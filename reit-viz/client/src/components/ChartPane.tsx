@@ -36,6 +36,7 @@ import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import ExportMenu from "@/components/ExportMenu";
+import type { SavedDrawing } from "@/lib/savedDrawings";
 
 // ── Gradient color helper for color-by-variable ──
 // Maps normalised [0,1] → red→yellow→green hex
@@ -125,6 +126,10 @@ interface ChartPaneProps {
   colorByRange?: { min: number; max: number } | null;
   /** Callback to clear color-by for this pane */
   onClearColorBy?: () => void;
+  /** Saved drawings to render as overlays (ISO-date anchored) */
+  savedDrawings?: SavedDrawing[];
+  /** Called when a new drawing is finalized by a tool so it can be persisted */
+  onSaveDrawing?: (drawing: { type: "hline" | "trendline"; color: string; price?: number; points?: { time: string; price: number }[] }) => void;
 }
 
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
@@ -593,6 +598,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   colorByMetric,
   colorByRange = null,
   onClearColorBy,
+  savedDrawings = [],
+  onSaveDrawing,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -603,6 +610,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const subIndicatorValuesRef = useRef<Record<string, number>>({});
   const drawingsRef = useRef<Drawing[]>([]);
   const quarterShadingCleanupRef = useRef<(() => void) | null>(null);
+  // Saved drawings overlay series (keyed by drawing id)
+  const savedDrawingSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());
   const markersPluginRef = useRef<any>(null);
   const haSignalsPluginRef = useRef<any>(null);
   const vertLinePrimitivesRef = useRef<VerticalLinePrimitive[]>([]);
@@ -948,6 +957,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           seriesRef: hSeries,
         });
         onDrawingAdded?.();
+        onSaveDrawing?.({ type: "hline", color: drawColor, price: priceCoord });
       } else if (activeTool === "trendline") {
         if (!drawStateRef.current.pending) {
           // First click — store start point
@@ -983,13 +993,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           });
           drawStateRef.current = { pending: false };
           onDrawingAdded?.();
+          onSaveDrawing?.({ type: "trendline", color: drawColor, points: [start, { time: timeStr, price: priceCoord }] });
         }
       }
     };
 
     chart.subscribeClick(handleClick);
     return () => chart.unsubscribeClick(handleClick);
-  }, [activeTool, drawColor, chartReady, paneSeries, getAnySeries]);
+  }, [activeTool, drawColor, chartReady, paneSeries, getAnySeries, onSaveDrawing]);
 
   // Freehand drawing: mousedown → mousemove → mouseup
   useEffect(() => {
@@ -1629,6 +1640,153 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
   }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC]);
+
+  // ── Saved drawings overlay ──────────────────────────────────────────────────
+  // Re-renders whenever the savedDrawings prop changes (ticker switch or mutation).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady) return;
+
+    // Remove previously rendered saved drawing series
+    savedDrawingSeriesRef.current.forEach((seriesList) => {
+      for (const s of seriesList) {
+        try { chart.removeSeries(s); } catch {}
+      }
+    });
+    savedDrawingSeriesRef.current.clear();
+
+    if (!savedDrawings || savedDrawings.length === 0) return;
+
+    // Collect all dates in the chart to know x-range for horizontal lines
+    const allTimes = paneSeries.flatMap((s) => s.data.map((d) => d.time));
+    const sortedTimes = [...new Set(allTimes)].sort() as string[];
+    const firstTime = sortedTimes[0];
+    const lastTime = sortedTimes[sortedTimes.length - 1];
+
+    for (const drawing of savedDrawings) {
+      if (!drawing.visible) continue;
+      const { style, id } = drawing;
+      const lineStyle = style.dashed ? LineStyle.Dashed : LineStyle.Solid;
+      const seriesList: ISeriesApi<any>[] = [];
+
+      try {
+        if (drawing.kind === "sr") {
+          if (!firstTime || !lastTime) continue;
+          const s = chart.addSeries(LineSeries, {
+            color: style.color,
+            lineWidth: style.lineWidth as any,
+            lineStyle,
+            title: drawing.label,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          s.setData([
+            { time: firstTime as any, value: drawing.price },
+            { time: lastTime as any, value: drawing.price },
+          ]);
+          seriesList.push(s);
+
+        } else if (drawing.kind === "trendline") {
+          const s = chart.addSeries(LineSeries, {
+            color: style.color,
+            lineWidth: style.lineWidth as any,
+            lineStyle,
+            title: drawing.label,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          s.setData([
+            { time: drawing.start.date as any, value: drawing.start.price },
+            { time: drawing.end.date as any, value: drawing.end.price },
+          ]);
+          seriesList.push(s);
+
+        } else if (drawing.kind === "channel") {
+          const upper = chart.addSeries(LineSeries, {
+            color: style.color,
+            lineWidth: style.lineWidth as any,
+            lineStyle,
+            title: drawing.label,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          upper.setData([
+            { time: drawing.upper.start.date as any, value: drawing.upper.start.price },
+            { time: drawing.upper.end.date as any, value: drawing.upper.end.price },
+          ]);
+          const lower = chart.addSeries(LineSeries, {
+            color: style.color,
+            lineWidth: style.lineWidth as any,
+            lineStyle: LineStyle.Dashed,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          lower.setData([
+            { time: drawing.lower.start.date as any, value: drawing.lower.start.price },
+            { time: drawing.lower.end.date as any, value: drawing.lower.end.price },
+          ]);
+          seriesList.push(upper, lower);
+
+        } else if (drawing.kind === "fib") {
+          const high = drawing.swingHigh.price;
+          const low = drawing.swingLow.price;
+          const range = high - low;
+          const startDate = drawing.swingLow.date < drawing.swingHigh.date ? drawing.swingLow.date : drawing.swingHigh.date;
+          if (range <= 0) continue;
+
+          for (const level of drawing.levels) {
+            const price = high - range * level;
+            const fibSeries = chart.addSeries(LineSeries, {
+              color: style.color,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dashed,
+              title: `Fib ${(level * 100).toFixed(1)}%`,
+              crosshairMarkerVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              autoscaleInfoProvider: () => null,
+            });
+            fibSeries.setData([
+              { time: startDate as any, value: price },
+              { time: (lastTime || startDate) as any, value: price },
+            ]);
+            seriesList.push(fibSeries);
+          }
+
+        } else if (drawing.kind === "pattern") {
+          const s = chart.addSeries(LineSeries, {
+            color: style.color,
+            lineWidth: style.lineWidth as any,
+            lineStyle: LineStyle.Dotted,
+            title: drawing.label,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          s.setData([
+            { time: drawing.start.date as any, value: drawing.start.price },
+            { time: drawing.end.date as any, value: drawing.end.price },
+          ]);
+          seriesList.push(s);
+        }
+      } catch (err) {
+        console.warn(`[SavedDrawings] Failed to render drawing ${id}:`, err);
+      }
+
+      if (seriesList.length > 0) {
+        savedDrawingSeriesRef.current.set(id, seriesList);
+      }
+    }
+  }, [savedDrawings, chartReady, paneSeries]);
 
   // Time range
   useEffect(() => {

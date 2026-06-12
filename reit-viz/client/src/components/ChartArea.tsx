@@ -71,6 +71,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getTickers } from "@/lib/dataService";
+import {
+  listForTicker,
+  save as saveDrawing,
+  defaultStyle,
+  type SavedDrawing,
+} from "@/lib/savedDrawings";
+import SavedDrawingsManager from "@/components/SavedDrawingsManager";
+import { BookMarked } from "lucide-react";
 
 // Legacy LayoutMode replaced by GridLayout from GridLayoutPicker
 
@@ -619,6 +627,49 @@ export default function ChartArea({
 
   // Track drawing count across all panes so we can show "Clear All"
   const [drawingCount, setDrawingCount] = useState(0);
+
+  // ── Saved Drawings Manager ────────────────────────────────────────────────
+  const [showDrawingsManager, setShowDrawingsManager] = useState(false);
+  const [savedDrawings, setSavedDrawings] = useState<SavedDrawing[]>([]);
+
+  // Reload drawings when ticker changes
+  useEffect(() => {
+    if (!activeTicker) { setSavedDrawings([]); return; }
+    setSavedDrawings(listForTicker(activeTicker));
+  }, [activeTicker]);
+
+  // Called by the manager when drawings mutate (toggle, delete, rename)
+  const handleDrawingsChange = useCallback((drawings: SavedDrawing[]) => {
+    setSavedDrawings([...drawings]);
+  }, []);
+
+  // Called by ChartPane when a new drawing tool is finalized
+  const handleSaveDrawingFromTool = useCallback((raw: { type: "hline" | "trendline"; color: string; price?: number; points?: { time: string; price: number }[] }) => {
+    if (!activeTicker) return;
+    if (raw.type === "hline" && raw.price !== undefined) {
+      const now = new Date().toISOString().slice(0, 10);
+      saveDrawing(activeTicker, {
+        kind: "sr",
+        label: `H-Line ${raw.price.toFixed(2)}`,
+        visible: true,
+        style: defaultStyle({ color: raw.color }),
+        price: raw.price,
+        anchorDate: now,
+        srType: "auto",
+      });
+    } else if (raw.type === "trendline" && raw.points && raw.points.length >= 2) {
+      saveDrawing(activeTicker, {
+        kind: "trendline",
+        label: "Trendline",
+        visible: true,
+        style: defaultStyle({ color: raw.color }),
+        start: { date: raw.points[0].time, price: raw.points[0].price },
+        end: { date: raw.points[1].time, price: raw.points[1].price },
+      });
+    }
+    // Refresh
+    setSavedDrawings(listForTicker(activeTicker));
+  }, [activeTicker]);
   const bumpDrawingCount = useCallback(() => setDrawingCount(c => c + 1), []);
   const decrementDrawingCount = useCallback(() => setDrawingCount(c => Math.max(0, c - 1)), []);
 
@@ -1143,6 +1194,21 @@ export default function ChartArea({
           </Button>
         )}
 
+        {/* Saved Drawings Manager toggle */}
+        <Button
+          variant={showDrawingsManager ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px] gap-1"
+          onClick={() => setShowDrawingsManager(!showDrawingsManager)}
+          data-testid="toggle-drawings-manager"
+          title="Saved Drawings Manager"
+        >
+          <BookMarked className="w-3 h-3" />
+          {savedDrawings.length > 0 && (
+            <span className="tabular-nums">{savedDrawings.length}</span>
+          )}
+        </Button>
+
         <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setIsMaximized(!isMaximized)} data-testid="maximize">
           {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
         </Button>
@@ -1212,6 +1278,8 @@ export default function ChartArea({
                       return next;
                     });
                   }}
+                  savedDrawings={savedDrawings}
+                  onSaveDrawing={handleSaveDrawingFromTool}
                 />
                 {/* Per-pane color-by picker button */}
                 <Popover open={colorByPopoverOpen === pane.id} onOpenChange={(open) => setColorByPopoverOpen(open ? pane.id : null)}>
@@ -1317,6 +1385,16 @@ export default function ChartArea({
             onPlot={onAddFormulaSeries}
             onClose={() => setShowPairs(false)}
           />
+        )}
+
+        {showDrawingsManager && (
+          <div className="w-72 border-l border-border flex-shrink-0 overflow-hidden flex flex-col" data-testid="drawings-manager-panel">
+            <SavedDrawingsManager
+              ticker={activeTicker}
+              onDrawingsChange={handleDrawingsChange}
+              onClose={() => setShowDrawingsManager(false)}
+            />
+          </div>
         )}
       </div>
 
