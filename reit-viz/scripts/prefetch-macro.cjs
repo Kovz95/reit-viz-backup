@@ -133,16 +133,21 @@ const COMPUTED_SERIES = {
 };
 
 function fetchFredCSV(seriesId) {
-  const url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${seriesId}&cosd=2010-01-01`;
+  // Uses the official FRED API at api.stlouisfed.org via the custom-cred proxy,
+  // which auto-injects the api_key query param. The public fredgraph.csv endpoint
+  // is permanently blocked by Akamai from this sandbox and from Vultr.
+  const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}&observation_start=2010-01-01&file_type=json`;
   const body = execSync(`curl -sL --max-time 30 "${url}"`, { encoding: "utf-8", timeout: 35000 });
-  const lines = body.trim().split("\n");
+  let parsed;
+  try { parsed = JSON.parse(body); } catch { return []; }
+  const observations = parsed && parsed.observations;
+  if (!Array.isArray(observations)) return [];
   const data = [];
-  for (let i = 1; i < lines.length; i++) {
-    const [date, val] = lines[i].split(",");
-    if (!date || !val || val === "." || val.trim() === "") continue;
-    const num = parseFloat(val);
+  for (const obs of observations) {
+    if (!obs || !obs.date || obs.value === "." || obs.value == null || obs.value === "") continue;
+    const num = parseFloat(obs.value);
     if (!isFinite(num)) continue;
-    data.push({ time: date.trim(), value: num });
+    data.push({ time: obs.date.trim(), value: num });
   }
   return data;
 }
