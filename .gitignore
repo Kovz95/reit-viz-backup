@@ -5,3 +5,8 @@ data.db*
 data/yahoo-cache/
 .env
 .env.local
+baseline_tsc_errors.txt
+reit-viz/node_modules/
+reit-viz/dist/
+reit-viz/.cache/
+stale-source/node_modules/
