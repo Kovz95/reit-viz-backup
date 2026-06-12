@@ -96,7 +96,9 @@ export function computeForwardProfile(
   i: number,
   targetPct: number,
   direction: "buy" | "sell",
-  band?: ReturnBand | null
+  band?: ReturnBand | null,
+  minHold?: number | null,
+  benchmarkSeries?: number[] | null
 ): ForwardReturnProfile {
   const entry = prices[i];
   const returns: Record<string, number | null> = {};
@@ -498,20 +500,25 @@ export function isBasketTicker(ticker: string): boolean {
   return ticker.startsWith("$") || ticker.startsWith("BASKET:");
 }
 
-export function getScoreWeights(): Record<string, number> {
+export function getScoreWeights(rankBy?: string): Record<string, number> {
   return { hitRate: 0.4, avgReturn: 0.3, profitFactor: 0.2, sharpe: 0.1 };
 }
 
 export function pickBestByRankMode(
-  signals: any[],
-  rankBy: string
-): any[] {
-  if (!signals.length) return signals;
-  return [...signals].sort((a, b) => {
-    const va = a?.[rankBy] ?? 0;
-    const vb = b?.[rankBy] ?? 0;
-    return vb - va;
-  });
+  summary: any,
+  compositeScore: number,
+  direction?: "buy" | "sell",
+  scoreWeights?: Record<string, number>
+): number {
+  // Returns a numeric score for ranking; callers compare scores across categories
+  if (!summary) return compositeScore;
+  const weights = scoreWeights ?? { hitRate: 0.4, avgReturn: 0.3, profitFactor: 0.2, sharpe: 0.1 };
+  let score = compositeScore * 0.5;
+  if (typeof summary.hitRate === "object" && summary.hitRate) {
+    const hitVals = Object.values(summary.hitRate as Record<string, number>);
+    if (hitVals.length) score += (weights.hitRate ?? 0.4) * hitVals.reduce((a, b) => a + b, 0) / hitVals.length;
+  }
+  return score;
 }
 
 export function scoreBackgroundColor(score: number): string {

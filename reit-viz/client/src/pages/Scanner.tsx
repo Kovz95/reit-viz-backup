@@ -512,7 +512,7 @@ const CLASS_LABELS: Record<string, string> = {
 
 export default function Scanner() {
   const { baskets } = useBaskets();
-  const { data: allTickers } = useQuery({ queryKey: ["tickers"], queryFn: fetchWorkbookTickers, staleTime: Infinity });
+  const { data: allTickers } = useQuery<TickerMeta[]>({ queryKey: ["tickers"], queryFn: fetchWorkbookTickers, staleTime: Infinity });
 
   const [universeMode, setUniverseMode] = useState<UniverseMode>("workbook");
   const [selectedBasket, setSelectedBasket] = useState("");

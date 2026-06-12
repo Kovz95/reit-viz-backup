@@ -218,14 +218,14 @@ export async function fetchFredSeries(id: string): Promise<DataPoint[]> {
  */
 export async function fetchMacroSeriesBatch(
   ids: string[]
-): Promise<Record<string, DataPoint[]>> {
+): Promise<Record<string, { data: DataPoint[]; meta?: MacroSeriesMeta } | DataPoint[]>> {
   const results = await Promise.allSettled(
     ids.map(async (id) => ({ id, data: await fetchMacroSeries(id) }))
   );
-  const out: Record<string, DataPoint[]> = {};
+  const out: Record<string, { data: DataPoint[]; meta?: MacroSeriesMeta }> = {};
   for (const r of results) {
     if (r.status === "fulfilled") {
-      out[r.value.id] = r.value.data;
+      out[r.value.id] = { data: r.value.data };
     }
   }
   return out;

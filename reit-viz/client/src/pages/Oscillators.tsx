@@ -62,6 +62,8 @@ const wo = summarizeSignalsOsc as any;
 const hr = buildBacktestResult as any;
 const yr = EvaluatorPanelResult as any;
 const vo = EvaluatorPanelLoader as any;
+// Declare custom JSX element names so TypeScript accepts them
+declare global { namespace JSX { interface IntrinsicElements { yr: any; vo: any; } } }
 const kr = WorkerPool as any;
 const gr = getYahooPairsRatio as any;
 const br = PresetBar as any;

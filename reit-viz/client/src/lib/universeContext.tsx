@@ -33,8 +33,9 @@ export interface UniverseContextValue {
   manualTickers: Set<string>;
   setManualTickers: (s: Set<string>) => void;
   /** If any universe filter is active, this is the set of allowed ticker symbols.
-   *  If no filter is active, this is null (meaning "all tickers pass"). */
-  universeTickers: Set<string> | null;
+   *  If no filter is active, this is null (meaning "all tickers pass").
+   *  Note: has both Set methods (.has, .size) and array-compatible .length property. */
+  universeTickers: (Set<string> & { length: number }) | null;
   /** Whether any universe filter is active */
   isFiltered: boolean;
   /** Count of tickers passing the filter */
@@ -51,6 +52,8 @@ export interface UniverseContextValue {
   restore: (data: any) => void;
   /** Clear all filters */
   clearAll: () => void;
+  /** Active (filtered) ticker symbols; null if no filter active (= all tickers). */
+  activeTickers: string[] | null;
 }
 
 const UniverseContext = createContext<UniverseContextValue | null>(null);
@@ -135,6 +138,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     serialize,
     restore,
     clearAll,
+    activeTickers: universeTickers ? [...universeTickers] : null,
   };
 
   return (

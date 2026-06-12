@@ -53,6 +53,7 @@ export interface ChannelOptions {
   minTouches?: number;
   maxChannels?: number;
   lookbackBars?: number | number[];
+  minBars?: number;
   [key: string]: any;
 }
 

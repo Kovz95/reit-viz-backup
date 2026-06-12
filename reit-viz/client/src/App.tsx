@@ -1,3 +1,5 @@
+// Reconstructed from recovered-bundle/index-CsG73Aq_.js on 2025-01-31
+import { lazy, Suspense } from "react";
 import { Switch, Route, Router, Link, useLocation } from "wouter";
 import { useEffect, useRef } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -5,28 +7,6 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
-import Dashboard from "./pages/Dashboard";
-import Ranking from "./pages/Ranking";
-import Scatter from "./pages/Scatter";
-import Pairs from "./pages/Pairs";
-import Macro from "./pages/Macro";
-import Correlation from "./pages/Correlation";
-import Valuation from "./pages/Valuation";
-import DividendSpread from "./pages/DividendSpread";
-import Heatmap from "./pages/Heatmap";
-import Performance from "./pages/Performance";
-import ShortInterest from "./pages/ShortInterest";
-import PairRatios from "./pages/PairRatios";
-import Universe from "./pages/Universe";
-import Screener from "./pages/Screener";
-import DataExplorer from "./pages/DataExplorer";
-import Ratings from "./pages/Ratings";
-import ZScoreOptimizer from "./pages/ZScoreOptimizer";
-import PairOptimizer from "./pages/PairOptimizer";
-import ValuationRegime from "./pages/ValuationRegime";
-import MomentumOptimizer from "./pages/MomentumOptimizer";
-import MACrossoverOptimizer from "./pages/MACrossoverOptimizer";
-import RSIRegimeOptimizer from "./pages/RSIRegimeOptimizer";
 import { UniverseProvider } from "@/lib/universeContext";
 import { WorkspaceTabProvider } from "@/lib/workspaceContext";
 import { UploadProvider } from "@/lib/uploadContext";
@@ -59,6 +39,65 @@ import DataManager from "@/components/DataManager";
 import AutoSaveManager from "@/components/AutoSaveManager";
 import { useUpload } from "@/lib/uploadContext";
 import { Loader2, CheckCircle2, AlertCircle, X } from "lucide-react";
+
+// ─── Lazy page imports ───────────────────────────────────────────────────────
+
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const Universe = lazy(() => import("@/pages/Universe"));
+const GlobalUniverseExplorer = lazy(() => import("@/pages/GlobalUniverseExplorer"));
+const Baskets = lazy(() => import("@/pages/Baskets"));
+const Ranking = lazy(() => import("@/pages/Ranking"));
+const Scatter = lazy(() => import("@/pages/Scatter"));
+const FactorBacktest = lazy(() => import("@/pages/FactorBacktest"));
+const RelativeStrength = lazy(() => import("@/pages/RelativeStrength"));
+const Pairs = lazy(() => import("@/pages/Pairs"));
+const PairsScreener = lazy(() => import("@/pages/PairsScreener"));
+const Scanner = lazy(() => import("@/pages/Scanner"));
+const Macro = lazy(() => import("@/pages/Macro"));
+const MacroRegime = lazy(() => import("@/pages/MacroRegime"));
+const RatesForward = lazy(() => import("@/pages/RatesForward"));
+const YieldCorrelation = lazy(() => import("@/pages/YieldCorrelation"));
+const Correlation = lazy(() => import("@/pages/Correlation"));
+const Valuation = lazy(() => import("@/pages/Valuation"));
+const ValuationRegime = lazy(() => import("@/pages/ValuationRegime"));
+const PremiumDiscount = lazy(() => import("@/pages/PremiumDiscount"));
+const PremiumDiscountScreener = lazy(() => import("@/pages/PremiumDiscountScreener"));
+const Distributions = lazy(() => import("@/pages/Distributions"));
+const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
+const Heatmap = lazy(() => import("@/pages/Heatmap"));
+const Performance = lazy(() => import("@/pages/Performance"));
+const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
+const PairRatios = lazy(() => import("@/pages/PairRatios"));
+const Screener = lazy(() => import("@/pages/Screener"));
+const Ratings = lazy(() => import("@/pages/Ratings"));
+const ZScoreOptimizer = lazy(() => import("@/pages/ZScoreOptimizer"));
+const PairOptimizer = lazy(() => import("@/pages/PairOptimizer"));
+const MomentumOptimizer = lazy(() => import("@/pages/MomentumOptimizer"));
+const RSIRegimeOptimizer = lazy(() => import("@/pages/RSIRegimeOptimizer"));
+const ComboOptimizer = lazy(() => import("@/pages/ComboOptimizer"));
+const ROCOptimizer = lazy(() => import("@/pages/ROCOptimizer"));
+const MACrossoverOptimizer = lazy(() => import("@/pages/MACrossoverOptimizer"));
+const Oscillators = lazy(() => import("@/pages/Oscillators"));
+const RangeOptimizer = lazy(() => import("@/pages/RangeOptimizer"));
+const HarsiOptimizer = lazy(() => import("@/pages/HarsiOptimizer"));
+const SlowStochOptimizer = lazy(() => import("@/pages/SlowStochOptimizer"));
+const DualMAOptimizer = lazy(() => import("@/pages/DualMAOptimizer"));
+const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
+const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
+const Trendlines = lazy(() => import("@/pages/Trendlines"));
+const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
+const PriceAction = lazy(() => import("@/pages/PriceAction"));
+const ROCAnalysis = lazy(() => import("@/pages/ROCAnalysis"));
+const SigmaMove = lazy(() => import("@/pages/SigmaMove"));
+const Attribution = lazy(() => import("@/pages/Attribution"));
+const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
+const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
+const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
+const Alerts = lazy(() => import("@/pages/Alerts"));
+const DataExplorer = lazy(() => import("@/pages/DataExplorer"));
+const NotFound = lazy(() => import("@/pages/not-found"));
+
+// ─── Upload status banner ─────────────────────────────────────────────────────
 
 function UploadStatus() {
   const { activeJob, dismissJob, mergePreviewResult } = useUpload();
@@ -136,6 +175,8 @@ function UploadStatus() {
   );
 }
 
+// ─── NavBar ───────────────────────────────────────────────────────────────────
+
 function NavBar() {
   const [location] = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -152,25 +193,56 @@ function NavBar() {
   const links: { path: string; label: string; icon: any; universeControlled?: boolean }[] = [
     { path: "/", label: "Charts", icon: BarChart3, universeControlled: true },
     { path: "/universe", label: "Universe", icon: Globe },
+    { path: "/global-universe", label: "Global Universe", icon: Globe },
+    { path: "/baskets", label: "Baskets", icon: Grid3X3 },
     { path: "/ranking", label: "Ranking", icon: ListOrdered, universeControlled: true },
     { path: "/scatter", label: "XY Scatter", icon: ScatterChart, universeControlled: true },
+    { path: "/factor-backtest", label: "Factor Backtest", icon: TrendingUp, universeControlled: true },
+    { path: "/relative-strength", label: "Rel Strength", icon: TrendingUp, universeControlled: true },
     { path: "/pairs", label: "Pairs", icon: ArrowRightLeft },
+    { path: "/pair-ratios", label: "Pair Ratios", icon: GitCompareArrows, universeControlled: true },
+    { path: "/pair-screener", label: "Pair Screener", icon: Filter, universeControlled: true },
+    { path: "/scanner", label: "Scanner", icon: Target, universeControlled: true },
     { path: "/macro", label: "Macro", icon: TrendingUp },
+    { path: "/regime", label: "Regime", icon: Layers },
+    { path: "/rates-forward", label: "Rates Forward", icon: TrendingUp },
+    { path: "/yield-correlation", label: "Yield Corr", icon: Link2 },
     { path: "/correlation", label: "Correlation", icon: Link2, universeControlled: true },
     { path: "/valuation", label: "Valuation", icon: Gauge, universeControlled: true },
+    { path: "/val-regime", label: "Val Regime", icon: Layers, universeControlled: true },
+    { path: "/premium-discount", label: "Premium/Discount", icon: Percent, universeControlled: true },
+    { path: "/pd-screener", label: "P/D Screener", icon: Filter, universeControlled: true },
+    { path: "/distributions", label: "Distributions", icon: BarChart2, universeControlled: true },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/heatmap", label: "Rel Value", icon: Grid3X3, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
-    { path: "/pair-ratios", label: "Pair Ratios", icon: GitCompareArrows, universeControlled: true },
     { path: "/screener", label: "Screener", icon: Filter, universeControlled: true },
+    { path: "/setups-screener", label: "Setups Screener", icon: Filter, universeControlled: true },
+    { path: "/pattern-screener", label: "Pattern Screener", icon: Activity, universeControlled: true },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
     { path: "/z-optimizer", label: "Z Optimizer", icon: Crosshair, universeControlled: true },
     { path: "/pair-optimizer", label: "Pair Opt", icon: Shuffle, universeControlled: true },
-    { path: "/val-regime", label: "Val Regime", icon: Layers, universeControlled: true },
     { path: "/momentum", label: "Momentum", icon: Zap, universeControlled: true },
     { path: "/ma-crossover", label: "MA Cross", icon: GitMerge, universeControlled: true },
     { path: "/rsi-regime", label: "RSI Regime", icon: BarChart2, universeControlled: true },
+    { path: "/combo-optimizer", label: "Combo Opt", icon: Shuffle, universeControlled: true },
+    { path: "/roc-optimizer", label: "ROC Opt", icon: Activity, universeControlled: true },
+    { path: "/oscillators", label: "Oscillators", icon: Activity, universeControlled: true },
+    { path: "/range-optimizer", label: "Range Opt", icon: Layers, universeControlled: true },
+    { path: "/harsi-optimizer", label: "HARSI Opt", icon: Crosshair, universeControlled: true },
+    { path: "/slow-stoch-optimizer", label: "SlowStoch Opt", icon: Activity, universeControlled: true },
+    { path: "/dual-ma-optimizer", label: "DualMA Opt", icon: Activity, universeControlled: true },
+    { path: "/tva-optimizer", label: "TVA Opt", icon: Crosshair, universeControlled: true },
+    { path: "/levels", label: "Levels & Trendlines", icon: TrendingUp },
+    { path: "/trendlines", label: "Trendlines", icon: TrendingUp },
+    { path: "/auto-trendline-backtest", label: "Auto Trendline BT", icon: TrendingUp },
+    { path: "/price-action", label: "Price Action", icon: Activity, universeControlled: true },
+    { path: "/roc-analysis", label: "ROC Deciles", icon: Crosshair, universeControlled: true },
+    { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
+    { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
+    { path: "/similar-setups", label: "Similar Setups", icon: Filter },
+    { path: "/alerts", label: "Alerts", icon: Target },
     { path: "/data", label: "Data", icon: Table2 },
   ];
 
@@ -201,7 +273,7 @@ function NavBar() {
                           ? "text-red-400/60 hover:text-foreground hover:bg-accent"
                           : "text-muted-foreground hover:text-foreground hover:bg-accent"
                   }`}
-                  data-testid={`nav-${label.toLowerCase().replace(" ", "-")}`}
+                  data-testid={`nav-${label.toLowerCase().replace(/ /g, "-")}`}
                   data-active={active ? "true" : undefined}
                 >
                   <Icon className="w-3 h-3" />
@@ -223,6 +295,8 @@ function NavBar() {
   );
 }
 
+// ─── App ──────────────────────────────────────────────────────────────────────
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -236,35 +310,64 @@ function App() {
           <NavBar />
           <div className="flex-1 overflow-hidden">
             <ErrorBoundary>
+            <Suspense fallback={<div className="flex items-center justify-center h-full gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading page…</div>}>
             <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/universe" component={Universe} />
+              <Route path="/global-universe" component={GlobalUniverseExplorer} />
+              <Route path="/baskets" component={Baskets} />
               <Route path="/ranking" component={Ranking} />
               <Route path="/scatter" component={Scatter} />
+              <Route path="/factor-backtest" component={FactorBacktest} />
+              <Route path="/relative-strength" component={RelativeStrength} />
               <Route path="/pairs" component={Pairs} />
+              <Route path="/pair-ratios" component={PairRatios} />
+              <Route path="/pair-screener" component={PairsScreener} />
+              <Route path="/scanner" component={Scanner} />
               <Route path="/macro" component={Macro} />
+              <Route path="/regime" component={MacroRegime} />
+              <Route path="/rates-forward" component={RatesForward} />
+              <Route path="/yield-correlation" component={YieldCorrelation} />
               <Route path="/correlation" component={Correlation} />
               <Route path="/valuation" component={Valuation} />
+              <Route path="/val-regime" component={ValuationRegime} />
+              <Route path="/premium-discount" component={PremiumDiscount} />
+              <Route path="/pd-screener" component={PremiumDiscountScreener} />
+              <Route path="/distributions" component={Distributions} />
               <Route path="/spread" component={DividendSpread} />
               <Route path="/heatmap" component={Heatmap} />
               <Route path="/performance" component={Performance} />
               <Route path="/short-interest" component={ShortInterest} />
-              <Route path="/pair-ratios" component={PairRatios} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings" component={Ratings} />
+              <Route path="/setups-screener" component={SetupsScreener} />
+              <Route path="/pattern-screener" component={PatternScreener} />
               <Route path="/z-optimizer" component={ZScoreOptimizer} />
               <Route path="/pair-optimizer" component={PairOptimizer} />
-              <Route path="/val-regime" component={ValuationRegime} />
               <Route path="/momentum" component={MomentumOptimizer} />
               <Route path="/ma-crossover" component={MACrossoverOptimizer} />
               <Route path="/rsi-regime" component={RSIRegimeOptimizer} />
+              <Route path="/combo-optimizer" component={ComboOptimizer} />
+              <Route path="/roc-optimizer" component={ROCOptimizer} />
+              <Route path="/oscillators" component={Oscillators} />
+              <Route path="/range-optimizer" component={RangeOptimizer} />
+              <Route path="/harsi-optimizer" component={HarsiOptimizer} />
+              <Route path="/slow-stoch-optimizer" component={SlowStochOptimizer} />
+              <Route path="/dual-ma-optimizer" component={DualMAOptimizer} />
+              <Route path="/tva-optimizer" component={TVAOptimizer} />
+              <Route path="/levels" component={LevelsAndTrendlines} />
+              <Route path="/trendlines" component={Trendlines} />
+              <Route path="/auto-trendline-backtest" component={AutoTrendlineBacktest} />
+              <Route path="/price-action" component={PriceAction} />
+              <Route path="/roc-analysis" component={ROCAnalysis} />
+              <Route path="/sigma-move" component={SigmaMove} />
+              <Route path="/attribution" component={Attribution} />
+              <Route path="/similar-setups" component={SimilarSetups} />
+              <Route path="/alerts" component={Alerts} />
               <Route path="/data" component={DataExplorer} />
-              <Route>
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  Not found
-                </div>
-              </Route>
+              <Route component={NotFound} />
             </Switch>
+            </Suspense>
             </ErrorBoundary>
           </div>
         </div>

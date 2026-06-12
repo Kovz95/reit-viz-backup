@@ -16,7 +16,7 @@ export async function fetchPerfData(
   return res.json();
 }
 
-export async function fetchMonthlySeasonality(): Promise<any[]> {
+export async function fetchMonthlySeasonality(tickerOrOpts?: string | any): Promise<any[]> {
   const res = await fetch("/api/performance/monthly-seasonality");
   if (!res.ok) throw new Error(`fetchMonthlySeasonality: HTTP ${res.status}`);
   return res.json();

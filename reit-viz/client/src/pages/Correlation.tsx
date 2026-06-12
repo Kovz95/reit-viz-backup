@@ -75,6 +75,7 @@ interface MacroSeriesMeta {
 interface PairwiseResult {
   summary: {
     correlation: number;
+    spearmanCorrelation: number;
     rSquared: number;
     beta: number;
     alpha: number;
@@ -87,6 +88,8 @@ interface PairwiseResult {
     pValue: number;
   };
   rolling: { time: string; value: number }[];
+  rollingCI?: { time: string; upper: number; lower: number }[];
+  rollingBeta?: { time: string; value: number }[];
   multiWindowRolling: Record<number, { time: string; value: number }[]>;
   crossCorrelation: { lag: number; value: number }[];
   acfA: { lag: number; value: number }[];
@@ -94,6 +97,13 @@ interface PairwiseResult {
   scatter: { x: number; y: number; date: string }[];
   levelsA: { time: string; value: number }[];
   levelsB: { time: string; value: number }[];
+  diagnostics?: {
+    adfA?: { stat: number; pValue: number; lags: number; isStationary: boolean };
+    adfB?: { stat: number; pValue: number; lags: number; isStationary: boolean };
+    cointegration?: { stat: number; pValue: number; lags: number; isCointegrated: boolean } | null;
+    fisherCI?: { lower: number; upper: number };
+  };
+  error?: string;
 }
 
 interface MatrixResult {

@@ -81,9 +81,10 @@ export function useWorkspaceStateEx(
  */
 export function useUploadedMetricColumns(): string[] {
   const upload = useUpload();
-  if (!upload?.sheets) return [];
+  const sheets = (upload as any)?.sheets ?? upload?.fundamentalSheets ?? [];
+  if (!sheets || !sheets.length) return [];
   const cols = new Set<string>();
-  for (const sheet of upload.sheets) {
+  for (const sheet of sheets) {
     for (const metric of sheet.metrics ?? []) {
       if (metric?.name) cols.add(metric.name);
     }

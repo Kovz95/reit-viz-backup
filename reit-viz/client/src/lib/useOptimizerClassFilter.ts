@@ -17,6 +17,8 @@ export interface OptimizerClassFilterResult {
   universeSourceUI: React.ReactNode | null;
   /** JSX element for the classification filter bar (null when not active). */
   classFilterUI: React.ReactNode | null;
+  /** True when any classification filter is active. */
+  hasActiveFilters: boolean;
 }
 
 /**
@@ -59,11 +61,20 @@ export function useOptimizerClassFilter(
       )
     : null;
 
+  const hasActiveFilters = active && (
+    (classFilter as any)?.sectors?.size > 0 ||
+    (classFilter as any)?.subsectors?.size > 0 ||
+    (classFilter as any)?.industries?.size > 0 ||
+    search.length > 0 ||
+    manualTickers.size > 0
+  );
+
   return {
     filteredTickers,
     classFilter,
     setClassFilter,
     universeSourceUI,
     classFilterUI,
+    hasActiveFilters: !!hasActiveFilters,
   };
 }

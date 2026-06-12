@@ -15,6 +15,8 @@ export interface PairRatioData {
   prices: number[];
   indices: number[];
   dates?: string[];
+  /** Ratio values (alias for prices) */
+  ratio: number[];
 }
 
 /**

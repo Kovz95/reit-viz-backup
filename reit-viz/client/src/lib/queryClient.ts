@@ -74,3 +74,6 @@ export const queryClient = new QueryClient({
 // Re-export fetchMetricSeries so pages that import from "@/lib/queryClient" work.
 // The canonical implementation lives in fetchMetricSeries.ts.
 export { fetchMetricSeries } from "./fetchMetricSeries";
+
+// Re-export fetchWorkbookTickers and TickerMeta for pages importing from queryClient
+export { fetchWorkbookTickers, TickerMeta } from "./fetchWorkbookTickers";

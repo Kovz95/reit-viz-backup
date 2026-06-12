@@ -1,6 +1,6 @@
 // Hand-written from call-site inference (LevelsAndTrendlines.tsx, PairRatios.tsx)
 
-import type { OHLCVBar } from "@/lib/fetchTickerOHLCV";
+import type { OHLCVBar, OHLCVResult } from "@/lib/fetchTickerOHLCV";
 
 export interface DatePreset {
   label: string;
@@ -36,11 +36,90 @@ export function getDateRangeFromPreset(preset: string): DateRange {
   return { start, end };
 }
 
+export interface SlicedResult {
+  dates: string[];
+  closes: number[];
+  adjCloses: number[];
+  highs: number[];
+  lows: number[];
+  opens: number[];
+  volumes: number[];
+  dailyIndexMap: Map<string, number>;
+  bars?: OHLCVBar[];
+}
+
 /**
- * Filters an array of OHLCV bars to those whose `date` falls within [range.start, range.end].
+ * Filters an OHLCV result (or OHLCVBar[]) to those whose `date` falls within [range.start, range.end].
+ * Returns a parallel-arrays result object.
  */
-export function sliceDateRange(bars: OHLCVBar[], range: DateRange): OHLCVBar[] {
-  const startStr = range.start.toISOString().slice(0, 10);
-  const endStr = range.end.toISOString().slice(0, 10);
-  return bars.filter((b) => b.date >= startStr && b.date <= endStr);
+export function sliceDateRange(
+  input: OHLCVBar[] | OHLCVResult | any,
+  range: DateRange | any
+): SlicedResult {
+  const startStr = range?.start instanceof Date
+    ? range.start.toISOString().slice(0, 10)
+    : typeof range?.start === "string" ? range.start : null;
+  const endStr = range?.end instanceof Date
+    ? range.end.toISOString().slice(0, 10)
+    : typeof range?.end === "string" ? range.end : null;
+
+  let dates: string[] = [];
+  let closes: number[] = [];
+  let adjCloses: number[] = [];
+  let highs: number[] = [];
+  let lows: number[] = [];
+  let opens: number[] = [];
+  let volumes: number[] = [];
+  let bars: OHLCVBar[] | undefined;
+
+  if (Array.isArray(input)) {
+    const barArr = input as OHLCVBar[];
+    dates = barArr.map((b) => b.date);
+    closes = barArr.map((b) => b.close);
+    adjCloses = closes;
+    highs = barArr.map((b) => b.high);
+    lows = barArr.map((b) => b.low);
+    opens = barArr.map((b) => b.open);
+    volumes = barArr.map((b) => b.volume ?? 0);
+    bars = barArr;
+  } else if (input && typeof input === "object" && input.dates) {
+    dates = input.dates;
+    closes = input.closes ?? [];
+    adjCloses = input.adjCloses ?? closes;
+    highs = input.highs ?? closes;
+    lows = input.lows ?? closes;
+    opens = input.opens ?? closes;
+    volumes = input.volumes ?? new Array(closes.length).fill(0);
+    bars = input.bars;
+  }
+
+  const mask: boolean[] = dates.map((d) => {
+    if (startStr && d < startStr) return false;
+    if (endStr && d > endStr) return false;
+    return true;
+  });
+
+  const fDates = dates.filter((_, i) => mask[i]);
+  const fCloses = closes.filter((_, i) => mask[i]);
+  const fAdjCloses = adjCloses.filter((_, i) => mask[i]);
+  const fHighs = highs.filter((_, i) => mask[i]);
+  const fLows = lows.filter((_, i) => mask[i]);
+  const fOpens = opens.filter((_, i) => mask[i]);
+  const fVolumes = volumes.filter((_, i) => mask[i]);
+  const fBars = bars ? bars.filter((_, i) => mask[i]) : undefined;
+
+  const dailyIndexMap = new Map<string, number>();
+  fDates.forEach((d, i) => dailyIndexMap.set(d, i));
+
+  return {
+    dates: fDates,
+    closes: fCloses,
+    adjCloses: fAdjCloses,
+    highs: fHighs,
+    lows: fLows,
+    opens: fOpens,
+    volumes: fVolumes,
+    dailyIndexMap,
+    bars: fBars,
+  };
 }

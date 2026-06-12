@@ -2,7 +2,8 @@
 // Combines per-horizon signal summaries into a single composite score (0–100).
 export function computeComposite(
   summary: Record<string, { hitRate: number; count: number; profitFactor: number }>,
-  opts?: { weights?: Record<string, number> }
+  opts?: { weights?: Record<string, number> } | string,
+  useBandRate?: boolean
 ): number {
   const keys = Object.keys(summary);
   if (keys.length === 0) return 0;

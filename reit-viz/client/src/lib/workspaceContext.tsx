@@ -92,7 +92,7 @@ export function WorkspaceTabProvider({ children }: { children: React.ReactNode }
  * On every serialize change: the latest snapshot is pushed into the cache.
  * On unmount: a final snapshot is pushed before cleanup.
  */
-export function useWorkspaceTab(key: string, serialize: SerializeFn, restore: RestoreFn) {
+export function useWorkspaceTab(key: string, serialize: SerializeFn, restore: RestoreFn, opts?: any) {
   const ctx = useContext(WorkspaceContext);
   const initialRestoreDone = useRef(false);
   const lastRestoreGen = useRef(ctx.restoreGen);

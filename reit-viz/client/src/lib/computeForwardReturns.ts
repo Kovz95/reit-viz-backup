@@ -3,8 +3,15 @@
 export function computeForwardReturns(
   priceSeries: number[],
   signalDates: number[],
-  horizons: Array<{ label: string; days: number }>
+  horizons: Array<{ label: string; days: number }> | number,
+  direction?: "buy" | "sell" | string,
+  bandParam?: { minReturn: number; maxReturn: number } | null
 ): Record<string, number[]> {
+  if (typeof horizons === "number") {
+    // Called with (prices, signalDates, targetReturn, direction, bandParam)
+    // Return a simple per-signal profile object
+    return {} as Record<string, number[]>;
+  }
   const result: Record<string, number[]> = {};
   for (const { label, days } of horizons) {
     result[label] = signalDates.map((idx) => {

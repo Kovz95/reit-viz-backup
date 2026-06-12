@@ -10,7 +10,8 @@ export const MA_TYPES: MAType[] = ["SMA", "EMA", "WMA", "DEMA", "TEMA", "HMA"];
 export function computeMA(
   values: number[],
   period: number,
-  type: MAType = "SMA"
+  type: MAType = "SMA",
+  opts?: any
 ): (number | null)[] {
   if (!values || values.length === 0 || period < 1) return [];
   const n = values.length;

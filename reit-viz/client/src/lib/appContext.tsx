@@ -18,6 +18,18 @@ export interface AppContextValue {
   allTickers: any[];
   /** Filtered ticker metadata list. */
   filteredTickersList: any[];
+  /** Classification filter object. */
+  filters: any;
+  /** Setter for filters. */
+  setFilters: (f: any) => void;
+  /** Text search string. */
+  search: string;
+  /** Setter for search. */
+  setSearch: (s: string) => void;
+  /** Set of manually-added ticker symbols. */
+  manualTickers: Set<string>;
+  /** Setter for manualTickers. */
+  setManualTickers: (m: Set<string>) => void;
 }
 
 /**
