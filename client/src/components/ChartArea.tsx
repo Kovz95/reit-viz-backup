@@ -7,6 +7,7 @@ import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
 import type { IChartApi } from "lightweight-charts";
 import ChartPane from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
+import SeededOverlaysManager from "./SeededOverlaysManager";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
 import PairsPickerPanel from "./PairsPickerPanel";
 import {
@@ -243,6 +244,7 @@ export default function ChartArea({
 
   const [timeRange, setTimeRange] = useState("5Y");
   const [showIndicators, setShowIndicators] = useState(false);
+  const [showSeeds, setShowSeeds] = useState(false);
   const [showCorrelation, setShowCorrelation] = useState(false);
   const [showPairs, setShowPairs] = useState(false);
   // Per-pane indicator state: paneId → ActiveIndicators
@@ -1069,10 +1071,22 @@ export default function ChartArea({
           variant={showIndicators ? "default" : "ghost"}
           size="sm"
           className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowIndicators(!showIndicators); setShowCorrelation(false); setShowPairs(false); }}
+          onClick={() => { setShowIndicators(!showIndicators); setShowCorrelation(false); setShowPairs(false); setShowSeeds(false); }}
           data-testid="toggle-indicators"
         >
           Indicators
+        </Button>
+
+        {/* Seeds (docked sidebar) */}
+        <Button
+          variant={showSeeds ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => { setShowSeeds(!showSeeds); setShowIndicators(false); setShowCorrelation(false); setShowPairs(false); }}
+          data-testid="toggle-seeds"
+          title={`Manage seeded overlays for ${activeTicker || ""}`}
+        >
+          Seeds
         </Button>
 
         {/* Correlation */}
@@ -1080,7 +1094,7 @@ export default function ChartArea({
           variant={showCorrelation ? "default" : "ghost"}
           size="sm"
           className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowCorrelation(!showCorrelation); setShowIndicators(false); setShowPairs(false); }}
+          onClick={() => { setShowCorrelation(!showCorrelation); setShowIndicators(false); setShowPairs(false); setShowSeeds(false); }}
           data-testid="toggle-correlation"
         >
           Correlation
@@ -1091,7 +1105,7 @@ export default function ChartArea({
           variant={showPairs ? "default" : "ghost"}
           size="sm"
           className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowPairs(!showPairs); setShowCorrelation(false); setShowIndicators(false); }}
+          onClick={() => { setShowPairs(!showPairs); setShowCorrelation(false); setShowIndicators(false); setShowSeeds(false); }}
           data-testid="toggle-pairs"
         >
           Pairs
@@ -1287,6 +1301,13 @@ export default function ChartArea({
             );
           })}
         </div>
+
+        {showSeeds && (
+          <SeededOverlaysManager
+            activeTicker={activeTicker}
+            onClose={() => setShowSeeds(false)}
+          />
+        )}
 
         {showIndicators && (
           <IndicatorsPanel
