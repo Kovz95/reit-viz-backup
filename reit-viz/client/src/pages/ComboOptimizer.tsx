@@ -4,7 +4,7 @@ import React, { useState, useRef, useMemo, useCallback, useEffect } from "react"
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getScoreWeights, createDateRangeFromPreset, pct, hitRateColor, pctSigned,
-  profitFactorColor, RANK_BY_OPTIONS, DATE_PRESETS, summarizeSignals } from "@/lib/forwardReturns";
+  profitFactorColor, RANK_BY_OPTIONS, DATE_PRESETS, summarizeSignals, pickBestByRankMode } from "@/lib/forwardReturns";
 import { createDateRange } from "@/lib/optimizerInputSeries";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useUniverse } from "@/lib/universeContext";
@@ -41,7 +41,7 @@ const getBasketOhlc = getBasketOhlcFn as any;
 const weeklyDownsample = weeklyDownsampleFn as any;
 const expandWeeklyToDailyFn = expandWeeklyToDailyRaw as any;
 const getDailyIndexFromWeekly = getDailyIndexFromWeeklyFn as any;
-const pickBestByRankMode = (getScoreWeights as any);
+// pickBestByRankMode imported from @/lib/forwardReturns above
 const fetchWorkbookSeriesForTicker = fetchWorkbookSeriesForTickerFn as any;
 
 // rocSignalDetect (c from rocSignalDetect-B1VJ2Cnc.js): ROC array over period
@@ -681,7 +681,7 @@ export default function ComboOptimizer() {
           for (let i = 0; i < globalDates.length; i++) dateIndexMap.set(globalDates[i], i);
 
           if ((frequency as string) === "weekly_on_daily") {
-            prices = rawPrices;
+            prices = rawPrices ?? [];
             highs  = basketData.highs;
             lows   = basketData.lows;
             dates  = basketData.priceDates;
@@ -719,13 +719,13 @@ export default function ComboOptimizer() {
           const clippedLows  = clipped.arrays[2];
           volumes   = clipped.arrays[3];
           const clippedDates = clipped.dates;
-          if (rawPrices.length < 252) continue;
+          if ((rawPrices ?? []).length < 252) continue;
 
           const dateIndexMap = new Map<string, number>();
           for (let i = 0; i < globalDates.length; i++) dateIndexMap.set(globalDates[i], i);
 
           if ((frequency as string) === "weekly_on_daily") {
-            prices = rawPrices;
+            prices = rawPrices ?? [];
             highs  = clippedHighs;
             lows   = clippedLows;
             dates  = clippedDates;
@@ -1007,7 +1007,7 @@ export default function ComboOptimizer() {
         if (pass) filteredIndices.push(si);
       }
 
-      const evalResult = evaluateSignals(workPrices, dates, filteredIndices, evalDirection === "long" ? "buy" : "sell", targetReturn, minHold, null, horizon);
+      const evalResult = evaluateSignals(workPrices, dates, filteredIndices, evalDirection === "long" ? "long" : "short", targetReturn, minHold, undefined, horizon);
       setEvalResult(evalResult);
       setEvalPriceCtx({
         prices: workPrices, highs: workHighs, lows: workLows, volumes: workVolumes,
@@ -1140,7 +1140,7 @@ export default function ComboOptimizer() {
         <div className="flex items-center gap-1">
           <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">DATE RANGE</label>
           <div className="flex items-center gap-0.5">
-            {(DATE_PRESETS as any[]).map((p: any) => (
+            {(DATE_PRESETS as unknown as any[]).map((p: any) => (
               <button
                 key={p.value}
                 data-testid={`combo-date-preset-${p.value}`}
@@ -1312,7 +1312,7 @@ export default function ComboOptimizer() {
               {runMode === "single" && (
                 <div className="flex flex-col gap-0.5">
                   <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Input Series</label>
-                  <InputSeriesPicker value={inputSelection} onChange={setInputSelection} family="combo" label="" disabled={running} />
+                  <InputSeriesPicker value={inputSelection as any} onChange={setInputSelection as any} family="combo" label="" />
                 </div>
               )}
 
@@ -1489,7 +1489,7 @@ export default function ComboOptimizer() {
                       onChange={e => setRankBy(e.target.value)}
                       className="text-[10px] font-mono bg-background border border-border rounded px-1.5 py-0.5"
                     >
-                      {(RANK_BY_OPTIONS as any[]).map((opt: any) => (
+                      {(RANK_BY_OPTIONS as unknown as any[]).map((opt: any) => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))}
                     </select>
@@ -1659,7 +1659,7 @@ export default function ComboOptimizer() {
               {runMode === "single" && (
                 <div className="flex flex-col gap-0.5">
                   <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Input Series</label>
-                  <InputSeriesPicker value={inputSelection} onChange={setInputSelection} family="combo" label="" />
+                  <InputSeriesPicker value={inputSelection as any} onChange={setInputSelection as any} family="combo" label="" />
                 </div>
               )}
 

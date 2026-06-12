@@ -86,8 +86,8 @@ This file tracks reconstruction status for every file recovered from the live Vu
 | File | Lines | Status | Notes |
 |---|---|---|---|
 | Pairs | 3808 | RAW | Newer than stale Pairs.tsx |
-| PremiumDiscount | 4008 | RAW | New |
-| ROCOptimizer | 4548 | RAW | New optimizer |
+| PremiumDiscount | 4008 | RECONSTRUCTED | New; 2802 lines TSX; unresolved: @/lib/premiumDiscount, @/lib/crossCorrelation, @/lib/rollingCorr, @/lib/computeStats, @/lib/percentile, @/lib/basketAggregation, @/lib/trendingDownIcon, @/lib/calendarIcon, @/lib/earningsPrimitive |
+| ROCOptimizer | 4548 | RECONSTRUCTED | New optimizer; 3674 lines TSX; fixed fragment close (</>) before ternary end; unresolved: @/lib/signalUtils, @/lib/rocOptimizer libs |
 | MACrossoverOptimizer | 5454 | RAW | Newer than stale; has Evaluate basket UI + dep-array fix |
 | index-CsG73Aq_.js | 131700 | RAW | Main entry: router, App, contexts, vendored deps |
 
