@@ -24,32 +24,32 @@ This file tracks reconstruction status for every file recovered from the live Vu
 | BasketTickerPill-DA9Wjwwc.js | 128 | RECONSTRUCTED | New since stale-source; imports @/lib/useBaskets, @/lib/basketUtils (isBasketTicker, extractBasketId) |
 | PresetBar-B4InBSQb.js | 187 | RECONSTRUCTED | New; has defensive `presets ?? []` fix; imports @/lib/optimizerPresets |
 | BasketPicker-DkcKAXfe.js | 303 | RECONSTRUCTED | New since stale-source; imports @/lib/useBaskets, @/lib/basketUtils (dedupeUpperTickers) |
-| ClassificationFiltersWithSource-D7v4WOtR.js | 77 | RAW | Newer than stale ClassificationFilters.tsx |
-| Baskets-CFu3VD0m.js | 88 | RAW | Basket page |
-| CartesianGrid-BQtjaw_K.js | 405 | RAW | Likely a recharts custom; could possibly skip |
-| YieldCorrelation-Dp9JZcNi.js | 27 | RAW | Tiny — probably a route wrapper |
+| ClassificationFiltersWithSource-D7v4WOtR.js | 77 | RECONSTRUCTED | Newer than stale ClassificationFilters.tsx; wraps ClassificationFilters with source toggle |
+| Baskets-CFu3VD0m.js | 88 | RECONSTRUCTED | Basket page; uses @/lib/useBaskets, @/lib/basketEditorPanel |
+| CartesianGrid-BQtjaw_K.js | 405 | RECONSTRUCTED | Recharts internal override with sub-components; uses @/lib/rechartsInternals |
+| YieldCorrelation-Dp9JZcNi.js | 27 | RECONSTRUCTED | Trivial iframe wrapper for yield correlation chart |
 
 ### Tier 2 — Medium pages
 | File | Lines | Status | Notes |
 |---|---|---|---|
-| Universe-s8lkGiqo.js | 485 | RAW | Newer than stale Universe.tsx |
-| GlobalUniverseExplorer-Bnuulnji.js | 489 | RAW | New |
-| DataExplorer-Y0Xg6AZ4.js | 503 | RAW | Newer than stale DataExplorer.tsx |
-| ShortInterest-CduJ1tqP.js | 567 | RAW | Newer than stale ShortInterest.tsx |
-| Alerts-DlZaNYym.js | 568 | RAW | New |
-| Valuation-58qiOq4f.js | 607 | RAW | Newer than stale Valuation.tsx |
-| ROCAnalysis-kpcfSeFI.js | 726 | RAW | New |
-| DividendSpread-Ck9w3CYe.js | 756 | RAW | Newer than stale DividendSpread.tsx |
-| ValuationRegime-BV1jZW8T.js | 766 | RAW | Newer than stale ValuationRegime.tsx |
-| PremiumDiscountScreener-D60ZbT1-.js | 819 | RAW | New |
-| Distributions-U9XjHz3w.js | 907 | RAW | New |
-| AutoTrendlineBacktest-BuiEwErn.js | 918 | RAW | New — Charts-related |
-| LevelsAndTrendlines-D9no3NXd.js | 990 | RAW | New — Charts-related |
-| Performance-CUtKWd0D.js | 1018 | RAW | Newer than stale Performance.tsx |
-| PairOptimizer-Df5S8y_J.js | 1106 | RAW | Newer than stale PairOptimizer.tsx |
-| PairRatios-B1PiWPRS.js | 1125 | RAW | Newer than stale PairRatios.tsx |
-| Scatter-BxBV76dr.js | 1152 | RAW | Newer than stale Scatter.tsx |
-| PatternScreener-BVupFpw-.js | 1288 | RAW | New — Charts-related |
+| Universe-s8lkGiqo.js | 485 | RECONSTRUCTED | Newer than stale Universe.tsx; classification override UI + excluded tickers |
+| GlobalUniverseExplorer-Bnuulnji.js | 489 | RECONSTRUCTED | New; full-featured explorer with sorting, filtering, pagination; uses @/lib/globalUniverse |
+| DataExplorer-Y0Xg6AZ4.js | 503 | RECONSTRUCTED | Newer than stale DataExplorer.tsx; virtual-scrolled metrics table with column picker |
+| ShortInterest-CduJ1tqP.js | 567 | RECONSTRUCTED | Newer than stale ShortInterest.tsx; SI overview + movers view with sparklines |
+| Alerts-DlZaNYym.js | 568 | RECONSTRUCTED | New; alert CRUD + evaluate endpoint; uses @/lib/createLucideIcon, @/lib/apiRequest |
+| Valuation-58qiOq4f.js | 607 | RECONSTRUCTED | Newer than stale Valuation.tsx; z-score table with canvas sparklines, groupBy, pageState |
+| ROCAnalysis-kpcfSeFI.js | 726 | RECONSTRUCTED | New |
+| DividendSpread-Ck9w3CYe.js | 756 | RECONSTRUCTED | Newer than stale DividendSpread.tsx |
+| ValuationRegime-BV1jZW8T.js | 766 | RECONSTRUCTED | Newer than stale ValuationRegime.tsx |
+| PremiumDiscountScreener-D60ZbT1-.js | 819 | RECONSTRUCTED | New |
+| Distributions-U9XjHz3w.js | 907 | RECONSTRUCTED | New |
+| AutoTrendlineBacktest-BuiEwErn.js | 918 | RECONSTRUCTED | New — Charts-related |
+| LevelsAndTrendlines-D9no3NXd.js | 990 | RECONSTRUCTED | New — Charts-related |
+| Performance-CUtKWd0D.js | 1018 | RECONSTRUCTED | Newer than stale Performance.tsx |
+| PairOptimizer-Df5S8y_J.js | 1106 | RECONSTRUCTED | Newer than stale PairOptimizer.tsx |
+| PairRatios-B1PiWPRS.js | 1125 | RECONSTRUCTED | Newer than stale PairRatios.tsx; uses lightweight-charts dual-panel + inline sparkline canvas |
+| Scatter-BxBV76dr.js | 1152 | RECONSTRUCTED | Newer than stale Scatter.tsx; canvas-based scatter with zoom/pan, regression, bubble-size, color-by-metric |
+| PatternScreener-BVupFpw-.js | 1288 | RECONSTRUCTED | New — Charts-related; pattern+channel screener across single/universe/pair/combo/basket scopes |
 | FactorBacktest-DTdYrgz4.js | ~ | RAW | New |
 | MacroRegime-DwnEMx4A.js | 1861 | RAW | New |
 | Macro-B6QgIETi.js | ~ | RAW | Newer than stale Macro.tsx |
@@ -98,6 +98,14 @@ This file tracks reconstruction status for every file recovered from the live Vu
 | main.tsx | STALE | likely OK |
 | client/src/lib/* | STALE+ | need to add basketOhlc, useBaskets, optimizerPresets, useFrequency, weeklyDownsample, optimizerInputSeries, etc. |
 | server/* | STALE | check vs Vultr `/opt/reit-viz/server/` later |
+
+## Lib files (hand-written from call-site inference)
+
+| File | Status | Notes |
+|---|---|---|
+| client/src/lib/basketUtils.ts | RECONSTRUCTED | Hand-written; `isBasketTicker`, `extractBasketId` use `BASKET:` prefix confirmed from bundle; `dedupeUpperTickers` caps at 50 |
+| client/src/lib/useBaskets.ts | RECONSTRUCTED | Hand-written; localStorage key `reit-viz:baskets:v1`; Basket interface extended with `weighting/rebalance/customWeights/volLookback` fields inferred from call sites and bundle; `addBasket` accepts optional third `BasketOptions` arg (seen in BasketPicker.tsx line 153) |
+| client/src/lib/optimizerPresets.tsx | RECONSTRUCTED | Hand-written; Context provider pattern matches bundle's `vHe/nXe`; per-kind storage keys `reit-viz:optimizer-presets:v1:<kind>`; OptimizerKind union includes all recently-deployed additions (slowstoch, zscore, momentum, rsi-regime, dualma, tva); `getPreset` added beyond spec — seen in bundle's `nXe` return value |
 
 ## Recent deployed fixes (preserve during reconstruction)
 - `optimizerPresets.tsx`: OptimizerKind union extends `"slowstoch" | "zscore" | "momentum" | "rsi-regime" | "dualma" | "tva"`; EMPTY_STORE and three iterator loops updated.

@@ -1,61 +1,48 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { useWorkspaceTab } from "@/lib/workspaceContext";
-import { useQuery } from "@tanstack/react-query";
-import { getMetricTrailingAllTickers, getCustomFundamentalMetrics } from "@/lib/dataService";
-import type { ClassifiedBase } from "@/lib/dataService";
-import ClassificationFilters, {
-  emptyClassFilters,
-  applyClassFilters,
-  serializeClassFilters,
-  deserializeClassFilters,
-  type ClassFilters,
-} from "@/components/ClassificationFilters";
+// Reconstructed from recovered-bundle/Valuation-58qiOq4f.js on 2026-06-11
+
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import React from "react";
 import { useUniverse } from "@/lib/universeContext";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  emptyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  getCustomFundamentalMetrics,
+  getMetricTrailingAllTickers,
+} from "@/lib/dataService";
+import { usePageState } from "@/lib/pageState";
+import { useQuery } from "@tanstack/react-query";
+import { applyClassFilters } from "@/lib/classificationFilters";
+import { ClassificationFilters } from "@/lib/classificationFilters";
+import { navigateToTicker } from "@/lib/navigateToTicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  ArrowUpDown,
-  Search,
-  Download,
-  ExternalLink,
-  ChevronDown,
-  ChevronRight,
-} from "lucide-react";
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { Download, ChevronDown, ChevronRight, ArrowUpDown, ExternalLink } from "lucide-react";
 
-// ---- Constants ----
-const METRIC_OPTIONS = [
-  "P/FFO FY2",
-  "P/FFO LTM",
-  "P/AFFO FY2",
-  "P/AFFO LTM",
-  "P/E FY2",
-  "P/E LTM",
-  "P/S FY2",
-  "P/S LTM",
-  "EV/EBITDA FY2",
-  "EV/EBITDA LTM",
-  "FFO Yield FY2",
-  "FFO Yield LTM",
-  "AFFO Yield FY2",
-  "AFFO Yield LTM",
-  "Dividend Yield",
-  "Implied Cap Rate",
-  "FY1 FFO Growth",
-  "FY2 FFO Growth",
-  "FY1 AFFO Growth",
-  "FY2 AFFO Growth",
-  "FY1 EPS Growth",
-  "FY2 EPS Growth",
-];
+const METRIC_GROUPS: Record<string, string[]> = {
+  Valuation: [
+    "P/FFO FY2", "P/FFO LTM", "P/AFFO FY2", "P/AFFO LTM", "P/E FY2", "P/E LTM",
+    "P/S FY2", "P/S LTM", "EV/EBITDA FY2", "EV/EBITDA LTM", "Implied Cap Rate",
+  ],
+  Yields: [
+    "FFO Yield FY2", "FFO Yield LTM", "AFFO Yield FY2", "AFFO Yield LTM", "Dividend Yield",
+  ],
+  Growth: [
+    "FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth",
+    "FY1 EPS Growth", "FY2 EPS Growth",
+  ],
+};
 
-const LOOKBACK_PRESETS = [
+Object.values(METRIC_GROUPS).flat();
+
+const LOOKBACK_OPTIONS = [
   { label: "1 Year", value: 252 },
   { label: "2 Year", value: 504 },
   { label: "3 Year", value: 756 },
@@ -65,49 +52,35 @@ const LOOKBACK_PRESETS = [
   { label: "All", value: 99999 },
 ];
 
-// ---- Stats helpers ----
-function computeStats(values: number[]): { mean: number; std: number } {
+interface ValuationStats {
+  mean: number;
+  std: number;
+}
+
+function calcStats(values: number[]): ValuationStats {
   if (values.length === 0) return { mean: 0, std: 0 };
-  const mean = values.reduce((s, v) => s + v, 0) / values.length;
-  const variance =
-    values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  const mean = values.reduce((acc, v) => acc + v, 0) / values.length;
+  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length;
   return { mean, std: Math.sqrt(variance) };
 }
 
-// ---- Types ----
-interface ValRow extends ClassifiedBase {
-  current: number | null;
-  mean5Y: number | null;
-  std5Y: number | null;
-  zScore: number | null;
-  histPctile: number | null;
-  premium: number | null; // (current - mean) / mean * 100
-  values: number[];
-  dates: string[];
-}
-
-// ---- Sparkline with mean ± std bands ----
-function ValSparkline({
-  values,
-  mean,
-  std,
-  current,
-  width = 120,
-  height = 32,
-}: {
+interface SparklineProps {
   values: number[];
   mean: number | null;
   std: number | null;
   current: number | null;
   width?: number;
   height?: number;
-}) {
+}
+
+function Sparkline({ values, mean, std, current, width = 120, height = 32 }: SparklineProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || values.length < 2) return;
-    const ctx = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = width * dpr;
     canvas.height = height * dpr;
@@ -115,65 +88,55 @@ function ValSparkline({
     canvas.style.height = `${height}px`;
     ctx.scale(dpr, dpr);
 
-    // Determine range — include mean ± 2 std if available
     let allVals = [...values];
-    if (mean !== null && std !== null) {
-      allVals.push(mean + 2 * std, mean - 2 * std);
-    }
-    const min = Math.min(...allVals);
-    const max = Math.max(...allVals);
-    const range = max - min || 1;
+    if (mean !== null && std !== null) allVals.push(mean + 2 * std, mean - 2 * std);
+    const minVal = Math.min(...allVals);
+    const range = Math.max(...allVals) - minVal || 1;
     const pad = 2;
-    const plotW = width - 2 * pad;
-    const plotH = height - 2 * pad;
-
-    const toY = (v: number) => pad + plotH - ((v - min) / range) * plotH;
-    const toX = (i: number) => pad + (i / (values.length - 1)) * plotW;
+    const drawW = width - 2 * pad;
+    const drawH = height - 2 * pad;
+    const toY = (v: number) => pad + drawH - ((v - minVal) / range) * drawH;
+    const toX = (i: number) => pad + (i / (values.length - 1)) * drawW;
 
     ctx.clearRect(0, 0, width, height);
 
-    // Mean ± 1 std band (shaded)
     if (mean !== null && std !== null) {
       const bandTop = toY(mean + std);
       const bandBot = toY(mean - std);
       ctx.fillStyle = "rgba(14, 165, 233, 0.07)";
-      ctx.fillRect(pad, bandTop, plotW, bandBot - bandTop);
-
-      // Mean line
+      ctx.fillRect(pad, bandTop, drawW, bandBot - bandTop);
       ctx.beginPath();
       ctx.strokeStyle = "rgba(14, 165, 233, 0.35)";
       ctx.lineWidth = 0.8;
       ctx.setLineDash([3, 3]);
-      const my = toY(mean);
-      ctx.moveTo(pad, my);
-      ctx.lineTo(pad + plotW, my);
+      const meanY = toY(mean);
+      ctx.moveTo(pad, meanY);
+      ctx.lineTo(pad + drawW, meanY);
       ctx.stroke();
       ctx.setLineDash([]);
-
-      // ± 1 std dashed
       ctx.beginPath();
       ctx.strokeStyle = "rgba(14, 165, 233, 0.15)";
       ctx.lineWidth = 0.5;
       ctx.setLineDash([2, 2]);
-      const topY = toY(mean + std);
-      ctx.moveTo(pad, topY);
-      ctx.lineTo(pad + plotW, topY);
+      const plusSigY = toY(mean + std);
+      ctx.moveTo(pad, plusSigY);
+      ctx.lineTo(pad + drawW, plusSigY);
       ctx.stroke();
       ctx.beginPath();
-      const botY = toY(mean - std);
-      ctx.moveTo(pad, botY);
-      ctx.lineTo(pad + plotW, botY);
+      const minusSigY = toY(mean - std);
+      ctx.moveTo(pad, minusSigY);
+      ctx.lineTo(pad + drawW, minusSigY);
       ctx.stroke();
       ctx.setLineDash([]);
     }
 
-    // P/FFO line — color based on z-score
-    let lineColor = "rgba(14, 165, 233, 0.7)"; // neutral blue
+    let lineColor = "rgba(14, 165, 233, 0.7)";
     if (mean !== null && std !== null && current !== null && std > 0) {
       const z = (current - mean) / std;
-      if (z < -1) lineColor = "rgba(34, 197, 94, 0.75)"; // cheap green
-      else if (z > 1) lineColor = "rgba(239, 68, 68, 0.75)"; // expensive red
+      if (z < -1) lineColor = "rgba(34, 197, 94, 0.75)";
+      else if (z > 1) lineColor = "rgba(239, 68, 68, 0.75)";
     }
+
     ctx.beginPath();
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.2;
@@ -185,9 +148,8 @@ function ValSparkline({
     }
     ctx.stroke();
 
-    // Current value dot
     if (current !== null) {
-      const cx = pad + plotW;
+      const cx = pad + drawW;
       const cy = toY(current);
       ctx.beginPath();
       ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
@@ -197,14 +159,12 @@ function ValSparkline({
   }, [values, mean, std, current, width, height]);
 
   if (values.length < 2)
-    return (
-      <span className="text-[10px] text-muted-foreground/40">—</span>
-    );
+    return <span className="text-[10px] text-muted-foreground/40">—</span>;
+
   return <canvas ref={canvasRef} style={{ width, height }} />;
 }
 
-// ---- Z-score color ----
-function zScoreColor(z: number | null): string {
+function zScoreTextClass(z: number | null): string {
   if (z === null) return "";
   if (z <= -2) return "text-green-400 font-semibold";
   if (z <= -1) return "text-green-400";
@@ -215,7 +175,7 @@ function zScoreColor(z: number | null): string {
   return "text-muted-foreground";
 }
 
-function zScoreBg(z: number | null): string {
+function zScoreRowClass(z: number | null): string {
   if (z === null) return "";
   if (z <= -2) return "bg-green-500/10";
   if (z <= -1) return "bg-green-500/5";
@@ -224,103 +184,124 @@ function zScoreBg(z: number | null): string {
   return "";
 }
 
-// ---- Main component ----
+interface ValuationRow {
+  ticker: string;
+  name: string;
+  economy: string;
+  sector: string;
+  subsector: string;
+  industryGroup: string;
+  industry: string;
+  subindustry: string;
+  current: number | null;
+  mean5Y: number;
+  std5Y: number;
+  zScore: number | null;
+  histPctile: number | null;
+  premium: number | null;
+  values: number[];
+  dates: string[];
+}
+
+interface SummaryStats {
+  cheapCount: number;
+  fairCount: number;
+  richCount: number;
+  medianZ: number;
+  avgZ: number;
+  total: number;
+}
+
 export default function Valuation() {
   const { universeTickers } = useUniverse();
   const [metric, setMetric] = useState("P/FFO FY2");
   const [lookback, setLookback] = useState(1260);
-  const [sortCol, setSortCol] = useState<string>("zScore");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortCol, setSortCol] = useState("zScore");
+  const [sortDir, setSortDir] = useState("asc");
   const [search, setSearch] = useState("");
-  const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
-  const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set()
+  const [classFilters, setClassFilters] = useState(emptyClassFilters);
+  const [manualTickers, setManualTickers] = useState(new Set<string>());
+  const [expandedGroups, setExpandedGroups] = useState(new Set<string>());
+  const [groupByLevel, setGroupByLevel] = useState("none");
+
+  const getState = useCallback(
+    () => ({
+      metric,
+      lookback,
+      sortCol,
+      sortDir,
+      classFilters: serializeClassFilters(classFilters),
+      manualTickers: [...manualTickers],
+      groupByLevel,
+    }),
+    [metric, lookback, sortCol, sortDir, classFilters, manualTickers, groupByLevel]
   );
-  const [groupByLevel, setGroupByLevel] = useState<string>("none");
 
-  const serializeValuation = useCallback(() => ({
-    metric,
-    lookback,
-    sortCol,
-    sortDir,
-    classFilters: serializeClassFilters(classFilters),
-    manualTickers: [...manualTickers],
-    groupByLevel,
-  }), [metric, lookback, sortCol, sortDir, classFilters, manualTickers, groupByLevel]);
-
-  const restoreValuation = useCallback((state: any) => {
-    if (state.metric !== undefined) setMetric(state.metric);
-    if (state.lookback !== undefined) setLookback(state.lookback);
-    if (state.sortCol !== undefined) setSortCol(state.sortCol);
-    if (state.sortDir !== undefined) setSortDir(state.sortDir);
-    if (state.classFilters !== undefined) setClassFilters(deserializeClassFilters(state.classFilters));
-    if (state.manualTickers !== undefined) setManualTickers(new Set(state.manualTickers));
-    if (state.groupByLevel !== undefined) setGroupByLevel(state.groupByLevel);
-    else if (state.groupBySubind !== undefined) setGroupByLevel(state.groupBySubind ? "subindustry" : "none");
+  const restoreState = useCallback((saved: any) => {
+    if (saved.metric !== undefined) setMetric(saved.metric);
+    if (saved.lookback !== undefined) setLookback(saved.lookback);
+    if (saved.sortCol !== undefined) setSortCol(saved.sortCol);
+    if (saved.sortDir !== undefined) setSortDir(saved.sortDir);
+    if (saved.classFilters !== undefined) setClassFilters(deserializeClassFilters(saved.classFilters));
+    if (saved.manualTickers !== undefined) setManualTickers(new Set(saved.manualTickers));
+    if (saved.groupByLevel !== undefined) {
+      setGroupByLevel(saved.groupByLevel);
+    } else if (saved.groupBySubind !== undefined) {
+      setGroupByLevel(saved.groupBySubind ? "subindustry" : "none");
+    }
   }, []);
 
-  useWorkspaceTab("valuation", serializeValuation, restoreValuation);
+  usePageState("valuation", getState, restoreState);
 
-  // Fetch trailing data for all tickers
-  const { data: rawData = [], isLoading } = useQuery({
+  const { data: rawData = [], isLoading } = useQuery<any[]>({
     queryKey: ["valuation-trailing", metric, lookback],
     queryFn: () => getMetricTrailingAllTickers(metric, lookback),
   });
 
-  // Compute stats rows
-  const rows: ValRow[] = useMemo(() => {
+  const enrichedRows = useMemo<ValuationRow[]>(() => {
     return rawData
-      .filter((r) => r.values.length > 20)
-      .map((r) => {
-        const { mean, std } = computeStats(r.values);
-        const current = r.current;
-        const zScore =
-          current !== null && std > 0 ? (current - mean) / std : null;
-        // Percentile: count at or below current / total observations
+      .filter((row) => row.values.length > 20)
+      .map((row) => {
+        const { mean, std } = calcStats(row.values);
+        const current = row.current;
+        const zScore = current !== null && std > 0 ? (current - mean) / std : null;
         const histPctile =
-          current !== null && r.values.length > 0
-            ? (r.values.filter((v) => v <= current).length /
-                r.values.length) *
-              100
+          current !== null && row.values.length > 1
+            ? (row.values.filter((v: number) => v < current).length / (row.values.length - 1)) * 100
+            : current !== null && row.values.length === 1
+            ? 50
             : null;
-        const premium =
-          current !== null && mean !== 0
-            ? ((current - mean) / mean) * 100
-            : null;
-
+        const premium = current !== null && mean !== 0 ? ((current - mean) / mean) * 100 : null;
         return {
-          ticker: r.ticker,
-          name: r.name,
-          economy: r.economy,
-          sector: r.sector,
-          subsector: r.subsector,
-          industryGroup: r.industryGroup,
-          industry: r.industry,
-          subindustry: r.subindustry,
+          ticker: row.ticker,
+          name: row.name,
+          economy: row.economy,
+          sector: row.sector,
+          subsector: row.subsector,
+          industryGroup: row.industryGroup,
+          industry: row.industry,
+          subindustry: row.subindustry,
           current,
           mean5Y: mean,
           std5Y: std,
           zScore,
           histPctile,
           premium,
-          values: r.values,
-          dates: r.dates,
+          values: row.values,
+          dates: row.dates,
         };
       });
   }, [rawData]);
 
-  // Filter + sort
-  const sorted = useMemo(() => {
-    let filtered = rows.filter((r) => r.current !== null);
-    if (universeTickers) filtered = filtered.filter(r => universeTickers.has(r.ticker));
-    filtered = applyClassFilters(filtered, classFilters, search, manualTickers);
-
-    return filtered.sort((a, b) => {
-      const getter = (row: ValRow): number => {
+  const filteredRows = useMemo<ValuationRow[]>(() => {
+    let rows = enrichedRows.filter((r) => r.current !== null);
+    if (universeTickers) rows = rows.filter((r) => universeTickers.has(r.ticker));
+    rows = applyClassFilters(rows, classFilters, search, manualTickers);
+    rows.sort((a, b) => {
+      const getValue = (row: ValuationRow): number => {
         switch (sortCol) {
           case "ticker":
-            return 0; // handled differently
+            return 0;
           case "current":
             return row.current ?? (sortDir === "asc" ? Infinity : -Infinity);
           case "mean5Y":
@@ -330,86 +311,59 @@ export default function Valuation() {
           case "zScore":
             return row.zScore ?? (sortDir === "asc" ? Infinity : -Infinity);
           case "histPctile":
-            return (
-              row.histPctile ?? (sortDir === "asc" ? Infinity : -Infinity)
-            );
+            return row.histPctile ?? (sortDir === "asc" ? Infinity : -Infinity);
           case "premium":
             return row.premium ?? (sortDir === "asc" ? Infinity : -Infinity);
           default:
             return row.zScore ?? (sortDir === "asc" ? Infinity : -Infinity);
         }
       };
-
-      if (sortCol === "ticker") {
-        return sortDir === "asc"
-          ? a.ticker.localeCompare(b.ticker)
-          : b.ticker.localeCompare(a.ticker);
-      }
-      const av = getter(a);
-      const bv = getter(b);
-      return sortDir === "asc" ? av - bv : bv - av;
+      if (sortCol === "ticker")
+        return sortDir === "asc" ? a.ticker.localeCompare(b.ticker) : b.ticker.localeCompare(a.ticker);
+      const va = getValue(a);
+      const vb = getValue(b);
+      return sortDir === "asc" ? va - vb : vb - va;
     });
-  }, [rows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers]);
+    return rows;
+  }, [enrichedRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers]);
 
-  // Group by selected classification level
-  const grouped = useMemo(() => {
+  const groupedRows = useMemo<[string, ValuationRow[]][] | null>(() => {
     if (groupByLevel === "none") return null;
-    const map = new Map<string, ValRow[]>();
-    for (const r of sorted) {
-      const key = (r as any)[groupByLevel] || "Other";
+    const map = new Map<string, ValuationRow[]>();
+    for (const row of filteredRows) {
+      const key = (row as any)[groupByLevel] || "Other";
       if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(r);
+      map.get(key)!.push(row);
     }
-    // Sort groups by average z-score
     return Array.from(map.entries()).sort((a, b) => {
-      const avgZ = (rows: ValRow[]) => {
+      const avgZ = (rows: ValuationRow[]) => {
         const valid = rows.filter((r) => r.zScore !== null);
-        if (valid.length === 0) return 0;
-        return valid.reduce((s, r) => s + r.zScore!, 0) / valid.length;
+        return valid.length === 0 ? 0 : valid.reduce((acc, r) => acc + r.zScore!, 0) / valid.length;
       };
       return avgZ(a[1]) - avgZ(b[1]);
     });
-  }, [sorted, groupByLevel]);
+  }, [filteredRows, groupByLevel]);
 
-  const toggleGroup = (group: string) => {
+  const handleToggleGroup = (key: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(group)) next.delete(group);
-      else next.add(group);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
   const handleSort = (col: string) => {
-    if (sortCol === col) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
-    } else {
-      setSortCol(col);
-      setSortDir("asc");
-    }
+    if (sortCol === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortCol(col); setSortDir("asc"); }
   };
 
-  const navigateToChart = useCallback((ticker: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("ticker", ticker);
-    url.hash = "#/";
-    window.location.href = url.toString();
-  }, []);
-
-  const exportCSV = () => {
+  const handleExportCsv = () => {
     const headers = [
-      "Rank",
-      "Ticker",
-      "Name",
-      "Subindustry",
-      `Current ${metric}`,
-      "5Y Mean",
-      "5Y Std Dev",
-      "Z-Score",
-      "Pctile",
-      "Premium/Disc %",
+      "Rank", "Ticker", "Name", "Subindustry", `Current ${metric}`,
+      "5Y Mean", "5Y Std Dev", "Z-Score", "Pctile", "Premium/Disc %",
     ];
-    const lines = sorted.map((r, i) =>
+    const rows = filteredRows.map((r, i) =>
       [
         i + 1,
         r.ticker,
@@ -423,42 +377,29 @@ export default function Valuation() {
         r.premium?.toFixed(1) ?? "",
       ].join(",")
     );
-    const csv = [headers.join(","), ...lines].join("\n");
+    const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `valuation_${metric.replace(/[^a-zA-Z0-9]/g, "_")}.csv`;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `valuation_${metric.replace(/[^a-zA-Z0-9]/g, "_")}.csv`;
+    anchor.click();
     URL.revokeObjectURL(url);
   };
 
-  // Summary stats
-  const summaryStats = useMemo(() => {
-    const valid = sorted.filter((r) => r.zScore !== null);
+  const summaryStats = useMemo<SummaryStats | null>(() => {
+    const valid = filteredRows.filter((r) => r.zScore !== null);
     if (valid.length === 0) return null;
     const cheapCount = valid.filter((r) => r.zScore! < -1).length;
-    const fairCount = valid.filter(
-      (r) => r.zScore! >= -1 && r.zScore! <= 1
-    ).length;
+    const fairCount = valid.filter((r) => r.zScore! >= -1 && r.zScore! <= 1).length;
     const richCount = valid.filter((r) => r.zScore! > 1).length;
-    const medianZ = [...valid]
-      .sort((a, b) => a.zScore! - b.zScore!)
-      [Math.floor(valid.length / 2)].zScore!;
-    const avgZ =
-      valid.reduce((s, r) => s + r.zScore!, 0) / valid.length;
+    const sorted = [...valid].sort((a, b) => a.zScore! - b.zScore!);
+    const medianZ = sorted[Math.floor(valid.length / 2)].zScore!;
+    const avgZ = valid.reduce((acc, r) => acc + r.zScore!, 0) / valid.length;
     return { cheapCount, fairCount, richCount, medianZ, avgZ, total: valid.length };
-  }, [sorted]);
+  }, [filteredRows]);
 
-  const SortHeader = ({
-    col,
-    label,
-    className = "",
-  }: {
-    col: string;
-    label: string;
-    className?: string;
-  }) => (
+  const SortHeader = ({ col, label, className = "" }: { col: string; label: string; className?: string }) => (
     <th className={`px-2 py-1.5 text-muted-foreground font-medium ${className}`}>
       <button
         className="inline-flex items-center gap-0.5 hover:text-foreground"
@@ -471,31 +412,26 @@ export default function Valuation() {
     </th>
   );
 
-  const renderRow = (row: ValRow, idx: number) => (
+  const renderRow = (row: ValuationRow, index: number) => (
     <tr
       key={row.ticker}
-      className={`group border-b border-border/20 hover:bg-accent/30 transition-colors cursor-pointer ${zScoreBg(row.zScore)}`}
-      onClick={() => navigateToChart(row.ticker)}
+      className={`group border-b border-border/20 hover:bg-accent/30 transition-colors cursor-pointer ${zScoreRowClass(row.zScore)}`}
+      onClick={() => navigateToTicker(row.ticker)}
       data-testid={`val-row-${row.ticker}`}
     >
       <td className="px-2 py-1 text-muted-foreground font-mono tabular-nums text-center">
-        {idx + 1}
+        {index + 1}
       </td>
       <td className="px-2 py-1 font-mono font-bold">
         <button
           className="text-primary hover:text-primary/80 hover:underline inline-flex items-center gap-0.5"
-          onClick={(e) => {
-            e.stopPropagation();
-            navigateToChart(row.ticker);
-          }}
+          onClick={(e) => { e.stopPropagation(); navigateToTicker(row.ticker); }}
         >
           {row.ticker}
           <ExternalLink className="w-2.5 h-2.5 opacity-0 group-hover:opacity-60" />
         </button>
       </td>
-      <td className="px-2 py-1 text-foreground truncate max-w-[140px]">
-        {row.name}
-      </td>
+      <td className="px-2 py-1 text-foreground truncate max-w-[140px]">{row.name}</td>
       <td className="px-2 py-1 text-muted-foreground text-[10px] truncate">
         {row.subindustry.replace(" Equity REITs", "")}
       </td>
@@ -508,9 +444,7 @@ export default function Valuation() {
       <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground/60">
         {row.std5Y?.toFixed(2) ?? "—"}
       </td>
-      <td
-        className={`px-2 py-1 text-right font-mono tabular-nums ${zScoreColor(row.zScore)}`}
-      >
+      <td className={`px-2 py-1 text-right font-mono tabular-nums ${zScoreTextClass(row.zScore)}`}>
         {row.zScore !== null ? row.zScore.toFixed(2) : "—"}
       </td>
       <td
@@ -519,8 +453,8 @@ export default function Valuation() {
             ? row.histPctile < 20
               ? "text-green-400"
               : row.histPctile > 80
-                ? "text-red-400"
-                : "text-muted-foreground"
+              ? "text-red-400"
+              : "text-muted-foreground"
             : ""
         }`}
       >
@@ -532,8 +466,8 @@ export default function Valuation() {
             ? row.premium < -10
               ? "text-green-400"
               : row.premium > 10
-                ? "text-red-400"
-                : "text-muted-foreground"
+              ? "text-red-400"
+              : "text-muted-foreground"
             : ""
         }`}
       >
@@ -542,7 +476,7 @@ export default function Valuation() {
           : "—"}
       </td>
       <td className="px-1 py-1">
-        <ValSparkline
+        <Sparkline
           values={row.values}
           mean={row.mean5Y}
           std={row.std5Y}
@@ -553,56 +487,62 @@ export default function Valuation() {
   );
 
   return (
-    <div
-      className="flex flex-col h-full bg-background"
-      data-testid="valuation-page"
-    >
-      {/* Controls bar */}
+    <div className="flex flex-col h-full bg-background" data-testid="valuation-page">
+      {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-wrap">
-        <span className="text-xs font-semibold text-muted-foreground">
-          Metric
-        </span>
+        <span className="text-xs font-semibold text-muted-foreground">Metric</span>
         <Select value={metric} onValueChange={setMetric}>
           <SelectTrigger
-            className="h-6 text-[11px] w-[130px]"
+            className="h-6 text-[11px] w-[180px]"
             data-testid="val-metric-select"
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
-            {METRIC_OPTIONS.map((m) => (
-              <SelectItem key={m} value={m}>
-                {m}
-              </SelectItem>
+          <SelectContent className="max-h-[420px]">
+            {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
+              <div key={group}>
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {group}
+                </div>
+                {metrics.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </div>
             ))}
-            {(() => { const cm = getCustomFundamentalMetrics(); return cm.length > 0 ? (
-              <>
-                <div className="px-2 py-1 text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Uploaded Fundamental</div>
-                {cm.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-              </>
-            ) : null; })()}
+            {(() => {
+              const customMetrics = getCustomFundamentalMetrics();
+              return customMetrics.length > 0 ? (
+                <React.Fragment>
+                  <div className="px-2 py-1 text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">
+                    Uploaded Fundamental
+                  </div>
+                  {customMetrics.map((m: string) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </React.Fragment>
+              ) : null;
+            })()}
           </SelectContent>
         </Select>
 
         <div className="h-5 w-px bg-border mx-1" />
 
-        <span className="text-xs font-semibold text-muted-foreground">
-          Lookback
-        </span>
+        <span className="text-xs font-semibold text-muted-foreground">Lookback</span>
         <Select
-          value={LOOKBACK_PRESETS.find(p => p.value === lookback) ? String(lookback) : "custom"}
+          value={LOOKBACK_OPTIONS.find((o) => o.value === lookback) ? String(lookback) : "custom"}
           onValueChange={(v) => { if (v !== "custom") setLookback(parseInt(v)); }}
         >
-          <SelectTrigger
-            className="h-6 text-[11px] w-[90px]"
-            data-testid="val-lookback"
-          >
+          <SelectTrigger className="h-6 text-[11px] w-[90px]" data-testid="val-lookback">
             <SelectValue>
-              {LOOKBACK_PRESETS.find(p => p.value === lookback)?.label ?? `${lookback}d`}
+              {LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label ?? `${lookback}d`}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {LOOKBACK_PRESETS.map((o) => (
+            {LOOKBACK_OPTIONS.map((o) => (
               <SelectItem key={o.value} value={String(o.value)}>
                 {o.label}
               </SelectItem>
@@ -610,7 +550,8 @@ export default function Valuation() {
             <SelectItem value="custom">Custom...</SelectItem>
           </SelectContent>
         </Select>
-        {!LOOKBACK_PRESETS.find(p => p.value === lookback) && (
+
+        {!LOOKBACK_OPTIONS.find((o) => o.value === lookback) && (
           <Input
             type="number"
             className="h-6 text-[11px] w-[65px] font-mono px-1.5"
@@ -618,8 +559,8 @@ export default function Valuation() {
             min={20}
             max={10000}
             onChange={(e) => {
-              const v = parseInt(e.target.value);
-              if (v >= 20) setLookback(v);
+              const n = parseInt(e.target.value);
+              if (n >= 20) setLookback(n);
             }}
             placeholder="days"
           />
@@ -627,8 +568,14 @@ export default function Valuation() {
 
         <div className="h-5 w-px bg-border mx-1" />
 
-        <Select value={groupByLevel} onValueChange={(v) => { setGroupByLevel(v); setExpandedGroups(new Set()); }}>
-          <SelectTrigger className="h-6 text-[11px] w-[120px]" data-testid="val-group-select">
+        <Select
+          value={groupByLevel}
+          onValueChange={(v) => { setGroupByLevel(v); setExpandedGroups(new Set()); }}
+        >
+          <SelectTrigger
+            className="h-6 text-[11px] w-[120px]"
+            data-testid="val-group-select"
+          >
             <SelectValue placeholder="Group by" />
           </SelectTrigger>
           <SelectContent>
@@ -642,7 +589,6 @@ export default function Valuation() {
           </SelectContent>
         </Select>
 
-        {/* Summary badges */}
         {summaryStats && (
           <div className="flex items-center gap-2 ml-auto mr-2">
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-green-500/10 text-green-400 font-mono">
@@ -664,7 +610,7 @@ export default function Valuation() {
           variant="outline"
           size="sm"
           className="h-6 gap-1 text-[11px]"
-          onClick={exportCSV}
+          onClick={handleExportCsv}
           data-testid="val-export"
         >
           <Download className="w-3 h-3" />
@@ -672,7 +618,7 @@ export default function Valuation() {
         </Button>
       </div>
 
-      {/* Classification Filters Row */}
+      {/* Filters bar */}
       <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/50 flex-wrap">
         <ClassificationFilters
           filters={classFilters}
@@ -681,8 +627,8 @@ export default function Valuation() {
           onSearchChange={setSearch}
           manualTickers={manualTickers}
           onManualTickersChange={setManualTickers}
-          filteredCount={sorted.length}
-          totalCount={rows.length}
+          filteredCount={filteredRows.length}
+          totalCount={enrichedRows.length}
           testIdPrefix="val"
         />
       </div>
@@ -694,15 +640,10 @@ export default function Valuation() {
             Loading valuation data for all tickers...
           </div>
         ) : (
-          <table
-            className="w-full text-[11px]"
-            data-testid="valuation-table"
-          >
+          <table className="w-full text-[11px]" data-testid="valuation-table">
             <thead className="sticky top-0 bg-card z-10">
               <tr className="border-b border-border">
-                <th className="text-center px-2 py-1.5 w-8 text-muted-foreground font-medium">
-                  #
-                </th>
+                <th className="text-center px-2 py-1.5 w-8 text-muted-foreground font-medium">#</th>
                 <SortHeader col="ticker" label="Ticker" className="text-left w-14" />
                 <th className="text-left px-2 py-1.5 text-muted-foreground font-medium max-w-[140px]">
                   Name
@@ -722,54 +663,46 @@ export default function Valuation() {
               </tr>
             </thead>
             <tbody>
-              {groupByLevel !== "none" && grouped
-                ? grouped.map(([groupName, groupRows]) => {
-                    const isOpen = expandedGroups.has(groupName);
+              {groupByLevel !== "none" && groupedRows
+                ? groupedRows.map(([groupKey, groupRows]) => {
+                    const isExpanded = expandedGroups.has(groupKey);
+                    const validRows = groupRows.filter((r) => r.zScore !== null);
                     const avgZ =
-                      groupRows.filter((r) => r.zScore !== null).length > 0
-                        ? groupRows
-                            .filter((r) => r.zScore !== null)
-                            .reduce((s, r) => s + r.zScore!, 0) /
-                          groupRows.filter((r) => r.zScore !== null).length
+                      validRows.length > 0
+                        ? validRows.reduce((acc, r) => acc + r.zScore!, 0) / validRows.length
                         : null;
                     return (
-                      <React.Fragment key={groupName}>
+                      <React.Fragment key={groupKey}>
                         <tr
                           className="bg-card/60 border-b border-border/40 cursor-pointer hover:bg-accent/20"
-                          onClick={() => toggleGroup(groupName)}
+                          onClick={() => handleToggleGroup(groupKey)}
                         >
-                          <td
-                            colSpan={11}
-                            className="px-2 py-1.5"
-                          >
+                          <td colSpan={11} className="px-2 py-1.5">
                             <div className="flex items-center gap-2">
-                              {isOpen ? (
+                              {isExpanded ? (
                                 <ChevronDown className="w-3 h-3 text-muted-foreground" />
                               ) : (
                                 <ChevronRight className="w-3 h-3 text-muted-foreground" />
                               )}
                               <span className="text-[11px] font-semibold text-foreground">
-                                {groupName.replace(" Equity REITs", "")}
+                                {groupKey.replace(" Equity REITs", "")}
                               </span>
                               <span className="text-[10px] text-muted-foreground font-mono">
                                 ({groupRows.length})
                               </span>
                               {avgZ !== null && (
-                                <span
-                                  className={`text-[10px] font-mono ${zScoreColor(avgZ)}`}
-                                >
+                                <span className={`text-[10px] font-mono ${zScoreTextClass(avgZ)}`}>
                                   Avg Z: {avgZ.toFixed(2)}
                                 </span>
                               )}
                             </div>
                           </td>
                         </tr>
-                        {isOpen &&
-                          groupRows.map((row, i) => renderRow(row, i))}
+                        {isExpanded && groupRows.map((row, i) => renderRow(row, i))}
                       </React.Fragment>
                     );
                   })
-                : sorted.map((row, i) => renderRow(row, i))}
+                : filteredRows.map((row, i) => renderRow(row, i))}
             </tbody>
           </table>
         )}

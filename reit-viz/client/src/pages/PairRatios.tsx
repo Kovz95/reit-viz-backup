@@ -1,39 +1,57 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+// Reconstructed from recovered-bundle/PairRatios-B1PiWPRS.js on 2026-06-11
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useAppContext } from "@/lib/appContext";
+import { useWorkspaceState } from "@/lib/workspaceState";
+import { useRouterState } from "@/lib/navigateToPairs";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { useUniverse } from "@/lib/universeContext";
-import { getTickers, getTickerRaw, getDates, type ClassifiedBase } from "@/lib/dataService";
-import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { Button } from "@/components/ui/button";
+import { ChevronLeft } from "lucide-react";
 import {
   Select,
-  SelectContent,
-  SelectItem,
   SelectTrigger,
   SelectValue,
+  SelectContent,
+  SelectItem,
 } from "@/components/ui/select";
+import { SlidersHorizontal, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Download, Loader2, ExternalLink } from "lucide-react";
+import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
+import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
+import { useUniverseSignature } from "@/lib/universeSignature";
 import {
   createChart,
-  ColorType,
   CrosshairMode,
+  ColorType,
   LineSeries,
 } from "lightweight-charts";
-import type { IChartApi, Time } from "lightweight-charts";
-import { Input } from "@/components/ui/input";
-import {
-  ArrowLeft,
-  Download,
-  Loader2,
-  ArrowUpDown,
-  TrendingUp,
-  TrendingDown,
-  Search,
-  X,
-  Filter,
-  RotateCcw,
-} from "lucide-react";
 
-// ── Metric options ──
-const RATIO_METRICS = [
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+interface RatioPair {
+  tickerA: string;
+  tickerB: string;
+  currentRatio: number;
+  zScore: number;
+  mean: number;
+  std: number;
+  ratioSeries: { time: string; value: number }[];
+  zScoreSeries: { time: string; value: number }[];
+  pctChange30d: number;
+  pctChange90d: number;
+}
+
+interface ValueFilter {
+  min: string;
+  max: string;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const METRIC_OPTIONS = [
   { value: "close", label: "Stock Price" },
   { value: "P/FFO FY2", label: "P/FFO FY2" },
   { value: "P/AFFO FY2", label: "P/AFFO FY2" },
@@ -56,128 +74,115 @@ const LOOKBACK_OPTIONS = [
   { value: "all", label: "All" },
 ];
 
-const ZSCORE_THRESHOLDS = [1, 1.5, 2, 2.5, 3];
+const Z_THRESHOLDS = [1, 1.5, 2, 2.5, 3];
 
-interface PairData {
-  tickerA: string;
-  tickerB: string;
-  currentRatio: number;
-  zScore: number;
-  mean: number;
-  std: number;
-  ratioSeries: { time: string; value: number }[];
-  zScoreSeries: { time: string; value: number }[];
-  pctChange30d: number;
-  pctChange90d: number;
-}
-
-// ── Helpers ──
+// ---------------------------------------------------------------------------
+// Color helpers
+// ---------------------------------------------------------------------------
 function zScoreColor(z: number): string {
   const abs = Math.abs(z);
-  if (abs >= 2.5) return z > 0 ? "#ef4444" : "#22c55e";
-  if (abs >= 2) return z > 0 ? "#f97316" : "#4ade80";
-  if (abs >= 1.5) return z > 0 ? "#fbbf24" : "#6ee7b7";
-  return "#94a3b8";
+  return abs >= 2.5
+    ? z > 0 ? "#ef4444" : "#22c55e"
+    : abs >= 2
+    ? z > 0 ? "#f97316" : "#4ade80"
+    : abs >= 1.5
+    ? z > 0 ? "#fbbf24" : "#6ee7b7"
+    : "#94a3b8";
 }
 
-function zScoreBg(z: number): string {
+function zScoreBgColor(z: number): string {
   const abs = Math.abs(z);
-  if (abs >= 2.5) return z > 0 ? "rgba(239,68,68,0.12)" : "rgba(34,197,94,0.12)";
-  if (abs >= 2) return z > 0 ? "rgba(249,115,22,0.08)" : "rgba(74,222,128,0.08)";
-  return "transparent";
+  return abs >= 2.5
+    ? z > 0 ? "rgba(239,68,68,0.12)" : "rgba(34,197,94,0.12)"
+    : abs >= 2
+    ? z > 0 ? "rgba(249,115,22,0.08)" : "rgba(74,222,128,0.08)"
+    : "transparent";
 }
 
-// ── Compute pair ratios ──
-// RawTickerData format: Record<metric, [dateIndex, value][]>
-// We need the global dates array to resolve dateIndex → date string
+// ---------------------------------------------------------------------------
+// Compute all pair ratio objects
+// ---------------------------------------------------------------------------
 function computePairRatios(
   tickers: string[],
-  tickerDataMap: Map<string, any>,
-  globalDates: string[],
+  dataMap: Map<string, any>,
+  dates: string[],
   metric: string,
-  lookback: string,
-  zThreshold: number
-): PairData[] {
-  const results: PairData[] = [];
+  lookback: string
+): RatioPair[] {
+  const results: RatioPair[] = [];
+  const cleanMap = new Map<string, Map<number, number>>();
 
-  // Pre-build per-ticker dateIndex→value maps for the selected metric
-  const metricMaps = new Map<string, Map<number, number>>();
   for (const ticker of tickers) {
-    const raw = tickerDataMap.get(ticker);
-    if (!raw) continue;
-    const tuples: [number, number][] = raw[metric] || [];
-    if (tuples.length === 0) continue;
-    const m = new Map<number, number>();
-    for (const [idx, val] of tuples) {
-      if (val != null && val > 0) m.set(idx, val);
+    const tickerData = dataMap.get(ticker);
+    if (!tickerData) continue;
+    const series: [number, number][] = tickerData[metric] || [];
+    if (series.length === 0) continue;
+    const valueMap = new Map<number, number>();
+    for (const [idx, val] of series) {
+      if (val != null && isFinite(val) && val !== 0) valueMap.set(idx, val);
     }
-    if (m.size > 0) metricMaps.set(ticker, m);
+    if (valueMap.size > 0) cleanMap.set(ticker, valueMap);
   }
 
-  const validTickers = tickers.filter((t) => metricMaps.has(t));
+  const validTickers = tickers.filter((t) => cleanMap.has(t));
 
   for (let i = 0; i < validTickers.length; i++) {
     for (let j = i + 1; j < validTickers.length; j++) {
       const tickerA = validTickers[i];
       const tickerB = validTickers[j];
-      const mapA = metricMaps.get(tickerA)!;
-      const mapB = metricMaps.get(tickerB)!;
+      const mapA = cleanMap.get(tickerA)!;
+      const mapB = cleanMap.get(tickerB)!;
 
-      // Find common date indices where both have data
-      const commonIndices: number[] = [];
+      const sharedIndices: number[] = [];
       for (const [idx] of mapA) {
-        if (mapB.has(idx)) commonIndices.push(idx);
+        if (mapB.has(idx)) sharedIndices.push(idx);
       }
-      commonIndices.sort((a, b) => a - b);
+      sharedIndices.sort((a, b) => a - b);
+      if (sharedIndices.length < 30) continue;
 
-      if (commonIndices.length < 30) continue;
-
-      // Apply lookback for z-score/stats computation
-      let indices = commonIndices;
+      let indices = sharedIndices;
       if (lookback !== "all") {
-        const lb = parseInt(lookback);
-        if (indices.length > lb) indices = indices.slice(-lb);
+        const n = parseInt(lookback);
+        if (indices.length > n) indices = indices.slice(-n);
       }
 
-      // Compute lookback-limited ratio series (for table z-score/stats)
       const ratioSeries: { time: string; value: number }[] = [];
       for (const idx of indices) {
-        const valA = mapA.get(idx)!;
-        const valB = mapB.get(idx)!;
-        const ratio = valA / valB;
+        if (idx >= dates.length) continue;
+        const a = mapA.get(idx)!;
+        const b = mapB.get(idx)!;
+        if (!(a > 0) || !(b > 0)) continue;
+        const ratio = a / b;
         if (isFinite(ratio) && !isNaN(ratio)) {
-          ratioSeries.push({ time: globalDates[idx], value: ratio });
+          ratioSeries.push({ time: dates[idx], value: ratio });
         }
       }
-
       if (ratioSeries.length < 20) continue;
 
-      // Z-score the ratio (using lookback window)
-      const values = ratioSeries.map((r) => r.value);
-      const mean = values.reduce((a, b) => a + b, 0) / values.length;
-      const variance =
-        values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
-      const std = Math.sqrt(variance);
+      const values = ratioSeries.map((p) => p.value);
+      const logValues = values.map((v) => Math.log(v));
+      const logMean = logValues.reduce((s, v) => s + v, 0) / logValues.length;
+      const logVar = logValues.reduce((s, v) => s + (v - logMean) ** 2, 0) / logValues.length;
+      const logStd = Math.sqrt(logVar);
 
-      const currentRatio = values[values.length - 1];
-      const zScore = std === 0 ? 0 : (currentRatio - mean) / std;
+      const mean = values.reduce((s, v) => s + v, 0) / values.length;
+      const std = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length);
 
-      const zScoreSeries = ratioSeries.map((r) => ({
-        time: r.time,
-        value: std === 0 ? 0 : (r.value - mean) / std,
+      const last = values[values.length - 1];
+      const zScore = logStd === 0 ? 0 : (Math.log(last) - logMean) / logStd;
+      const zScoreSeries = ratioSeries.map((p) => ({
+        time: p.time,
+        value: logStd === 0 ? 0 : (Math.log(p.value) - logMean) / logStd,
       }));
 
-      // Percent changes
-      const len = values.length;
-      const pctChange30d =
-        len > 30 ? ((values[len - 1] / values[len - 31]) - 1) * 100 : 0;
-      const pctChange90d =
-        len > 90 ? ((values[len - 1] / values[len - 91]) - 1) * 100 : 0;
+      const n = values.length;
+      const pctChange30d = n > 30 ? (values[n - 1] / values[n - 31] - 1) * 100 : 0;
+      const pctChange90d = n > 90 ? (values[n - 1] / values[n - 91] - 1) * 100 : 0;
 
       results.push({
         tickerA,
         tickerB,
-        currentRatio,
+        currentRatio: last,
         zScore,
         mean,
         std,
@@ -188,14 +193,15 @@ function computePairRatios(
       });
     }
   }
-
   return results;
 }
 
-// ── Chart options shared by all pair ratio charts ──
-const PR_CHART_OPTIONS = {
+// ---------------------------------------------------------------------------
+// Chart options
+// ---------------------------------------------------------------------------
+const CHART_OPTIONS = {
   layout: {
-    background: { type: ColorType.Solid as const, color: "transparent" },
+    background: { type: ColorType.Solid, color: "transparent" },
     textColor: "#7a8a9e",
     fontSize: 9,
     fontFamily: "'JetBrains Mono', monospace",
@@ -206,146 +212,138 @@ const PR_CHART_OPTIONS = {
   },
   crosshair: { mode: CrosshairMode.Normal },
   rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
-  timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: false },
+  timeScale: {
+    borderColor: "rgba(255,255,255,0.08)",
+    timeVisible: false,
+  },
   handleScroll: true,
   handleScale: true,
 };
 
-// ── Mini Ratio Chart (sparkline in table rows — no sync needed) ──
-function MiniRatioChart({
-  pair,
-  showZScore,
-  height = 200,
-}: {
-  pair: PairData;
-  showZScore: boolean;
-  height?: number;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-
-  const series = showZScore ? pair.zScoreSeries : pair.ratioSeries;
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || series.length === 0) return;
-    if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
-    const chart = createChart(el, { ...PR_CHART_OPTIONS, width: el.clientWidth, height });
-    chartRef.current = chart;
-    const lineSeries = chart.addSeries(LineSeries, { color: "#0ea5e9", lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerRadius: 3 });
-    lineSeries.setData(series.map((d) => ({ time: d.time as Time, value: d.value })));
-    if (showZScore) {
-      for (const [val, clr] of [[0, "rgba(148,163,184,0.4)"], [2, "rgba(239,68,68,0.3)"], [-2, "rgba(34,197,94,0.3)"]] as [number, string][]) {
-        const l = chart.addSeries(LineSeries, { color: clr, lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
-        l.setData(series.map((d) => ({ time: d.time as Time, value: val })));
-      }
-    }
-    chart.timeScale().fitContent();
-    const ro = new ResizeObserver(() => { if (el.clientWidth > 0) chart.applyOptions({ width: el.clientWidth }); });
-    ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [series, showZScore, height]);
-
-  return <div ref={ref} style={{ width: "100%", height }} />;
-}
-
-// ── Synced Detail Charts (ratio + z-score, fully synced crosshair & scroll) ──
-function SyncedDetailCharts({
-  ratioSeries,
-  zScoreSeries,
-  ratioTitle,
-  zScoreTitle,
-}: {
+// ---------------------------------------------------------------------------
+// PairRatioChart component
+// ---------------------------------------------------------------------------
+interface PairRatioChartProps {
   ratioSeries: { time: string; value: number }[];
   zScoreSeries: { time: string; value: number }[];
   ratioTitle: string;
   zScoreTitle: string;
-}) {
+}
+
+function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: PairRatioChartProps) {
   const ratioRef = useRef<HTMLDivElement>(null);
-  const zRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<IChartApi[]>([]);
-  const seriesRef = useRef<(ReturnType<IChartApi["addSeries"]>)[]>([]);
-  const syncingRef = useRef(false);
+  const zScoreRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<any[]>([]);
+  const seriesRef = useRef<any[]>([]);
+  const isSyncingRef = useRef(false);
 
   useEffect(() => {
     const ratioEl = ratioRef.current;
-    const zEl = zRef.current;
-    if (!ratioEl || !zEl || ratioSeries.length === 0) return;
+    const zScoreEl = zScoreRef.current;
+    if (!ratioEl || !zScoreEl || ratioSeries.length === 0) return;
 
-    // Clean up previous
-    chartsRef.current.forEach((c) => { try { c.remove(); } catch {} });
+    chartsRef.current.forEach((c) => {
+      try { c.remove(); } catch {}
+    });
     chartsRef.current = [];
     seriesRef.current = [];
 
-    const charts: IChartApi[] = [];
-    const mainSeries: (ReturnType<IChartApi["addSeries"]>)[] = [];
+    const charts: any[] = [];
+    const allSeries: any[] = [];
 
-    // --- Ratio chart ---
-    const ratioChart = createChart(ratioEl, { ...PR_CHART_OPTIONS, width: ratioEl.clientWidth, height: ratioEl.clientHeight || 300 });
-    const ratioLine = ratioChart.addSeries(LineSeries, { color: "#0ea5e9", lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerRadius: 3 });
-    ratioLine.setData(ratioSeries.map((d) => ({ time: d.time as Time, value: d.value })));
-    charts.push(ratioChart);
-    mainSeries.push(ratioLine);
+    const chart1 = createChart(ratioEl, {
+      ...CHART_OPTIONS,
+      width: ratioEl.clientWidth,
+      height: ratioEl.clientHeight || 300,
+    });
+    const rSeries = (chart1 as any).addSeries(LineSeries, {
+      color: "#0ea5e9",
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerRadius: 3,
+    });
+    rSeries.setData(ratioSeries.map((p) => ({ time: p.time, value: p.value })));
+    charts.push(chart1);
+    allSeries.push(rSeries);
 
-    // --- Z-Score chart ---
-    const zChart = createChart(zEl, { ...PR_CHART_OPTIONS, width: zEl.clientWidth, height: zEl.clientHeight || 300 });
-    const zLine = zChart.addSeries(LineSeries, { color: "#0ea5e9", lineWidth: 1.5 as any, priceLineVisible: false, lastValueVisible: true, crosshairMarkerRadius: 3 });
-    zLine.setData(zScoreSeries.map((d) => ({ time: d.time as Time, value: d.value })));
-    // Reference lines: 0, ±2
-    for (const [val, clr] of [[0, "rgba(148,163,184,0.4)"], [2, "rgba(239,68,68,0.3)"], [-2, "rgba(34,197,94,0.3)"]] as [number, string][]) {
-      const l = zChart.addSeries(LineSeries, { color: clr, lineWidth: 1 as any, priceLineVisible: false, lastValueVisible: false, lineStyle: 2 });
-      l.setData(zScoreSeries.map((d) => ({ time: d.time as Time, value: val })));
-    }
-    charts.push(zChart);
-    mainSeries.push(zLine);
+    const chart2 = createChart(zScoreEl, {
+      ...CHART_OPTIONS,
+      width: zScoreEl.clientWidth,
+      height: zScoreEl.clientHeight || 300,
+    });
+    const zSeries = (chart2 as any).addSeries(LineSeries, {
+      color: "#0ea5e9",
+      lineWidth: 1.5,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerRadius: 3,
+    });
+    zSeries.setData(zScoreSeries.map((p) => ({ time: p.time, value: p.value })));
 
-    chartsRef.current = charts;
-    seriesRef.current = mainSeries;
-
-    // --- Sync: scroll/zoom ---
-    charts.forEach((chart, i) => {
-      chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (syncingRef.current || !range) return;
-        syncingRef.current = true;
-        charts.forEach((other, j) => {
-          if (j !== i) { try { other.timeScale().setVisibleLogicalRange(range); } catch {} }
-        });
-        syncingRef.current = false;
+    for (const [level, color] of [
+      [0, "rgba(148,163,184,0.4)"],
+      [2, "rgba(239,68,68,0.3)"],
+      [-2, "rgba(34,197,94,0.3)"],
+    ] as [number, string][]) {
+      const bandSeries = (chart2 as any).addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        lineStyle: 2,
       });
+      bandSeries.setData(zScoreSeries.map((p) => ({ time: p.time, value: level })));
+    }
 
-      // --- Sync: crosshair ---
-      chart.subscribeCrosshairMove((param) => {
-        if (syncingRef.current) return;
-        syncingRef.current = true;
-        charts.forEach((other, j) => {
-          if (j !== i) {
+    charts.push(chart2);
+    allSeries.push(zSeries);
+    chartsRef.current = charts;
+    seriesRef.current = allSeries;
+
+    charts.forEach((chart, idx) => {
+      chart.timeScale().subscribeVisibleLogicalRangeChange((range: any) => {
+        if (isSyncingRef.current || !range) return;
+        isSyncingRef.current = true;
+        charts.forEach((other, otherIdx) => {
+          if (otherIdx !== idx) {
+            try { other.timeScale().setVisibleLogicalRange(range); } catch {}
+          }
+        });
+        isSyncingRef.current = false;
+      });
+      chart.subscribeCrosshairMove((param: any) => {
+        if (isSyncingRef.current) return;
+        isSyncingRef.current = true;
+        charts.forEach((other, otherIdx) => {
+          if (otherIdx !== idx) {
             try {
               if (param.time) {
-                other.setCrosshairPosition(NaN, param.time, mainSeries[j]);
+                other.setCrosshairPosition(NaN, param.time, allSeries[otherIdx]);
               } else {
                 other.clearCrosshairPosition();
               }
             } catch {}
           }
         });
-        syncingRef.current = false;
+        isSyncingRef.current = false;
       });
     });
 
-    // Fit content
     charts.forEach((c) => c.timeScale().fitContent());
 
-    // Resize observer
-    const ro = new ResizeObserver(() => {
-      if (ratioEl.clientWidth > 0) ratioChart.applyOptions({ width: ratioEl.clientWidth });
-      if (zEl.clientWidth > 0) zChart.applyOptions({ width: zEl.clientWidth });
+    const resizeObserver = new ResizeObserver(() => {
+      if (ratioEl.clientWidth > 0) chart1.applyOptions({ width: ratioEl.clientWidth });
+      if (zScoreEl.clientWidth > 0) chart2.applyOptions({ width: zScoreEl.clientWidth });
     });
-    ro.observe(ratioEl);
-    ro.observe(zEl);
+    resizeObserver.observe(ratioEl);
+    resizeObserver.observe(zScoreEl);
 
     return () => {
-      ro.disconnect();
-      charts.forEach((c) => { try { c.remove(); } catch {} });
+      resizeObserver.disconnect();
+      charts.forEach((c) => {
+        try { c.remove(); } catch {}
+      });
       chartsRef.current = [];
       seriesRef.current = [];
     };
@@ -363,28 +361,118 @@ function SyncedDetailCharts({
         <div className="px-3 py-1.5 bg-card/50 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {zScoreTitle}
         </div>
-        <div ref={zRef} style={{ width: "100%", height: 300 }} />
+        <div ref={zScoreRef} style={{ width: "100%", height: 300 }} />
       </div>
     </div>
   );
 }
 
-// ── Main Page ──
+// ---------------------------------------------------------------------------
+// Mini sparkline canvas for table rows
+// ---------------------------------------------------------------------------
+const SPARK_WIDTH = 160;
+const SPARK_HEIGHT = 28;
+const SPARK_SAMPLES = 100;
+
+function downsample(arr: { time: string; value: number }[], n: number) {
+  if (arr.length <= n) return arr;
+  const step = (arr.length - 1) / (n - 1);
+  const result = [];
+  for (let i = 0; i < n; i++) result.push(arr[Math.round(i * step)]);
+  return result;
+}
+
+function PairSparkline({ pair }: { pair: RatioPair }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || pair.zScoreSeries.length === 0) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = SPARK_WIDTH;
+    const h = SPARK_HEIGHT;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const samples = downsample(pair.zScoreSeries, SPARK_SAMPLES);
+    const maxAbs = Math.max(3, ...samples.map((p) => Math.abs(p.value)));
+    const pad = 2;
+    const plotW = w - pad * 2;
+    const plotH = h - pad * 2;
+    const midY = pad + plotH / 2;
+    const yPlus2 = midY - (2 / maxAbs) * (plotH / 2);
+    const yMinus2 = midY + (2 / maxAbs) * (plotH / 2);
+
+    ctx.fillStyle = "rgba(239,68,68,0.06)";
+    ctx.fillRect(pad, pad, plotW, yPlus2 - pad);
+    ctx.fillStyle = "rgba(34,197,94,0.06)";
+    ctx.fillRect(pad, yMinus2, plotW, h - pad - yMinus2);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(pad, midY);
+    ctx.lineTo(w - pad, midY);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(pad, yPlus2);
+    ctx.lineTo(w - pad, yPlus2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pad, yMinus2);
+    ctx.lineTo(w - pad, yMinus2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = "#0ea5e9";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < samples.length; i++) {
+      const x = pad + (i / (samples.length - 1)) * plotW;
+      const y = midY - (samples[i].value / maxAbs) * (plotH / 2);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const lastY = midY - (samples[samples.length - 1].value / maxAbs) * (plotH / 2);
+    ctx.beginPath();
+    ctx.arc(w - pad, lastY, 2, 0, Math.PI * 2);
+    ctx.fillStyle = zScoreColor(pair.zScore);
+    ctx.fill();
+  }, [pair]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: SPARK_WIDTH, height: SPARK_HEIGHT }}
+      className="block"
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main PairRatios page
+// ---------------------------------------------------------------------------
 export default function PairRatios() {
-  const PAGE_SIZE = 100;
   const [metric, setMetric] = useState("close");
   const [lookback, setLookback] = useState("252");
   const [zThreshold, setZThreshold] = useState(2);
-  const [sortBy, setSortBy] = useState<"zscore" | "name" | "change30" | "change90">("zscore");
+  const [sortBy, setSortBy] = useState("zscore");
   const [showZScore, setShowZScore] = useState(true);
-  const [selectedPair, setSelectedPair] = useState<PairData | null>(null);
-  const [filterMode, setFilterMode] = useState<"all" | "extreme">("all");
-  const [pageNum, setPageNum] = useState(0);
+  const [selectedPair, setSelectedPair] = useState<RatioPair | null>(null);
+  const [filterMode, setFilterMode] = useState("all");
+  const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Value filters: min/max for each filterable column
-  interface ValueFilter { min: string; max: string }
   const emptyFilter = (): ValueFilter => ({ min: "", max: "" });
   const [vfZScore, setVfZScore] = useState<ValueFilter>(emptyFilter());
   const [vfRatio, setVfRatio] = useState<ValueFilter>(emptyFilter());
@@ -393,9 +481,10 @@ export default function PairRatios() {
   const [vfMean, setVfMean] = useState<ValueFilter>(emptyFilter());
   const [vfStd, setVfStd] = useState<ValueFilter>(emptyFilter());
 
-  const hasValueFilters = [vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd].some(
+  const hasActiveValueFilters = [vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd].some(
     (f) => f.min.trim() !== "" || f.max.trim() !== ""
   );
+
   const clearValueFilters = () => {
     setVfZScore(emptyFilter());
     setVfRatio(emptyFilter());
@@ -412,57 +501,102 @@ export default function PairRatios() {
     allTickers,
     filteredCount,
     totalCount,
-  } = useUniverse();
+  } = useAppContext();
 
-  // Serialize/restore state
-  const serializeState = useCallback(
-    () => ({ metric, lookback, zThreshold, sortBy, showZScore, filterMode, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd }),
+  const getState = useCallback(
+    () => ({
+      metric,
+      lookback,
+      zThreshold,
+      sortBy,
+      showZScore,
+      filterMode,
+      searchQuery,
+      vfZScore,
+      vfRatio,
+      vfChg30,
+      vfChg90,
+      vfMean,
+      vfStd,
+    }),
     [metric, lookback, zThreshold, sortBy, showZScore, filterMode, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]
   );
-  const restoreState = useCallback((s: any) => {
-    if (s?.metric) setMetric(s.metric);
-    if (s?.lookback) setLookback(s.lookback);
-    if (s?.zThreshold) setZThreshold(s.zThreshold);
-    if (s?.sortBy) setSortBy(s.sortBy);
-    if (s?.showZScore !== undefined) setShowZScore(s.showZScore);
-    if (s?.filterMode) setFilterMode(s.filterMode);
-    if (s?.searchQuery !== undefined) setSearchQuery(s.searchQuery);
-    if (s?.vfZScore) setVfZScore(s.vfZScore);
-    if (s?.vfRatio) setVfRatio(s.vfRatio);
-    if (s?.vfChg30) setVfChg30(s.vfChg30);
-    if (s?.vfChg90) setVfChg90(s.vfChg90);
-    if (s?.vfMean) setVfMean(s.vfMean);
-    if (s?.vfStd) setVfStd(s.vfStd);
+
+  const restoreState = useCallback((saved: any) => {
+    if (saved?.metric) setMetric(saved.metric);
+    if (saved?.lookback) setLookback(saved.lookback);
+    if (saved?.zThreshold) setZThreshold(saved.zThreshold);
+    if (saved?.sortBy) setSortBy(saved.sortBy);
+    if (saved?.showZScore !== undefined) setShowZScore(saved.showZScore);
+    if (saved?.filterMode) setFilterMode(saved.filterMode);
+    if (saved?.searchQuery !== undefined) setSearchQuery(saved.searchQuery);
+    if (saved?.vfZScore) setVfZScore(saved.vfZScore);
+    if (saved?.vfRatio) setVfRatio(saved.vfRatio);
+    if (saved?.vfChg30) setVfChg30(saved.vfChg30);
+    if (saved?.vfChg90) setVfChg90(saved.vfChg90);
+    if (saved?.vfMean) setVfMean(saved.vfMean);
+    if (saved?.vfStd) setVfStd(saved.vfStd);
   }, []);
-  useWorkspaceTab("pair-ratios", serializeState, restoreState);
 
-  // Get tickers
-  const tickerList = useMemo(() => {
-    const list = isFiltered ? filteredTickersList : allTickers;
-    return list
-      .filter((t) => t.ticker !== "TEST" && t.ticker !== "TST2")
-      .map((t) => t.ticker)
-      .sort();
-  }, [isFiltered, filteredTickersList, allTickers]);
-
-  // Load global dates array
-  const { data: globalDates } = useQuery({
-    queryKey: ["global-dates"],
-    queryFn: getDates,
+  const universeSig = useUniverseSignature();
+  useWorkspaceState("pair-ratios", getState, restoreState, {
+    universeSig,
+    resultFields: ["searchQuery"],
   });
 
-  // Load all ticker data (batch in chunks of 20 to avoid overwhelming)
-  const { data: tickerDataMap, isLoading } = useQuery({
+  const VALID_RATIO_METRICS = new Set([
+    "close","P/E LTM","P/E FY2","P/S LTM","P/S FY2","EV/EBITDA LTM","EV/EBITDA FY2",
+    "P/FFO LTM","P/FFO FY2","P/AFFO LTM","P/AFFO FY2","Implied Cap Rate",
+    "FFO Yield LTM","FFO Yield FY2","AFFO Yield LTM","AFFO Yield FY2","Dividend Yield",
+    "FFO FY1","FFO FY2","AFFO FY1","AFFO FY2","EPS FY1","EPS FY2","EBITDA FY1",
+    "EBITDA FY2","FY1 FFO Growth","FY2 FFO Growth","FY1 AFFO Growth","FY2 AFFO Growth",
+    "FY1 EPS Growth","FY2 EPS Growth",
+  ]);
+
+  const routerState = useRouterState();
+  const [, navigate] = useLocation();
+
+  const navigateToPairsDetail = useCallback(
+    (tickerA: string, tickerB: string, m: string) => {
+      const resolvedMetric = VALID_RATIO_METRICS.has(m) ? m : "close";
+      const cached = routerState.getCachedState("pairs") || {};
+      routerState.pushState("pairs", {
+        ...cached,
+        tickerA,
+        tickerB,
+        metricA: resolvedMetric,
+        metricB: resolvedMetric,
+      });
+      navigate("/pairs");
+    },
+    [routerState, navigate]
+  );
+
+  const tickerList = useMemo(
+    () =>
+      ((isFiltered ? filteredTickersList : allTickers) as { ticker: string }[])
+        .filter((t) => t.ticker !== "TEST" && t.ticker !== "TST2")
+        .map((t) => t.ticker)
+        .sort(),
+    [isFiltered, filteredTickersList, allTickers]
+  );
+
+  const { data: globalDates } = useQuery<string[]>({
+    queryKey: ["global-dates"],
+    queryFn: fetchGlobalDates,
+  });
+
+  const { data: workbookData, isLoading: isLoadingWorkbook } = useQuery<Map<string, any>>({
     queryKey: ["pair-ratio-data", tickerList.join(",")],
     queryFn: async () => {
       const map = new Map<string, any>();
-      const CHUNK = 20;
-      for (let start = 0; start < tickerList.length; start += CHUNK) {
-        const chunk = tickerList.slice(start, start + CHUNK);
+      const batchSize = 20;
+      for (let i = 0; i < tickerList.length; i += batchSize) {
+        const batch = tickerList.slice(i, i + batchSize);
         await Promise.all(
-          chunk.map(async (ticker) => {
+          batch.map(async (ticker: string) => {
             try {
-              const data = await getTickerRaw(ticker);
+              const data = await fetchWorkbookData(ticker);
               if (data) map.set(ticker, data);
             } catch {}
           })
@@ -473,96 +607,102 @@ export default function PairRatios() {
     enabled: tickerList.length >= 2,
   });
 
-  // Compute all pair ratios
-  const pairResults = useMemo(() => {
-    if (!tickerDataMap || tickerDataMap.size < 2 || !globalDates || globalDates.length === 0) return [];
-    return computePairRatios(tickerList, tickerDataMap, globalDates, metric, lookback, zThreshold);
-  }, [tickerList, tickerDataMap, globalDates, metric, lookback, zThreshold]);
+  const allPairs = useMemo(
+    () =>
+      !workbookData || workbookData.size < 2 || !globalDates || globalDates.length === 0
+        ? []
+        : computePairRatios(tickerList, workbookData, globalDates, metric, lookback),
+    [tickerList, workbookData, globalDates, metric, lookback, zThreshold]
+  );
 
-  // Filter and sort
-  const displayPairs = useMemo(() => {
-    let pairs = [...pairResults];
+  const filteredPairs = useMemo(() => {
+    let list = [...allPairs];
     if (filterMode === "extreme") {
-      pairs = pairs.filter((p) => Math.abs(p.zScore) >= zThreshold);
+      list = list.filter((p) => Math.abs(p.zScore) >= zThreshold);
     }
 
-    // Apply value filters
-    const applyVF = (pairs: PairData[], vf: ValueFilter, getter: (p: PairData) => number) => {
-      const minVal = vf.min.trim() !== "" ? parseFloat(vf.min) : null;
-      const maxVal = vf.max.trim() !== "" ? parseFloat(vf.max) : null;
-      if (minVal === null && maxVal === null) return pairs;
-      return pairs.filter((p) => {
-        const v = getter(p);
-        if (minVal !== null && !isNaN(minVal) && v < minVal) return false;
-        if (maxVal !== null && !isNaN(maxVal) && v > maxVal) return false;
-        return true;
+    const applyFilter = (
+      arr: RatioPair[],
+      vf: ValueFilter,
+      getter: (p: RatioPair) => number
+    ) => {
+      const min = vf.min.trim() !== "" ? parseFloat(vf.min) : null;
+      const max = vf.max.trim() !== "" ? parseFloat(vf.max) : null;
+      if (min === null && max === null) return arr;
+      return arr.filter((p) => {
+        const val = getter(p);
+        return !(
+          (min !== null && !isNaN(min) && val < min) ||
+          (max !== null && !isNaN(max) && val > max)
+        );
       });
     };
-    pairs = applyVF(pairs, vfZScore, (p) => p.zScore);
-    pairs = applyVF(pairs, vfRatio, (p) => p.currentRatio);
-    pairs = applyVF(pairs, vfChg30, (p) => p.pctChange30d);
-    pairs = applyVF(pairs, vfChg90, (p) => p.pctChange90d);
-    pairs = applyVF(pairs, vfMean, (p) => p.mean);
-    pairs = applyVF(pairs, vfStd, (p) => p.std);
+
+    list = applyFilter(list, vfZScore, (p) => p.zScore);
+    list = applyFilter(list, vfRatio, (p) => p.currentRatio);
+    list = applyFilter(list, vfChg30, (p) => p.pctChange30d);
+    list = applyFilter(list, vfChg90, (p) => p.pctChange90d);
+    list = applyFilter(list, vfMean, (p) => p.mean);
+    list = applyFilter(list, vfStd, (p) => p.std);
 
     switch (sortBy) {
       case "zscore":
-        pairs.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
+        list.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
         break;
       case "name":
-        pairs.sort((a, b) =>
+        list.sort((a, b) =>
           `${a.tickerA}/${a.tickerB}`.localeCompare(`${b.tickerA}/${b.tickerB}`)
         );
         break;
       case "change30":
-        pairs.sort((a, b) => Math.abs(b.pctChange30d) - Math.abs(a.pctChange30d));
+        list.sort((a, b) => Math.abs(b.pctChange30d) - Math.abs(a.pctChange30d));
         break;
       case "change90":
-        pairs.sort((a, b) => Math.abs(b.pctChange90d) - Math.abs(a.pctChange90d));
+        list.sort((a, b) => Math.abs(b.pctChange90d) - Math.abs(a.pctChange90d));
         break;
     }
-    return pairs;
-  }, [pairResults, filterMode, sortBy, zThreshold, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
+    return list;
+  }, [allPairs, filterMode, sortBy, zThreshold, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
 
-  // Apply search filter on top of displayPairs
-  const searchedPairs = useMemo(() => {
-    if (!searchQuery.trim()) return displayPairs;
-    const q = searchQuery.trim().toUpperCase();
-    // Support "AMT/SBAC" or "AMT SBAC" or just "AMT"
-    const parts = q.split(/[\/\s,]+/).filter(Boolean);
-    if (parts.length === 0) return displayPairs;
+  const searchFilteredPairs = useMemo(() => {
+    if (!searchQuery.trim()) return filteredPairs;
+    const parts = searchQuery.trim().toUpperCase().split(/[\/\s,]+/).filter(Boolean);
+    if (parts.length === 0) return filteredPairs;
     if (parts.length === 1) {
-      // Match either ticker
-      return displayPairs.filter(
+      return filteredPairs.filter(
         (p) => p.tickerA.includes(parts[0]) || p.tickerB.includes(parts[0])
       );
     }
-    // Two terms: match A contains first AND B contains second, or vice versa
-    return displayPairs.filter(
+    return filteredPairs.filter(
       (p) =>
         (p.tickerA.includes(parts[0]) && p.tickerB.includes(parts[1])) ||
         (p.tickerA.includes(parts[1]) && p.tickerB.includes(parts[0]))
     );
-  }, [displayPairs, searchQuery]);
+  }, [filteredPairs, searchQuery]);
 
-  // Reset page when filters or search change
-  useEffect(() => { setPageNum(0); }, [filterMode, sortBy, metric, lookback, zThreshold, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
+  useEffect(() => {
+    setPage(0);
+  }, [filterMode, sortBy, metric, lookback, zThreshold, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
 
-  const totalPages = Math.max(1, Math.ceil(searchedPairs.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(searchFilteredPairs.length / 100));
   const pagedPairs = useMemo(
-    () => searchedPairs.slice(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE),
-    [searchedPairs, pageNum]
+    () => searchFilteredPairs.slice(page * 100, (page + 1) * 100),
+    [searchFilteredPairs, page]
   );
 
   const extremeCount = useMemo(
-    () => pairResults.filter((p) => Math.abs(p.zScore) >= zThreshold).length,
-    [pairResults, zThreshold]
+    () => allPairs.filter((p) => Math.abs(p.zScore) >= zThreshold).length,
+    [allPairs, zThreshold]
   );
 
-  // Keyboard shortcut: / to focus search
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "/" && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== "INPUT") {
+      if (
+        e.key === "/" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        document.activeElement?.tagName !== "INPUT"
+      ) {
         e.preventDefault();
         searchRef.current?.focus();
       }
@@ -575,14 +715,13 @@ export default function PairRatios() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
-  // CSV export
-  const exportCSV = useCallback(() => {
+  const handleExportCsv = useCallback(() => {
     const header = "Pair,Current Ratio,Z-Score,Mean,Std Dev,30d Chg%,90d Chg%";
-    const lines = displayPairs.map(
+    const rows = filteredPairs.map(
       (p) =>
         `${p.tickerA}/${p.tickerB},${p.currentRatio.toFixed(4)},${p.zScore.toFixed(3)},${p.mean.toFixed(4)},${p.std.toFixed(4)},${p.pctChange30d.toFixed(2)},${p.pctChange90d.toFixed(2)}`
     );
-    const csv = [header, ...lines].join("\n");
+    const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -590,50 +729,70 @@ export default function PairRatios() {
     a.download = `pair_ratios_${metric}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [displayPairs, metric]);
+  }, [filteredPairs, metric]);
 
-  // Compute full-history series on-demand when a pair is selected
-  const detailSeries = useMemo(() => {
-    if (!selectedPair || !tickerDataMap || !globalDates) return null;
-    const rawA = tickerDataMap.get(selectedPair.tickerA);
-    const rawB = tickerDataMap.get(selectedPair.tickerB);
-    if (!rawA || !rawB) return null;
+  const detailChartData = useMemo(() => {
+    if (!selectedPair || !workbookData || !globalDates) return null;
+    const dataA = workbookData.get(selectedPair.tickerA);
+    const dataB = workbookData.get(selectedPair.tickerB);
+    if (!dataA || !dataB) return null;
 
-    const tuplesA: [number, number][] = rawA[metric] || [];
-    const tuplesB: [number, number][] = rawB[metric] || [];
+    const seriesA: [number, number][] = dataA[metric] || [];
+    const seriesB: [number, number][] = dataB[metric] || [];
+
     const mapA = new Map<number, number>();
-    for (const [idx, val] of tuplesA) { if (val != null && val > 0) mapA.set(idx, val); }
+    for (const [idx, val] of seriesA) {
+      if (val != null && isFinite(val) && val !== 0) mapA.set(idx, val);
+    }
     const mapB = new Map<number, number>();
-    for (const [idx, val] of tuplesB) { if (val != null && val > 0) mapB.set(idx, val); }
+    for (const [idx, val] of seriesB) {
+      if (val != null && isFinite(val) && val !== 0) mapB.set(idx, val);
+    }
 
-    const commonIndices: number[] = [];
-    for (const [idx] of mapA) { if (mapB.has(idx)) commonIndices.push(idx); }
-    commonIndices.sort((a, b) => a - b);
+    const sharedIndices: number[] = [];
+    for (const [idx] of mapA) if (mapB.has(idx)) sharedIndices.push(idx);
+    sharedIndices.sort((a, b) => a - b);
 
-    const fullRatio: { time: string; value: number }[] = [];
-    for (const idx of commonIndices) {
-      const ratio = mapA.get(idx)! / mapB.get(idx)!;
+    const ratioSeries: { time: string; value: number }[] = [];
+    for (const idx of sharedIndices) {
+      if (idx >= globalDates.length) continue;
+      const a = mapA.get(idx)!;
+      const b = mapB.get(idx)!;
+      if (!(a > 0) || !(b > 0)) continue;
+      const ratio = a / b;
       if (isFinite(ratio) && !isNaN(ratio)) {
-        fullRatio.push({ time: globalDates[idx], value: ratio });
+        ratioSeries.push({ time: globalDates[idx], value: ratio });
       }
     }
-    if (fullRatio.length === 0) return null;
+    if (ratioSeries.length === 0) return null;
 
-    const { mean, std } = selectedPair;
-    const fullZ = fullRatio.map((r) => ({
-      time: r.time,
-      value: std === 0 ? 0 : (r.value - mean) / std,
+    const values = ratioSeries.map((p) => p.value);
+    const mean = values.reduce((s, v) => s + v, 0) / values.length;
+    const n = Math.max(1, values.length - 1);
+    const std = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+
+    const zScoreSeries = ratioSeries.map((p) => ({
+      time: p.time,
+      value: std === 0 ? 0 : (p.value - mean) / std,
     }));
 
-    return { fullRatio, fullZ };
-  }, [selectedPair, tickerDataMap, globalDates, metric]);
+    return { fullRatio: ratioSeries, fullZ: zScoreSeries, fullMean: mean, fullStd: std };
+  }, [selectedPair, workbookData, globalDates, metric]);
 
-  // ── Detail View ──
+  const valueFilterDefs = [
+    { label: "Z-Score", vf: vfZScore, set: setVfZScore },
+    { label: "Ratio", vf: vfRatio, set: setVfRatio },
+    { label: "30d Chg%", vf: vfChg30, set: setVfChg30 },
+    { label: "90d Chg%", vf: vfChg90, set: setVfChg90 },
+    { label: "Mean", vf: vfMean, set: setVfMean },
+    { label: "Std", vf: vfStd, set: setVfStd },
+  ];
+
+  // ---- Detail view ----
   if (selectedPair) {
     return (
       <div className="flex h-full bg-background" data-testid="pair-ratios-page">
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Header */}
           <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50">
             <Button
               variant="ghost"
@@ -641,23 +800,33 @@ export default function PairRatios() {
               className="h-7 text-xs gap-1"
               onClick={() => setSelectedPair(null)}
             >
-              <ArrowLeft className="w-3 h-3" /> Back
+              <ChevronLeft className="w-3 h-3" /> Back
             </Button>
             <div className="text-sm font-bold font-mono">
               {selectedPair.tickerA} / {selectedPair.tickerB}
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Metric: {RATIO_METRICS.find((m) => m.value === metric)?.label}
+              Metric: {METRIC_OPTIONS.find((o) => o.value === metric)?.label}
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] gap-1"
+              title={`Open ${selectedPair.tickerA} / ${selectedPair.tickerB} in the Pairs deep-dive (13 charts: prices, log ratio, OLS residual Z, rolling β, beta-adj spread, etc.)`}
+              onClick={() => navigateToPairsDetail(selectedPair.tickerA, selectedPair.tickerB, metric)}
+              data-testid="open-in-pairs"
+            >
+              <ExternalLink className="w-3 h-3" /> Open in Pairs
+            </Button>
             <div className="flex items-center gap-2 ml-auto">
               <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
                 <span className="text-muted-foreground">Ratio: </span>
-                <span className="font-mono font-bold">
-                  {selectedPair.currentRatio.toFixed(4)}
-                </span>
+                <span className="font-mono font-bold">{selectedPair.currentRatio.toFixed(4)}</span>
               </div>
               <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
-                <span className="text-muted-foreground">Z ({LOOKBACK_OPTIONS.find(o => o.value === lookback)?.label}): </span>
+                <span className="text-muted-foreground">
+                  Z ({LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label}):{" "}
+                </span>
                 <span
                   className="font-mono font-bold"
                   style={{ color: zScoreColor(selectedPair.zScore) }}
@@ -667,32 +836,26 @@ export default function PairRatios() {
               </div>
               <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
                 <span className="text-muted-foreground">μ: </span>
-                <span className="font-mono">
-                  {selectedPair.mean.toFixed(4)}
-                </span>
+                <span className="font-mono">{selectedPair.mean.toFixed(4)}</span>
               </div>
               <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
                 <span className="text-muted-foreground">σ: </span>
-                <span className="font-mono">
-                  {selectedPair.std.toFixed(4)}
-                </span>
+                <span className="font-mono">{selectedPair.std.toFixed(4)}</span>
               </div>
-              {detailSeries && (
+              {detailChartData && (
                 <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
                   <span className="text-muted-foreground">Pts: </span>
-                  <span className="font-mono">{detailSeries.fullRatio.length}</span>
+                  <span className="font-mono">{detailChartData.fullRatio.length}</span>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Synced Charts */}
-          {detailSeries ? (
-            <SyncedDetailCharts
-              ratioSeries={detailSeries.fullRatio}
-              zScoreSeries={detailSeries.fullZ}
-              ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${RATIO_METRICS.find((m) => m.value === metric)?.label} (${detailSeries.fullRatio.length} pts)`}
-              zScoreTitle={`Z-Score (±2σ bands — mean/σ from ${LOOKBACK_OPTIONS.find(o => o.value === lookback)?.label} window)`}
+          {detailChartData ? (
+            <PairRatioChart
+              ratioSeries={detailChartData.fullRatio}
+              zScoreSeries={detailChartData.fullZ}
+              ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${METRIC_OPTIONS.find((o) => o.value === metric)?.label} (${detailChartData.fullRatio.length} pts)`}
+              zScoreTitle={`Z-Score (±2σ bands — mean/σ from ${LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label} window)`}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -704,7 +867,7 @@ export default function PairRatios() {
     );
   }
 
-  // ── Table View ──
+  // ---- List view ----
   return (
     <div className="flex h-full bg-background" data-testid="pair-ratios-page">
       {/* Sidebar */}
@@ -712,14 +875,11 @@ export default function PairRatios() {
         <div className="px-3 py-2 border-b border-border">
           <div className="text-xs font-bold tracking-tight">Pair Ratios</div>
           <div className="text-[10px] text-muted-foreground mt-0.5">
-            {isFiltered
-              ? `${filteredCount} tickers (filtered)`
-              : `${totalCount} tickers (all)`}
+            {isFiltered ? `${filteredCount} tickers (filtered)` : `${totalCount} tickers (all)`}
           </div>
         </div>
-
         <div className="p-3 space-y-3 flex-1">
-          {/* Metric selector */}
+          {/* Metric */}
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
               Ratio Metric
@@ -729,15 +889,12 @@ export default function PairRatios() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {RATIO_METRICS.map((m) => (
-                  <SelectItem key={m.value} value={m.value}>
-                    {m.label}
-                  </SelectItem>
+                {METRIC_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-
           {/* Lookback */}
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
@@ -749,14 +906,11 @@ export default function PairRatios() {
               </SelectTrigger>
               <SelectContent>
                 {LOOKBACK_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-
           {/* Z-Score Threshold */}
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
@@ -770,21 +924,18 @@ export default function PairRatios() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ZSCORE_THRESHOLDS.map((t) => (
-                  <SelectItem key={t} value={String(t)}>
-                    ±{t}σ
-                  </SelectItem>
+                {Z_THRESHOLDS.map((t) => (
+                  <SelectItem key={t} value={String(t)}>±{t}σ</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-
           {/* Sort By */}
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
               Sort By
             </div>
-            <Select value={sortBy} onValueChange={(v: any) => setSortBy(v)}>
+            <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="h-7 text-[11px]" data-testid="ratio-sort">
                 <SelectValue />
               </SelectTrigger>
@@ -796,8 +947,7 @@ export default function PairRatios() {
               </SelectContent>
             </Select>
           </div>
-
-          {/* Filter mode */}
+          {/* Show: All / Extreme */}
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
               Show
@@ -809,7 +959,7 @@ export default function PairRatios() {
                 className="flex-1 h-6 text-[10px]"
                 onClick={() => setFilterMode("all")}
               >
-                All ({pairResults.length})
+                All ({allPairs.length})
               </Button>
               <Button
                 variant={filterMode === "extreme" ? "default" : "secondary"}
@@ -821,33 +971,30 @@ export default function PairRatios() {
               </Button>
             </div>
           </div>
-
           {/* Value Filters */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider flex items-center gap-1">
-                <Filter className="w-3 h-3" /> Value Filters
+                <SlidersHorizontal className="w-3 h-3" /> Value Filters
               </div>
-              {hasValueFilters && (
+              {hasActiveValueFilters && (
                 <button
                   onClick={clearValueFilters}
                   className="text-[9px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 transition-colors"
                   title="Clear all value filters"
                 >
-                  <RotateCcw className="w-2.5 h-2.5" /> Reset
+                  <X className="w-2.5 h-2.5" /> Reset
                 </button>
               )}
             </div>
-            {([
-              { label: "Z-Score", vf: vfZScore, set: setVfZScore },
-              { label: "Ratio", vf: vfRatio, set: setVfRatio },
-              { label: "30d Chg%", vf: vfChg30, set: setVfChg30 },
-              { label: "90d Chg%", vf: vfChg90, set: setVfChg90 },
-              { label: "Mean", vf: vfMean, set: setVfMean },
-              { label: "Std", vf: vfStd, set: setVfStd },
-            ] as const).map(({ label, vf, set }) => (
+            {valueFilterDefs.map(({ label, vf, set }) => (
               <div key={label} className="flex items-center gap-1">
-                <span className="text-[9px] text-muted-foreground w-[52px] flex-shrink-0 truncate" title={label}>{label}</span>
+                <span
+                  className="text-[9px] text-muted-foreground w-[52px] flex-shrink-0 truncate"
+                  title={label}
+                >
+                  {label}
+                </span>
                 <Input
                   type="text"
                   inputMode="decimal"
@@ -866,44 +1013,41 @@ export default function PairRatios() {
                 />
               </div>
             ))}
-            {hasValueFilters && (
+            {hasActiveValueFilters && (
               <div className="text-[9px] text-muted-foreground">
-                {displayPairs.length.toLocaleString()} pairs match filters
+                {filteredPairs.length.toLocaleString()} pairs match filters
               </div>
             )}
           </div>
-
-          {/* Stats summary */}
+          {/* Summary */}
           <div className="border border-border/30 rounded p-2 bg-card/30 space-y-1">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
               Summary
             </div>
             <div className="text-[11px] font-mono space-y-0.5">
               <div>
-                Total pairs:{" "}
-                <span className="font-bold">{pairResults.length}</span>
+                Total pairs: <span className="font-bold">{allPairs.length}</span>
               </div>
               <div>
                 Above +{zThreshold}σ:{" "}
                 <span className="font-bold text-red-400">
-                  {pairResults.filter((p) => p.zScore >= zThreshold).length}
+                  {allPairs.filter((p) => p.zScore >= zThreshold).length}
                 </span>
               </div>
               <div>
                 Below -{zThreshold}σ:{" "}
                 <span className="font-bold text-green-400">
-                  {pairResults.filter((p) => p.zScore <= -zThreshold).length}
+                  {allPairs.filter((p) => p.zScore <= -zThreshold).length}
                 </span>
               </div>
             </div>
           </div>
-
           <Button
             variant="outline"
             size="sm"
             className="w-full h-7 text-xs gap-1.5"
-            onClick={exportCSV}
-            disabled={displayPairs.length === 0}
+            onClick={handleExportCsv}
+            disabled={filteredPairs.length === 0}
           >
             <Download className="w-3 h-3" /> Export CSV
           </Button>
@@ -912,7 +1056,7 @@ export default function PairRatios() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        {isLoading ? (
+        {isLoadingWorkbook ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground text-sm">
             <Loader2 className="w-5 h-5 animate-spin" />
             Loading ticker data...
@@ -925,7 +1069,7 @@ export default function PairRatios() {
           <div className="flex-1 flex flex-col overflow-hidden min-h-0">
             {/* Search bar */}
             <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50 flex-shrink-0">
-              <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+              <SlidersHorizontal className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
               <Input
                 ref={searchRef}
                 type="text"
@@ -937,7 +1081,10 @@ export default function PairRatios() {
               />
               {searchQuery && (
                 <button
-                  onClick={() => { setSearchQuery(""); searchRef.current?.focus(); }}
+                  onClick={() => {
+                    setSearchQuery("");
+                    searchRef.current?.focus();
+                  }}
                   className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -945,277 +1092,112 @@ export default function PairRatios() {
               )}
               {searchQuery.trim() && (
                 <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                  {searchedPairs.length.toLocaleString()} match{searchedPairs.length !== 1 ? "es" : ""}
+                  {searchFilteredPairs.length.toLocaleString()} match
+                  {searchFilteredPairs.length !== 1 ? "es" : ""}
                 </span>
               )}
             </div>
+            {/* Table */}
             <div className="flex-1 overflow-auto">
-            {/* Table header */}
-            <table className="w-full table-fixed text-[11px] font-mono">
-              <thead className="sticky top-0 z-10 bg-card border-b border-border">
-                <tr>
-                  <th className="text-left px-3 py-2 font-semibold text-muted-foreground w-[140px]">
-                    Pair (A/B)
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[90px]">
-                    Ratio
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[70px]">
-                    Z-Score
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">
-                    Mean
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">
-                    Std
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">
-                    30d Chg
-                  </th>
-                  <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">
-                    90d Chg
-                  </th>
-                  <th className="px-2 py-2 font-semibold text-muted-foreground w-[180px] min-w-[180px] max-w-[180px]">
-                    Ratio Z-Score Chart
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedPairs.map((pair, idx) => (
-                  <tr
-                    key={`${pair.tickerA}-${pair.tickerB}`}
-                    className="border-b border-border/20 hover:bg-accent/30 cursor-pointer group"
-                    style={{ backgroundColor: zScoreBg(pair.zScore) }}
-                    onClick={() => setSelectedPair(pair)}
-                    data-testid={`pair-row-${idx}`}
-                  >
-                    <td className="px-3 py-1.5 font-bold">
-                      <span className="text-foreground">
-                        {pair.tickerA}
-                      </span>
-                      <span className="text-muted-foreground/60">/</span>
-                      <span className="text-foreground">
-                        {pair.tickerB}
-                      </span>
-                    </td>
-                    <td className="text-right px-2 py-1.5">
-                      {pair.currentRatio.toFixed(3)}
-                    </td>
-                    <td className="text-right px-2 py-1.5">
-                      <span
-                        className="font-bold"
-                        style={{ color: zScoreColor(pair.zScore) }}
-                      >
-                        {pair.zScore >= 0 ? "+" : ""}
-                        {pair.zScore.toFixed(2)}
-                      </span>
-                    </td>
-                    <td className="text-right px-2 py-1.5 text-muted-foreground">
-                      {pair.mean.toFixed(3)}
-                    </td>
-                    <td className="text-right px-2 py-1.5 text-muted-foreground">
-                      {pair.std.toFixed(3)}
-                    </td>
-                    <td className="text-right px-2 py-1.5">
-                      <span
-                        style={{
-                          color:
-                            pair.pctChange30d > 0
-                              ? "#22c55e"
-                              : pair.pctChange30d < 0
-                              ? "#ef4444"
-                              : "#94a3b8",
-                        }}
-                      >
-                        {pair.pctChange30d >= 0 ? "+" : ""}
-                        {pair.pctChange30d.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="text-right px-2 py-1.5">
-                      <span
-                        style={{
-                          color:
-                            pair.pctChange90d > 0
-                              ? "#22c55e"
-                              : pair.pctChange90d < 0
-                              ? "#ef4444"
-                              : "#94a3b8",
-                        }}
-                      >
-                        {pair.pctChange90d >= 0 ? "+" : ""}
-                        {pair.pctChange90d.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="px-2 py-0.5 w-[180px] min-w-[180px] max-w-[180px]">
-                      <MiniSparkline pair={pair} />
-                    </td>
+              <table className="w-full table-fixed text-[11px] font-mono">
+                <thead className="sticky top-0 z-10 bg-card border-b border-border">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold text-muted-foreground w-[140px]">Pair (A/B)</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[90px]">Ratio</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[70px]">Z-Score</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">Mean</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">Std</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">30d Chg</th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">90d Chg</th>
+                    <th className="px-2 py-2 font-semibold text-muted-foreground w-[180px] min-w-[180px] max-w-[180px]">Ratio Z-Score Chart</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {/* Pagination controls */}
-            {searchedPairs.length > PAGE_SIZE && (
-              <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-card/50 text-xs">
-                <span className="text-muted-foreground">
-                  Showing {pageNum * PAGE_SIZE + 1}–{Math.min((pageNum + 1) * PAGE_SIZE, searchedPairs.length)} of {searchedPairs.length.toLocaleString()} pairs
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={pageNum === 0}
-                    onClick={() => setPageNum(0)}
-                  >
-                    First
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={pageNum === 0}
-                    onClick={() => setPageNum(p => p - 1)}
-                  >
-                    Prev
-                  </Button>
-                  <span className="px-2 font-mono text-muted-foreground">
-                    {pageNum + 1} / {totalPages}
+                </thead>
+                <tbody>
+                  {pagedPairs.map((pair, idx) => (
+                    <tr
+                      key={`${pair.tickerA}-${pair.tickerB}`}
+                      className="border-b border-border/20 hover:bg-accent/30 cursor-pointer group"
+                      style={{ backgroundColor: zScoreBgColor(pair.zScore) }}
+                      onClick={() => setSelectedPair(pair)}
+                      data-testid={`pair-row-${idx}`}
+                    >
+                      <td className="px-3 py-1.5 font-bold">
+                        <span className="text-foreground">{pair.tickerA}</span>
+                        <span className="text-muted-foreground/60">/</span>
+                        <span className="text-foreground">{pair.tickerB}</span>
+                      </td>
+                      <td className="text-right px-2 py-1.5">{pair.currentRatio.toFixed(3)}</td>
+                      <td className="text-right px-2 py-1.5">
+                        <span className="font-bold" style={{ color: zScoreColor(pair.zScore) }}>
+                          {pair.zScore >= 0 ? "+" : ""}{pair.zScore.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="text-right px-2 py-1.5 text-muted-foreground">{pair.mean.toFixed(3)}</td>
+                      <td className="text-right px-2 py-1.5 text-muted-foreground">{pair.std.toFixed(3)}</td>
+                      <td className="text-right px-2 py-1.5">
+                        <span
+                          style={{
+                            color:
+                              pair.pctChange30d > 0
+                                ? "#22c55e"
+                                : pair.pctChange30d < 0
+                                ? "#ef4444"
+                                : "#94a3b8",
+                          }}
+                        >
+                          {pair.pctChange30d >= 0 ? "+" : ""}{pair.pctChange30d.toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="text-right px-2 py-1.5">
+                        <span
+                          style={{
+                            color:
+                              pair.pctChange90d > 0
+                                ? "#22c55e"
+                                : pair.pctChange90d < 0
+                                ? "#ef4444"
+                                : "#94a3b8",
+                          }}
+                        >
+                          {pair.pctChange90d >= 0 ? "+" : ""}{pair.pctChange90d.toFixed(1)}%
+                        </span>
+                      </td>
+                      <td className="px-2 py-0.5 w-[180px] min-w-[180px] max-w-[180px]">
+                        <PairSparkline pair={pair} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {/* Pagination */}
+              {searchFilteredPairs.length > 100 && (
+                <div className="flex items-center justify-between px-3 py-2 border-t border-border bg-card/50 text-xs">
+                  <span className="text-muted-foreground">
+                    Showing {page * 100 + 1}–{Math.min((page + 1) * 100, searchFilteredPairs.length)} of{" "}
+                    {searchFilteredPairs.length.toLocaleString()} pairs
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={pageNum >= totalPages - 1}
-                    onClick={() => setPageNum(p => p + 1)}
-                  >
-                    Next
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px]"
-                    disabled={pageNum >= totalPages - 1}
-                    onClick={() => setPageNum(totalPages - 1)}
-                  >
-                    Last
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={page === 0} onClick={() => setPage(0)}>First</Button>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+                    <span className="px-2 font-mono text-muted-foreground">{page + 1} / {totalPages}</span>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>Last</Button>
+                  </div>
                 </div>
-              </div>
-            )}
-            {searchedPairs.length === 0 && (
-              <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
-                {searchQuery.trim()
-                  ? `No pairs matching "${searchQuery.trim()}"`
-                  : filterMode === "extreme"
-                  ? `No pairs beyond ±${zThreshold}σ`
-                  : "No valid pairs found"}
-              </div>
-            )}
-          </div>
+              )}
+              {searchFilteredPairs.length === 0 && (
+                <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">
+                  {searchQuery.trim()
+                    ? `No pairs matching "${searchQuery.trim()}"`
+                    : filterMode === "extreme"
+                    ? `No pairs beyond ±${zThreshold}σ`
+                    : "No valid pairs found"}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
     </div>
-  );
-}
-
-// ── Sparkline ──
-const SPARKLINE_W = 160;
-const SPARKLINE_H = 28;
-const SPARKLINE_MAX_PTS = 100;
-
-function downsample(
-  data: { time: string; value: number }[],
-  maxPts: number
-): { time: string; value: number }[] {
-  if (data.length <= maxPts) return data;
-  const step = (data.length - 1) / (maxPts - 1);
-  const out: { time: string; value: number }[] = [];
-  for (let i = 0; i < maxPts; i++) {
-    out.push(data[Math.round(i * step)]);
-  }
-  return out;
-}
-
-function MiniSparkline({ pair }: { pair: PairData }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || pair.zScoreSeries.length === 0) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const w = SPARKLINE_W;
-    const h = SPARKLINE_H;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-
-    const data = downsample(pair.zScoreSeries, SPARKLINE_MAX_PTS);
-    const maxAbs = Math.max(3, ...data.map((d) => Math.abs(d.value)));
-    const pad = 2;
-    const plotW = w - pad * 2;
-    const plotH = h - pad * 2;
-    const yCenter = pad + plotH / 2;
-
-    // ±2σ bands
-    const upper2Y = yCenter - (2 / maxAbs) * (plotH / 2);
-    const lower2Y = yCenter + (2 / maxAbs) * (plotH / 2);
-    ctx.fillStyle = "rgba(239,68,68,0.06)";
-    ctx.fillRect(pad, pad, plotW, upper2Y - pad);
-    ctx.fillStyle = "rgba(34,197,94,0.06)";
-    ctx.fillRect(pad, lower2Y, plotW, h - pad - lower2Y);
-
-    // Zero line
-    ctx.strokeStyle = "rgba(255,255,255,0.1)";
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(pad, yCenter);
-    ctx.lineTo(w - pad, yCenter);
-    ctx.stroke();
-
-    // ±2 lines
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(pad, upper2Y);
-    ctx.lineTo(w - pad, upper2Y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(pad, lower2Y);
-    ctx.lineTo(w - pad, lower2Y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Z-score line
-    ctx.strokeStyle = "#0ea5e9";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-      const x = pad + (i / (data.length - 1)) * plotW;
-      const y = yCenter - (data[i].value / maxAbs) * (plotH / 2);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Current value dot
-    const lastY =
-      yCenter - (data[data.length - 1].value / maxAbs) * (plotH / 2);
-    ctx.beginPath();
-    ctx.arc(w - pad, lastY, 2, 0, Math.PI * 2);
-    ctx.fillStyle = zScoreColor(pair.zScore);
-    ctx.fill();
-  }, [pair]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: SPARKLINE_W, height: SPARKLINE_H }}
-      className="block"
-    />
   );
 }

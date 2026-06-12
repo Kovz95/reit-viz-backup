@@ -1,34 +1,132 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import {
-  getTickers,
-  getDates,
-  getTickerRaw,
-  metricMultiplier,
-} from "@/lib/dataService";
-import type { TickerMeta } from "@/lib/dataService";
-import { useUniverse } from "@/lib/universeContext";
-import { useWorkspaceTab } from "@/lib/workspaceContext";
-import {
-  FORWARD_HORIZONS,
-  TARGET_THRESHOLDS,
-  RETURN_BAND_PRESETS,
-  ALL_METRICS,
-  computeForwardProfile,
-  summarizeSignals,
-  computeCompositeScore,
-  scoreColor,
-  scoreTextColor,
-  hitRateColor,
-  profitFactorColor,
-  pct,
-  pctSigned,
-  type ForwardReturnProfile,
-  type SignalSummary,
-  type HorizonLabel,
-  type ReturnBand,
-} from "@/lib/forwardReturns";
+// Reconstructed from recovered-bundle/PairOptimizer-Df5S8y_J.js on 2026-06-11
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { usePersistedState } from "@/lib/persistedState";
+import { useAppContext } from "@/lib/appContext";
+import { useWorkspaceState } from "@/lib/workspaceState";
+import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
+import { getMetricScalar, getMetricInverseFlag } from "@/lib/metricHelpers";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
+import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
+import { computeSignalStats } from "@/lib/computeSignalStats";
+import { scoreSignalStats } from "@/lib/scoreSignalStats";
+import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
+import { useWorkspaceStateEx } from "@/lib/workspaceState";
+import { TARGET_RETURN_OPTIONS, BAND_OPTIONS } from "@/lib/optimizerConstants";
+import { FORWARD_HORIZONS } from "@/lib/forwardHorizons";
+import { Button } from "@/components/ui/button";
+import { Download } from "lucide-react";
+import { hitRateClass, formatPct, pfClass, pfTextColor, scoreTextColor, scoreBackgroundColor } from "@/lib/formattingHelpers";
+import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
+import { useFrequency, isValidFrequency } from "@/lib/useFrequency";
 
-// ── Types ──
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+interface HorizonDef { label: string; days: number; }
+const FWD_HORIZONS = FORWARD_HORIZONS as HorizonDef[];
+
+const Z_SCORE_WINDOWS = [21, 42, 63, 126, 189, 252, 504];
+
+const GROUP_BY_OPTIONS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Sub-Sector" },
+  { key: "industryGroup", label: "Industry Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Sub-Industry" },
+];
+
+// ─── Math helpers ─────────────────────────────────────────────────────────────
+
+function rollingZScore(series: number[], window: number): (number | null)[] {
+  const result = new Array<number | null>(series.length).fill(null);
+  for (let i = 1; i < series.length; i++) {
+    const start = Math.max(0, i - window);
+    const len = i - start;
+    if (len < 2) continue;
+    let sum = 0, sumSq = 0;
+    for (let j = start; j < i; j++) { sum += series[j]; sumSq += series[j] * series[j]; }
+    const mean = sum / len;
+    const variance = sumSq / len - mean * mean;
+    const std = Math.sqrt(Math.max(0, variance));
+    if (std > 0) result[i] = (series[i] - mean) / std;
+  }
+  return result;
+}
+
+function computeHalfLife(series: number[]): number {
+  if (series.length < 20) return Infinity;
+  const n = series.length - 1;
+  let sumY = 0, sumDY = 0, sumYDY = 0, sumY2 = 0;
+  for (let i = 1; i <= n; i++) {
+    const y = series[i - 1];
+    const dy = series[i] - series[i - 1];
+    sumY += y; sumDY += dy; sumYDY += y * dy; sumY2 += y * y;
+  }
+  const beta = (n * sumYDY - sumY * sumDY) / (n * sumY2 - sumY * sumY);
+  return beta >= 0 ? Infinity : -Math.log(2) / Math.log(1 + beta);
+}
+
+function computeHurst(series: number[]): number {
+  if (series.length < 20) return 0.5;
+  const returns: number[] = [];
+  for (let i = 1; i < series.length; i++) returns.push(series[i] - series[i - 1]);
+  const scales = [8, 16, 32, 64, 128].filter((s) => s <= returns.length / 2);
+  if (scales.length < 2) return 0.5;
+  const logScales: number[] = [], logRS: number[] = [];
+  for (const scale of scales) {
+    const numChunks = Math.floor(returns.length / scale);
+    if (numChunks === 0) continue;
+    let rsSum = 0;
+    for (let chunk = 0; chunk < numChunks; chunk++) {
+      const seg = returns.slice(chunk * scale, (chunk + 1) * scale);
+      const mean = seg.reduce((a, v) => a + v, 0) / seg.length;
+      const cumDev: number[] = [];
+      let cum = 0;
+      for (const v of seg) { cum += v - mean; cumDev.push(cum); }
+      const range = Math.max(...cumDev) - Math.min(...cumDev);
+      const std = Math.sqrt(seg.reduce((a, v) => a + (v - mean) ** 2, 0) / seg.length);
+      rsSum += std > 0 ? range / std : 0;
+    }
+    const avgRS = rsSum / numChunks;
+    if (avgRS > 0) { logScales.push(Math.log(scale)); logRS.push(Math.log(avgRS)); }
+  }
+  if (logScales.length < 2) return 0.5;
+  const k = logScales.length;
+  const sx = logScales.reduce((a, v) => a + v, 0);
+  const sy = logRS.reduce((a, v) => a + v, 0);
+  const sxy = logScales.reduce((a, v, i) => a + v * logRS[i], 0);
+  const sxx = logScales.reduce((a, v) => a + v * v, 0);
+  const slope = (k * sxy - sx * sy) / (k * sxx - sx * sx);
+  return Math.max(0, Math.min(1, slope));
+}
+
+function adfPValue(series: number[]): number {
+  if (series.length < 30) return 1;
+  const n = series.length;
+  const returns: number[] = [];
+  for (let i = 1; i < n; i++) returns.push(series[i] - series[i - 1]);
+  const c = returns.length;
+  let sx = 0, sdx = 0, sxdx = 0, sx2 = 0;
+  for (let i = 0; i < c; i++) {
+    const x = series[i], dx = returns[i];
+    sx += x; sdx += dx; sxdx += x * dx; sx2 += x * x;
+  }
+  const beta = (c * sxdx - sx * sdx) / (c * sx2 - sx * sx);
+  const meanDX = sdx / c;
+  const meanX = sx / c;
+  let sse = 0;
+  for (let i = 0; i < c; i++) {
+    const predicted = meanDX + beta * (series[i] - meanX);
+    sse += (returns[i] - predicted) ** 2;
+  }
+  const se = Math.sqrt(sse / (c - 2)) / Math.sqrt(sx2 / c - meanX ** 2);
+  const tStat = se > 0 ? beta / (se / Math.sqrt(c)) : 0;
+  return tStat < -3.43 ? 0.01 : tStat < -2.86 ? 0.05 : tStat < -2.57 ? 0.1 : tStat < -1.94 ? 0.2 : 0.5;
+}
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface PairResult {
   tickerA: string;
@@ -37,438 +135,376 @@ interface PairResult {
   halfLife: number;
   adfPValue: number;
   hurstExponent: number;
-  /** Best z-score window and thresholds for trading this pair */
   bestWindow: number;
-  /** Buy = long spread (spread is cheap), Sell = short spread (spread is rich) */
-  buySummary: SignalSummary;
-  sellSummary: SignalSummary;
+  buySummary: any;
+  sellSummary: any;
   compositeScore: number;
-  bestHorizon: HorizonLabel;
+  bestHorizon: string;
+  buyRevSummary?: any;
+  sellRevSummary?: any;
 }
 
-// ── Statistical helpers ──
-
-function computeSpreadZScores(
-  spreadValues: number[],
-  window: number
-): (number | null)[] {
-  const result: (number | null)[] = new Array(spreadValues.length).fill(null);
-  for (let i = 1; i < spreadValues.length; i++) {
-    const start = Math.max(0, i - window + 1);
-    const n = i - start + 1;
-    if (n < 2) continue;
-    let sum = 0;
-    let sumSq = 0;
-    for (let j = start; j <= i; j++) {
-      sum += spreadValues[j];
-      sumSq += spreadValues[j] * spreadValues[j];
-    }
-    const mean = sum / n;
-    const variance = sumSq / n - mean * mean;
-    const std = Math.sqrt(Math.max(0, variance));
-    if (std > 0) result[i] = (spreadValues[i] - mean) / std;
-  }
-  return result;
-}
-
-/**
- * Estimate half-life of mean reversion via OLS regression:
- *   Δspread(t) = α + β * spread(t-1) + ε
- *   halfLife = -ln(2) / ln(1 + β)
- */
-function estimateHalfLife(values: number[]): number {
-  if (values.length < 20) return Infinity;
-  const n = values.length - 1;
-  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-  for (let i = 1; i <= n; i++) {
-    const x = values[i - 1];
-    const y = values[i] - values[i - 1];
-    sumX += x;
-    sumY += y;
-    sumXY += x * y;
-    sumXX += x * x;
-  }
-  const beta = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-  if (beta >= 0) return Infinity; // no mean reversion
-  return -Math.log(2) / Math.log(1 + beta);
-}
-
-/**
- * Hurst exponent via R/S analysis (simplified).
- * H < 0.5 = mean-reverting, H ≈ 0.5 = random walk, H > 0.5 = trending
- */
-function estimateHurst(values: number[]): number {
-  if (values.length < 20) return 0.5;
-  const returns: number[] = [];
-  for (let i = 1; i < values.length; i++) {
-    returns.push(values[i] - values[i - 1]);
-  }
-
-  const sizes = [8, 16, 32, 64, 128].filter((s) => s <= returns.length / 2);
-  if (sizes.length < 2) return 0.5;
-
-  const logN: number[] = [];
-  const logRS: number[] = [];
-
-  for (const sz of sizes) {
-    const chunks = Math.floor(returns.length / sz);
-    if (chunks === 0) continue;
-    let rsSum = 0;
-    for (let c = 0; c < chunks; c++) {
-      const seg = returns.slice(c * sz, (c + 1) * sz);
-      const mean = seg.reduce((a, b) => a + b, 0) / seg.length;
-      const cumDev: number[] = [];
-      let cum = 0;
-      for (const r of seg) {
-        cum += r - mean;
-        cumDev.push(cum);
-      }
-      const R = Math.max(...cumDev) - Math.min(...cumDev);
-      const S = Math.sqrt(seg.reduce((s, r) => s + (r - mean) ** 2, 0) / seg.length);
-      rsSum += S > 0 ? R / S : 0;
-    }
-    const avgRS = rsSum / chunks;
-    if (avgRS > 0) {
-      logN.push(Math.log(sz));
-      logRS.push(Math.log(avgRS));
-    }
-  }
-
-  if (logN.length < 2) return 0.5;
-
-  // Simple linear regression: logRS = H * logN + c
-  const n = logN.length;
-  const sumX = logN.reduce((a, b) => a + b, 0);
-  const sumY = logRS.reduce((a, b) => a + b, 0);
-  const sumXY = logN.reduce((s, x, i) => s + x * logRS[i], 0);
-  const sumXX = logN.reduce((s, x) => s + x * x, 0);
-  const H = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-  return Math.max(0, Math.min(1, H));
-}
-
-/**
- * Augmented Dickey-Fuller test (simplified) — returns approximate p-value.
- * Tests: Δy(t) = α + β*y(t-1) + Σ γ*Δy(t-k) + ε
- * If β < 0 and t-stat is very negative, the spread is stationary (mean-reverting).
- */
-function adfPValue(values: number[]): number {
-  if (values.length < 30) return 1;
-  const n = values.length;
-  const lags = Math.min(Math.floor(Math.cbrt(n)), 12);
-  
-  // Compute differences
-  const dy: number[] = [];
-  for (let i = 1; i < n; i++) dy.push(values[i] - values[i - 1]);
-  
-  // Simple ADF: regress Δy on y(t-1) (no lagged diffs for speed)
-  const nObs = dy.length;
-  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-  for (let i = 0; i < nObs; i++) {
-    const x = values[i]; // y(t-1)
-    const y = dy[i]; // Δy(t)
-    sumX += x;
-    sumY += y;
-    sumXY += x * y;
-    sumXX += x * x;
-  }
-  const beta = (nObs * sumXY - sumX * sumY) / (nObs * sumXX - sumX * sumX);
-  const meanY = sumY / nObs;
-  const meanX = sumX / nObs;
-  
-  // Compute t-statistic
-  let ssr = 0;
-  for (let i = 0; i < nObs; i++) {
-    const predicted = meanY + beta * (values[i] - meanX);
-    ssr += (dy[i] - predicted) ** 2;
-  }
-  const se = Math.sqrt(ssr / (nObs - 2)) / Math.sqrt(sumXX / nObs - meanX ** 2);
-  const tStat = se > 0 ? beta / (se / Math.sqrt(nObs)) : 0;
-
-  // Approximate p-value from ADF critical values (with intercept, no trend)
-  // 1%: -3.43, 5%: -2.86, 10%: -2.57
-  if (tStat < -3.43) return 0.01;
-  if (tStat < -2.86) return 0.05;
-  if (tStat < -2.57) return 0.10;
-  if (tStat < -1.94) return 0.20;
-  return 0.50;
-}
-
-// ── Candidate windows for spread z-score ──
-const PAIR_WINDOWS = [21, 42, 63, 126, 189, 252, 504];
-
-// ── Component ──
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function PairOptimizer() {
-  const [allTickers, setAllTickers] = useState<TickerMeta[]>([]);
+  const [allTickers, setAllTickers] = useState<any[]>([]);
   const [selectedMetric, setSelectedMetric] = useState("P/FFO LTM");
-  const [returnMode, setReturnMode] = useState<"threshold" | "band">("threshold");
+  const [returnMode, setReturnMode] = useState("threshold");
   const [targetReturn, setTargetReturn] = useState(0.05);
   const [bandMin, setBandMin] = useState(0.05);
-  const [bandMax, setBandMax] = useState(0.10);
+  const [bandMax, setBandMax] = useState(0.1);
   const [buyThreshold, setBuyThreshold] = useState(-2);
   const [sellThreshold, setSellThreshold] = useState(2);
-  const [mode, setMode] = useState<"manual" | "scan">("scan");
+  const [signalType, setSignalType] = useState("breakout");
+  const [mode, setMode] = useState("scan");
+  const [groupBy, setGroupBy] = useState("subsector");
+  const [spreadMethod, setSpreadMethod] = useState("ratio");
   const [tickerA, setTickerA] = useState("");
   const [tickerB, setTickerB] = useState("");
-  const [running, setRunning] = useState(false);
+  const [showLoading, setShowLoading] = useState(false);
+  const { frequency, setFrequency, frequencyUI } = useFrequency("pair", "daily", showLoading);
   const [progress, setProgress] = useState({ current: 0, total: 0, label: "" });
-  const [results, setResults] = useState<PairResult[]>([]);
+  const [results, setResults] = usePersistedState<PairResult[]>("pair:results", []);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<"score" | "halfLife" | "hurst">("score");
-  const abortRef = useRef(false);
-  const restoredTickerRef = useRef(false);
-
-  const { universeTickers, isFiltered } = useUniverse();
-
-  const tickers = useMemo(() => {
-    if (!universeTickers) return allTickers;
-    return allTickers.filter((t) => universeTickers.has(t.ticker));
-  }, [allTickers, universeTickers]);
-
-  // Available metrics = intersection of ALL_METRICS and what the data actually has
-  const [availableMetrics, setAvailableMetrics] = useState<string[]>(ALL_METRICS);
+  const [sortBy, setSortBy] = useState("score");
+  const cancelRef = useRef(false);
+  const tickerInitialized = useRef(false);
+  const { universeTickers, isFiltered } = useAppContext();
+  const filteredTickers = useMemo(
+    () => (universeTickers ? allTickers.filter((t) => universeTickers.has(t.ticker)) : allTickers),
+    [allTickers, universeTickers]
+  );
+  const classFilter = useOptimizerClassFilter(filteredTickers, mode === "scan", "pair-opt-clf");
+  const effectiveTickers = mode === "scan" ? classFilter.filteredTickers : filteredTickers;
+  const [availableMetrics, setAvailableMetrics] = useState<string[]>([]);
 
   useEffect(() => {
-    getTickers().then((t) => {
-      setAllTickers(t);
-      if (t.length > 0 && !restoredTickerRef.current) {
-        setTickerA(t[0].ticker);
-        setTickerB(t.length > 1 ? t[1].ticker : t[0].ticker);
+    fetchWorkbookTickers().then((tickers: any[]) => {
+      setAllTickers(tickers);
+      if (tickers.length > 0 && !tickerInitialized.current) {
+        setTickerA(tickers[0].ticker);
+        setTickerB(tickers.length > 1 ? tickers[1].ticker : tickers[0].ticker);
       }
-      // Detect available metrics from first ticker
-      if (t.length > 0 && t[0].metrics) {
-        const metricNames = t[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
-        const available = ALL_METRICS.filter((m) => metricNames.includes(m));
-        if (available.length > 0) setAvailableMetrics(available);
+      if (tickers.length > 0 && tickers[0].metrics) {
+        const metricNames = tickers[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
+        const filtered = availableMetrics.filter((m) => metricNames.includes(m));
+        if (filtered.length > 0) setAvailableMetrics(filtered);
       }
     });
   }, []);
 
-  const analyzePair = useCallback(async (
+  // ── Workspace state ──
+  const serializeState = useCallback(
+    () => ({
+      selectedMetric,
+      targetReturn,
+      buyThreshold,
+      sellThreshold,
+      signalType,
+      mode,
+      groupBy,
+      spreadMethod,
+      tickerA,
+      tickerB,
+      results,
+      expandedPair,
+      sortBy,
+      returnMode,
+      bandMin,
+      bandMax,
+      frequency,
+    }),
+    [selectedMetric, targetReturn, buyThreshold, sellThreshold, signalType, mode, groupBy, spreadMethod, tickerA, tickerB, results, expandedPair, sortBy, returnMode, bandMin, bandMax, frequency]
+  );
+
+  const hydrateState = useCallback(
+    (state: any) => {
+      if (!state) return;
+      if (state.selectedMetric) setSelectedMetric(state.selectedMetric);
+      if (typeof state.targetReturn === "number") setTargetReturn(state.targetReturn);
+      if (typeof state.buyThreshold === "number") setBuyThreshold(state.buyThreshold);
+      if (typeof state.sellThreshold === "number") setSellThreshold(state.sellThreshold);
+      if (state.signalType) setSignalType(state.signalType);
+      if (state.mode) setMode(state.mode);
+      if (state.groupBy) setGroupBy(state.groupBy);
+      if (state.spreadMethod) setSpreadMethod(state.spreadMethod);
+      if (state.returnMode) setReturnMode(state.returnMode);
+      if (typeof state.bandMin === "number") setBandMin(state.bandMin);
+      if (typeof state.bandMax === "number") setBandMax(state.bandMax);
+      if (state.tickerA) { setTickerA(state.tickerA); tickerInitialized.current = true; }
+      if (state.tickerB) { setTickerB(state.tickerB); tickerInitialized.current = true; }
+      if (Array.isArray(state.results)) setResults(state.results);
+      if (state.expandedPair !== undefined) setExpandedPair(state.expandedPair);
+      if (state.sortBy) setSortBy(state.sortBy);
+      if (isValidFrequency(state.frequency)) setFrequency(state.frequency);
+    },
+    [setFrequency, setResults]
+  );
+
+  useWorkspaceState("pair-optimizer", serializeState, hydrateState);
+
+  // ── Run pair analysis ──
+  const runAnalysis = useCallback(async (
     tA: string, tB: string, metric: string, dates: string[],
-    target: number, buyTh: number, sellTh: number,
-    band: ReturnBand | null
+    tgtReturn: number, buyZ: number, sellZ: number,
+    bandParam: { minReturn: number; maxReturn: number } | null,
+    spread: string, sig: string, freq: string
   ): Promise<PairResult | null> => {
     try {
-      const [rawA, rawB] = await Promise.all([getTickerRaw(tA), getTickerRaw(tB)]);
-      const mult = metricMultiplier(metric);
+      const [dataA, dataB] = await Promise.all([fetchWorkbookData(tA), fetchWorkbookData(tB)]);
+      const scalar = getMetricScalar(metric);
+      const inverse = getMetricInverseFlag(metric);
+      const seriesA = dataA[metric] || [];
+      const seriesB = dataB[metric] || [];
+      const closesA = dataA.close || [];
+      const closesB = dataB.close || [];
+      if (!seriesA.length || !seriesB.length || !closesA.length || !closesB.length) return null;
 
-      const metricA = rawA[metric];
-      const metricB = rawB[metric];
-      const closeA = rawA["close"];
-      const closeB = rawB["close"];
-      if (!metricA?.length || !metricB?.length || !closeA?.length || !closeB?.length) return null;
-
-      // Build maps
       const mapA = new Map<number, number>();
-      for (const [idx, val] of metricA) mapA.set(idx, val * mult);
+      for (const [idx, val] of seriesA) mapA.set(idx, val * scalar * inverse);
       const mapB = new Map<number, number>();
-      for (const [idx, val] of metricB) mapB.set(idx, val * mult);
-      const closeMapA = new Map<number, number>();
-      for (const [idx, val] of closeA) closeMapA.set(idx, val);
-      const closeMapB = new Map<number, number>();
-      for (const [idx, val] of closeB) closeMapB.set(idx, val);
+      for (const [idx, val] of seriesB) mapB.set(idx, val * scalar * inverse);
+      const mapCA = new Map<number, number>();
+      for (const [idx, val] of closesA) mapCA.set(idx, val);
+      const mapCB = new Map<number, number>();
+      for (const [idx, val] of closesB) mapCB.set(idx, val);
 
-      // Find overlapping indices where both tickers have metric AND close data
-      const indices: number[] = [];
+      const overlapIndices: number[] = [];
       for (let i = 0; i < dates.length; i++) {
-        if (mapA.has(i) && mapB.has(i) && closeMapA.has(i) && closeMapB.has(i)) {
-          indices.push(i);
+        if (mapA.has(i) && mapB.has(i) && mapCA.has(i) && mapCB.has(i)) {
+          if (spread === "ratio") {
+            const bVal = mapB.get(i)!;
+            if (!Number.isFinite(bVal) || bVal <= 0) continue;
+          }
+          overlapIndices.push(i);
         }
       }
-      if (indices.length < 100) return null;
+      if (overlapIndices.length < 100) return null;
 
-      // Compute spread = metric(A) - metric(B)
-      const spread = indices.map((i) => mapA.get(i)! - mapB.get(i)!);
-      // Compute pair return = avg of the two stocks' returns (for forward return measurement)
-      const pairPrices = indices.map((i) => {
-        // Normalise both prices to 1 at start, then average
-        return (closeMapA.get(i)! / closeMapA.get(indices[0])! + closeMapB.get(i)! / closeMapB.get(indices[0])!) / 2;
-      });
-      // For pair trades: long A short B return
-      const longShortPrices = indices.map((i) => {
-        return closeMapA.get(i)! / closeMapA.get(indices[0])! - closeMapB.get(i)! / closeMapB.get(indices[0])! + 1;
-      });
+      const spreadSeries = spread === "ratio"
+        ? overlapIndices.map((i) => mapA.get(i)! / mapB.get(i)!)
+        : overlapIndices.map((i) => mapA.get(i)! - mapB.get(i)!);
 
-      // Statistical tests on the spread
-      const halfLife = estimateHalfLife(spread);
-      const hurst = estimateHurst(spread);
-      const adfP = adfPValue(spread);
+      const priceRatioSeries = overlapIndices.map(
+        (i) => (mapCA.get(i)! / mapCA.get(overlapIndices[0])! + mapCB.get(i)! / mapCB.get(overlapIndices[0])!) / 2
+      );
+      const hedgeSeries = overlapIndices.map(
+        (i) => mapCA.get(i)! / mapCA.get(overlapIndices[0])! - mapCB.get(i)! / mapCB.get(overlapIndices[0])! + 1
+      );
 
-      // Test each candidate window
-      let bestResult: {
-        window: number;
-        buySummary: SignalSummary;
-        sellSummary: SignalSummary;
-        compositeScore: number;
-        bestHorizon: HorizonLabel;
-      } | null = null;
-      let bestComposite = -1;
+      const freqMode = freq === "weekly" ? "weekly" : "daily";
+      const overlapDates = overlapIndices.map((i) => dates[i]);
+      let workingSeries: number[];
+      let mapToDaily: (idx: number) => number;
 
-      for (const w of PAIR_WINDOWS) {
-        if (w > spread.length * 0.8) continue;
-        const zScores = computeSpreadZScores(spread, w);
+      if (freqMode === "weekly") {
+        const downsampled = weeklyDownsample(
+          { dates: overlapDates, closes: spreadSeries, adjCloses: spreadSeries },
+          "weekly"
+        );
+        if (downsampled.closes.length < 30) return null;
+        if (freq === "weekly_on_daily") {
+          const mapped = new Array<number>(spreadSeries.length);
+          let wi = 0;
+          for (let di = 0; di < spreadSeries.length; di++) {
+            while (wi + 1 < downsampled.dailyIndexMap.length && downsampled.dailyIndexMap[wi + 1] <= di) wi++;
+            mapped[di] = downsampled.closes[wi];
+          }
+          workingSeries = mapped;
+          mapToDaily = (i) => i;
+        } else {
+          workingSeries = downsampled.closes;
+          mapToDaily = (i) => getDailyIndexFromWeekly(i, downsampled);
+        }
+      } else {
+        workingSeries = spreadSeries;
+        mapToDaily = (i) => i;
+      }
 
-        // Detect signals
-        const buyProfiles: ForwardReturnProfile[] = [];
-        const sellProfiles: ForwardReturnProfile[] = [];
+      const halfLife = computeHalfLife(workingSeries);
+      const hurst = computeHurst(workingSeries);
+      const adfP = adfPValue(workingSeries);
+
+      let bestResult: any = null;
+      let bestScore = -1;
+
+      for (const win of Z_SCORE_WINDOWS) {
+        if (win > workingSeries.length * 0.8) continue;
+        const zScores = rollingZScore(workingSeries, win);
+        const isBreakout = sig === "breakout" || sig === "both";
+        const isReversion = sig === "reversion" || sig === "both";
+
+        const buyBreakoutSignals: any[] = [], sellBreakoutSignals: any[] = [];
+        const buyRevSignals: any[] = [], sellRevSignals: any[] = [];
+
         let prevZ: number | null = null;
-
         for (let i = 0; i < zScores.length; i++) {
           const z = zScores[i];
           if (z === null) { prevZ = null; continue; }
-
-          // Buy signal: spread z crosses below buyThreshold (spread is cheap → long A/short B)
-          if (prevZ !== null && prevZ >= buyTh && z < buyTh) {
-            buyProfiles.push(computeForwardProfile(longShortPrices, i, target, "buy", band));
-          }
-          // Sell signal: spread z crosses above sellThreshold (spread is rich → short A/long B)
-          if (prevZ !== null && prevZ <= sellTh && z > sellTh) {
-            sellProfiles.push(computeForwardProfile(longShortPrices, i, target, "sell", band));
+          if (prevZ !== null) {
+            const dailyIdx = mapToDaily(i);
+            if (dailyIdx >= 0) {
+              if (isBreakout && prevZ >= buyZ && z < buyZ) buyBreakoutSignals.push(computeSignalStats(hedgeSeries, dailyIdx, tgtReturn, "buy", bandParam));
+              if (isBreakout && prevZ <= sellZ && z > sellZ) sellBreakoutSignals.push(computeSignalStats(hedgeSeries, dailyIdx, tgtReturn, "sell", bandParam));
+              if (isReversion && prevZ < buyZ && z >= buyZ) buyRevSignals.push(computeSignalStats(hedgeSeries, dailyIdx, tgtReturn, "buy", bandParam));
+              if (isReversion && prevZ > sellZ && z <= sellZ) sellRevSignals.push(computeSignalStats(hedgeSeries, dailyIdx, tgtReturn, "sell", bandParam));
+            }
           }
           prevZ = z;
         }
 
-        const buySummary = summarizeSignals(buyProfiles, "buy");
-        const sellSummary = summarizeSignals(sellProfiles, "sell");
+        const buySummary = scoreSignalStats(isBreakout ? buyBreakoutSignals : buyRevSignals, "buy");
+        const sellSummary = scoreSignalStats(isBreakout ? sellBreakoutSignals : sellRevSignals, "sell");
+        const buyRevSummary = sig === "both" ? scoreSignalStats(buyRevSignals, "buy") : undefined;
+        const sellRevSummary = sig === "both" ? scoreSignalStats(sellRevSignals, "sell") : undefined;
+        const hasBand = bandParam !== null;
+        const buyScore = scoreSignalStats(buySummary, "buy", hasBand);
+        const sellScore = scoreSignalStats(sellSummary, "sell", hasBand);
 
-        // Combined score
-        const useBand = band !== null;
-        const buyComp = computeCompositeScore(buySummary, "buy", useBand);
-        const sellComp = computeCompositeScore(sellSummary, "sell", useBand);
-        const dirCount = (buySummary.count > 0 ? 1 : 0) + (sellSummary.count > 0 ? 1 : 0);
-        const composite = dirCount > 0 ? (buyComp.score + sellComp.score) / (dirCount * 2) * 100 : 0;
+        let sigCount = ((buySummary?.count ?? 0) > 0 ? 1 : 0) + ((sellSummary?.count ?? 0) > 0 ? 1 : 0);
+        let totalScore = buyScore.score + sellScore.score;
+        if (sig === "both") {
+          const brs = scoreSignalStats(buyRevSummary, "buy", hasBand);
+          const srs = scoreSignalStats(sellRevSummary, "sell", hasBand);
+          if ((buyRevSummary?.count ?? 0) > 0) { sigCount++; totalScore += brs.score; }
+          if ((sellRevSummary?.count ?? 0) > 0) { sigCount++; totalScore += srs.score; }
+        }
+        const avgScore = sigCount > 0 ? totalScore / sigCount : 0;
+        const hurstBonus = hurst < 0.45 ? 1.15 : 1;
+        const adfBonus = adfP <= 0.05 ? 1.1 : 1;
+        const composite = Math.min(100, avgScore * hurstBonus * adfBonus);
 
-        // Boost score for statistically significant mean reversion
-        const statBoost = (hurst < 0.45 ? 1.15 : 1) * (adfP <= 0.05 ? 1.10 : 1);
-        const adjustedComposite = Math.min(100, composite * statBoost);
-
-        if (adjustedComposite > bestComposite) {
-          bestComposite = adjustedComposite;
+        if (composite > bestScore) {
+          bestScore = composite;
           bestResult = {
-            window: w,
+            window: win,
             buySummary,
             sellSummary,
-            compositeScore: Math.round(adjustedComposite),
-            bestHorizon: buyComp.score >= sellComp.score ? buyComp.bestHorizon : sellComp.bestHorizon,
+            compositeScore: Math.round(composite),
+            bestHorizon: buyScore.score >= sellScore.score ? buyScore.bestHorizon : sellScore.bestHorizon,
+            buyRevSummary,
+            sellRevSummary,
           };
         }
       }
 
-      if (!bestResult) return null;
-
-      return {
-        tickerA: tA,
-        tickerB: tB,
-        metric,
-        halfLife: Math.round(halfLife * 10) / 10,
-        adfPValue: adfP,
-        hurstExponent: Math.round(hurst * 1000) / 1000,
-        bestWindow: bestResult.window,
-        buySummary: bestResult.buySummary,
-        sellSummary: bestResult.sellSummary,
-        compositeScore: bestResult.compositeScore,
-        bestHorizon: bestResult.bestHorizon,
-      };
+      return bestResult
+        ? {
+            tickerA: tA,
+            tickerB: tB,
+            metric,
+            halfLife: Math.round(halfLife * 10) / 10,
+            adfPValue: adfP,
+            hurstExponent: Math.round(hurst * 1000) / 1000,
+            bestWindow: bestResult.window,
+            buySummary: bestResult.buySummary,
+            sellSummary: bestResult.sellSummary,
+            compositeScore: bestResult.compositeScore,
+            bestHorizon: bestResult.bestHorizon,
+            buyRevSummary: bestResult.buyRevSummary,
+            sellRevSummary: bestResult.sellRevSummary,
+          }
+        : null;
     } catch {
       return null;
     }
   }, []);
 
-  const runOptimizer = useCallback(async () => {
-    setRunning(true);
+  const handleRun = useCallback(async () => {
+    setShowLoading(true);
     setResults([]);
-    abortRef.current = false;
+    cancelRef.current = false;
 
-    const dates = await getDates();
+    const dates = await fetchGlobalDates();
 
     if (mode === "manual") {
       setProgress({ current: 0, total: 1, label: `${tickerA}/${tickerB}` });
-      const activeBand: ReturnBand | null = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-      const result = await analyzePair(tickerA, tickerB, selectedMetric, dates, targetReturn, buyThreshold, sellThreshold, activeBand);
+      const result = await runAnalysis(
+        tickerA, tickerB, selectedMetric, dates,
+        targetReturn, buyThreshold, sellThreshold,
+        returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null,
+        spreadMethod, signalType, frequency
+      );
       if (result) setResults([result]);
       setProgress({ current: 1, total: 1, label: "" });
     } else {
-      // Scan: test all pairs within same subsector
-      const subsectorGroups = new Map<string, TickerMeta[]>();
-      for (const t of tickers) {
-        const key = t.subsector || t.sector || "Other";
-        if (!subsectorGroups.has(key)) subsectorGroups.set(key, []);
-        subsectorGroups.get(key)!.push(t);
+      const groupMap = new Map<string, any[]>();
+      for (const t of effectiveTickers) {
+        const group = t[groupBy] || "Other";
+        if (!groupMap.has(group)) groupMap.set(group, []);
+        groupMap.get(group)!.push(t);
       }
-
-      // Generate all pairs
       const pairs: [string, string][] = [];
-      for (const [, group] of subsectorGroups) {
-        if (group.length < 2) continue;
-        for (let i = 0; i < group.length; i++) {
-          for (let j = i + 1; j < group.length; j++) {
-            pairs.push([group[i].ticker, group[j].ticker]);
+      for (const [, members] of groupMap) {
+        if (members.length < 2) continue;
+        for (let a = 0; a < members.length; a++) {
+          for (let b = a + 1; b < members.length; b++) {
+            pairs.push([members[a].ticker, members[b].ticker]);
           }
         }
       }
-
       setProgress({ current: 0, total: pairs.length, label: "Scanning pairs..." });
-      const allResults: PairResult[] = [];
-
-      for (let pi = 0; pi < pairs.length; pi++) {
-        if (abortRef.current) break;
-        const [a, b] = pairs[pi];
-        setProgress({ current: pi + 1, total: pairs.length, label: `${a}/${b}` });
-
-        const activeBand: ReturnBand | null = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-        const result = await analyzePair(a, b, selectedMetric, dates, targetReturn, buyThreshold, sellThreshold, activeBand);
-        if (result && result.compositeScore > 0) {
-          allResults.push(result);
-        }
-
-        // Stream results
-        if (pi % 10 === 0 || pi === pairs.length - 1) {
-          setResults([...allResults]);
-        }
+      const accumulated: PairResult[] = [];
+      for (let i = 0; i < pairs.length && !cancelRef.current; i++) {
+        const [pA, pB] = pairs[i];
+        setProgress({ current: i + 1, total: pairs.length, label: `${pA}/${pB}` });
+        const result = await runAnalysis(
+          pA, pB, selectedMetric, dates,
+          targetReturn, buyThreshold, sellThreshold,
+          returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null,
+          spreadMethod, signalType, frequency
+        );
+        if (result && result.compositeScore > 0) accumulated.push(result);
+        if (i % 10 === 0 || i === pairs.length - 1) setResults([...accumulated]);
       }
-
-      setResults(allResults);
+      setResults(accumulated);
     }
+    setShowLoading(false);
+  }, [effectiveTickers, mode, tickerA, tickerB, selectedMetric, targetReturn, buyThreshold, sellThreshold, returnMode, bandMin, bandMax, spreadMethod, signalType, frequency, groupBy, runAnalysis, setResults]);
 
-    setRunning(false);
-  }, [tickers, tickerA, tickerB, selectedMetric, mode, targetReturn, buyThreshold, sellThreshold, returnMode, bandMin, bandMax, analyzePair]);
-
-  // ── Persistence ──
-  const serialize = useCallback(() => ({
-    selectedMetric, targetReturn, buyThreshold, sellThreshold, mode, tickerA, tickerB, results, expandedPair, sortBy, returnMode, bandMin, bandMax,
-  }), [selectedMetric, targetReturn, buyThreshold, sellThreshold, mode, tickerA, tickerB, results, expandedPair, sortBy, returnMode, bandMin, bandMax]);
-
-  const restore = useCallback((saved: any) => {
-    if (!saved) return;
-    if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (typeof saved.targetReturn === "number") setTargetReturn(saved.targetReturn);
-    if (typeof saved.buyThreshold === "number") setBuyThreshold(saved.buyThreshold);
-    if (typeof saved.sellThreshold === "number") setSellThreshold(saved.sellThreshold);
-    if (saved.mode) setMode(saved.mode);
-    if (saved.returnMode) setReturnMode(saved.returnMode);
-    if (typeof saved.bandMin === "number") setBandMin(saved.bandMin);
-    if (typeof saved.bandMax === "number") setBandMax(saved.bandMax);
-    if (saved.tickerA) { setTickerA(saved.tickerA); restoredTickerRef.current = true; }
-    if (saved.tickerB) { setTickerB(saved.tickerB); restoredTickerRef.current = true; }
-    if (Array.isArray(saved.results)) setResults(saved.results);
-    if (saved.expandedPair !== undefined) setExpandedPair(saved.expandedPair);
-    if (saved.sortBy) setSortBy(saved.sortBy);
-  }, []);
-
-  useWorkspaceTab("pair-optimizer", serialize, restore);
-
+  // ── Sorted results ──
   const sortedResults = useMemo(() => {
-    const r = [...results];
-    if (sortBy === "score") r.sort((a, b) => b.compositeScore - a.compositeScore);
-    else if (sortBy === "halfLife") r.sort((a, b) => a.halfLife - b.halfLife);
-    else r.sort((a, b) => a.hurstExponent - b.hurstExponent);
-    return r;
+    const copy = [...results];
+    if (sortBy === "score") copy.sort((a, b) => b.compositeScore - a.compositeScore);
+    else if (sortBy === "halfLife") copy.sort((a, b) => a.halfLife - b.halfLife);
+    else copy.sort((a, b) => a.hurstExponent - b.hurstExponent);
+    return copy;
   }, [results, sortBy]);
+
+  // ── CSV export ──
+  const handleExportCsv = () => {
+    const horizonCols = FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2);
+    const rows = sortedResults.map((r) => {
+      const row: Record<string, any> = {
+        tickerA: r.tickerA,
+        tickerB: r.tickerB,
+        metric: r.metric,
+        halfLife: r.halfLife,
+        adfPValue: r.adfPValue,
+        hurstExponent: r.hurstExponent,
+        bestWindow: r.bestWindow,
+        compositeScore: r.compositeScore,
+      };
+      horizonCols.forEach((h: HorizonDef) => {
+        row[`buy_hitRate_${h.label}`] = r.buySummary?.hitRate[h.label] ?? null;
+        row[`sell_hitRate_${h.label}`] = r.sellSummary?.hitRate[h.label] ?? null;
+      });
+      return row;
+    });
+    const colKeys = Object.keys(rows[0] || {});
+    const csv = [
+      colKeys.join(","),
+      ...rows.map((r) => colKeys.map((k) => `"${String(r[k] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `pair_optimizer_${selectedMetric.replace(/[^a-zA-Z0-9]/g, "_")}.csv`;
+    a.click();
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
         <div className="flex items-center gap-4 flex-wrap">
           <div>
@@ -476,7 +512,7 @@ export default function PairOptimizer() {
               <h2 className="text-sm font-bold text-foreground tracking-tight">Pair Optimizer</h2>
               {isFiltered && (
                 <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-red-600/20 text-red-400 border border-red-600/30">
-                  {tickers.length}/{allTickers.length}
+                  {effectiveTickers.length}/{allTickers.length}
                 </span>
               )}
             </div>
@@ -485,95 +521,249 @@ export default function PairOptimizer() {
             </p>
           </div>
 
+          {/* Metric */}
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Metric</label>
-            <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[140px]" value={selectedMetric} onChange={(e) => setSelectedMetric(e.target.value)} disabled={running}>
-              {availableMetrics.map((m) => <option key={m} value={m}>{m}</option>)}
+            <select
+              className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[140px]"
+              value={selectedMetric}
+              onChange={(e) => setSelectedMetric(e.target.value)}
+              disabled={showLoading}
+            >
+              {availableMetrics.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
             </select>
           </div>
 
+          {/* Mode */}
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Mode</label>
             <div className="flex gap-px">
               {(["scan", "manual"] as const).map((m) => (
-                <button key={m} className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${mode === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`} onClick={() => setMode(m)} disabled={running}>
+                <button
+                  key={m}
+                  className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${mode === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`}
+                  onClick={() => setMode(m)}
+                  disabled={showLoading}
+                >
                   {m === "scan" ? "Subsector Scan" : "Manual Pair"}
                 </button>
               ))}
             </div>
           </div>
 
-          {mode === "manual" && (
+          {/* Universe source (scan mode) */}
+          {mode === "scan" && classFilter.universeSourceUI && (
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Universe Source</label>
+              {classFilter.universeSourceUI}
+            </div>
+          )}
+          {mode === "scan" && classFilter.classFilterUI && (
+            <div className="flex flex-col gap-0.5 w-full mt-1">
+              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Classification Filter</label>
+              {classFilter.classFilterUI}
+            </div>
+          )}
+
+          {/* Manual pair pickers */}
+          {mode === "manual" ? (
             <>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Ticker A</label>
-                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[80px]" value={tickerA} onChange={(e) => setTickerA(e.target.value)} disabled={running}>
-                  {tickers.map((t) => <option key={t.ticker} value={t.ticker}>{t.ticker}</option>)}
+                <select
+                  className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[80px]"
+                  value={tickerA}
+                  onChange={(e) => setTickerA(e.target.value)}
+                  disabled={showLoading}
+                >
+                  {(effectiveTickers as any[]).map((t: any) => (
+                    <option key={t.ticker} value={t.ticker}>{t.ticker}</option>
+                  ))}
                 </select>
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Ticker B</label>
-                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[80px]" value={tickerB} onChange={(e) => setTickerB(e.target.value)} disabled={running}>
-                  {tickers.map((t) => <option key={t.ticker} value={t.ticker}>{t.ticker}</option>)}
+                <select
+                  className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[80px]"
+                  value={tickerB}
+                  onChange={(e) => setTickerB(e.target.value)}
+                  disabled={showLoading}
+                >
+                  {(effectiveTickers as any[]).map((t: any) => (
+                    <option key={t.ticker} value={t.ticker}>{t.ticker}</option>
+                  ))}
                 </select>
               </div>
             </>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Group By</label>
+              <select
+                className="text-xs font-mono bg-background border border-border rounded px-2 py-1 min-w-[120px]"
+                value={groupBy}
+                onChange={(e) => setGroupBy(e.target.value)}
+                disabled={showLoading}
+              >
+                {GROUP_BY_OPTIONS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
           )}
 
+          {/* Spread */}
+          <div className="flex flex-col gap-0.5">
+            <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Spread</label>
+            <div className="flex gap-px">
+              {(["ratio", "difference"] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${spreadMethod === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`}
+                  onClick={() => setSpreadMethod(m)}
+                  disabled={showLoading}
+                >
+                  {m === "ratio" ? "A / B" : "A − B"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Frequency */}
+          <div title="Frequency at which the spread z-scores and signals are computed.">
+            {frequencyUI}
+          </div>
+
+          {/* Return mode */}
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Return Measure</label>
             <div className="flex gap-px">
               {(["threshold", "band"] as const).map((m) => (
-                <button key={m} className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${returnMode === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`} onClick={() => setReturnMode(m)} disabled={running}>
+                <button
+                  key={m}
+                  className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${returnMode === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`}
+                  onClick={() => setReturnMode(m)}
+                  disabled={showLoading}
+                >
                   {m === "threshold" ? "Threshold" : "Band"}
                 </button>
               ))}
             </div>
           </div>
 
+          {/* Target / Band params */}
           {returnMode === "threshold" ? (
             <div className="flex flex-col gap-0.5">
               <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Target</label>
-              <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[70px]" value={targetReturn} onChange={(e) => setTargetReturn(Number(e.target.value))} disabled={running}>
-                {TARGET_THRESHOLDS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              <select
+                className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[70px]"
+                value={targetReturn}
+                onChange={(e) => setTargetReturn(Number(e.target.value))}
+                disabled={showLoading}
+              >
+                {TARGET_RETURN_OPTIONS.map((opt: any) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             </div>
           ) : (
             <>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Band</label>
-                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[80px]" value={`${bandMin}-${bandMax}`} onChange={(e) => { const [mn, mx] = e.target.value.split("-").map(Number); setBandMin(mn); setBandMax(mx); }} disabled={running}>
-                  {RETURN_BAND_PRESETS.map((p) => <option key={p.label} value={`${p.band.minReturn}-${p.band.maxReturn}`}>{p.label}</option>)}
+                <select
+                  className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[80px]"
+                  value={`${bandMin}-${bandMax}`}
+                  onChange={(e) => {
+                    const [min, max] = e.target.value.split("-").map(Number);
+                    setBandMin(min);
+                    setBandMax(max);
+                  }}
+                  disabled={showLoading}
+                >
+                  {BAND_OPTIONS.map((opt: any) => (
+                    <option key={opt.label} value={`${opt.band.minReturn}-${opt.band.maxReturn}`}>{opt.label}</option>
+                  ))}
                 </select>
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Min %</label>
-                <input type="number" step="1" min="0" max="100" className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14" value={Math.round(bandMin * 100)} onChange={(e) => setBandMin(Number(e.target.value) / 100)} disabled={running} />
+                <input
+                  type="number" step="1" min="0" max="100"
+                  className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14"
+                  value={Math.round(bandMin * 100)}
+                  onChange={(e) => setBandMin(Number(e.target.value) / 100)}
+                  disabled={showLoading}
+                />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Max %</label>
-                <input type="number" step="1" min="0" max="100" className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14" value={Math.round(bandMax * 100)} onChange={(e) => setBandMax(Number(e.target.value) / 100)} disabled={running} />
+                <input
+                  type="number" step="1" min="0" max="100"
+                  className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14"
+                  value={Math.round(bandMax * 100)}
+                  onChange={(e) => setBandMax(Number(e.target.value) / 100)}
+                  disabled={showLoading}
+                />
               </div>
             </>
           )}
 
+          {/* Buy/Sell sigma */}
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Buy σ</label>
-            <input type="number" step="0.5" className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14" value={buyThreshold} onChange={(e) => setBuyThreshold(Number(e.target.value))} disabled={running} />
+            <input
+              type="number" step="0.5"
+              className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14"
+              value={buyThreshold}
+              onChange={(e) => setBuyThreshold(Number(e.target.value))}
+              disabled={showLoading}
+            />
           </div>
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Sell σ</label>
-            <input type="number" step="0.5" className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14" value={sellThreshold} onChange={(e) => setSellThreshold(Number(e.target.value))} disabled={running} />
+            <input
+              type="number" step="0.5"
+              className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14"
+              value={sellThreshold}
+              onChange={(e) => setSellThreshold(Number(e.target.value))}
+              disabled={showLoading}
+            />
           </div>
 
+          {/* Signal type */}
           <div className="flex flex-col gap-0.5">
-            <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">&nbsp;</label>
-            {running ? (
-              <button className="text-xs font-mono font-bold px-4 py-1 rounded bg-red-600 text-white hover:bg-red-500" onClick={() => { abortRef.current = true; }}>
+            <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Signal</label>
+            <div className="flex gap-px">
+              {(["breakout", "reversion", "both"] as const).map((s) => (
+                <button
+                  key={s}
+                  className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${signalType === s ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`}
+                  onClick={() => setSignalType(s)}
+                  disabled={showLoading}
+                  title={s === "breakout" ? "Signal when Z crosses through threshold (entering extreme)" : s === "reversion" ? "Signal when Z crosses back inside threshold (leaving extreme)" : "Show both breakout and reversion signals"}
+                >
+                  {s === "breakout" ? "Breakout" : s === "reversion" ? "Reversion" : "Both"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Run / Cancel */}
+          <div className="flex flex-col gap-0.5">
+            <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider"> </label>
+            {showLoading ? (
+              <button
+                className="text-xs font-mono font-bold px-4 py-1 rounded bg-red-600 text-white hover:bg-red-500"
+                onClick={() => { cancelRef.current = true; }}
+              >
                 Cancel ({progress.current}/{progress.total})
               </button>
             ) : (
-              <button className="text-xs font-mono font-bold px-4 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90" onClick={runOptimizer}>
+              <button
+                className="text-xs font-mono font-bold px-4 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                onClick={handleRun}
+              >
                 Run Optimizer
               </button>
             )}
@@ -581,41 +771,51 @@ export default function PairOptimizer() {
         </div>
       </div>
 
-      {/* Results */}
+      {/* ── Results ── */}
       <div className="flex-1 overflow-auto px-4 py-3">
-        {results.length === 0 && !running && (
+        {results.length === 0 && !showLoading && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             {mode === "scan"
-              ? "Scans all pairs within the same subsector for mean-reversion signals"
-              : "Select two tickers and click \"Run Optimizer\" to test pair mean reversion"}
+              ? `Scans all pairs within the same ${GROUP_BY_OPTIONS.find((o) => o.key === groupBy)?.label?.toLowerCase() || "group"} for mean-reversion signals`
+              : 'Select two tickers and click "Run Optimizer" to test pair mean reversion'}
           </div>
         )}
-
-        {running && results.length === 0 && (
+        {showLoading && results.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <div className="text-sm text-muted-foreground mb-2">Analyzing pairs...</div>
               <div className="text-xs font-mono text-muted-foreground">{progress.label}</div>
               <div className="text-xs font-mono text-muted-foreground mt-1">{progress.current}/{progress.total}</div>
               <div className="w-48 h-1 bg-border rounded-full mt-2 mx-auto overflow-hidden">
-                <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }} />
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${progress.total > 0 ? (progress.current / progress.total) * 100 : 0}%` }}
+                />
               </div>
             </div>
           </div>
         )}
-
         {sortedResults.length > 0 && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                {sortedResults.length} pairs — {selectedMetric} — {returnMode === "band" ? `band ${pct(bandMin)}–${pct(bandMax)}` : `target ${pct(targetReturn)}`}
+                {sortedResults.length} pairs — {selectedMetric} ({spreadMethod === "ratio" ? "A/B" : "A−B"}) —{" "}
+                {mode === "scan" ? `by ${GROUP_BY_OPTIONS.find((o) => o.key === groupBy)?.label || groupBy}` : "manual"} —{" "}
+                {returnMode === "band" ? `band ${formatPct(bandMin)}–${formatPct(bandMax)}` : `target ${formatPct(targetReturn)}`}
               </h3>
-              <div className="flex gap-1">
+              <div className="flex items-center gap-1">
                 {(["score", "halfLife", "hurst"] as const).map((s) => (
-                  <button key={s} className={`text-[9px] font-mono px-2 py-0.5 rounded ${sortBy === s ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground border border-border"}`} onClick={() => setSortBy(s)}>
+                  <button
+                    key={s}
+                    className={`text-[9px] font-mono px-2 py-0.5 rounded ${sortBy === s ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground border border-border"}`}
+                    onClick={() => setSortBy(s)}
+                  >
                     {s === "score" ? "Score" : s === "halfLife" ? "Half-Life" : "Hurst"}
                   </button>
                 ))}
+                <Button variant="outline" size="sm" className="h-6 gap-1 text-[11px]" onClick={handleExportCsv} data-testid="export-csv">
+                  <Download className="w-3 h-3" />
+                </Button>
               </div>
             </div>
 
@@ -630,62 +830,74 @@ export default function PairOptimizer() {
                     <th className="text-center px-2 py-1 font-bold">Window</th>
                     <th className="text-center px-2 py-1 font-bold">Buy Sigs</th>
                     <th className="text-center px-2 py-1 font-bold">Sell Sigs</th>
-                    {FORWARD_HORIZONS.map((h) => (
-                      <th key={h.label} className="text-center px-2 py-1 font-bold">{returnMode === "band" ? "Band" : "Hit"} {h.label}</th>
+                    {FWD_HORIZONS.map((h: HorizonDef) => (
+                      <th key={h.label} className="text-center px-2 py-1 font-bold">
+                        {returnMode === "band" ? "Band" : "Hit"} {h.label}
+                      </th>
                     ))}
-                    {FORWARD_HORIZONS.filter((_, i) => i >= 2).map((h) => (
+                    {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => (
                       <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
                     ))}
                     <th className="text-center px-2 py-1 font-bold">Score</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedResults.map((pr) => {
-                    const pairKey = `${pr.tickerA}/${pr.tickerB}`;
+                  {sortedResults.map((row) => {
+                    const pairKey = `${row.tickerA}/${row.tickerB}`;
                     const isExpanded = expandedPair === pairKey;
-                    const buySig = pr.buySummary;
-                    const sellSig = pr.sellSummary;
+                    const buy = row.buySummary;
+                    const sell = row.sellSummary;
                     return (
-                      <tr key={pairKey} className={`${isExpanded ? "bg-primary/10" : "hover:bg-white/5"} cursor-pointer`} onClick={() => setExpandedPair(isExpanded ? null : pairKey)}>
+                      <tr
+                        key={pairKey}
+                        className={`${isExpanded ? "bg-primary/10" : "hover:bg-white/5"} cursor-pointer`}
+                        onClick={() => setExpandedPair(isExpanded ? null : pairKey)}
+                      >
                         <td className="px-2 py-1 font-bold text-foreground sticky left-0 bg-card z-10 border-r border-border whitespace-nowrap">
-                          {pr.tickerA} / {pr.tickerB}
+                          {row.tickerA} / {row.tickerB}
                         </td>
-                        <td className={`text-center px-2 py-1 ${pr.halfLife < 30 ? "text-emerald-400 font-bold" : pr.halfLife < 63 ? "text-green-400" : pr.halfLife < 126 ? "text-yellow-300" : "text-muted-foreground"}`}>
-                          {pr.halfLife === Infinity ? "∞" : `${pr.halfLife}d`}
+                        <td className={`text-center px-2 py-1 ${row.halfLife < 30 ? "text-emerald-400 font-bold" : row.halfLife < 63 ? "text-green-400" : row.halfLife < 126 ? "text-yellow-300" : "text-muted-foreground"}`}>
+                          {row.halfLife === Infinity ? "∞" : `${row.halfLife}d`}
                         </td>
-                        <td className={`text-center px-2 py-1 ${pr.hurstExponent < 0.4 ? "text-emerald-400 font-bold" : pr.hurstExponent < 0.5 ? "text-green-400" : "text-orange-400"}`}>
-                          {pr.hurstExponent.toFixed(3)}
+                        <td className={`text-center px-2 py-1 ${row.hurstExponent < 0.4 ? "text-emerald-400 font-bold" : row.hurstExponent < 0.5 ? "text-green-400" : "text-orange-400"}`}>
+                          {row.hurstExponent.toFixed(3)}
                         </td>
-                        <td className={`text-center px-2 py-1 ${pr.adfPValue <= 0.05 ? "text-emerald-400 font-bold" : pr.adfPValue <= 0.10 ? "text-green-400" : "text-muted-foreground"}`}>
-                          {pr.adfPValue <= 0.01 ? "<.01" : pr.adfPValue.toFixed(2)}
+                        <td className={`text-center px-2 py-1 ${row.adfPValue <= 0.05 ? "text-emerald-400 font-bold" : row.adfPValue <= 0.1 ? "text-green-400" : "text-muted-foreground"}`}>
+                          {row.adfPValue <= 0.01 ? "<.01" : row.adfPValue.toFixed(2)}
                         </td>
-                        <td className="text-center px-2 py-1 text-foreground">{pr.bestWindow}d</td>
-                        <td className="text-center px-2 py-1 text-foreground">{buySig.count}</td>
-                        <td className="text-center px-2 py-1 text-foreground">{sellSig.count}</td>
-                        {FORWARD_HORIZONS.map((h) => {
-                          const rateKey = returnMode === "band" ? "bandHitRate" : "hitRate";
-                          const buyRate = buySig[rateKey]?.[h.label] ?? buySig.hitRate[h.label];
-                          const sellRate = sellSig[rateKey]?.[h.label] ?? sellSig.hitRate[h.label];
-                          const combinedHit = (buySig.count > 0 && sellSig.count > 0)
-                            ? (buyRate * buySig.count + sellRate * sellSig.count) / (buySig.count + sellSig.count)
-                            : buySig.count > 0 ? buyRate : sellRate;
+                        <td className="text-center px-2 py-1 text-foreground">{row.bestWindow}d</td>
+                        <td className="text-center px-2 py-1 text-foreground">{buy?.count}</td>
+                        <td className="text-center px-2 py-1 text-foreground">{sell?.count}</td>
+                        {FWD_HORIZONS.map((h: HorizonDef) => {
+                          const rateField = returnMode === "band" ? "bandHitRate" : "hitRate";
+                          const br = buy?.[rateField]?.[h.label] ?? buy?.hitRate[h.label];
+                          const sr = sell?.[rateField]?.[h.label] ?? sell?.hitRate[h.label];
+                          const combined = buy?.count > 0 && sell?.count > 0
+                            ? (br * buy.count + sr * sell.count) / (buy.count + sell.count)
+                            : buy?.count > 0 ? br : sr;
                           return (
-                            <td key={h.label} className={`text-center px-2 py-1 ${hitRateColor(combinedHit)}`}>
-                              {pct(combinedHit)}
+                            <td key={h.label} className={`text-center px-2 py-1 ${hitRateClass(combined)}`}>
+                              {formatPct(combined)}
                             </td>
                           );
                         })}
-                        {FORWARD_HORIZONS.filter((_, i) => i >= 2).map((h) => {
-                          const combinedPF = buySig.count > 0 ? buySig.profitFactor[h.label] : sellSig.profitFactor[h.label];
+                        {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => {
+                          const pf = buy?.count > 0 ? buy.profitFactor[h.label] : sell?.profitFactor[h.label];
                           return (
-                            <td key={`pf-${h.label}`} className={`text-center px-2 py-1 ${profitFactorColor(combinedPF)}`}>
-                              {combinedPF >= 99 ? "∞" : combinedPF.toFixed(2)}
+                            <td key={`pf-${h.label}`} className={`text-center px-2 py-1 ${pfTextColor(pf)}`}>
+                              {pf >= 99 ? "∞" : pf?.toFixed(2)}
                             </td>
                           );
                         })}
                         <td className="text-center px-2 py-1">
-                          <span className="inline-block px-1.5 py-0.5 rounded font-bold" style={{ backgroundColor: scoreColor(pr.compositeScore), color: scoreTextColor(pr.compositeScore) }}>
-                            {pr.compositeScore}
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded font-bold"
+                            style={{
+                              backgroundColor: scoreBackgroundColor(row.compositeScore),
+                              color: scoreTextColor(row.compositeScore),
+                            }}
+                          >
+                            {row.compositeScore}
                           </span>
                         </td>
                       </tr>
@@ -695,83 +907,59 @@ export default function PairOptimizer() {
               </table>
             </div>
 
-            {/* Expanded detail for selected pair */}
+            {/* Expanded pair detail */}
             {expandedPair && (() => {
-              const pr = results.find((r) => `${r.tickerA}/${r.tickerB}` === expandedPair);
-              if (!pr) return null;
+              const detail = (results as PairResult[]).find((r: PairResult) => `${r.tickerA}/${r.tickerB}` === expandedPair);
+              if (!detail) return null;
+              const renderSummaryTable = (summary: any, side: "buy" | "sell") => (
+                <table className="w-full text-[10px] font-mono">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="text-left px-1 py-0.5">Horizon</th>
+                      <th className="text-center px-1 py-0.5">Hit Rate</th>
+                      <th className="text-center px-1 py-0.5">Win Rate</th>
+                      <th className="text-center px-1 py-0.5">Avg Ret</th>
+                      <th className="text-center px-1 py-0.5">Median</th>
+                      <th className="text-center px-1 py-0.5">Avg Peak</th>
+                      <th className="text-center px-1 py-0.5">Avg Trough</th>
+                      <th className="text-center px-1 py-0.5">PF</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {FWD_HORIZONS.map((h: HorizonDef) => (
+                      <tr key={h.label}>
+                        <td className="px-1 py-0.5 text-foreground font-bold">{h.label}</td>
+                        <td className={`text-center px-1 py-0.5 ${hitRateClass(summary.hitRate[h.label])}`}>{formatPct(summary.hitRate[h.label])}</td>
+                        <td className={`text-center px-1 py-0.5 ${hitRateClass(summary.winRate[h.label])}`}>{formatPct(summary.winRate[h.label])}</td>
+                        <td className={`text-center px-1 py-0.5 ${side === "buy" ? summary.avgReturn[h.label] >= 0 ? "text-green-400" : "text-red-400" : summary.avgReturn[h.label] <= 0 ? "text-green-400" : "text-red-400"}`}>{formatPct(summary.avgReturn[h.label])}</td>
+                        <td className={`text-center px-1 py-0.5 ${side === "buy" ? summary.medianReturn[h.label] >= 0 ? "text-green-400" : "text-red-400" : summary.medianReturn[h.label] <= 0 ? "text-green-400" : "text-red-400"}`}>{formatPct(summary.medianReturn[h.label])}</td>
+                        <td className="text-center px-1 py-0.5 text-green-400">{formatPct(summary.avgPeak[h.label])}</td>
+                        <td className="text-center px-1 py-0.5 text-red-400">{formatPct(summary.avgTrough[h.label])}</td>
+                        <td className={`text-center px-1 py-0.5 ${pfTextColor(summary.profitFactor[h.label])}`}>
+                          {summary.profitFactor[h.label] >= 99 ? "∞" : summary.profitFactor[h.label]?.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
               return (
                 <div className="mt-4 border border-border rounded p-3 bg-card/50">
                   <h4 className="text-xs font-bold text-foreground mb-2">
-                    {pr.tickerA} / {pr.tickerB} — Detailed Forward Returns ({selectedMetric})
+                    {detail.tickerA} / {detail.tickerB} — Detailed Forward Returns ({selectedMetric})
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
-                    {/* Buy side */}
                     <div>
                       <div className="text-[10px] font-mono text-emerald-400 font-bold mb-1">
-                        BUY SPREAD (Long {pr.tickerA} / Short {pr.tickerB}) — {pr.buySummary.count} signals
+                        BUY SPREAD (Long {detail.tickerA} / Short {detail.tickerB}) — {detail.buySummary?.count ?? 0} signals
                       </div>
-                      <table className="w-full text-[10px] font-mono">
-                        <thead>
-                          <tr className="text-muted-foreground">
-                            <th className="text-left px-1 py-0.5">Horizon</th>
-                            <th className="text-center px-1 py-0.5">Hit Rate</th>
-                            <th className="text-center px-1 py-0.5">Win Rate</th>
-                            <th className="text-center px-1 py-0.5">Avg Ret</th>
-                            <th className="text-center px-1 py-0.5">Median</th>
-                            <th className="text-center px-1 py-0.5">Avg Peak</th>
-                            <th className="text-center px-1 py-0.5">Avg Trough</th>
-                            <th className="text-center px-1 py-0.5">PF</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {FORWARD_HORIZONS.map((h) => (
-                            <tr key={h.label}>
-                              <td className="px-1 py-0.5 text-foreground font-bold">{h.label}</td>
-                              <td className={`text-center px-1 py-0.5 ${hitRateColor(pr.buySummary.hitRate[h.label])}`}>{pct(pr.buySummary.hitRate[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${hitRateColor(pr.buySummary.winRate[h.label])}`}>{pct(pr.buySummary.winRate[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${pr.buySummary.avgReturn[h.label] >= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(pr.buySummary.avgReturn[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${pr.buySummary.medianReturn[h.label] >= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(pr.buySummary.medianReturn[h.label])}</td>
-                              <td className="text-center px-1 py-0.5 text-green-400">{pctSigned(pr.buySummary.avgPeak[h.label])}</td>
-                              <td className="text-center px-1 py-0.5 text-red-400">{pctSigned(pr.buySummary.avgTrough[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${profitFactorColor(pr.buySummary.profitFactor[h.label])}`}>{pr.buySummary.profitFactor[h.label] >= 99 ? "∞" : pr.buySummary.profitFactor[h.label].toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      {renderSummaryTable(detail.buySummary, "buy")}
                     </div>
-                    {/* Sell side */}
                     <div>
                       <div className="text-[10px] font-mono text-red-400 font-bold mb-1">
-                        SELL SPREAD (Short {pr.tickerA} / Long {pr.tickerB}) — {pr.sellSummary.count} signals
+                        SELL SPREAD (Short {detail.tickerA} / Long {detail.tickerB}) — {detail.sellSummary?.count ?? 0} signals
                       </div>
-                      <table className="w-full text-[10px] font-mono">
-                        <thead>
-                          <tr className="text-muted-foreground">
-                            <th className="text-left px-1 py-0.5">Horizon</th>
-                            <th className="text-center px-1 py-0.5">Hit Rate</th>
-                            <th className="text-center px-1 py-0.5">Win Rate</th>
-                            <th className="text-center px-1 py-0.5">Avg Ret</th>
-                            <th className="text-center px-1 py-0.5">Median</th>
-                            <th className="text-center px-1 py-0.5">Avg Peak</th>
-                            <th className="text-center px-1 py-0.5">Avg Trough</th>
-                            <th className="text-center px-1 py-0.5">PF</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {FORWARD_HORIZONS.map((h) => (
-                            <tr key={h.label}>
-                              <td className="px-1 py-0.5 text-foreground font-bold">{h.label}</td>
-                              <td className={`text-center px-1 py-0.5 ${hitRateColor(pr.sellSummary.hitRate[h.label])}`}>{pct(pr.sellSummary.hitRate[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${hitRateColor(pr.sellSummary.winRate[h.label])}`}>{pct(pr.sellSummary.winRate[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${pr.sellSummary.avgReturn[h.label] <= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(pr.sellSummary.avgReturn[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${pr.sellSummary.medianReturn[h.label] <= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(pr.sellSummary.medianReturn[h.label])}</td>
-                              <td className="text-center px-1 py-0.5 text-green-400">{pctSigned(pr.sellSummary.avgPeak[h.label])}</td>
-                              <td className="text-center px-1 py-0.5 text-red-400">{pctSigned(pr.sellSummary.avgTrough[h.label])}</td>
-                              <td className={`text-center px-1 py-0.5 ${profitFactorColor(pr.sellSummary.profitFactor[h.label])}`}>{pr.sellSummary.profitFactor[h.label] >= 99 ? "∞" : pr.sellSummary.profitFactor[h.label].toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      {renderSummaryTable(detail.sellSummary, "sell")}
                     </div>
                   </div>
                 </div>
