@@ -4,11 +4,10 @@
 
 const BASKET_PREFIX = "basket:";
 
-/** Parse a basket symbol string into its component id. */
-export function parseBasketSymbol(symbol: string): { id: string } {
+/** Parse a basket symbol string into its component id (returns the id string). */
+export function parseBasketSymbol(symbol: string): string {
   // Stub — TODO: reverse-engineer from production bundle
-  const id = symbol.startsWith(BASKET_PREFIX) ? symbol.slice(BASKET_PREFIX.length) : symbol;
-  return { id };
+  return symbol.startsWith(BASKET_PREFIX) ? symbol.slice(BASKET_PREFIX.length) : symbol;
 }
 
 /** Return true if the symbol represents a basket (not a plain ticker). */

@@ -28,6 +28,8 @@ export const rankingTemplates = sqliteTable("ranking_templates", {
   metrics: text("metrics").notNull(),
   showRevisions: integer("show_revisions", { mode: "boolean" }).notNull().default(false),
   revMetric: text("rev_metric"),
+  metricWeights: text("metric_weights"),
+  metricDirections: text("metric_directions"),
   createdAt: text("created_at").notNull(),
 });
 

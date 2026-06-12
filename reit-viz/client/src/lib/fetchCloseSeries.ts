@@ -1,9 +1,6 @@
 // Stub — TODO: reverse-engineer from production bundle
 
-export interface CloseSeries {
-  dates: string[];
-  closes: number[];
-}
+export type CloseSeries = Array<{ time: string; close: number; high?: number; low?: number; open?: number }>;
 
 /**
  * Fetch the daily close price series for a ticker.
@@ -12,6 +9,5 @@ export async function fetchCloseSeries(
   _ticker: string,
   _options?: { start?: string; end?: string; [key: string]: any }
 ): Promise<CloseSeries> {
-  // Stub — TODO: reverse-engineer from production bundle
-  return { dates: [], closes: [] };
+  return [];
 }

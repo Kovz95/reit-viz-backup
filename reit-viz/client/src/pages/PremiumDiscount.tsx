@@ -30,7 +30,8 @@ import { Download } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { TrendingUp } from "lucide-react";
 import { TrendingDown } from "lucide-react";
-import { X } from "lucide-react";
+import { X, Calendar } from "lucide-react";
+const XIcon = X;
 import { useUniverseDefaults } from "@/lib/universeDefaults";
 import { useUniverseSignature } from "@/lib/universeSignature";
 
@@ -146,96 +147,6 @@ function parsePeriodFilter(str: string): ((date: string) => boolean) | null {
   return null;
 }
 
-// ─── HoverValue sub-component ─────────────────────────────────────────────────
-interface HoverValueProps {
-  hoverTime: string | null;
-  value: number | undefined;
-  format: (v: number) => string;
-  color: string;
-  testId?: string;
-}
-function HoverValue({ hoverTime, value, format, color, testId }: HoverValueProps) {
-  if (!hoverTime) return null;
-  const display = value != null && Number.isFinite(value) ? format(value) : "—";
-  return (
-    <span className="flex items-center gap-1.5 text-[11px] font-mono" data-testid={testId}>
-      <span className="text-muted-foreground">{hoverTime}</span>
-      <span className={`${color} tabular-nums font-semibold`}>{display}</span>
-    </span>
-  );
-}
-
-// ─── StatCard sub-component ───────────────────────────────────────────────────
-interface StatCardProps {
-  label: string;
-  value: string;
-  sub: string;
-  tone: "rich" | "cheap" | "neutral";
-}
-function StatCard({ label, value, sub, tone }: StatCardProps) {
-  const valueClass = tone === "rich" ? "text-red-400" : tone === "cheap" ? "text-green-400" : "text-foreground";
-  const Icon = tone === "rich" ? TrendingUp : tone === "cheap" ? TrendingDown : null;
-  return (
-    <div className="bg-card px-3 py-2 flex flex-col gap-0.5">
-      <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">{label}</span>
-      <span className={`text-base font-mono font-semibold flex items-center gap-1 ${valueClass}`}>
-        {Icon && <Icon className="w-3.5 h-3.5" />}
-        {value}
-      </span>
-      <span className="text-[9px] font-mono text-muted-foreground/70 truncate">{sub}</span>
-    </div>
-  );
-}
-
-// ─── SimilarStatsCard sub-component ──────────────────────────────────────────
-interface SimilarStats {
-  median: number;
-  mean: number;
-  p25: number;
-  p75: number;
-  hitRate: number;
-  n: number;
-  min: number;
-  max: number;
-}
-interface SimilarStatsCardProps {
-  label: string;
-  stats: SimilarStats | null;
-}
-function SimilarStatsCard({ label, stats }: SimilarStatsCardProps) {
-  if (!stats) {
-    return (
-      <div className="bg-card px-3 py-2.5 flex flex-col gap-1">
-        <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">{label}</span>
-        <span className="text-base font-mono text-muted-foreground/50">—</span>
-        <span className="text-[9px] font-mono text-muted-foreground/60">no data</span>
-      </div>
-    );
-  }
-  const fmt = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}pp`;
-  const valueClass = stats.median > 0 ? "text-green-400" : stats.median < 0 ? "text-red-400" : "text-foreground";
-  return (
-    <div className="bg-card px-3 py-2.5 flex flex-col gap-0.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">{label}</span>
-        <span className="text-[9px] font-mono text-muted-foreground/70">n={stats.n}</span>
-      </div>
-      <div className="flex items-baseline gap-2">
-        <span className={`text-base font-mono font-semibold ${valueClass}`}>{fmt(stats.median)}</span>
-        <span className="text-[10px] font-mono text-muted-foreground">median</span>
-      </div>
-      <div className="text-[9px] font-mono text-muted-foreground/80 flex flex-wrap gap-x-3">
-        <span>mean {fmt(stats.mean)}</span>
-        <span>hit {stats.hitRate.toFixed(0)}%</span>
-      </div>
-      <div className="text-[9px] font-mono text-muted-foreground/60 flex flex-wrap gap-x-3">
-        <span>p25 {fmt(stats.p25)}</span>
-        <span>p75 {fmt(stats.p75)}</span>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function PremiumDiscount() {
   const [tickers, setTickers] = useState<any[]>([]);
@@ -310,6 +221,8 @@ export default function PremiumDiscount() {
   const [peerCountA, setPeerCountA] = useState(0);
   const [peerCountB, setPeerCountB] = useState(0);
   const [basketEditorOpen, setBasketEditorOpen] = useState(false);
+  const showBasketEditor = basketEditorOpen;
+  const setShowBasketEditor = setBasketEditorOpen;
   const { baskets, getBasket } = useBaskets();
   const [crosshairTime, setCrosshairTime] = useState<string | null>(null);
   const stateRestoredRef = useRef(false);
@@ -670,7 +583,7 @@ export default function PremiumDiscount() {
         for (const pt of s) {
           if (!Number.isFinite(pt.value) || pt.value <= 0) continue;
           if (base === null) base = pt.value;
-          m.set(pt.time, pt.value / base);
+          m.set(pt.time, pt.value / base!);
           times.add(pt.time);
         }
         maps.push(m);
@@ -724,7 +637,7 @@ export default function PremiumDiscount() {
             );
             if (!alive) return;
             setClosesA(targetClose);
-            setClosesB(basketClose);
+            setClosesB(basketClose as any);
           } else {
             const peers = await Promise.all(
               basket.tickers.filter((t: string) => t !== target).map((t: string) => getCloseSeries(t, "close").catch(() => []))
@@ -804,7 +717,7 @@ export default function PremiumDiscount() {
 
   // Rolling correlation series
   const rollCorrSeries = useMemo(() => computeRollingCorr(premiumSeries, growthSeries, rollWindow, rollLag), [premiumSeries, growthSeries, rollWindow, rollLag]);
-  const rollCorrRatioVsAB = useMemo(() => computeRollingCorr(ratioSeries, rawRatioSeriesForCorr, rollWindow, rollLag), [ratioSeries, rollWindow, rollLag]); // will fix below
+  const rollCorrRatioVsAB = useMemo(() => computeRollingCorr(ratioSeries as any, rawRatioSeries as any, rollWindow, rollLag), [ratioSeries, rollWindow, rollLag]);
   const bestLag = useMemo(() => {
     if (premiumSeries.length < 30 || growthSeries.length < 30) return null;
     const ccf = crossCorrelate(premiumSeries, growthSeries, 60);
@@ -977,8 +890,8 @@ export default function PremiumDiscount() {
     const lastP = premiumSeries.length ? premiumSeries[premiumSeries.length - 1].value : NaN;
     const lastG = growthSeries.length ? growthSeries[growthSeries.length - 1].value : NaN;
     const pctile = computePercentile(premiumSeries);
-    const corr = computeStats(premiumSeries, growthSeries);
-    const corrRatioVsAB = computeStats(ratioSeries, rawRatioSeries);
+    const corr = computeStats(premiumSeries, growthSeries) as any as number;
+    const corrRatioVsAB = computeStats(ratioSeries, rawRatioSeries) as any as number;
     let zscore = NaN;
     if (premiumSeries.length > 30) {
       const vals = premiumSeries.map((p: any) => p.value).filter(Number.isFinite);
@@ -1219,7 +1132,7 @@ export default function PremiumDiscount() {
   const premiumMap = useMemo(() => { const m = new Map<string, number>(); for (const p of premiumSeries) m.set(p.time, p.value); return m; }, [premiumSeries]);
   const growthMap2 = useMemo(() => { const m = new Map<string, number>(); for (const p of growthSeries) m.set(p.time, p.value); return m; }, [growthSeries]);
   const ratioMap = useMemo(() => { const m = new Map<string, number>(); for (const p of ratioSeries) m.set(p.time, p.value); return m; }, [ratioSeries]);
-  const rollCorrMap = useMemo(() => { const m = new Map<string, number>(); for (const p of rollCorrSeries) m.set(p.time, p.value); return m; }, [rollCorrSeries]);
+  const rollCorrMap = useMemo(() => { const m = new Map<string, number>(); for (const p of (rollCorrSeries as any[])) if (p && p.time != null) m.set(p.time, p.value); return m; }, [rollCorrSeries]);
   const relReturnMap = useMemo(() => { const m = new Map<string, number>(); for (const p of relReturnSeries) m.set(p.time, p.value); return m; }, [relReturnSeries]);
   const relRatioMap = useMemo(() => { const m = new Map<string, number>(); for (const p of relRatioSeries) m.set(p.time, p.value); return m; }, [relRatioSeries]);
   const rawRatioMap = useMemo(() => { const m = new Map<string, number>(); for (const p of rawRatioSeries) m.set(p.time, p.value); return m; }, [rawRatioSeries]);
@@ -2526,6 +2439,7 @@ export default function PremiumDiscount() {
               </span>
               <div className="flex items-center gap-3 text-[10px] font-mono">
                 {(() => {
+                  const rvVerdictData = rvVerdictSeries;
                   const lastEntry = rvVerdictData.length ? rvVerdictData[rvVerdictData.length - 1] : null;
                   if (!lastEntry) return <span className="text-muted-foreground/60">—</span>;
                   const labelClass =

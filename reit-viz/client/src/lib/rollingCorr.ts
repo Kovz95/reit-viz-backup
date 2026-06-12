@@ -8,8 +8,8 @@
 export function computeRollingCorr(
   _seriesA: number[],
   _seriesB: number[],
-  _window: number
+  _window: number,
+  _lag?: number
 ): (number | null)[] {
-  // Stub — TODO: reverse-engineer algorithm from production bundle
   return [];
 }

@@ -129,3 +129,24 @@ export function weeklyDownsample(
     dailyIndexMap: wDailyIndexMap,
   };
 }
+
+
+/** Alias for weeklyDownsample (used by some optimizer pages). */
+export const downsampleWeekly = weeklyDownsample;
+
+/** 
+ * Map a weekly bar index back to the corresponding daily bar index.
+ * weeklyResult.dailyIndexMap[weeklyIdx] gives the daily end-of-week index.
+ */
+export function mapWeeklyIndexToDaily(
+  weeklyResult: WeeklyResult,
+  weeklyIdx: number
+): number {
+  return weeklyResult.dailyIndexMap[weeklyIdx] ?? weeklyIdx;
+}
+
+/** Stub: downsamples a prices array to weekly. */
+export function weeklyDownsamplePrices(...args: any[]): any { return null; }
+
+/** Stub: expands weekly data back to daily. */
+export function expandWeeklyToDaily(...args: any[]): any { return null; }

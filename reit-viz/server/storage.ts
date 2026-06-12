@@ -79,6 +79,26 @@ export interface IStorage {
   listScreenerPresets(): ScreenerPreset[];
   createScreenerPreset(p: InsertScreenerPreset): ScreenerPreset;
   deleteScreenerPreset(id: number): boolean;
+
+  listMAOptimizerPresets(): any[];
+  createMAOptimizerPreset(preset: any): any;
+  deleteMAOptimizerPreset(id: number): boolean;
+
+  listCustomCharts(): any[];
+  getCustomChart(id: number): any | undefined;
+  createCustomChart(chart: any): any;
+  updateCustomChart(id: number, updates: any): any | undefined;
+  deleteCustomChart(id: number): boolean;
+
+  listAlerts(): any[];
+  createAlert(alert: any): any;
+  updateAlert(id: number, updates: any): any | undefined;
+  deleteAlert(id: number): boolean;
+
+  listAnnotations(): any[];
+  createAnnotation(annotation: any): any;
+  updateAnnotation(id: number, updates: any): any | undefined;
+  deleteAnnotation(id: number): boolean;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -150,6 +170,106 @@ export class DatabaseStorage implements IStorage {
   deleteChartViewTemplate(id: number): boolean {
     const result = db.delete(chartViewTemplates).where(eq(chartViewTemplates.id, id)).run();
     return result.changes > 0;
+  }
+
+  // ── MA Optimizer Presets (stub — table created on demand) ──
+  listMAOptimizerPresets(): any[] {
+    try {
+      return (sqlite.prepare("SELECT * FROM ma_optimizer_presets ORDER BY created_at DESC").all() as any[]);
+    } catch { return []; }
+  }
+  createMAOptimizerPreset(preset: any): any {
+    try {
+      const stmt = sqlite.prepare("INSERT INTO ma_optimizer_presets (label, config, created_at) VALUES (?, ?, ?) RETURNING *");
+      return stmt.get(preset.label, preset.config, preset.createdAt) ?? preset;
+    } catch { return { ...preset, id: Date.now() }; }
+  }
+  deleteMAOptimizerPreset(id: number): boolean {
+    try {
+      const r = sqlite.prepare("DELETE FROM ma_optimizer_presets WHERE id = ?").run(id);
+      return r.changes > 0;
+    } catch { return false; }
+  }
+
+  // ── Custom Charts ──
+  listCustomCharts(): any[] {
+    try {
+      return (sqlite.prepare("SELECT * FROM custom_charts ORDER BY updated_at DESC").all() as any[]);
+    } catch { return []; }
+  }
+  getCustomChart(id: number): any | undefined {
+    try {
+      return sqlite.prepare("SELECT * FROM custom_charts WHERE id = ?").get(id) ?? undefined;
+    } catch { return undefined; }
+  }
+  createCustomChart(chart: any): any {
+    try {
+      const stmt = sqlite.prepare("INSERT INTO custom_charts (name, state, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING *");
+      return stmt.get(chart.name, chart.state, chart.createdAt, chart.updatedAt) ?? chart;
+    } catch { return { ...chart, id: Date.now() }; }
+  }
+  updateCustomChart(id: number, updates: any): any | undefined {
+    try {
+      const existing: any = this.getCustomChart(id);
+      if (!existing) return undefined;
+      const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+      sqlite.prepare("UPDATE custom_charts SET name = ?, state = ?, updated_at = ? WHERE id = ?").run(merged.name, merged.state, merged.updatedAt, id);
+      return merged;
+    } catch { return undefined; }
+  }
+  deleteCustomChart(id: number): boolean {
+    try {
+      return sqlite.prepare("DELETE FROM custom_charts WHERE id = ?").run(id).changes > 0;
+    } catch { return false; }
+  }
+
+  // ── Alerts ──
+  listAlerts(): any[] {
+    try {
+      return (sqlite.prepare("SELECT * FROM alerts ORDER BY created_at DESC").all() as any[]);
+    } catch { return []; }
+  }
+  createAlert(alert: any): any {
+    try {
+      const now = new Date().toISOString();
+      const stmt = sqlite.prepare("INSERT INTO alerts (ticker, metric, operator, threshold, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *");
+      return stmt.get(alert.ticker, alert.metric, alert.operator, alert.threshold, alert.label ?? '', now, now) ?? alert;
+    } catch { return { ...alert, id: Date.now() }; }
+  }
+  updateAlert(id: number, updates: any): any | undefined {
+    try {
+      const existing: any = sqlite.prepare("SELECT * FROM alerts WHERE id = ?").get(id);
+      if (!existing) return undefined;
+      const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+      return merged;
+    } catch { return undefined; }
+  }
+  deleteAlert(id: number): boolean {
+    try {
+      return sqlite.prepare("DELETE FROM alerts WHERE id = ?").run(id).changes > 0;
+    } catch { return false; }
+  }
+
+  // ── Annotations ──
+  listAnnotations(): any[] {
+    try {
+      return (sqlite.prepare("SELECT * FROM annotations ORDER BY created_at DESC").all() as any[]);
+    } catch { return []; }
+  }
+  createAnnotation(annotation: any): any {
+    try {
+      return { ...annotation, id: Date.now() };
+    } catch { return annotation; }
+  }
+  updateAnnotation(id: number, updates: any): any | undefined {
+    try {
+      return { id, ...updates };
+    } catch { return undefined; }
+  }
+  deleteAnnotation(id: number): boolean {
+    try {
+      return sqlite.prepare("DELETE FROM annotations WHERE id = ?").run(id).changes > 0;
+    } catch { return false; }
   }
 }
 

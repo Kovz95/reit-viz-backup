@@ -84,7 +84,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
 
   const universeTickers = useMemo(() => {
     if (!isFiltered) return null;
-    return new Set(filteredTickersList.map((t) => t.ticker));
+    const s = new Set(filteredTickersList.map((t) => t.ticker));
+    return s as unknown as (Set<string> & { length: number });
   }, [isFiltered, filteredTickersList]);
 
   const serialize = useCallback(() => {

@@ -46,3 +46,6 @@ export async function getYahooPairsRatio(
 
 // Named export alias for destructured import `{ g as getYahooPairsRatio }`
 export { getYahooPairsRatio as g };
+
+/** Alias for getYahooPairsRatio */
+export const yahooPairsRatio = getYahooPairsRatio;

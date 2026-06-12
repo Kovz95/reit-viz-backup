@@ -4,10 +4,10 @@
 
 import { useState, useMemo, createElement } from "react";
 
-export type Frequency = "daily" | "weekly" | "monthly";
+export type Frequency = "daily" | "weekly" | "monthly" | "weekly_on_daily";
 
 export function isValidFrequency(v: unknown): v is Frequency {
-  return v === "daily" || v === "weekly" || v === "monthly";
+  return v === "daily" || v === "weekly" || v === "monthly" || v === "weekly_on_daily";
 }
 
 export interface UseFrequencyResult {

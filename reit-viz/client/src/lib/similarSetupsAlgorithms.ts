@@ -89,10 +89,16 @@ export interface AlgoMatch {
   [key: string]: any;
 }
 
+export interface AlgoResult {
+  matches: AlgoMatch[];
+  info: Record<string, any>;
+}
+
 /**
  * Dispatch the selected similarity algorithm to find the top-K matching setups.
  * Stub — TODO: reverse-engineer algorithm from production bundle.
+ * Called as: dispatchAlgo(algoKey, algoInput) or dispatchAlgo(input, opts?)
  */
-export function dispatchAlgo(_input: AlgoInput): AlgoMatch[] {
-  return [];
+export function dispatchAlgo(_inputOrKey: AlgoInput | string, _optsOrInput?: any): AlgoResult {
+  return { matches: [], info: {} };
 }

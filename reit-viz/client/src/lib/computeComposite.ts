@@ -13,7 +13,7 @@ export function computeComposite(
   for (const key of keys) {
     const s = summary[key];
     if (!s || s.count === 0) continue;
-    const w = opts?.weights?.[key] ?? 1;
+    const w = (typeof opts === 'object' ? opts?.weights?.[key] : undefined) ?? 1;
     const hScore = s.hitRate * 80;
     const pfScore = Math.min((s.profitFactor - 1) * 10, 20);
     totalScore += (hScore + pfScore) * w;

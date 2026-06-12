@@ -6,8 +6,10 @@
 export {
   XAxis,
   YAxis,
-  generateCategoricalChart,
 } from "recharts";
+
+// generateCategoricalChart is internal in newer recharts — stub it
+export const generateCategoricalChart: any = null;
 
 export type { XAxis as XAxisType } from "recharts";
 
@@ -22,8 +24,8 @@ export function useChartHeight(): number {
   return 0;
 }
 
-export function useViewBox(): { x: number; y: number; width: number; height: number } {
-  return { x: 0, y: 0, width: 0, height: 0 };
+export function useViewBox(): { x: number; y: number; width: number; height: number; left: number; top: number } {
+  return { x: 0, y: 0, width: 0, height: 0, left: 0, top: 0 };
 }
 
 export function isNumOrStr(value: unknown): value is number | string {
@@ -42,7 +44,7 @@ export function isFunction(value: unknown): value is Function {
   return typeof value === "function";
 }
 
-export function assertIsArrayOf<T>(_value: unknown, _guard: (v: unknown) => v is T): void {
+export function assertIsArrayOf(_value: unknown, _guard: any): void {
   // no-op in stub
 }
 
@@ -50,7 +52,12 @@ export function getTicksOfAxis(_axis: any, _scale?: boolean): any[] {
   return [];
 }
 
-export function getCoordinatesOfGrid(_ticks: any[], _min: number, _max: number): any[] {
+export function getCoordinatesOfGrid(
+  _ticks: any[],
+  _min: number,
+  _max: number,
+  _syncWithTicks?: boolean
+): any[] {
   return [];
 }
 

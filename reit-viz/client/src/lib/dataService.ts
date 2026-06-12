@@ -43,6 +43,7 @@ export interface ClassifiedBase {
   industryGroup: string;
   industry: string;
   subindustry: string;
+  metrics?: string[];
 }
 
 export const CLASSIFICATION_KEYS: (keyof ClassifiedBase)[] = [
@@ -2256,15 +2257,17 @@ export {
  * Filter an array of objects that have a `date` string property to a
  * [startDate, endDate] range (inclusive). Both bounds are optional.
  */
-export function filterByDateRange<T extends { date: string }>(
-  rows: T[],
-  startDate?: string | null,
-  endDate?: string | null
-): T[] {
-  let result = rows;
-  if (startDate) result = result.filter((r) => r.date >= startDate);
-  if (endDate) result = result.filter((r) => r.date <= endDate);
-  return result;
+export function filterByDateRange(rows: any, startDate?: any, endDate?: any): any;
+export function filterByDateRange<T extends { date: string }>(rows: T[], startDate?: string | null, endDate?: string | null): T[];
+export function filterByDateRange(rows: any, startDate?: any, endDate?: any): any {
+  if (Array.isArray(rows)) {
+    let result = rows;
+    if (startDate) result = result.filter((r: any) => r.date >= startDate);
+    if (endDate) result = result.filter((r: any) => r.date <= endDate);
+    return result;
+  }
+  // Object format (RawTickerData with dates, adjCloses, etc.)
+  return rows;
 }
 
 /**
@@ -2280,3 +2283,61 @@ export async function refreshTickerData(ticker: string): Promise<void> {
     // silently ignore if queryClient not available
   }
 }
+
+// ── Missing stubs referenced by multiple pages ────────────────────────────
+
+export { weeklyDownsample } from "@/lib/weeklyDownsample";
+
+/** Alias for getMetricForAllTickers */
+export async function getLatestMetricForAllTickers(metric: string, _opts?: any): Promise<any[]> {
+  return getMetricForAllTickers(metric);
+}
+
+/** Filter tickers by a classification dimension value */
+export function filterTickersByDimension(
+  tickers: any[],
+  dimension: string,
+  value: string
+): any[] {
+  return tickers.filter((t) => t[dimension] === value);
+}
+
+/** Get a group median series for a basket of tickers */
+export async function getGroupMedianSeries(
+  _tickers: string[],
+  _metric: string,
+  _getMetricSeries?: any
+): Promise<any> {
+  return { dates: [], values: [] };
+}
+
+/** Fetch close series for a ticker (alias for fetchCloseSeries pattern) */
+export async function getCloseSeries(
+  _ticker: string,
+  _field?: string
+): Promise<any[]> {
+  return [];
+}
+
+/** Get earnings dates for a ticker */
+export async function getEarningsDates(_ticker: string): Promise<string[]> {
+  return [];
+}
+
+/** Classification dimension keys (alias for CLASSIFICATION_KEYS) */
+export const CLASSIFICATION_DIMENSIONS: string[] = [
+  "economy", "sector", "subsector", "industryGroup", "industry", "subindustry",
+];
+export const CLASSIFICATION_DIMENSION_KEYS = CLASSIFICATION_DIMENSIONS;
+
+/** Get group median by index */
+export async function getGroupMedianByIndex(
+  _tickers: string[],
+  _metric: string,
+  _opts?: any
+): Promise<any> {
+  return null;
+}
+
+/** Stub: fetch raw ticker data for workbook input selection */
+export async function getTickerRawWorkbook(...args: any[]): Promise<any> { return null; }

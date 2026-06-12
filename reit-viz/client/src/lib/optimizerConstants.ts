@@ -31,3 +31,13 @@ export const BAND_OPTIONS: BandOption[] = [
   { label: "2–5%", band: { minReturn: 0.02,  maxReturn: 0.05 } },
   { label: "3–7%", band: { minReturn: 0.03,  maxReturn: 0.07 } },
 ];
+
+
+/** Preset return bands for return-band analysis mode. */
+export const RETURN_BAND_PRESETS: { label: string; days: number }[] = [
+  { label: "5D", days: 5 },
+  { label: "10D", days: 10 },
+  { label: "21D", days: 21 },
+  { label: "42D", days: 42 },
+  { label: "63D", days: 63 },
+];

@@ -76,4 +76,8 @@ export const queryClient = new QueryClient({
 export { fetchMetricSeries } from "./fetchMetricSeries";
 
 // Re-export fetchWorkbookTickers and TickerMeta for pages importing from queryClient
-export { fetchWorkbookTickers, TickerMeta } from "./fetchWorkbookTickers";
+export { fetchWorkbookTickers } from "./fetchWorkbookTickers";
+export type { TickerMeta } from "./fetchWorkbookTickers";
+
+// Re-export fetchOhlcSeries for pages importing from queryClient
+export { fetchOhlcSeries } from "./fetchOhlcSeries";

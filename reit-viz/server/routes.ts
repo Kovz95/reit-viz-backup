@@ -1756,10 +1756,10 @@ export async function registerRoutes(server: Server, app: Express) {
       const fp = path.join(MACRO_DIR, `${id}.json`);
       const cached = fs.existsSync(fp);
       const lastUpdate = cached ? fs.statSync(fp).mtime.toISOString() : null;
-      catalog.push({ id, ...meta, cached, lastUpdate });
+      catalog.push({ ...meta, id, cached, lastUpdate });
     }
     for (const [id, meta] of Object.entries(COMPUTED_SERIES)) {
-      catalog.push({ id, ...meta, computed: true, cached: true, lastUpdate: null });
+      catalog.push({ ...meta, id, computed: true, cached: true, lastUpdate: null });
     }
     res.json(catalog);
   });

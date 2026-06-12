@@ -1,6 +1,6 @@
 // Stub — TODO: reverse-engineer algorithm from production bundle
 
-export interface RocSignalHandler {
+export interface RocSignalHandler extends Iterable<string> {
   key: string;
   label: string;
   [key: string]: any;
@@ -44,11 +44,11 @@ export const ROC_SIGNAL_HANDLERS: Record<string, RocSignalHandler> = {};
  */
 export function detectSignals(
   _closes: number[],
-  _handlerOrHandlers: RocSignalHandler | Record<string, RocSignalHandler>,
+  _handlerOrHandlers: RocSignalHandler | Record<string, RocSignalHandler> | any[],
   _opts?: Record<string, any>,
   _startIdx?: number
-): DetectedSignal[] {
-  return [];
+): any {
+  return {};
 }
 
 /**

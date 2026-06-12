@@ -3,14 +3,16 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createChart, CandlestickSeries, CrosshairMode, ColorType, LineSeries, LineStyle } from "lightweight-charts";
 import type { CandlestickSeriesPartialOptions } from "lightweight-charts";
 import { computeAllMAs } from "@/lib/maUtils";
-import { yahooPairsRatio } from "@/lib/yahooPairsRatio";
+import { getYahooPairsRatio as yahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
-import { getDates, getTickerRaw, filterByDateRange, weeklyDownsample } from "@/lib/dataService";
-import { emptyClassFilters, filterTickersByClassification } from "@/lib/classificationFilters";
+import { getDates, getTickerRaw, filterByDateRange } from "@/lib/dataService";
+import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { emptyClassFilters } from "@/lib/classificationFilters";
+import { filterTickersByClassification } from "@/lib/classificationFilters";
 import { isBasketTicker } from "@/lib/basketUtils";
 import { DATE_PRESETS, createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -1127,3 +1129,8 @@ export default function SupportResistance() {
     </div>
   );
 }
+
+// Stubs for minified re-exports expected by LevelsAndTrendlines page
+export function D(...args: any[]): any { return null; }
+export function d(...args: any[]): any { return null; }
+export const S: any = null;

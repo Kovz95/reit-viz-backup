@@ -37,7 +37,7 @@ import { Download } from "lucide-react";
 import "@/lib/harsi";
 import "@/lib/tva";
 import "@/lib/globalUniverse";
-import "@/lib/classificationFiltersWithSource";
+import "@/components/ClassificationFiltersWithSource";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

@@ -9,34 +9,50 @@ export interface PremiumSeriesInput {
 export interface PremiumSeriesResult {
   dates: string[];
   values: (number | null)[];
+  targetSeries: (number | null)[];
+  groupSeries: (number | null)[];
+  peerTickers: string[];
 }
 
 /**
- * Compute the premium/discount series (price vs. fundamental-derived fair value).
- * Stub — TODO: reverse-engineer algorithm from production bundle.
+ * Compute the premium/discount series.
+ * Accepts a full set of arguments from the call site:
+ *   computePremiumSeries(target, dimension, peerLabel, metric, aggregation, opts?, getMetricSeries?)
  */
 export function computePremiumSeries(
-  _input: PremiumSeriesInput
-): PremiumSeriesResult {
-  return { dates: [], values: [] };
+  _target: any,
+  _dimension?: any,
+  _peerLabel?: any,
+  _metric?: any,
+  _aggregation?: any,
+  _opts?: any,
+  _getMetricSeries?: any
+): Promise<PremiumSeriesResult> {
+  return Promise.resolve({ dates: [], values: [], targetSeries: [], groupSeries: [], peerTickers: [] });
 }
 
 /**
- * Compute the first difference of the premium/discount series.
- * Stub — TODO: reverse-engineer algorithm from production bundle.
+ * Compute the diff between two series.
+ *   computePremiumDiff(seriesA, seriesB, mode)
  */
 export function computePremiumDiff(
-  _values: (number | null)[]
+  _seriesA: any,
+  _seriesB?: any,
+  _mode?: any
 ): (number | null)[] {
   return [];
 }
 
 /**
- * Compute the absolute value of the premium/discount diff series.
- * Stub — TODO: reverse-engineer algorithm from production bundle.
+ * Compute the absolute value diff.
+ *   computePremiumDiffAbs(dim, value, metric, aggregation, getMetricSeries)
  */
 export function computePremiumDiffAbs(
-  _values: (number | null)[]
-): (number | null)[] {
-  return [];
+  _dim: any,
+  _value?: any,
+  _metric?: any,
+  _aggregation?: any,
+  _getMetricSeries?: any
+): Promise<(number | null)[]> {
+  return Promise.resolve([]);
 }

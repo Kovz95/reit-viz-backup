@@ -7,6 +7,13 @@ import { createElement } from "react";
 export interface TickerPair {
   tickerA: string;
   tickerB: string;
+  /** Aliases used by some pages */
+  a?: string;
+  b?: string;
+  label?: string;
+  kind?: string;
+  id?: string;
+  [key: string]: any;
 }
 
 export interface PairComboPickerResult {

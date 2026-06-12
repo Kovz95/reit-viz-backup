@@ -15,7 +15,7 @@ export interface EarningsDatePrimitiveOptions {
  * Stub — the real implementation attaches to a chart series via .attachPrimitive().
  */
 export class EarningsDatePrimitive {
-  constructor(_options: EarningsDatePrimitiveOptions) {
+  constructor(_options: EarningsDatePrimitiveOptions | any[]) {
     // Stub — TODO: reverse-engineer from production bundle
   }
 

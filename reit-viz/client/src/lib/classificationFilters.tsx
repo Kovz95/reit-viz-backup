@@ -11,3 +11,5 @@ export {
 } from "@/components/ClassificationFilters";
 
 export type { ClassFilters } from "@/components/ClassificationFilters";
+
+export { filterTickersByClassification } from "@/lib/filterTickersByClassification";

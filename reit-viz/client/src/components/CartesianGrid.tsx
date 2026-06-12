@@ -23,17 +23,12 @@ const EXCLUDED_OFFSET_PROPS = ["offset"];
 // ---------- helpers ----------
 
 function _typeof(obj: any): string {
-  "@babel/helpers - typeof";
-  return (_typeof =
-    typeof Symbol === "function" && typeof Symbol.iterator === "symbol"
-      ? (o) => typeof o
-      : (o) =>
-          o &&
-          typeof Symbol === "function" &&
-          o.constructor === Symbol &&
-          o !== Symbol.prototype
-            ? "symbol"
-            : typeof o)(obj);
+  if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") {
+    return typeof obj;
+  }
+  return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype
+    ? "symbol"
+    : typeof obj;
 }
 
 function _objectSpread(target: any, ...sources: any[]): any {
@@ -328,9 +323,9 @@ function CartesianGrid(userProps: any): React.ReactElement | null {
 
   if (
     !isNumOrStr(width) ||
-    width <= 0 ||
+    Number(width) <= 0 ||
     !isNumOrStr(height) ||
-    height <= 0 ||
+    Number(height) <= 0 ||
     !isNumOrStr(x) ||
     x !== +x ||
     !isNumOrStr(y) ||

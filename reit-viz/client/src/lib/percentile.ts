@@ -4,7 +4,7 @@
  * Compute the percentile rank of a value within a distribution.
  * Returns a value in [0, 100].
  */
-export function computePercentile(_values: number[], _target: number): number {
+export function computePercentile(_values: any, _target?: number): number {
   // Stub — TODO: reverse-engineer algorithm from production bundle
   return 50;
 }

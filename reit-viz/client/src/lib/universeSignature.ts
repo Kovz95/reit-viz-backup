@@ -5,6 +5,9 @@
 import { useMemo } from "react";
 import { useUniverse } from "@/lib/universeContext";
 
+/** @deprecated alias for useUniverseSignature */
+export function universeSignature(): string { return useUniverseSignature(); }
+
 export function useUniverseSignature(): string {
   const { filteredTickersList, isFiltered } = useUniverse();
 

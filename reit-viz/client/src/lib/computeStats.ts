@@ -16,7 +16,7 @@ export interface SeriesStats {
 /**
  * Compute descriptive statistics for a numeric array.
  */
-export function computeStats(_values: number[]): SeriesStats {
+export function computeStats(_values: any, _valuesB?: any): SeriesStats {
   // Stub — TODO: reverse-engineer algorithm from production bundle
   return {
     mean: 0,

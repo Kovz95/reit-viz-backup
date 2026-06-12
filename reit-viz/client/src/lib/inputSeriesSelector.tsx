@@ -71,3 +71,6 @@ export function InputSeriesSelector({
     )
   );
 }
+
+/** Alias for DEFAULT_INPUT_SELECTION */
+export const defaultInputSelection = DEFAULT_INPUT_SELECTION;
