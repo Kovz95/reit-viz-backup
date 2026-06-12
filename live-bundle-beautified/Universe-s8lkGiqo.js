@@ -1,0 +1,472 @@
+import {
+    a as ce,
+    bU as ne,
+    r as i,
+    bV as le,
+    bW as y,
+    j as e,
+    bq as A,
+    y as de,
+    x as F,
+    B as u,
+    X as xe,
+    bX as me,
+    z as ue,
+    bY as pe,
+    bS as G,
+    be as fe,
+    bZ as he,
+    b_ as be,
+    b$ as ke,
+    T as ve,
+    c0 as je,
+    c1 as ge,
+    bC as ye,
+    E as we,
+    c2 as Ne,
+    c3 as Ce
+} from "./index-CsG73Aq_.js";
+import {
+    U as B
+} from "./undo-2-sA_Gvxm5.js";
+
+function Re() {
+    const {
+        filters: V,
+        setFilters: H,
+        search: J,
+        setSearch: K,
+        manualTickers: P,
+        setManualTickers: Y,
+        isFiltered: R,
+        filteredCount: O,
+        totalCount: w,
+        allTickers: x,
+        filteredTickersList: h,
+        clearAll: X
+    } = ce(), l = ne(), d = Object.keys(l).length, {
+        activeOverrideCount: $,
+        inertOverrideCount: b
+    } = i.useMemo(() => {
+        if (d === 0) return {
+            activeOverrideCount: 0,
+            inertOverrideCount: 0
+        };
+        const t = new Set(x.map(a => a.ticker));
+        let s = 0,
+            r = 0;
+        for (const a of Object.keys(l)) t.has(a) ? s++ : r++;
+        return {
+            activeOverrideCount: s,
+            inertOverrideCount: r
+        }
+    }, [l, d, x]), p = le("workbook"), [T, _] = i.useState(!1), q = i.useMemo(() => {
+        const t = new Map;
+        for (const s of x) {
+            const r = l[s.ticker],
+                a = {
+                    economy: s.economy,
+                    sector: s.sector,
+                    subsector: s.subsector,
+                    industryGroup: s.industryGroup,
+                    industry: s.industry,
+                    subindustry: s.subindustry
+                };
+            if (r)
+                for (const o of y) r[o] !== void 0 && (a[o] = r[o]);
+            t.set(s.ticker, a)
+        }
+        return t
+    }, [x, l]), W = i.useMemo(() => {
+        const t = {
+            economy: new Set,
+            sector: new Set,
+            subsector: new Set,
+            industryGroup: new Set,
+            industry: new Set,
+            subindustry: new Set
+        };
+        for (const r of x)
+            for (const a of y) {
+                const o = r[a];
+                o && t[a].add(o)
+            }
+        const s = {};
+        for (const r of y) s[r] = [...t[r]].sort((a, o) => a.localeCompare(o));
+        return s
+    }, [x]), [f, Z] = i.useState("ticker"), [k, U] = i.useState("asc"), [c, N] = i.useState(null), [z, v] = i.useState(""), j = i.useRef(null);
+    i.useEffect(() => {
+        c && j.current && (j.current.focus(), j.current.select())
+    }, [c]);
+    const Q = (t, s, r) => {
+            N({
+                ticker: t,
+                field: s
+            }), v(r || "")
+        },
+        L = () => {
+            if (!c) return;
+            const t = q.get(c.ticker)?.[c.field] || "";
+            ge(c.ticker, c.field, z, t), N(null), v("")
+        },
+        ee = () => {
+            N(null), v("")
+        },
+        te = t => {
+            f === t ? U(k === "asc" ? "desc" : "asc") : (Z(t), U("asc"))
+        },
+        M = i.useMemo(() => {
+            const t = [...h];
+            return t.sort((s, r) => {
+                const a = (s[f] || "").toLowerCase(),
+                    o = (r[f] || "").toLowerCase(),
+                    n = a < o ? -1 : a > o ? 1 : 0;
+                return k === "asc" ? n : -n
+            }), t
+        }, [h, f, k]),
+        se = i.useMemo(() => new Set(h.map(t => t.ticker)), [h]),
+        C = [{
+            key: "economy",
+            label: "Economy"
+        }, {
+            key: "sector",
+            label: "Sector"
+        }, {
+            key: "subsector",
+            label: "Subsector"
+        }, {
+            key: "industryGroup",
+            label: "Ind. Group"
+        }, {
+            key: "industry",
+            label: "Industry"
+        }, {
+            key: "subindustry",
+            label: "Subindustry"
+        }],
+        S = ({
+            col: t,
+            label: s,
+            className: r = ""
+        }) => e.jsx("th", {
+            className: `text-left py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none ${r}`,
+            onClick: () => te(t),
+            children: e.jsxs("span", {
+                className: "inline-flex items-center gap-0.5",
+                children: [s, f === t && (k === "asc" ? e.jsx(ye, {
+                    className: "w-2.5 h-2.5"
+                }) : e.jsx(we, {
+                    className: "w-2.5 h-2.5"
+                }))]
+            })
+        }),
+        re = () => {
+            const t = new Blob([JSON.stringify(l, null, 2)], {
+                    type: "application/json"
+                }),
+                s = URL.createObjectURL(t),
+                r = document.createElement("a");
+            r.href = s;
+            const a = new Date().toISOString().slice(0, 10);
+            r.download = `reit-viz-classification-overrides-${a}.json`, document.body.appendChild(r), r.click(), document.body.removeChild(r), URL.revokeObjectURL(s)
+        },
+        g = i.useRef(null),
+        ae = () => g.current?.click(),
+        oe = async t => {
+            const s = t.target.files?.[0];
+            if (s) try {
+                const r = await s.text(),
+                    a = JSON.parse(r),
+                    o = window.confirm(`Click OK to MERGE imported overrides with existing ones.
+Click Cancel to REPLACE all existing overrides.`) ? "merge" : "replace";
+                Ne(a, o)
+            } catch (r) {
+                window.alert(`Failed to import: ${r?.message||String(r)}`)
+            } finally {
+                g.current && (g.current.value = "")
+            }
+        }, ie = () => {
+            d !== 0 && window.confirm(`Reset all ${d} reclassification override(s) back to the workbook defaults?`) && Ce()
+        };
+    return e.jsxs("div", {
+        className: "flex flex-col h-full overflow-hidden",
+        children: [e.jsxs("div", {
+            className: "px-3 py-2 border-b border-border bg-card/50 space-y-2",
+            children: [e.jsxs("div", {
+                className: "flex items-center gap-2",
+                children: [e.jsx(A, {
+                    className: "w-4 h-4 text-primary"
+                }), e.jsx("span", {
+                    className: "text-xs font-bold tracking-tight",
+                    children: "MASTER UNIVERSE"
+                }), e.jsx("span", {
+                    className: "text-[10px] text-muted-foreground",
+                    children: "Controls ticker universe for all tabs marked with a filter dot in the navbar"
+                })]
+            }), e.jsx(de, {
+                filters: V,
+                onFiltersChange: H,
+                search: J,
+                onSearchChange: K,
+                manualTickers: P,
+                onManualTickersChange: Y,
+                filteredCount: O,
+                totalCount: w,
+                testIdPrefix: "universe"
+            }), e.jsxs("div", {
+                className: "flex items-center gap-3 text-[11px]",
+                children: [R ? e.jsxs("div", {
+                    className: "flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 border border-primary/20 text-primary",
+                    children: [e.jsx(F, {
+                        className: "w-3 h-3"
+                    }), e.jsx("span", {
+                        className: "font-medium",
+                        children: O
+                    }), e.jsxs("span", {
+                        className: "text-primary/70",
+                        children: ["of ", w, " tickers active across all tabs"]
+                    })]
+                }) : e.jsxs("div", {
+                    className: "flex items-center gap-1.5 px-2 py-1 rounded bg-muted/50 border border-border text-muted-foreground",
+                    children: [e.jsx(A, {
+                        className: "w-3 h-3"
+                    }), e.jsxs("span", {
+                        children: ["All ", w, " tickers active (no filter)"]
+                    })]
+                }), R && e.jsxs(u, {
+                    variant: "ghost",
+                    size: "sm",
+                    className: "h-6 px-2 text-[11px] text-muted-foreground",
+                    onClick: X,
+                    children: [e.jsx(xe, {
+                        className: "w-3 h-3 mr-0.5"
+                    }), "Reset to all"]
+                }), e.jsxs("div", {
+                    className: "ml-auto flex items-center gap-1.5",
+                    children: [d > 0 && e.jsxs("div", {
+                        className: "flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400",
+                        title: b > 0 ? `${$} active override(s) on tickers in this workbook · ${b} inert (ticker not in workbook — will re-activate if ticker returns)` : "These tickers have user-edited classifications that override the workbook defaults",
+                        children: [e.jsx(me, {
+                            className: "w-3 h-3"
+                        }), e.jsx("span", {
+                            className: "font-medium",
+                            children: $
+                        }), e.jsx("span", {
+                            className: "opacity-80",
+                            children: "reclassified"
+                        }), b > 0 && e.jsxs("span", {
+                            className: "opacity-70 text-[10px] ml-1",
+                            children: ["(+", b, " inert)"]
+                        })]
+                    }), e.jsxs(u, {
+                        variant: "ghost",
+                        size: "sm",
+                        className: "h-6 px-2 text-[11px] text-muted-foreground",
+                        onClick: re,
+                        disabled: d === 0,
+                        title: "Download overrides as JSON",
+                        children: [e.jsx(ue, {
+                            className: "w-3 h-3 mr-0.5"
+                        }), "Export"]
+                    }), e.jsxs(u, {
+                        variant: "ghost",
+                        size: "sm",
+                        className: "h-6 px-2 text-[11px] text-muted-foreground",
+                        onClick: ae,
+                        title: "Load overrides from a JSON file",
+                        children: [e.jsx(pe, {
+                            className: "w-3 h-3 mr-0.5"
+                        }), "Import"]
+                    }), e.jsx("input", {
+                        ref: g,
+                        type: "file",
+                        accept: "application/json,.json",
+                        className: "hidden",
+                        onChange: oe
+                    }), e.jsxs(u, {
+                        variant: "ghost",
+                        size: "sm",
+                        className: "h-6 px-2 text-[11px] text-muted-foreground",
+                        onClick: ie,
+                        disabled: d === 0,
+                        title: "Remove all reclassification overrides",
+                        children: [e.jsx(G, {
+                            className: "w-3 h-3 mr-0.5"
+                        }), "Reset overrides"]
+                    })]
+                })]
+            }), p.size > 0 && e.jsxs("div", {
+                className: "flex items-center gap-2 text-[11px]",
+                children: [e.jsxs("div", {
+                    className: "flex items-center gap-1 px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400",
+                    children: [e.jsx(fe, {
+                        className: "w-3 h-3"
+                    }), e.jsx("span", {
+                        className: "font-medium",
+                        children: p.size
+                    }), e.jsx("span", {
+                        className: "opacity-80",
+                        children: "excluded (hidden from all tabs)"
+                    })]
+                }), e.jsx(u, {
+                    variant: "ghost",
+                    size: "sm",
+                    className: "h-6 px-2 text-[11px] text-muted-foreground",
+                    onClick: () => _(t => !t),
+                    children: T ? "Hide list" : "Show list"
+                }), e.jsxs(u, {
+                    variant: "ghost",
+                    size: "sm",
+                    className: "h-6 px-2 text-[11px] text-muted-foreground",
+                    onClick: () => {
+                        window.confirm(`Restore all ${p.size} excluded ticker(s)?`) && he("workbook")
+                    },
+                    children: [e.jsx(B, {
+                        className: "w-3 h-3 mr-0.5"
+                    }), "Restore all"]
+                })]
+            }), T && p.size > 0 && e.jsx("div", {
+                className: "flex flex-wrap gap-1 px-2 py-1.5 rounded bg-red-500/5 border border-red-500/20",
+                children: [...p].sort().map(t => e.jsxs("button", {
+                    type: "button",
+                    onClick: () => be("workbook", t),
+                    className: "inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-background border border-border text-[10px] font-mono hover:border-primary hover:text-primary",
+                    title: `Click to restore ${t}`,
+                    children: [t, e.jsx(B, {
+                        className: "w-2.5 h-2.5"
+                    })]
+                }, t))
+            }), e.jsx("div", {
+                className: "text-[10px] text-muted-foreground italic",
+                children: "Click any classification cell to reclassify. Enter to save, Esc to cancel. Click the trash icon on a row to hide that ticker from every tab (restorable)."
+            })]
+        }), y.map(t => e.jsx("datalist", {
+            id: `class-values-${t}`,
+            children: W[t].map(s => e.jsx("option", {
+                value: s
+            }, s))
+        }, t)), e.jsx("div", {
+            className: "flex-1 overflow-auto",
+            children: e.jsxs("table", {
+                className: "w-full text-[11px]",
+                children: [e.jsx("thead", {
+                    className: "sticky top-0 bg-card z-10 border-b border-border text-muted-foreground",
+                    children: e.jsxs("tr", {
+                        children: [e.jsx("th", {
+                            className: "w-8 py-1.5 px-2"
+                        }), e.jsx(S, {
+                            col: "ticker",
+                            label: "Ticker",
+                            className: "w-20"
+                        }), e.jsx(S, {
+                            col: "name",
+                            label: "Name"
+                        }), C.map(({
+                            key: t,
+                            label: s
+                        }) => e.jsx(S, {
+                            col: t,
+                            label: s
+                        }, t)), e.jsx("th", {
+                            className: "w-8 py-1.5 px-2"
+                        })]
+                    })
+                }), e.jsxs("tbody", {
+                    children: [M.map((t, s) => {
+                        const r = se.has(t.ticker),
+                            a = l[t.ticker],
+                            o = !!a && Object.keys(a).length > 0;
+                        return e.jsxs("tr", {
+                            className: `border-b border-border/30 ${s%2===0?"bg-card/30":""} ${r?"hover:bg-accent/30":"opacity-40"}`,
+                            "data-testid": `universe-row-${t.ticker}`,
+                            children: [e.jsx("td", {
+                                className: "py-1 px-2 text-center",
+                                children: r && e.jsx(F, {
+                                    className: "w-3 h-3 text-primary"
+                                })
+                            }), e.jsx("td", {
+                                className: "py-1 px-2 font-mono font-bold text-foreground",
+                                children: t.ticker
+                            }), e.jsx("td", {
+                                className: "py-1 px-2 truncate max-w-[200px]",
+                                title: t.name,
+                                children: t.name
+                            }), C.map(({
+                                key: n
+                            }) => {
+                                const D = t[n] || "",
+                                    I = c?.ticker === t.ticker && c.field === n,
+                                    E = !!a && a[n] !== void 0;
+                                return e.jsx("td", {
+                                    className: `py-1 px-2 cursor-text ${E?"text-amber-600 dark:text-amber-400 font-medium bg-amber-500/5":"text-muted-foreground"}`,
+                                    onClick: () => !I && Q(t.ticker, n, D),
+                                    title: E ? "Reclassified (click to edit; clear text to revert)" : "Click to reclassify",
+                                    children: I ? e.jsx("input", {
+                                        ref: j,
+                                        type: "text",
+                                        list: `class-values-${n}`,
+                                        value: z,
+                                        onChange: m => v(m.target.value),
+                                        onBlur: L,
+                                        onKeyDown: m => {
+                                            m.key === "Enter" ? (m.preventDefault(), L()) : m.key === "Escape" && (m.preventDefault(), ee())
+                                        },
+                                        className: "w-full bg-background border border-primary/50 rounded px-1 py-0.5 text-[11px] text-foreground outline-none focus:border-primary"
+                                    }) : e.jsxs("span", {
+                                        className: "inline-flex items-center gap-1",
+                                        children: [D || e.jsx("span", {
+                                            className: "opacity-50 italic",
+                                            children: "—"
+                                        }), E && e.jsx("span", {
+                                            className: "text-[8px]",
+                                            children: "●"
+                                        })]
+                                    })
+                                }, n)
+                            }), e.jsx("td", {
+                                className: "py-1 px-2 text-center",
+                                children: e.jsxs("div", {
+                                    className: "inline-flex items-center gap-1.5",
+                                    children: [o && e.jsx("button", {
+                                        type: "button",
+                                        onClick: () => {
+                                            window.confirm(`Revert all reclassification overrides for ${t.ticker}?`) && ke(t.ticker)
+                                        },
+                                        className: "text-muted-foreground hover:text-foreground",
+                                        title: `Revert ${t.ticker} to workbook defaults`,
+                                        children: e.jsx(G, {
+                                            className: "w-3 h-3"
+                                        })
+                                    }), e.jsx("button", {
+                                        type: "button",
+                                        onClick: () => {
+                                            window.confirm(`Hide ${t.ticker} from the universe?
+
+It will be excluded from EVERY tab (Ranking, Scatter, Valuation, etc.).
+Restorable from the Universe page header.`) && je("workbook", t.ticker)
+                                        },
+                                        className: "text-muted-foreground hover:text-red-500",
+                                        title: `Hide ${t.ticker} from all tabs`,
+                                        children: e.jsx(ve, {
+                                            className: "w-3 h-3"
+                                        })
+                                    })]
+                                })
+                            })]
+                        }, t.ticker)
+                    }), M.length === 0 && e.jsx("tr", {
+                        children: e.jsx("td", {
+                            colSpan: 4 + C.length,
+                            className: "py-8 text-center text-muted-foreground",
+                            children: "No tickers match the current filters"
+                        })
+                    })]
+                })]
+            })
+        })]
+    })
+}
+export {
+    Re as
+    default
+};

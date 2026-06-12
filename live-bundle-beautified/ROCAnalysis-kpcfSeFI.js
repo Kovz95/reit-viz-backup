@@ -1,0 +1,678 @@
+import {
+    a as P,
+    r as R,
+    af as U,
+    bB as D,
+    j as e,
+    cN as z,
+    B as X,
+    z as q,
+    a4 as V,
+    Y as K
+} from "./index-CsG73Aq_.js";
+import {
+    B as Q
+} from "./BasketTickerPill-DA9Wjwwc.js";
+import {
+    T as W
+} from "./trending-down-26dsT41Y.js";
+import {
+    M as Z
+} from "./minus-5wV5xQkh.js";
+const G = [{
+        days: 5,
+        label: "5d"
+    }, {
+        days: 10,
+        label: "10d"
+    }, {
+        days: 21,
+        label: "21d (1M)"
+    }, {
+        days: 42,
+        label: "42d (2M)"
+    }, {
+        days: 63,
+        label: "63d (3M)"
+    }, {
+        days: 126,
+        label: "126d (6M)"
+    }, {
+        days: 252,
+        label: "252d (1Y)"
+    }],
+    J = [{
+        days: 1,
+        label: "1d"
+    }, {
+        days: 5,
+        label: "5d"
+    }, {
+        days: 10,
+        label: "10d"
+    }, {
+        days: 21,
+        label: "21d (1M)"
+    }, {
+        days: 63,
+        label: "63d (3M)"
+    }, {
+        days: 126,
+        label: "126d (6M)"
+    }, {
+        days: 252,
+        label: "252d (1Y)"
+    }],
+    ee = [{
+        n: 5,
+        label: "Quintiles (5)"
+    }, {
+        n: 10,
+        label: "Deciles (10)"
+    }, {
+        n: 20,
+        label: "Vigintiles (20)"
+    }];
+
+function te(t, s) {
+    const a = new Array(t.length).fill(null);
+    for (let o = s; o < t.length; o++) {
+        const l = t[o - s],
+            i = t[o];
+        l != null && i != null && l !== 0 && (a[o] = (i - l) / l * 100)
+    }
+    return a
+}
+
+function re(t, s) {
+    const a = new Array(t.length).fill(null);
+    for (let o = 0; o + s < t.length; o++) {
+        const l = t[o],
+            i = t[o + s];
+        l != null && i != null && l !== 0 && (a[o] = (i - l) / l * 100)
+    }
+    return a
+}
+
+function ne(t, s) {
+    if (t.length !== s.length || t.length < 10) return null;
+    const a = t.length,
+        o = f => {
+            const C = f.map((g, y) => ({
+                v: g,
+                i: y
+            }));
+            C.sort((g, y) => g.v - y.v);
+            const F = new Array(a);
+            let j = 0;
+            for (; j < a;) {
+                let g = j;
+                for (; g + 1 < a && C[g + 1].v === C[j].v;) g++;
+                const y = (j + g) / 2 + 1;
+                for (let M = j; M <= g; M++) F[C[M].i] = y;
+                j = g + 1
+            }
+            return F
+        },
+        l = o(t),
+        i = o(s);
+    let h = 0,
+        c = 0,
+        u = 0,
+        m = 0,
+        x = 0;
+    for (let f = 0; f < a; f++) h += l[f], c += i[f], u += l[f] * i[f], m += l[f] * l[f], x += i[f] * i[f];
+    const r = a * u - h * c,
+        k = Math.sqrt((a * m - h * h) * (a * x - c * c));
+    return k === 0 ? null : r / k
+}
+
+function oe(t, s) {
+    if (t.length !== s.length || t.length < 10) return null;
+    const a = t.length;
+    let o = 0,
+        l = 0,
+        i = 0,
+        h = 0,
+        c = 0;
+    for (let x = 0; x < a; x++) o += t[x], l += s[x], i += t[x] * s[x], h += t[x] * t[x], c += s[x] * s[x];
+    const u = a * i - o * l,
+        m = Math.sqrt((a * h - o * o) * (a * c - l * l));
+    return m === 0 ? null : u / m
+}
+
+function se(t, s, a, o, l) {
+    const i = t.length,
+        h = Math.max(0, i - s - a),
+        c = te(t, s),
+        u = re(t, a),
+        m = [];
+    for (let d = 0; d < t.length; d++) {
+        const v = c[d],
+            $ = u[d];
+        v != null && $ != null && Number.isFinite(v) && Number.isFinite($) && m.push({
+            roc: v,
+            fwd: $
+        })
+    }
+    if (m.length < o * 10) return null;
+    const x = m.slice().sort((d, v) => d.roc - v.roc),
+        r = x.length,
+        k = [];
+    for (let d = 0; d < o; d++) {
+        const v = Math.floor(d * r / o),
+            $ = Math.floor((d + 1) * r / o),
+            b = x.slice(v, $);
+        if (b.length === 0) continue;
+        const N = b.map(O => O.fwd).slice().sort((O, I) => O - I),
+            A = N.reduce((O, I) => O + I, 0) / N.length,
+            w = Math.floor(N.length / 2),
+            _ = N.length % 2 === 1 ? N[w] : (N[w - 1] + N[w]) / 2,
+            Y = N.filter(O => O > 0).length,
+            H = N.reduce((O, I) => O + (I - A) * (I - A), 0) / N.length,
+            E = Math.sqrt(H);
+        k.push({
+            bucket: d + 1,
+            rocMin: b[0].roc,
+            rocMax: b[b.length - 1].roc,
+            rocMid: (b[0].roc + b[b.length - 1].roc) / 2,
+            count: b.length,
+            meanFwdReturn: A,
+            medianFwdReturn: _,
+            hitRate: Y / N.length,
+            stdFwdReturn: E
+        })
+    }
+    const f = m.map(d => d.roc),
+        C = m.map(d => d.fwd),
+        F = ne(f, C),
+        j = oe(f, C),
+        g = C.reduce((d, v) => d + v, 0) / C.length,
+        y = k[k.length - 1].meanFwdReturn - k[0].meanFwdReturn;
+    let M = "noise",
+        B = "weak";
+    const n = Math.abs(F ?? 0);
+    return n >= .1 ? B = "strong" : n >= .05 ? B = "moderate" : B = "weak", (F ?? 0) > .03 && y > 0 ? M = "momentum" : (F ?? 0) < -.03 && y < 0 ? M = "mean-reversion" : M = "noise", {
+        ticker: l,
+        rocLookback: s,
+        forwardHorizon: a,
+        bucketCount: o,
+        buckets: k,
+        totalSamples: r,
+        rawBars: i,
+        expectedPairs: h,
+        spearmanIC: F,
+        pearsonIC: j,
+        meanFwdAll: g,
+        topMinusBottom: y,
+        interpretation: M,
+        interpretationStrength: B
+    }
+}
+
+function ae(t, s) {
+    const a = Math.max(...s.map(l => Math.abs(l.meanFwdReturn))),
+        o = a > 0 ? t.meanFwdReturn / a : 0;
+    return o > .5 ? "bg-emerald-500/80" : o > .15 ? "bg-emerald-500/50" : o > .02 ? "bg-emerald-500/25" : o < -.5 ? "bg-red-500/80" : o < -.15 ? "bg-red-500/50" : o < -.02 ? "bg-red-500/25" : "bg-muted"
+}
+
+function p(t, s = 2) {
+    return `${t>=0?"+":""}${t.toFixed(s)}%`
+}
+
+function S(t) {
+    return t == null ? "—" : `${t>=0?"+":""}${t.toFixed(3)}`
+}
+
+function L(t) {
+    if (t == null) return "text-muted-foreground";
+    const s = Math.abs(t);
+    return s >= .1 ? t > 0 ? "text-emerald-400" : "text-red-400" : s >= .05 ? t > 0 ? "text-emerald-400/70" : "text-red-400/70" : "text-muted-foreground"
+}
+
+function xe() {
+    const {
+        filteredTickersList: t
+    } = P(), [s, a] = R.useState([]), [o, l] = R.useState(""), [i, h] = R.useState(21), [c, u] = R.useState(21), [m, x] = R.useState(10), [r, k] = R.useState(null), [f, C] = R.useState(!1), [F, j] = R.useState(null);
+    R.useEffect(() => {
+        (async () => {
+            const n = await U();
+            if (a(n), !o && n.length > 0) {
+                const d = t[0]?.ticker || n[0].ticker;
+                l(d)
+            }
+        })()
+    }, []);
+    const g = R.useCallback(async () => {
+        if (o) {
+            C(!0), j(null);
+            try {
+                const d = (await D(o)).close;
+                if (!d?.length) {
+                    j(`No price data for ${o}`), k(null);
+                    return
+                }
+                const v = d.map(([, b]) => b).filter(b => b != null && Number.isFinite(b));
+                if (v.length < i + c + 50) {
+                    j(`Insufficient data: only ${v.length} bars (need ${i+c+50}+)`), k(null);
+                    return
+                }
+                const $ = se(v, i, c, m, o);
+                if (!$) {
+                    j("Could not compute analysis (insufficient samples)"), k(null);
+                    return
+                }
+                k($)
+            } catch (n) {
+                j(n?.message || "Analysis failed"), k(null)
+            } finally {
+                C(!1)
+            }
+        }
+    }, [o, i, c, m]);
+    R.useEffect(() => {
+        o && g()
+    }, [o, i, c, m, g]);
+    const y = R.useMemo(() => r ? Math.max(...r.buckets.map(n => Math.abs(n.meanFwdReturn)), .001) : 1, [r]),
+        M = R.useCallback(() => {
+            if (!r) return;
+            const n = ["bucket", "roc_min_pct", "roc_max_pct", "roc_mid_pct", "n", "mean_fwd_return_pct", "median_fwd_return_pct", "hit_rate", "std_fwd_return_pct"],
+                d = r.buckets.map(w => [w.bucket, w.rocMin.toFixed(4), w.rocMax.toFixed(4), w.rocMid.toFixed(4), w.count, w.meanFwdReturn.toFixed(4), w.medianFwdReturn.toFixed(4), w.hitRate.toFixed(4), w.stdFwdReturn.toFixed(4)]),
+                $ = [...[`# ROC Analysis: ${r.ticker}`, `# ROC lookback: ${r.rocLookback}d`, `# Forward horizon: ${r.forwardHorizon}d`, `# Buckets: ${r.bucketCount}`, `# Samples: ${r.totalSamples}`, `# Spearman IC: ${S(r.spearmanIC)}`, `# Pearson r: ${S(r.pearsonIC)}`, `# Mean fwd return (all): ${p(r.meanFwdAll)}`, `# Top - bottom spread: ${p(r.topMinusBottom)}`], n.join(","), ...d.map(w => w.join(","))].join(`
+`),
+                b = new Blob([$], {
+                    type: "text/csv"
+                }),
+                N = URL.createObjectURL(b),
+                A = document.createElement("a");
+            A.href = N, A.download = `roc-analysis-${r.ticker}-roc${r.rocLookback}-fwd${r.forwardHorizon}.csv`, A.click(), URL.revokeObjectURL(N)
+        }, [r]),
+        B = R.useMemo(() => s.slice().sort((n, d) => n.ticker.localeCompare(d.ticker)), [s]);
+    return e.jsxs("div", {
+        className: "flex flex-col h-full bg-background",
+        children: [e.jsxs("div", {
+            className: "border-b border-border bg-card px-4 py-2",
+            children: [e.jsxs("div", {
+                className: "flex items-end gap-3 flex-wrap",
+                children: [e.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [e.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Ticker"
+                    }), e.jsx("select", {
+                        className: `text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[280px] ${z(o)?"opacity-40 pointer-events-none":""}`,
+                        value: z(o) ? "" : o,
+                        onChange: n => l(n.target.value),
+                        "data-testid": "select-ticker",
+                        children: B.map(n => e.jsxs("option", {
+                            value: n.ticker,
+                            children: [n.ticker, " — ", n.name]
+                        }, n.ticker))
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [e.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Basket"
+                    }), e.jsx(Q, {
+                        activeTicker: o,
+                        onSelectTicker: l,
+                        fallbackTicker: B[0]?.ticker ?? null
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [e.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "ROC Lookback"
+                    }), e.jsx("select", {
+                        className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[120px]",
+                        value: i,
+                        onChange: n => h(Number(n.target.value)),
+                        "data-testid": "select-roc-lookback",
+                        children: G.map(n => e.jsx("option", {
+                            value: n.days,
+                            children: n.label
+                        }, n.days))
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [e.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Forward Horizon"
+                    }), e.jsx("select", {
+                        className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[120px]",
+                        value: c,
+                        onChange: n => u(Number(n.target.value)),
+                        "data-testid": "select-fwd-horizon",
+                        children: J.map(n => e.jsx("option", {
+                            value: n.days,
+                            children: n.label
+                        }, n.days))
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [e.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Buckets"
+                    }), e.jsx("select", {
+                        className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[140px]",
+                        value: m,
+                        onChange: n => x(Number(n.target.value)),
+                        "data-testid": "select-buckets",
+                        children: ee.map(n => e.jsx("option", {
+                            value: n.n,
+                            children: n.label
+                        }, n.n))
+                    })]
+                }), e.jsx("div", {
+                    className: "flex-1"
+                }), r && e.jsxs(X, {
+                    variant: "outline",
+                    size: "sm",
+                    className: "h-7 gap-1 text-[11px]",
+                    onClick: M,
+                    "data-testid": "export-csv",
+                    children: [e.jsx(q, {
+                        className: "w-3 h-3"
+                    }), "CSV"]
+                })]
+            }), e.jsxs("div", {
+                className: "mt-1.5 text-[10px] text-muted-foreground",
+                children: ["Sorts every historical day's ROC into ", m, " equal-frequency buckets, then reports the average forward ", c, "d return inside each bucket. A monotonic up-slope means momentum (high ROC → high forward returns); a down-slope means mean-reversion (high ROC → low forward returns); flat means no signal."]
+            })]
+        }), e.jsxs("div", {
+            className: "flex-1 overflow-auto p-4",
+            children: [f && e.jsxs("div", {
+                className: "flex items-center justify-center h-full",
+                children: [e.jsx(V, {
+                    className: "w-5 h-5 animate-spin text-muted-foreground"
+                }), e.jsx("span", {
+                    className: "ml-2 text-sm text-muted-foreground",
+                    children: "Computing…"
+                })]
+            }), F && !f && e.jsx("div", {
+                className: "text-sm text-red-400 p-4 border border-red-500/30 rounded bg-red-500/5",
+                children: F
+            }), r && !f && e.jsxs("div", {
+                className: "flex flex-col gap-4",
+                children: [e.jsxs("div", {
+                    className: "grid grid-cols-2 lg:grid-cols-5 gap-2",
+                    children: [e.jsx(T, {
+                        label: "Samples",
+                        value: r.totalSamples.toLocaleString(),
+                        hint: `${r.rawBars.toLocaleString()} price bars → drop ${r.rocLookback} for ROC warmup + ${r.forwardHorizon} for forward window = ${r.expectedPairs.toLocaleString()} expected, ${r.totalSamples.toLocaleString()} actual valid (ROC, fwd) pairs. Each bucket holds ~${Math.floor(r.totalSamples/r.bucketCount)} samples.`
+                    }), e.jsx(T, {
+                        label: "Spearman IC",
+                        value: S(r.spearmanIC),
+                        valueClass: L(r.spearmanIC),
+                        hint: "Rank correlation between ROC and forward return. Above ±0.05 = signal, ±0.10 = strong"
+                    }), e.jsx(T, {
+                        label: "Pearson r",
+                        value: S(r.pearsonIC),
+                        valueClass: L(r.pearsonIC)
+                    }), e.jsx(T, {
+                        label: "Top − Bottom Spread",
+                        value: p(r.topMinusBottom),
+                        valueClass: r.topMinusBottom > 0 ? "text-emerald-400" : "text-red-400",
+                        hint: "Mean fwd return of highest-ROC bucket minus lowest-ROC bucket"
+                    }), e.jsx(T, {
+                        label: "Verdict",
+                        value: r.interpretation === "momentum" ? `${r.interpretationStrength} momentum` : r.interpretation === "mean-reversion" ? `${r.interpretationStrength} reversion` : "noise",
+                        valueClass: r.interpretation === "momentum" ? "text-emerald-400" : r.interpretation === "mean-reversion" ? "text-amber-400" : "text-muted-foreground",
+                        icon: r.interpretation === "momentum" ? e.jsx(K, {
+                            className: "w-3 h-3"
+                        }) : r.interpretation === "mean-reversion" ? e.jsx(W, {
+                            className: "w-3 h-3"
+                        }) : e.jsx(Z, {
+                            className: "w-3 h-3"
+                        })
+                    })]
+                }), e.jsxs("div", {
+                    className: "border border-border rounded p-4 bg-card",
+                    children: [e.jsxs("div", {
+                        className: "text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3",
+                        children: ["Mean Forward ", r.forwardHorizon, "d Return by ROC", r.rocLookback, " Bucket"]
+                    }), e.jsx(le, {
+                        buckets: r.buckets,
+                        maxAbsMean: y,
+                        meanFwdAll: r.meanFwdAll
+                    }), e.jsxs("div", {
+                        className: "flex items-center justify-between mt-2 text-[10px] text-muted-foreground",
+                        children: [e.jsxs("span", {
+                            children: ["Bucket 1 = lowest ROC", r.rocLookback]
+                        }), e.jsxs("span", {
+                            children: ["Dashed line = unconditional mean fwd return (", p(r.meanFwdAll), ")"]
+                        }), e.jsxs("span", {
+                            children: ["Bucket ", r.bucketCount, " = highest ROC", r.rocLookback]
+                        })]
+                    })]
+                }), e.jsx("div", {
+                    className: "border border-border rounded overflow-x-auto",
+                    children: e.jsxs("table", {
+                        className: "w-full text-[11px] font-mono",
+                        children: [e.jsx("thead", {
+                            children: e.jsxs("tr", {
+                                className: "bg-card text-muted-foreground border-b border-border",
+                                children: [e.jsx("th", {
+                                    className: "text-left px-3 py-2 font-bold",
+                                    children: "Bucket"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "ROC Range"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "N"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "Mean Fwd"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "Median Fwd"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "Hit Rate"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "Std Dev"
+                                }), e.jsx("th", {
+                                    className: "text-right px-3 py-2 font-bold",
+                                    children: "Sharpe-ish"
+                                })]
+                            })
+                        }), e.jsx("tbody", {
+                            children: r.buckets.map(n => {
+                                const d = n.stdFwdReturn > 0 ? n.meanFwdReturn / n.stdFwdReturn : 0;
+                                return e.jsxs("tr", {
+                                    className: "border-b border-border/50 hover:bg-white/5",
+                                    children: [e.jsx("td", {
+                                        className: "px-3 py-2 font-bold text-foreground",
+                                        children: n.bucket
+                                    }), e.jsxs("td", {
+                                        className: "px-3 py-2 text-right text-muted-foreground",
+                                        children: [p(n.rocMin, 1), " → ", p(n.rocMax, 1)]
+                                    }), e.jsx("td", {
+                                        className: "px-3 py-2 text-right",
+                                        children: n.count
+                                    }), e.jsx("td", {
+                                        className: `px-3 py-2 text-right font-bold ${n.meanFwdReturn>0?"text-emerald-400":"text-red-400"}`,
+                                        children: p(n.meanFwdReturn)
+                                    }), e.jsx("td", {
+                                        className: `px-3 py-2 text-right ${n.medianFwdReturn>0?"text-emerald-400/80":"text-red-400/80"}`,
+                                        children: p(n.medianFwdReturn)
+                                    }), e.jsxs("td", {
+                                        className: `px-3 py-2 text-right ${n.hitRate>.55?"text-emerald-400":n.hitRate<.45?"text-red-400":"text-muted-foreground"}`,
+                                        children: [(n.hitRate * 100).toFixed(1), "%"]
+                                    }), e.jsxs("td", {
+                                        className: "px-3 py-2 text-right text-muted-foreground",
+                                        children: [n.stdFwdReturn.toFixed(2), "%"]
+                                    }), e.jsx("td", {
+                                        className: `px-3 py-2 text-right ${Math.abs(d)>.05?d>0?"text-emerald-400":"text-red-400":"text-muted-foreground"}`,
+                                        children: d.toFixed(3)
+                                    })]
+                                }, n.bucket)
+                            })
+                        })]
+                    })
+                }), e.jsxs("div", {
+                    className: "border border-border rounded p-4 bg-card",
+                    children: [e.jsx("div", {
+                        className: "text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2",
+                        children: "Interpretation"
+                    }), e.jsx(de, {
+                        analysis: r
+                    })]
+                })]
+            })]
+        })]
+    })
+}
+
+function T({
+    label: t,
+    value: s,
+    valueClass: a = "text-foreground",
+    hint: o,
+    icon: l
+}) {
+    return e.jsxs("div", {
+        className: "border border-border rounded p-2 bg-card",
+        title: o,
+        children: [e.jsx("div", {
+            className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+            children: t
+        }), e.jsxs("div", {
+            className: `text-base font-bold font-mono flex items-center gap-1 ${a}`,
+            children: [l, s]
+        })]
+    })
+}
+
+function le({
+    buckets: t,
+    maxAbsMean: s,
+    meanFwdAll: a
+}) {
+    const h = 102 / s,
+        c = 108 - a * h;
+    return e.jsxs("div", {
+        className: "relative w-full",
+        style: {
+            height: 240
+        },
+        children: [e.jsxs("div", {
+            className: "relative w-full",
+            style: {
+                height: 216
+            },
+            children: [e.jsx("div", {
+                className: "absolute left-0 right-0 border-t border-border z-0",
+                style: {
+                    top: 108
+                }
+            }), e.jsx("div", {
+                className: "absolute left-0 right-0 border-t border-dashed border-amber-500/60 z-0",
+                style: {
+                    top: c
+                }
+            }), e.jsx("div", {
+                className: "absolute inset-0 flex gap-1 px-1",
+                children: t.map(u => {
+                    const m = u.meanFwdReturn >= 0,
+                        x = Math.max(2, Math.abs(u.meanFwdReturn) * h),
+                        r = m ? 108 - x : 108;
+                    return e.jsxs("div", {
+                        className: "flex-1 relative group",
+                        children: [e.jsxs("div", {
+                            className: "absolute -top-1 left-1/2 -translate-x-1/2 -translate-y-full hidden group-hover:block z-20 bg-popover border border-border rounded px-2 py-1 text-[10px] font-mono text-foreground whitespace-nowrap shadow-lg pointer-events-none",
+                            children: [e.jsxs("div", {
+                                className: "font-bold",
+                                children: ["Bucket ", u.bucket]
+                            }), e.jsxs("div", {
+                                children: ["ROC: ", p(u.rocMin, 1), " → ", p(u.rocMax, 1)]
+                            }), e.jsxs("div", {
+                                children: ["Mean Fwd: ", e.jsx("span", {
+                                    className: m ? "text-emerald-400" : "text-red-400",
+                                    children: p(u.meanFwdReturn)
+                                })]
+                            }), e.jsxs("div", {
+                                children: ["Hit Rate: ", (u.hitRate * 100).toFixed(1), "%"]
+                            }), e.jsxs("div", {
+                                children: ["N = ", u.count]
+                            })]
+                        }), e.jsx("div", {
+                            className: "absolute inset-0 cursor-pointer"
+                        }), e.jsx("div", {
+                            className: `absolute left-0 right-0 ${ae(u,t)} border ${m?"border-emerald-500/80 rounded-t":"border-red-500/80 rounded-b"} transition-all`,
+                            style: {
+                                top: r,
+                                height: x
+                            }
+                        }), e.jsx("div", {
+                            className: `absolute left-0 right-0 text-center text-[9px] font-mono font-bold ${m?"text-emerald-300":"text-red-300"}`,
+                            style: {
+                                top: m ? r - 14 : r + x + 2
+                            },
+                            children: p(u.meanFwdReturn, 1)
+                        })]
+                    }, u.bucket)
+                })
+            })]
+        }), e.jsx("div", {
+            className: "flex gap-1 px-1 mt-1",
+            children: t.map(u => e.jsx("div", {
+                className: "flex-1 text-center text-[9px] font-mono text-muted-foreground",
+                children: u.bucket
+            }, u.bucket))
+        })]
+    })
+}
+
+function de({
+    analysis: t
+}) {
+    const s = t.buckets[t.buckets.length - 1],
+        a = t.buckets[0],
+        o = t.meanFwdAll,
+        l = s.meanFwdReturn - o,
+        i = a.meanFwdReturn - o,
+        h = t.spearmanIC ?? 0,
+        c = [];
+    return t.interpretation === "momentum" ? (c.push({
+        color: "text-emerald-400",
+        text: `Strongest signal: highest ROC bucket (top ${(100/t.bucketCount).toFixed(0)}%, ROC ≥ ${p(s.rocMin,1)}) outperforms by ${p(l)} vs baseline.`
+    }), i < -.1 && c.push({
+        color: "text-red-400",
+        text: `Lowest ROC bucket (ROC ≤ ${p(a.rocMax,1)}) underperforms by ${p(i)} — momentum works in both directions.`
+    })) : t.interpretation === "mean-reversion" ? (c.push({
+        color: "text-emerald-400",
+        text: `Strongest signal: lowest ROC bucket (ROC ≤ ${p(a.rocMax,1)}) outperforms by ${p(i)} vs baseline. Buy weakness.`
+    }), l < -.1 && c.push({
+        color: "text-red-400",
+        text: `Highest ROC bucket (ROC ≥ ${p(s.rocMin,1)}) underperforms by ${p(l)} — fade strength.`
+    })) : c.push({
+        color: "text-muted-foreground",
+        text: `No clear monotonic relationship between ROC${t.rocLookback} and forward ${t.forwardHorizon}d return for ${t.ticker}. Spearman IC = ${S(t.spearmanIC)}.`
+    }), Math.abs(h) >= .1 ? c.push({
+        color: "text-emerald-400/80",
+        text: `IC of ${S(h)} is strong (rule of thumb: |IC| ≥ 0.05 = signal, ≥ 0.10 = strong). This ROC lookback is predictive for ${t.ticker}.`
+    }) : Math.abs(h) >= .05 ? c.push({
+        color: "text-amber-400/80",
+        text: `IC of ${S(h)} is moderate. Some predictive value, but not robust on its own.`
+    }) : c.push({
+        color: "text-muted-foreground",
+        text: `IC of ${S(h)} is weak. Try a different ROC lookback or forward horizon.`
+    }), c.push({
+        color: "text-muted-foreground italic",
+        text: "Try varying ROC lookback (5d–252d) and forward horizon (1d–252d) — momentum often shows up at 21d/63d ROC vs 21d/63d forward, while reversal often appears at very short (5d) or very long (252d) horizons."
+    }), e.jsx("div", {
+        className: "flex flex-col gap-1.5 text-[11px]",
+        children: c.map((u, m) => e.jsxs("div", {
+            className: u.color,
+            children: ["• ", u.text]
+        }, m))
+    })
+}
+export {
+    xe as
+    default
+};

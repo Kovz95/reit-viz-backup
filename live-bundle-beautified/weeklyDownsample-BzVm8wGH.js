@@ -1,0 +1,39 @@
+function u(n) {
+    const a = new Date(n + "T00:00:00Z");
+    if (isNaN(a.getTime())) return n;
+    const t = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate()));
+    t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+    const r = new Date(Date.UTC(t.getUTCFullYear(), 0, 1)),
+        e = Math.ceil(((t.getTime() - r.getTime()) / 864e5 + 1) / 7);
+    return `${t.getUTCFullYear()}-W${String(e).padStart(2,"0")}`
+}
+
+function T(n, a) {
+    const t = [],
+        r = [];
+    let e = "",
+        i = NaN,
+        l = -1;
+    for (let o = 0; o < n.length; o++) {
+        const s = u(a[o]);
+        s !== e && (l >= 0 && (t.push(i), r.push(l)), e = s), i = n[o], l = o
+    }
+    return l >= 0 && (t.push(i), r.push(l)), {
+        prices: t,
+        weekIndex: r
+    }
+}
+
+function g(n, a, t) {
+    const r = new Array(t).fill(NaN);
+    if (n.length === 0) return r;
+    let e = -1;
+    for (let i = 0; i < t; i++) {
+        for (; e + 1 < a.length && a[e + 1] <= i;) e++;
+        e >= 0 && Number.isFinite(n[e]) && (r[i] = n[e])
+    }
+    return r
+}
+export {
+    T as d, g as e
+};

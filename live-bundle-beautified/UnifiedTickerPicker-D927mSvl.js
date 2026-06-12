@@ -1,0 +1,116 @@
+import {
+    r as n,
+    j as t
+} from "./index-CsG73Aq_.js";
+
+function N({
+    tickers: l,
+    value: s,
+    onChange: b,
+    disabled: h,
+    label: g = "Ticker",
+    placeholder: k = "Search ticker / name or type any Yahoo symbol…"
+}) {
+    const [o, p] = n.useState(s || ""), [m, a] = n.useState(!1), [d, c] = n.useState(0), x = n.useRef(null), w = n.useRef(null);
+    n.useEffect(() => {
+        p(s || "")
+    }, [s]), n.useEffect(() => {
+        function e(r) {
+            x.current && (x.current.contains(r.target) || a(!1))
+        }
+        return document.addEventListener("mousedown", e), () => document.removeEventListener("mousedown", e)
+    }, []);
+    const i = n.useMemo(() => {
+            const e = o.trim().toLowerCase();
+            return e ? l.filter(r => r.ticker.toLowerCase().includes(e) || r.name && r.name.toLowerCase().includes(e)).slice(0, 50) : l.slice(0, 50)
+        }, [l, o]),
+        f = n.useMemo(() => l.some(e => e.ticker.toUpperCase() === (s || "").toUpperCase()), [l, s]),
+        u = e => {
+            const r = e.trim().toUpperCase();
+            r && (b(r), p(r), a(!1))
+        },
+        y = e => {
+            if (!m && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                a(!0);
+                return
+            }
+            e.key === "ArrowDown" ? (e.preventDefault(), c(r => Math.min(r + 1, Math.max(i.length - 1, 0)))) : e.key === "ArrowUp" ? (e.preventDefault(), c(r => Math.max(r - 1, 0))) : e.key === "Enter" ? (e.preventDefault(), m && i[d] ? u(i[d].ticker) : u(o)) : e.key === "Escape" && a(!1)
+        };
+    return t.jsxs("div", {
+        ref: x,
+        className: "flex flex-col gap-0.5 relative",
+        children: [t.jsx("label", {
+            className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+            children: g
+        }), t.jsxs("div", {
+            className: "flex items-center gap-1",
+            children: [t.jsxs("div", {
+                className: "relative",
+                children: [t.jsx("input", {
+                    ref: w,
+                    type: "text",
+                    placeholder: k,
+                    value: o,
+                    onChange: e => {
+                        p(e.target.value.toUpperCase()), a(!0), c(0)
+                    },
+                    onFocus: () => a(!0),
+                    onKeyDown: y,
+                    disabled: h,
+                    "data-testid": "input-ticker-unified",
+                    className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[260px] focus:outline-none focus:ring-1 focus:ring-primary"
+                }), m && t.jsxs("div", {
+                    className: "absolute z-50 mt-0.5 left-0 w-[440px] max-h-[280px] overflow-auto bg-popover border border-border rounded shadow-lg",
+                    children: [i.length === 0 ? t.jsxs("div", {
+                        className: "px-2 py-1.5 text-[11px] font-mono text-muted-foreground",
+                        children: ["No workbook match. Press Enter to use", " ", t.jsx("span", {
+                            className: "text-foreground font-bold",
+                            children: o.trim().toUpperCase() || "—"
+                        }), " ", "as a Yahoo symbol."]
+                    }) : i.map((e, r) => t.jsxs("button", {
+                        type: "button",
+                        className: `w-full text-left px-2 py-1 text-[11px] font-mono flex items-center gap-2 ${r===d?"bg-accent text-accent-foreground":"hover:bg-accent/50"}`,
+                        onMouseEnter: () => c(r),
+                        onMouseDown: v => {
+                            v.preventDefault(), u(e.ticker)
+                        },
+                        children: [t.jsx("span", {
+                            className: "font-bold w-14 shrink-0 whitespace-nowrap",
+                            children: e.ticker
+                        }), t.jsx("span", {
+                            className: "text-muted-foreground truncate flex-1 min-w-0",
+                            title: e.name || "",
+                            children: e.name || ""
+                        }), t.jsx("span", {
+                            className: "text-[9px] font-mono px-1 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 shrink-0",
+                            children: "Universe"
+                        })]
+                    }, e.ticker)), o.trim() && !i.find(e => e.ticker.toUpperCase() === o.trim().toUpperCase()) && t.jsxs("button", {
+                        type: "button",
+                        className: "w-full text-left px-2 py-1 text-[11px] font-mono flex items-center gap-2 border-t border-border hover:bg-accent/50",
+                        onMouseDown: e => {
+                            e.preventDefault(), u(o)
+                        },
+                        children: [t.jsx("span", {
+                            className: "font-bold w-14 shrink-0",
+                            children: o.trim().toUpperCase()
+                        }), t.jsx("span", {
+                            className: "text-muted-foreground flex-1",
+                            children: "Use as Yahoo symbol"
+                        }), t.jsx("span", {
+                            className: "text-[9px] font-mono px-1 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0",
+                            children: "Yahoo"
+                        })]
+                    })]
+                })]
+            }), s && t.jsx("span", {
+                className: `text-[9px] font-mono px-1 py-0.5 rounded shrink-0 ${f?"bg-blue-500/15 text-blue-600 dark:text-blue-400":"bg-amber-500/15 text-amber-600 dark:text-amber-400"}`,
+                title: f ? "From workbook universe" : "Live from Yahoo Finance",
+                children: f ? "Universe" : "Yahoo"
+            })]
+        })]
+    })
+}
+export {
+    N as U
+};

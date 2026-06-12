@@ -1,0 +1,2000 @@
+import {
+    b2 as Z,
+    a$ as T,
+    a_ as k,
+    b0 as R,
+    ee as v,
+    ef as S,
+    eg as G,
+    eh as X,
+    ei as J,
+    ej as Q,
+    ek as tt,
+    el as L,
+    em as et,
+    b3 as nt,
+    aR as U
+} from "./index-CsG73Aq_.js";
+import {
+    c as rt,
+    a as K
+} from "./oscillatorMath-DdsdJyTp.js";
+import {
+    c as x
+} from "./harsi-NMVnsDcX.js";
+import {
+    c as I
+} from "./tva-DaeKqI67.js";
+
+function w(t) {
+    return t.map((e, n) => ({
+        time: String(n),
+        value: e
+    }))
+}
+
+function M(t, e, n = 0) {
+    const r = new Array(e).fill(NaN);
+    for (const i of t) {
+        const o = Number(i.time);
+        o >= 0 && o < e && (r[o] = i.value)
+    }
+    return r
+}
+
+function D(t) {
+    return t.map(e => e === null ? NaN : e)
+}
+
+function _(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN);
+    for (let i = e; i < n; i++) {
+        const o = t[i - e];
+        o > 0 && t[i] > 0 && (r[i] = t[i] / o - 1)
+    }
+    return r
+}
+
+function C(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN),
+        i = new Array(n).fill(NaN);
+    for (let o = 1; o < n; o++) t[o - 1] > 0 && t[o] > 0 && (i[o] = Math.log(t[o] / t[o - 1]));
+    for (let o = e; o < n; o++) {
+        let a = 0,
+            l = 0;
+        for (let c = o - e + 1; c <= o; c++) Number.isFinite(i[c]) && (a += i[c], l++);
+        if (l < e) continue;
+        a /= l;
+        let s = 0;
+        for (let c = o - e + 1; c <= o; c++) s += (i[c] - a) ** 2;
+        r[o] = Math.sqrt(s / l * 252)
+    }
+    return r
+}
+
+function O(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN);
+    for (let i = e - 1; i < n; i++) {
+        let o = -1 / 0;
+        for (let a = i - e + 1; a <= i; a++) t[a] > o && (o = t[a]);
+        r[i] = o
+    }
+    return r
+}
+
+function E(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN);
+    for (let i = e - 1; i < n; i++) {
+        let o = 1 / 0;
+        for (let a = i - e + 1; a <= i; a++) t[a] < o && (o = t[a]);
+        r[i] = o
+    }
+    return r
+}
+
+function it(t, e) {
+    const n = O(t, e);
+    return t.map((r, i) => Number.isFinite(n[i]) && n[i] > 0 && r > 0 ? r / n[i] - 1 : NaN)
+}
+
+function at(t, e) {
+    const n = E(t, e);
+    return t.map((r, i) => Number.isFinite(n[i]) && n[i] > 0 && r > 0 ? r / n[i] - 1 : NaN)
+}
+
+function ot(t) {
+    const e = new Array(t.length).fill(NaN);
+    let n = -1 / 0;
+    for (let r = 0; r < t.length; r++) t[r] > n && (n = t[r]), n > 0 && t[r] > 0 && (e[r] = t[r] / n - 1);
+    return e
+}
+
+function q(t, e, n) {
+    const r = t.length,
+        i = new Array(r).fill(NaN);
+    for (let o = e - 1; o < r; o++) {
+        let a = o,
+            l = t[o];
+        for (let s = o - e + 1; s <= o; s++) {
+            const c = t[s];
+            Number.isFinite(c) && (n === "max" ? c > l : c < l) && (l = c, a = s)
+        }
+        i[o] = o - a
+    }
+    return i
+}
+
+function lt(t) {
+    const e = new Array(t.length).fill(NaN);
+    let n = 0,
+        r = t[0];
+    for (let i = 0; i < t.length; i++) t[i] > r && (r = t[i], n = i), e[i] = i - n;
+    return e
+}
+
+function st(t, e, n) {
+    const r = U(w(t), e, n),
+        i = M(r.upper, t.length),
+        o = M(r.lower, t.length);
+    return t.map((a, l) => {
+        const s = i[l],
+            c = o[l];
+        return Number.isFinite(s) && Number.isFinite(c) && s !== c ? (a - c) / (s - c) : NaN
+    })
+}
+
+function ct(t, e, n) {
+    const r = U(w(t), e, n),
+        i = M(r.upper, t.length),
+        o = M(r.lower, t.length),
+        a = M(r.middle, t.length);
+    return t.map((l, s) => Number.isFinite(i[s]) && Number.isFinite(o[s]) && Number.isFinite(a[s]) && a[s] !== 0 ? (i[s] - o[s]) / a[s] : NaN)
+}
+
+function ut(t, e, n, r = 20, i = 14, o = 2) {
+    const a = D(v(n, r)),
+        l = j(t, e, n, i);
+    return n.map((s, c) => !Number.isFinite(a[c]) || !Number.isFinite(l[c]) || l[c] === 0 ? NaN : (s - a[c]) / (o * l[c]))
+}
+
+function ft(t, e, n, r) {
+    const i = O(t, r),
+        o = E(e, r);
+    return n.map((a, l) => !Number.isFinite(i[l]) || !Number.isFinite(o[l]) || i[l] === o[l] ? NaN : (a - o[l]) / (i[l] - o[l]))
+}
+
+function j(t, e, n, r) {
+    const i = n.length,
+        o = new Array(i).fill(NaN);
+    for (let c = 1; c < i; c++) {
+        const u = t[c] - e[c],
+            m = Math.abs(t[c] - n[c - 1]),
+            f = Math.abs(e[c] - n[c - 1]);
+        o[c] = Math.max(u, m, f)
+    }
+    const a = new Array(i).fill(NaN);
+    if (i < r + 1) return a;
+    let l = 0,
+        s = 0;
+    for (let c = 1; c <= r; c++) Number.isFinite(o[c]) && (l += o[c], s++);
+    if (s === 0) return a;
+    l /= s, a[r] = l;
+    for (let c = r + 1; c < i; c++) Number.isFinite(o[c]) && (l = (l * (r - 1) + o[c]) / r, a[c] = l);
+    return a
+}
+
+function mt(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN);
+    if (n < e + 1) return r;
+    let i = 0,
+        o = 0;
+    for (let a = 1; a <= e; a++) {
+        const l = t[a] - t[a - 1];
+        l >= 0 ? i += l : o -= l
+    }
+    i /= e, o /= e, r[e] = o === 0 ? 100 : 100 - 100 / (1 + i / o);
+    for (let a = e + 1; a < n; a++) {
+        const l = t[a] - t[a - 1],
+            s = l > 0 ? l : 0,
+            c = l < 0 ? -l : 0;
+        i = (i * (e - 1) + s) / e, o = (o * (e - 1) + c) / e, r[a] = o === 0 ? 100 : 100 - 100 / (1 + i / o)
+    }
+    return r
+}
+
+function dt(t, e, n, r) {
+    const i = O(t, r),
+        o = E(e, r);
+    return n.map((a, l) => !Number.isFinite(i[l]) || !Number.isFinite(o[l]) || i[l] === o[l] ? NaN : (i[l] - a) / (i[l] - o[l]) * -100)
+}
+
+function ht(t, e, n, r) {
+    const i = n.length,
+        o = new Array(i);
+    for (let l = 0; l < i; l++) o[l] = (t[l] + e[l] + n[l]) / 3;
+    const a = new Array(i).fill(NaN);
+    for (let l = r - 1; l < i; l++) {
+        let s = 0;
+        for (let m = l - r + 1; m <= l; m++) s += o[m];
+        const c = s / r;
+        let u = 0;
+        for (let m = l - r + 1; m <= l; m++) u += Math.abs(o[m] - c);
+        u /= r, a[l] = u === 0 ? 0 : (o[l] - c) / (.015 * u)
+    }
+    return a
+}
+
+function gt(t, e, n, r, i) {
+    const o = n.length,
+        a = new Array(o);
+    for (let u = 0; u < o; u++) a[u] = (t[u] + e[u] + n[u]) / 3;
+    const l = new Array(o).fill(0),
+        s = new Array(o).fill(0);
+    for (let u = 1; u < o; u++) {
+        const m = a[u] * r[u];
+        a[u] > a[u - 1] ? l[u] = m : a[u] < a[u - 1] && (s[u] = m)
+    }
+    const c = new Array(o).fill(NaN);
+    for (let u = i; u < o; u++) {
+        let m = 0,
+            f = 0;
+        for (let h = u - i + 1; h <= u; h++) m += l[h], f += s[h];
+        if (f === 0) {
+            c[u] = 100;
+            continue
+        }
+        const d = m / f;
+        c[u] = 100 - 100 / (1 + d)
+    }
+    return c
+}
+
+function yt(t, e = 25, n = 13) {
+    const r = t.length,
+        i = new Array(r).fill(NaN),
+        o = new Array(r).fill(NaN);
+    for (let f = 1; f < r; f++) i[f] = t[f] - t[f - 1], o[f] = Math.abs(i[f]);
+    const a = (f, d) => {
+            const h = new Array(r).fill(NaN),
+                y = 2 / (d + 1);
+            let g = -1;
+            for (let b = 0; b < r; b++)
+                if (Number.isFinite(f[b])) {
+                    g = b;
+                    break
+                } if (g < 0 || g + d > r) return h;
+            let A = 0;
+            for (let b = g; b < g + d; b++) A += f[b];
+            let N = A / d;
+            h[g + d - 1] = N;
+            for (let b = g + d; b < r; b++) N = f[b] * y + N * (1 - y), h[b] = N;
+            return h
+        },
+        l = a(i, e),
+        s = a(l, n),
+        c = a(o, e),
+        u = a(c, n),
+        m = new Array(r).fill(NaN);
+    for (let f = 0; f < r; f++) Number.isFinite(s[f]) && Number.isFinite(u[f]) && u[f] !== 0 && (m[f] = 100 * (s[f] / u[f]));
+    return m
+}
+
+function Nt(t, e, n) {
+    const r = n.length,
+        i = new Array(r).fill(0),
+        o = new Array(r).fill(0);
+    for (let s = 1; s < r; s++) {
+        const c = Math.min(e[s], n[s - 1]),
+            u = Math.max(t[s], n[s - 1]);
+        i[s] = n[s] - c, o[s] = u - c
+    }
+    const a = new Array(r).fill(NaN),
+        l = (s, c, u) => {
+            let m = 0;
+            for (let f = c - u + 1; f <= c; f++) m += s[f];
+            return m
+        };
+    for (let s = 28; s < r; s++) {
+        const c = l(i, s, 7) / Math.max(1e-12, l(o, s, 7)),
+            u = l(i, s, 14) / Math.max(1e-12, l(o, s, 14)),
+            m = l(i, s, 28) / Math.max(1e-12, l(o, s, 28));
+        a[s] = 100 * (4 * c + 2 * u + m) / 7
+    }
+    return a
+}
+
+function bt(t, e = 14, n = 14) {
+    const r = mt(t, e),
+        i = t.length,
+        o = new Array(i).fill(NaN);
+    for (let a = e + n - 1; a < i; a++) {
+        let l = -1 / 0,
+            s = 1 / 0,
+            c = !0;
+        for (let u = a - n + 1; u <= a; u++) {
+            const m = r[u];
+            if (!Number.isFinite(m)) {
+                c = !1;
+                break
+            }
+            m > l && (l = m), m < s && (s = m)
+        }
+        c && l !== s && (o[a] = (r[a] - s) / (l - s) * 100)
+    }
+    return o
+}
+
+function P(t, e, n, r = 14) {
+    const i = n.length,
+        o = new Array(i).fill(0),
+        a = new Array(i).fill(0),
+        l = new Array(i).fill(0);
+    for (let g = 1; g < i; g++) {
+        const A = t[g] - t[g - 1],
+            N = e[g - 1] - e[g];
+        a[g] = A > N && A > 0 ? A : 0, l[g] = N > A && N > 0 ? N : 0;
+        const b = t[g] - e[g],
+            V = Math.abs(t[g] - n[g - 1]),
+            $ = Math.abs(e[g] - n[g - 1]);
+        o[g] = Math.max(b, V, $)
+    }
+    const s = g => {
+            const A = new Array(i).fill(NaN);
+            if (i < r + 1) return A;
+            let N = 0;
+            for (let b = 1; b <= r; b++) N += g[b];
+            A[r] = N;
+            for (let b = r + 1; b < i; b++) N = N - N / r + g[b], A[b] = N;
+            return A
+        },
+        c = s(o),
+        u = s(a),
+        m = s(l),
+        f = new Array(i).fill(NaN),
+        d = new Array(i).fill(NaN),
+        h = new Array(i).fill(NaN);
+    for (let g = r; g < i; g++) {
+        if (!Number.isFinite(c[g]) || c[g] === 0) continue;
+        f[g] = 100 * (u[g] / c[g]), d[g] = 100 * (m[g] / c[g]);
+        const A = f[g] + d[g];
+        h[g] = A === 0 ? 0 : 100 * Math.abs(f[g] - d[g]) / A
+    }
+    const y = new Array(i).fill(NaN);
+    if (i >= r * 2) {
+        let g = 0,
+            A = 0;
+        for (let N = r; N < r * 2; N++) Number.isFinite(h[N]) && (g += h[N], A++);
+        if (A > 0) {
+            y[r * 2 - 1] = g / A;
+            for (let N = r * 2; N < i; N++) Number.isFinite(y[N - 1]) && Number.isFinite(h[N]) && (y[N] = (y[N - 1] * (r - 1) + h[N]) / r)
+        }
+    }
+    return {
+        adx: y,
+        plusDI: f,
+        minusDI: d
+    }
+}
+
+function B(t, e, n = 25) {
+    const r = t.length,
+        i = new Array(r).fill(NaN),
+        o = new Array(r).fill(NaN);
+    for (let a = n; a < r; a++) {
+        let l = a,
+            s = a;
+        for (let c = a - n; c <= a; c++) t[c] >= t[l] && (l = c), e[c] <= e[s] && (s = c);
+        i[a] = (n - (a - l)) / n * 100, o[a] = (n - (a - s)) / n * 100
+    }
+    return {
+        up: i,
+        down: o,
+        osc: i.map((a, l) => Number.isFinite(a) ? a - o[l] : NaN)
+    }
+}
+
+function F(t) {
+    const e = new Array(t.length).fill(NaN);
+    for (let n = 1; n < t.length; n++) t[n - 1] > 0 && t[n] > 0 && (e[n] = Math.log(t[n] / t[n - 1]));
+    return e
+}
+
+function z(t, e, n) {
+    const r = F(t),
+        i = t.length,
+        o = new Array(i).fill(NaN);
+    for (let a = e; a < i; a++) {
+        let l = 0,
+            s = 0;
+        for (let f = a - e + 1; f <= a; f++) Number.isFinite(r[f]) && (l += r[f], s++);
+        if (s < e) continue;
+        l /= s;
+        let c = 0,
+            u = 0,
+            m = 0;
+        for (let f = a - e + 1; f <= a; f++) {
+            const d = r[f] - l;
+            c += d * d, n === "skew" && (u += d * d * d), n === "kurt" && (m += d * d * d * d)
+        }
+        c /= s, !(c <= 0) && (n === "skew" ? o[a] = u / s / Math.pow(c, 1.5) : o[a] = m / s / (c * c) - 3)
+    }
+    return o
+}
+
+function At(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(0);
+    for (let a = 1; a < n; a++) r[a] = t[a] > t[a - 1] ? 1 : 0;
+    const i = new Array(n).fill(NaN);
+    let o = 0;
+    for (let a = 1; a < n; a++) o += r[a], a > e && (o -= r[a - e]), a >= e && (i[a] = o / e);
+    return i
+}
+
+function H(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(0);
+    let i = 0;
+    for (let o = 1; o < n; o++) i = (e === "up" ? t[o] > t[o - 1] : t[o] < t[o - 1]) ? i + 1 : 0, r[o] = i;
+    return r
+}
+
+function Y(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN),
+        i = new Array(n).fill(NaN),
+        o = t.map(a => a > 0 ? Math.log(a) : NaN);
+    for (let a = e - 1; a < n; a++) {
+        let l = 0,
+            s = 0,
+            c = 0,
+            u = 0,
+            m = 0,
+            f = 0;
+        for (let A = a - e + 1; A <= a; A++) {
+            const N = o[A];
+            if (!Number.isFinite(N)) continue;
+            const b = A - (a - e + 1);
+            l += b, s += N, c += b * b, u += b * N, m += N * N, f++
+        }
+        if (f < e) continue;
+        const d = f * c - l * l;
+        if (d === 0) continue;
+        const h = (f * u - l * s) / d,
+            y = m - s * s / f,
+            g = (f * u - l * s) * (f * u - l * s) / (d * f);
+        r[a] = h, i[a] = y > 0 ? Math.max(0, Math.min(1, g / y)) : NaN
+    }
+    return {
+        slope: r,
+        r2: i
+    }
+}
+
+function Mt(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN),
+        i = F(t),
+        o = [2, 4, 8, 16, 32].filter(a => a <= e / 2);
+    if (o.length < 3) return r;
+    for (let a = e; a < n; a++) {
+        const l = [];
+        for (let h = a - e + 1; h <= a; h++) Number.isFinite(i[h]) && l.push(i[h]);
+        if (l.length < e * .9) continue;
+        const s = [],
+            c = [];
+        for (const h of o) {
+            const y = [];
+            for (let b = h; b < l.length; b++) y.push(l[b] - l[b - h]);
+            if (y.length < 5) continue;
+            const g = y.reduce((b, V) => b + V, 0) / y.length;
+            let A = 0;
+            for (const b of y) A += (b - g) ** 2;
+            const N = Math.sqrt(A / y.length);
+            N > 0 && (s.push(Math.log(h)), c.push(Math.log(N)))
+        }
+        if (s.length < 3) continue;
+        const u = s.reduce((h, y) => h + y, 0) / s.length,
+            m = c.reduce((h, y) => h + y, 0) / c.length;
+        let f = 0,
+            d = 0;
+        for (let h = 0; h < s.length; h++) f += (s[h] - u) * (c[h] - m), d += (s[h] - u) ** 2;
+        d > 0 && (r[a] = f / d)
+    }
+    return r
+}
+
+function wt(t, e, n) {
+    const r = t.length,
+        i = new Array(r).fill(NaN);
+    for (let o = n - 1; o < r; o++) {
+        let a = 0,
+            l = 0,
+            s = 0,
+            c = 0,
+            u = 0,
+            m = 0;
+        for (let h = o - n + 1; h <= o; h++) {
+            const y = t[h],
+                g = e[h];
+            !Number.isFinite(y) || !Number.isFinite(g) || (a += y, l += g, s += y * g, c += y * y, u += g * g, m++)
+        }
+        if (m < n / 2) continue;
+        const f = m * s - a * l,
+            d = Math.sqrt((m * c - a * a) * (m * u - l * l));
+        d > 0 && (i[o] = f / d)
+    }
+    return i
+}
+
+function pt(t, e, n) {
+    const r = t.length,
+        i = new Array(r).fill(NaN);
+    for (let o = n - 1; o < r; o++) {
+        let a = 0,
+            l = 0,
+            s = 0,
+            c = 0,
+            u = 0;
+        for (let f = o - n + 1; f <= o; f++) {
+            const d = e[f],
+                h = t[f];
+            !Number.isFinite(d) || !Number.isFinite(h) || (a += d, l += h, s += d * d, c += d * h, u++)
+        }
+        if (u < n / 2) continue;
+        const m = u * s - a * a;
+        m > 0 && (i[o] = (u * c - a * l) / m)
+    }
+    return i
+}
+
+function Dt(t, e, n, r, i) {
+    const o = n.length,
+        a = new Array(o).fill(0);
+    for (let s = 0; s < o; s++) {
+        const c = t[s] - e[s];
+        if (c > 0) {
+            const u = (n[s] - e[s] - (t[s] - n[s])) / c;
+            a[s] = u * r[s]
+        }
+    }
+    const l = new Array(o).fill(NaN);
+    for (let s = i - 1; s < o; s++) {
+        let c = 0,
+            u = 0;
+        for (let m = s - i + 1; m <= s; m++) c += a[m], u += r[m];
+        u > 0 && (l[s] = c / u)
+    }
+    return l
+}
+
+function _t(t, e) {
+    const n = t.length,
+        r = new Array(n).fill(NaN);
+    for (let i = e - 1; i < n; i++) {
+        let o = 0,
+            a = 0,
+            l = 0;
+        for (let u = i - e + 1; u <= i; u++) {
+            const m = t[u];
+            m > 0 && (o += m, a += m * m, l++)
+        }
+        if (l < e / 2) continue;
+        const s = o / l,
+            c = a / l - s * s;
+        c > 0 && (r[i] = (t[i] - s) / Math.sqrt(c))
+    }
+    return r
+}
+
+function St(t, e = 20, n = 60) {
+    const r = t.length,
+        i = new Array(r).fill(NaN);
+    let o = 0,
+        a = 0;
+    for (let l = 0; l < r; l++)
+        if (o += t[l], a += t[l], l >= e && (o -= t[l - e]), l >= n && (a -= t[l - n]), l >= n - 1) {
+            const s = o / e,
+                c = a / n;
+            c > 0 && (i[l] = s / c - 1)
+        } return i
+}
+
+function vt(t, e, n) {
+    const r = t.length,
+        i = new Array(r).fill(NaN);
+    for (let o = n - 1; o < r; o++) {
+        let a = 0,
+            l = 0;
+        for (let s = o - n + 1; s <= o; s++) a += t[s] * e[s], l += e[s];
+        if (l > 0) {
+            const s = a / l;
+            i[o] = (t[o] - s) / t[o]
+        }
+    }
+    return i
+}
+
+function Ft(t, e, n) {
+    const r = nt(w(t), w(e)),
+        i = M(r, t.length),
+        o = t.length,
+        a = new Array(o).fill(NaN);
+    for (let l = n; l < o; l++) {
+        const s = i[l - n],
+            c = i[l];
+        if (Number.isFinite(s) && Number.isFinite(c)) {
+            const u = Math.max(Math.abs(s), Math.abs(c), 1);
+            a[l] = (c - s) / u
+        }
+    }
+    return a
+}
+
+function p(t, e) {
+    return t.map((n, r) => {
+        const i = e[r];
+        return i && i > 0 ? n / i - 1 : NaN
+    })
+}
+const kt = {
+        smaDist20: ({
+            closes: t
+        }) => p(t, S(t, 20)),
+        smaDist50: ({
+            closes: t
+        }) => p(t, S(t, 50)),
+        smaDist100: ({
+            closes: t
+        }) => p(t, S(t, 100)),
+        smaDist200: ({
+            closes: t
+        }) => p(t, S(t, 200)),
+        emaDist20: ({
+            closes: t
+        }) => p(t, v(t, 20)),
+        emaDist50: ({
+            closes: t
+        }) => p(t, v(t, 50)),
+        emaDist100: ({
+            closes: t
+        }) => p(t, v(t, 100)),
+        emaDist200: ({
+            closes: t
+        }) => p(t, v(t, 200)),
+        wmaDist50: ({
+            closes: t
+        }) => p(t, et(t, 50)),
+        hmaDist50: ({
+            closes: t
+        }) => p(t, L(t, 50)),
+        hmaDist200: ({
+            closes: t
+        }) => p(t, L(t, 200)),
+        kamaDist50: ({
+            closes: t
+        }) => p(t, tt(t, 50)),
+        t3Dist50: ({
+            closes: t
+        }) => p(t, Q(t, 50, .7)),
+        almaDist50: ({
+            closes: t
+        }) => p(t, J(t, 50, .85, 6)),
+        framaDist50: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => p(t, X(e, n, 50, 1, 198)),
+        linregDist50: ({
+            closes: t
+        }) => p(t, G(t, 50)),
+        spread_sma20_50: ({
+            closes: t
+        }) => {
+            const e = D(S(t, 20)),
+                n = D(S(t, 50));
+            return e.map((r, i) => Number.isFinite(r) && Number.isFinite(n[i]) && n[i] > 0 ? r / n[i] - 1 : NaN)
+        },
+        spread_sma50_200: ({
+            closes: t
+        }) => {
+            const e = D(S(t, 50)),
+                n = D(S(t, 200));
+            return e.map((r, i) => Number.isFinite(r) && Number.isFinite(n[i]) && n[i] > 0 ? r / n[i] - 1 : NaN)
+        },
+        spread_ema12_26: ({
+            closes: t
+        }) => {
+            const e = D(v(t, 12)),
+                n = D(v(t, 26));
+            return e.map((r, i) => Number.isFinite(r) && Number.isFinite(n[i]) && n[i] > 0 ? r / n[i] - 1 : NaN)
+        },
+        dist52wHigh: ({
+            closes: t
+        }) => it(t, 252),
+        dist52wLow: ({
+            closes: t
+        }) => at(t, 252),
+        drawdown: ({
+            closes: t
+        }) => ot(t),
+        daysSince52wHigh: ({
+            closes: t
+        }) => q(t, 252, "max"),
+        daysSince52wLow: ({
+            closes: t
+        }) => q(t, 252, "min"),
+        daysSinceAth: ({
+            closes: t
+        }) => lt(t),
+        ret5: ({
+            closes: t
+        }) => _(t, 5),
+        ret10: ({
+            closes: t
+        }) => _(t, 10),
+        ret20: ({
+            closes: t
+        }) => _(t, 20),
+        ret63: ({
+            closes: t
+        }) => _(t, 63),
+        ret126: ({
+            closes: t
+        }) => _(t, 126),
+        ret252: ({
+            closes: t
+        }) => _(t, 252),
+        momAccel: ({
+            closes: t
+        }) => {
+            const e = _(t, 20),
+                n = _(t, 60);
+            return e.map((r, i) => Number.isFinite(r) && Number.isFinite(n[i]) ? r - n[i] : NaN)
+        },
+        roc5: ({
+            closes: t
+        }) => M(R(w(t), 5), t.length),
+        roc10: ({
+            closes: t
+        }) => M(R(w(t), 10), t.length),
+        roc20: ({
+            closes: t
+        }) => M(R(w(t), 20), t.length),
+        roc60: ({
+            closes: t
+        }) => M(R(w(t), 60), t.length),
+        roc120: ({
+            closes: t
+        }) => M(R(w(t), 120), t.length),
+        rsi7: ({
+            closes: t
+        }) => M(k(w(t), 7), t.length),
+        rsi14: ({
+            closes: t
+        }) => M(k(w(t), 14), t.length),
+        rsi21: ({
+            closes: t
+        }) => M(k(w(t), 21), t.length),
+        rsiSpread_14_50: ({
+            closes: t
+        }) => {
+            const e = M(k(w(t), 14), t.length),
+                n = M(k(w(t), 50), t.length);
+            return e.map((r, i) => Number.isFinite(r) && Number.isFinite(n[i]) ? r - n[i] : NaN)
+        },
+        stoch_k14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => {
+            const r = K(e, n, t, 14, 3, 3);
+            return D(r.k)
+        },
+        stoch_d14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => {
+            const r = K(e, n, t, 14, 3, 3);
+            return D(r.d)
+        },
+        stochRsi14: ({
+            closes: t
+        }) => bt(t, 14, 14),
+        williamsR14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => dt(e, n, t, 14),
+        cci20: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => ht(e, n, t, 20),
+        mfi14: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            volumes: r
+        }) => gt(e, n, t, r, 14),
+        tsi: ({
+            closes: t
+        }) => yt(t, 25, 13),
+        ultOsc: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => Nt(e, n, t),
+        ewo_5_35: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => D(rt(e, n, 5, 35)),
+        macd_line: ({
+            closes: t
+        }) => {
+            const e = T(w(t), 12, 26, 9);
+            return M(e.macd, t.length)
+        },
+        macd_signal: ({
+            closes: t
+        }) => {
+            const e = T(w(t), 12, 26, 9);
+            return M(e.signal, t.length)
+        },
+        macd_hist: ({
+            closes: t
+        }) => {
+            const e = T(w(t), 12, 26, 9);
+            return M(e.histogram, t.length)
+        },
+        adx14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => P(e, n, t, 14).adx,
+        plusDI14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => P(e, n, t, 14).plusDI,
+        minusDI14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => P(e, n, t, 14).minusDI,
+        aroonUp25: ({
+            highs: t,
+            lows: e
+        }) => B(t, e, 25).up,
+        aroonDown25: ({
+            highs: t,
+            lows: e
+        }) => B(t, e, 25).down,
+        aroonOsc25: ({
+            highs: t,
+            lows: e
+        }) => B(t, e, 25).osc,
+        linreg_slope60: ({
+            closes: t
+        }) => Y(t, 60).slope,
+        linreg_r2_60: ({
+            closes: t
+        }) => Y(t, 60).r2,
+        hurst100: ({
+            closes: t
+        }) => Mt(t, 100),
+        vol30: ({
+            closes: t
+        }) => C(t, 30),
+        vol90: ({
+            closes: t
+        }) => C(t, 90),
+        volOfVol60: ({
+            closes: t
+        }) => {
+            const e = C(t, 30),
+                n = t.length,
+                r = new Array(n).fill(NaN);
+            for (let i = 60; i < n; i++) {
+                let o = 0,
+                    a = 0;
+                for (let c = i - 59; c <= i; c++) Number.isFinite(e[c]) && (o += e[c], a++);
+                if (a < 30) continue;
+                const l = o / a;
+                let s = 0;
+                for (let c = i - 59; c <= i; c++) Number.isFinite(e[c]) && (s += (e[c] - l) ** 2);
+                r[i] = Math.sqrt(s / a)
+            }
+            return r
+        },
+        atrPct14: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => {
+            const r = j(e, n, t, 14);
+            return t.map((i, o) => Number.isFinite(r[o]) && i > 0 ? r[o] / i : NaN)
+        },
+        atrPctClose14: ({
+            closes: t
+        }) => {
+            const e = M(Z(w(t), 14), t.length);
+            return t.map((n, r) => Number.isFinite(e[r]) && n > 0 ? e[r] / n : NaN)
+        },
+        bbWidth20: ({
+            closes: t
+        }) => ct(t, 20, 2),
+        bbPctB20: ({
+            closes: t
+        }) => st(t, 20, 2),
+        keltnerPct: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => ut(e, n, t, 20, 14, 2),
+        donchianPct20: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => ft(e, n, t, 20),
+        skew60: ({
+            closes: t
+        }) => z(t, 60, "skew"),
+        kurt60: ({
+            closes: t
+        }) => z(t, 60, "kurt"),
+        upDayRatio60: ({
+            closes: t
+        }) => At(t, 60),
+        upStreak: ({
+            closes: t
+        }) => H(t, "up"),
+        downStreak: ({
+            closes: t
+        }) => H(t, "down"),
+        avgGap20: ({
+            closes: t,
+            opens: e
+        }) => {
+            const n = t.length,
+                r = new Array(n).fill(NaN);
+            for (let l = 1; l < n; l++) t[l - 1] > 0 && e[l] > 0 && (r[l] = e[l] / t[l - 1] - 1);
+            const i = new Array(n).fill(NaN);
+            let o = 0,
+                a = 0;
+            for (let l = 0; l < n; l++) Number.isFinite(r[l]) && (o += r[l], a++), l >= 20 && Number.isFinite(r[l - 20]) && (o -= r[l - 20], a--), l >= 19 && a > 0 && (i[l] = o / a);
+            return i
+        },
+        closeLocValue20: ({
+            closes: t,
+            highs: e,
+            lows: n
+        }) => {
+            const r = t.length,
+                i = new Array(r).fill(NaN);
+            for (let s = 0; s < r; s++) {
+                const c = e[s] - n[s];
+                c > 0 && (i[s] = (t[s] - n[s] - (e[s] - t[s])) / c)
+            }
+            const o = new Array(r).fill(NaN);
+            let a = 0,
+                l = 0;
+            for (let s = 0; s < r; s++) Number.isFinite(i[s]) && (a += i[s], l++), s >= 20 && Number.isFinite(i[s - 20]) && (a -= i[s - 20], l--), s >= 19 && l > 0 && (o[s] = a / l);
+            return o
+        },
+        volumeZ20: ({
+            volumes: t
+        }) => _t(t, 20),
+        obvSlope60: ({
+            closes: t,
+            volumes: e
+        }) => Ft(t, e, 60),
+        cmf20: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            volumes: r
+        }) => Dt(e, n, t, r, 20),
+        advRatio_20_60: ({
+            volumes: t
+        }) => St(t, 20, 60),
+        vwapDist20: ({
+            closes: t,
+            volumes: e
+        }) => vt(t, e, 20),
+        relStr20: ({
+            closes: t,
+            benchCloses: e
+        }) => {
+            if (!e) return new Array(t.length).fill(NaN);
+            const n = _(t, 20),
+                r = _(e, 20);
+            return n.map((i, o) => Number.isFinite(i) && Number.isFinite(r[o]) ? i - r[o] : NaN)
+        },
+        relStr63: ({
+            closes: t,
+            benchCloses: e
+        }) => {
+            if (!e) return new Array(t.length).fill(NaN);
+            const n = _(t, 63),
+                r = _(e, 63);
+            return n.map((i, o) => Number.isFinite(i) && Number.isFinite(r[o]) ? i - r[o] : NaN)
+        },
+        ratioVsBench: ({
+            closes: t,
+            benchCloses: e
+        }) => e ? t.map((n, r) => Number.isFinite(e[r]) && e[r] > 0 ? n / e[r] : NaN) : new Array(t.length).fill(NaN),
+        rollCorr60Bench: ({
+            closes: t,
+            benchCloses: e
+        }) => {
+            if (!e) return new Array(t.length).fill(NaN);
+            const n = F(t),
+                r = F(e);
+            return wt(n, r, 60)
+        },
+        rollBeta60Bench: ({
+            closes: t,
+            benchCloses: e
+        }) => {
+            if (!e) return new Array(t.length).fill(NaN);
+            const n = F(t),
+                r = F(e);
+            return pt(n, r, 60)
+        },
+        harsi_rsi: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            opens: r
+        }) => {
+            const i = x(t, e, n, {}, r);
+            return D(i.rsi)
+        },
+        harsi_haClose: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            opens: r
+        }) => {
+            const i = x(t, e, n, {}, r);
+            return D(i.haClose)
+        },
+        harsi_stochK: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            opens: r
+        }) => {
+            const i = x(t, e, n, {}, r);
+            return D(i.stochK)
+        },
+        harsi_stochKD: ({
+            closes: t,
+            highs: e,
+            lows: n,
+            opens: r
+        }) => {
+            const i = x(t, e, n, {}, r);
+            return D(i.stochKD)
+        },
+        tva_os: ({
+            closes: t,
+            volumes: e
+        }) => I(t, e, 15, 3, 5).os,
+        tva_bullPressure: ({
+            closes: t,
+            volumes: e
+        }) => I(t, e, 15, 3, 5).bullPressure,
+        tva_bearPressure: ({
+            closes: t,
+            volumes: e
+        }) => I(t, e, 15, 3, 5).bearPressure
+    },
+    Rt = {
+        smaDist20: {
+            id: "smaDist20",
+            label: "Δ vs SMA20",
+            category: "MA Distance"
+        },
+        smaDist50: {
+            id: "smaDist50",
+            label: "Δ vs SMA50",
+            category: "MA Distance"
+        },
+        smaDist100: {
+            id: "smaDist100",
+            label: "Δ vs SMA100",
+            category: "MA Distance"
+        },
+        smaDist200: {
+            id: "smaDist200",
+            label: "Δ vs SMA200",
+            category: "MA Distance"
+        },
+        emaDist20: {
+            id: "emaDist20",
+            label: "Δ vs EMA20",
+            category: "MA Distance"
+        },
+        emaDist50: {
+            id: "emaDist50",
+            label: "Δ vs EMA50",
+            category: "MA Distance"
+        },
+        emaDist100: {
+            id: "emaDist100",
+            label: "Δ vs EMA100",
+            category: "MA Distance"
+        },
+        emaDist200: {
+            id: "emaDist200",
+            label: "Δ vs EMA200",
+            category: "MA Distance"
+        },
+        wmaDist50: {
+            id: "wmaDist50",
+            label: "Δ vs WMA50",
+            category: "MA Distance"
+        },
+        hmaDist50: {
+            id: "hmaDist50",
+            label: "Δ vs HMA50",
+            category: "MA Distance"
+        },
+        hmaDist200: {
+            id: "hmaDist200",
+            label: "Δ vs HMA200",
+            category: "MA Distance"
+        },
+        kamaDist50: {
+            id: "kamaDist50",
+            label: "Δ vs KAMA50",
+            category: "MA Distance"
+        },
+        t3Dist50: {
+            id: "t3Dist50",
+            label: "Δ vs T3(50)",
+            category: "MA Distance"
+        },
+        almaDist50: {
+            id: "almaDist50",
+            label: "Δ vs ALMA50",
+            category: "MA Distance"
+        },
+        framaDist50: {
+            id: "framaDist50",
+            label: "Δ vs FRAMA50",
+            category: "MA Distance"
+        },
+        linregDist50: {
+            id: "linregDist50",
+            label: "Δ vs LinReg50",
+            category: "MA Distance"
+        },
+        spread_sma20_50: {
+            id: "spread_sma20_50",
+            label: "SMA20/50 spread",
+            category: "MA Spread"
+        },
+        spread_sma50_200: {
+            id: "spread_sma50_200",
+            label: "SMA50/200 spread",
+            category: "MA Spread"
+        },
+        spread_ema12_26: {
+            id: "spread_ema12_26",
+            label: "EMA12/26 spread",
+            category: "MA Spread"
+        },
+        dist52wHigh: {
+            id: "dist52wHigh",
+            label: "Δ to 52w high",
+            category: "Trend"
+        },
+        dist52wLow: {
+            id: "dist52wLow",
+            label: "Δ to 52w low",
+            category: "Trend"
+        },
+        drawdown: {
+            id: "drawdown",
+            label: "Drawdown (ATH)",
+            category: "Trend"
+        },
+        daysSince52wHigh: {
+            id: "daysSince52wHigh",
+            label: "Days since 52w hi",
+            category: "Trend"
+        },
+        daysSince52wLow: {
+            id: "daysSince52wLow",
+            label: "Days since 52w lo",
+            category: "Trend"
+        },
+        daysSinceAth: {
+            id: "daysSinceAth",
+            label: "Days since ATH",
+            category: "Trend"
+        },
+        ret5: {
+            id: "ret5",
+            label: "1W return",
+            category: "Momentum"
+        },
+        ret10: {
+            id: "ret10",
+            label: "2W return",
+            category: "Momentum"
+        },
+        ret20: {
+            id: "ret20",
+            label: "1M return",
+            category: "Momentum"
+        },
+        ret63: {
+            id: "ret63",
+            label: "3M return",
+            category: "Momentum"
+        },
+        ret126: {
+            id: "ret126",
+            label: "6M return",
+            category: "Momentum"
+        },
+        ret252: {
+            id: "ret252",
+            label: "1Y return",
+            category: "Momentum"
+        },
+        momAccel: {
+            id: "momAccel",
+            label: "Mom accel",
+            category: "Momentum"
+        },
+        roc5: {
+            id: "roc5",
+            label: "ROC(5)",
+            category: "Momentum"
+        },
+        roc10: {
+            id: "roc10",
+            label: "ROC(10)",
+            category: "Momentum"
+        },
+        roc20: {
+            id: "roc20",
+            label: "ROC(20)",
+            category: "Momentum"
+        },
+        roc60: {
+            id: "roc60",
+            label: "ROC(60)",
+            category: "Momentum"
+        },
+        roc120: {
+            id: "roc120",
+            label: "ROC(120)",
+            category: "Momentum"
+        },
+        rsi7: {
+            id: "rsi7",
+            label: "RSI-7",
+            category: "Oscillator"
+        },
+        rsi14: {
+            id: "rsi14",
+            label: "RSI-14",
+            category: "Oscillator"
+        },
+        rsi21: {
+            id: "rsi21",
+            label: "RSI-21",
+            category: "Oscillator"
+        },
+        rsiSpread_14_50: {
+            id: "rsiSpread_14_50",
+            label: "RSI14 − RSI50",
+            category: "Oscillator"
+        },
+        stoch_k14: {
+            id: "stoch_k14",
+            label: "Stoch %K(14,3)",
+            category: "Oscillator"
+        },
+        stoch_d14: {
+            id: "stoch_d14",
+            label: "Stoch %D(14,3)",
+            category: "Oscillator"
+        },
+        stochRsi14: {
+            id: "stochRsi14",
+            label: "Stoch RSI(14)",
+            category: "Oscillator"
+        },
+        williamsR14: {
+            id: "williamsR14",
+            label: "Williams %R(14)",
+            category: "Oscillator"
+        },
+        cci20: {
+            id: "cci20",
+            label: "CCI(20)",
+            category: "Oscillator"
+        },
+        mfi14: {
+            id: "mfi14",
+            label: "MFI(14)",
+            category: "Oscillator",
+            requiresVolume: !0
+        },
+        tsi: {
+            id: "tsi",
+            label: "TSI(25,13)",
+            category: "Oscillator"
+        },
+        ultOsc: {
+            id: "ultOsc",
+            label: "Ultimate Osc",
+            category: "Oscillator"
+        },
+        ewo_5_35: {
+            id: "ewo_5_35",
+            label: "EWO(5,35)",
+            category: "Oscillator"
+        },
+        macd_line: {
+            id: "macd_line",
+            label: "MACD line",
+            category: "Oscillator"
+        },
+        macd_signal: {
+            id: "macd_signal",
+            label: "MACD signal",
+            category: "Oscillator"
+        },
+        macd_hist: {
+            id: "macd_hist",
+            label: "MACD hist",
+            category: "Oscillator"
+        },
+        adx14: {
+            id: "adx14",
+            label: "ADX(14)",
+            category: "Trend"
+        },
+        plusDI14: {
+            id: "plusDI14",
+            label: "+DI(14)",
+            category: "Trend"
+        },
+        minusDI14: {
+            id: "minusDI14",
+            label: "−DI(14)",
+            category: "Trend"
+        },
+        aroonUp25: {
+            id: "aroonUp25",
+            label: "Aroon up(25)",
+            category: "Trend"
+        },
+        aroonDown25: {
+            id: "aroonDown25",
+            label: "Aroon dn(25)",
+            category: "Trend"
+        },
+        aroonOsc25: {
+            id: "aroonOsc25",
+            label: "Aroon osc",
+            category: "Trend"
+        },
+        linreg_slope60: {
+            id: "linreg_slope60",
+            label: "LinReg slope(60)",
+            category: "Trend"
+        },
+        linreg_r2_60: {
+            id: "linreg_r2_60",
+            label: "LinReg R²(60)",
+            category: "Trend"
+        },
+        hurst100: {
+            id: "hurst100",
+            label: "Hurst(100)",
+            category: "Trend"
+        },
+        vol30: {
+            id: "vol30",
+            label: "30d real vol",
+            category: "Volatility"
+        },
+        vol90: {
+            id: "vol90",
+            label: "90d real vol",
+            category: "Volatility"
+        },
+        volOfVol60: {
+            id: "volOfVol60",
+            label: "Vol-of-vol(60)",
+            category: "Volatility"
+        },
+        atrPct14: {
+            id: "atrPct14",
+            label: "ATR%/close(14)",
+            category: "Volatility"
+        },
+        atrPctClose14: {
+            id: "atrPctClose14",
+            label: "ATR%/close (C-only)",
+            category: "Volatility"
+        },
+        bbWidth20: {
+            id: "bbWidth20",
+            label: "BB width(20)",
+            category: "Volatility"
+        },
+        bbPctB20: {
+            id: "bbPctB20",
+            label: "BB %B(20)",
+            category: "Range / Channel"
+        },
+        keltnerPct: {
+            id: "keltnerPct",
+            label: "Keltner %(20,14)",
+            category: "Range / Channel"
+        },
+        donchianPct20: {
+            id: "donchianPct20",
+            label: "Donchian %(20)",
+            category: "Range / Channel"
+        },
+        skew60: {
+            id: "skew60",
+            label: "Skew(60)",
+            category: "Distribution"
+        },
+        kurt60: {
+            id: "kurt60",
+            label: "Kurt(60)",
+            category: "Distribution"
+        },
+        upDayRatio60: {
+            id: "upDayRatio60",
+            label: "Up-day % (60)",
+            category: "Distribution"
+        },
+        upStreak: {
+            id: "upStreak",
+            label: "Up streak",
+            category: "Distribution"
+        },
+        downStreak: {
+            id: "downStreak",
+            label: "Down streak",
+            category: "Distribution"
+        },
+        avgGap20: {
+            id: "avgGap20",
+            label: "Avg gap(20)",
+            category: "Distribution"
+        },
+        closeLocValue20: {
+            id: "closeLocValue20",
+            label: "CLV(20)",
+            category: "Distribution"
+        },
+        volumeZ20: {
+            id: "volumeZ20",
+            label: "Volume z(20)",
+            category: "Volume",
+            requiresVolume: !0
+        },
+        obvSlope60: {
+            id: "obvSlope60",
+            label: "OBV slope(60)",
+            category: "Volume",
+            requiresVolume: !0
+        },
+        cmf20: {
+            id: "cmf20",
+            label: "CMF(20)",
+            category: "Volume",
+            requiresVolume: !0
+        },
+        advRatio_20_60: {
+            id: "advRatio_20_60",
+            label: "ADV 20/60",
+            category: "Volume",
+            requiresVolume: !0
+        },
+        vwapDist20: {
+            id: "vwapDist20",
+            label: "VWAP dist(20)",
+            category: "Volume",
+            requiresVolume: !0
+        },
+        relStr20: {
+            id: "relStr20",
+            label: "Rel str vs SPY (20)",
+            category: "Cross-Sectional",
+            requiresBench: !0
+        },
+        relStr63: {
+            id: "relStr63",
+            label: "Rel str vs SPY (63)",
+            category: "Cross-Sectional",
+            requiresBench: !0
+        },
+        ratioVsBench: {
+            id: "ratioVsBench",
+            label: "Close / SPY ratio",
+            category: "Cross-Sectional",
+            requiresBench: !0
+        },
+        rollCorr60Bench: {
+            id: "rollCorr60Bench",
+            label: "Corr to SPY (60)",
+            category: "Cross-Sectional",
+            requiresBench: !0
+        },
+        rollBeta60Bench: {
+            id: "rollBeta60Bench",
+            label: "Beta to SPY (60)",
+            category: "Cross-Sectional",
+            requiresBench: !0
+        },
+        harsi_rsi: {
+            id: "harsi_rsi",
+            label: "HARSI RSI",
+            category: "App-Specific"
+        },
+        harsi_haClose: {
+            id: "harsi_haClose",
+            label: "HARSI candle",
+            category: "App-Specific"
+        },
+        harsi_stochK: {
+            id: "harsi_stochK",
+            label: "HARSI %K",
+            category: "App-Specific"
+        },
+        harsi_stochKD: {
+            id: "harsi_stochKD",
+            label: "HARSI %K−%D",
+            category: "App-Specific"
+        },
+        tva_os: {
+            id: "tva_os",
+            label: "TVA osc",
+            category: "App-Specific",
+            requiresVolume: !0
+        },
+        tva_bullPressure: {
+            id: "tva_bullPressure",
+            label: "TVA bull press",
+            category: "App-Specific",
+            requiresVolume: !0
+        },
+        tva_bearPressure: {
+            id: "tva_bearPressure",
+            label: "TVA bear press",
+            category: "App-Specific",
+            requiresVolume: !0
+        }
+    },
+    qt = Object.keys(Rt),
+    xt = ["smaDist50", "smaDist200", "ret20", "ret63", "vol30", "rsi14"],
+    zt = {
+        "Classic (6)": [...xt],
+        Trend: ["smaDist50", "smaDist200", "emaDist50", "spread_sma50_200", "dist52wHigh", "dist52wLow", "drawdown", "adx14", "linreg_slope60", "linreg_r2_60"],
+        Momentum: ["ret5", "ret20", "ret63", "ret252", "roc10", "roc60", "rsi14", "macd_hist", "momAccel"],
+        Oscillators: ["rsi14", "stoch_k14", "stochRsi14", "williamsR14", "cci20", "mfi14", "tsi", "ultOsc", "ewo_5_35"],
+        "Volatility / Range": ["vol30", "vol90", "atrPct14", "bbWidth20", "bbPctB20", "keltnerPct", "donchianPct20", "drawdown"],
+        Volume: ["volumeZ20", "obvSlope60", "cmf20", "advRatio_20_60", "vwapDist20", "mfi14"],
+        "Cross-Sectional (SPY)": ["relStr20", "relStr63", "rollCorr60Bench", "rollBeta60Bench", "ret63", "vol30"],
+        Distribution: ["skew60", "kurt60", "upDayRatio60", "vol30", "drawdown"],
+        "App-Specific": ["harsi_rsi", "harsi_stochK", "tva_os", "tva_bullPressure", "tva_bearPressure", "ewo_5_35"],
+        "Kitchen Sink (recommended)": ["smaDist50", "smaDist200", "ret20", "ret63", "ret252", "rsi14", "macd_hist", "stochRsi14", "vol30", "bbPctB20", "drawdown", "relStr63", "rollCorr60Bench", "skew60", "adx14", "linreg_slope60", "volumeZ20", "cmf20"]
+    };
+
+function Ht(t) {
+    const e = t.length,
+        n = new Array(e).fill(NaN),
+        r = new Array(e).fill(NaN),
+        i = new Array(e).fill(NaN),
+        o = new Array(e).fill(NaN);
+    for (let a = 0; a < e; a++) {
+        const l = t[a];
+        if (!l) continue;
+        const s = new Date(l + "T00:00:00Z");
+        if (Number.isNaN(s.getTime())) continue;
+        const c = s.getUTCDay(),
+            u = s.getUTCMonth();
+        n[a] = Math.sin(2 * Math.PI * c / 7), r[a] = Math.cos(2 * Math.PI * c / 7), i[a] = Math.sin(2 * Math.PI * u / 12), o[a] = Math.cos(2 * Math.PI * u / 12)
+    }
+    return {
+        dowSin: n,
+        dowCos: r,
+        moySin: i,
+        moyCos: o
+    }
+}
+const Yt = {
+    dowSin: {
+        id: "dowSin",
+        label: "Day-of-week sin",
+        category: "Time"
+    },
+    dowCos: {
+        id: "dowCos",
+        label: "Day-of-week cos",
+        category: "Time"
+    },
+    moySin: {
+        id: "moySin",
+        label: "Month-of-year sin",
+        category: "Time"
+    },
+    moyCos: {
+        id: "moyCos",
+        label: "Month-of-year cos",
+        category: "Time"
+    }
+};
+
+function Wt(t, e) {
+    const n = {};
+    for (const r of t) {
+        const i = kt[r];
+        if (i) try {
+            n[r] = i(e)
+        } catch {
+            n[r] = new Array(e.closes.length).fill(NaN)
+        }
+    }
+    return n
+}
+
+function Vt(t) {
+    const {
+        bars: e,
+        todayZ: n,
+        n: r
+    } = t, i = e.map(a => {
+        let l = 0;
+        for (let s = 0; s < a.zVec.length; s++) {
+            const c = a.zVec[s] - n[s];
+            l += c * c
+        }
+        return {
+            ...a,
+            distance: Math.sqrt(l)
+        }
+    });
+    i.sort((a, l) => a.distance - l.distance);
+    const o = i.slice(0, r).map(a => ({
+        i: 0,
+        date: a.date,
+        distance: a.distance,
+        weight: 1,
+        zVec: a.zVec,
+        fwd1M: a.fwd1M,
+        fwd3M: a.fwd3M,
+        fwd6M: a.fwd6M,
+        fwd1Y: a.fwd1Y
+    })).map((a, l) => ({
+        ...a,
+        i: l
+    }));
+    return {
+        matches: o,
+        info: `KNN · ${o.length} neighbors · equal-weighted`
+    }
+}
+
+function Tt(t) {
+    const {
+        bars: e,
+        todayZ: n,
+        n: r
+    } = t, i = e.map(c => {
+        let u = 0;
+        for (let m = 0; m < c.zVec.length; m++) {
+            const f = c.zVec[m] - n[m];
+            u += f * f
+        }
+        return {
+            ...c,
+            distance: Math.sqrt(u)
+        }
+    });
+    i.sort((c, u) => c.distance - u.distance);
+    let o = t.kernelH ?? NaN;
+    if (!Number.isFinite(o) || !(o > 0)) {
+        const u = i.slice(0, Math.min(i.length, r * 3)).map(m => m.distance).sort((m, f) => m - f);
+        o = u.length ? u[Math.floor(u.length / 2)] : 1, o > 0 || (o = 1)
+    }
+    const l = i.slice(0, Math.min(i.length, Math.max(r, r * 3))).map(c => ({
+            i: 0,
+            date: c.date,
+            distance: c.distance,
+            weight: Math.exp(-(c.distance * c.distance) / (o * o)),
+            zVec: c.zVec,
+            fwd1M: c.fwd1M,
+            fwd3M: c.fwd3M,
+            fwd6M: c.fwd6M,
+            fwd1Y: c.fwd1Y
+        })),
+        s = l.reduce((c, u) => c + u.weight, 0) || 1;
+    for (const c of l) c.weight /= s;
+    return l.sort((c, u) => c.distance - u.distance), {
+        matches: l.map((c, u) => ({
+            ...c,
+            i: u
+        })),
+        info: `Kernel KNN · ${l.length} weighted neighbors · h=${o.toFixed(2)}`
+    }
+}
+
+function It(t, e) {
+    const n = t.length,
+        r = e.length;
+    if (n === 0 || r === 0) return 1 / 0;
+    const i = Math.max(1, Math.floor(Math.max(n, r) / 4)),
+        o = 1 / 0;
+    let a = new Array(r + 1).fill(o),
+        l = new Array(r + 1).fill(o);
+    a[0] = 0;
+    for (let s = 1; s <= n; s++) {
+        l.fill(o);
+        const c = Math.max(1, s - i),
+            u = Math.min(r, s + i);
+        for (let m = c; m <= u; m++) {
+            const f = Math.abs(t[s - 1] - e[m - 1]),
+                d = a[m],
+                h = l[m - 1],
+                y = a[m - 1];
+            let g = d < h ? d : h;
+            y < g && (g = y), l[m] = f + (g === o ? 0 : g)
+        } [a, l] = [l, a]
+    }
+    return a[r]
+}
+
+function W(t) {
+    if (t.length === 0) return t;
+    let e = 0,
+        n = 0;
+    for (const a of t) Number.isFinite(a) && (e += a, n++);
+    if (n === 0) return t.slice();
+    const r = e / n;
+    let i = 0;
+    for (const a of t) Number.isFinite(a) && (i += (a - r) ** 2);
+    const o = Math.sqrt(i / n);
+    return o > 0 ? t.map(a => Number.isFinite(a) ? (a - r) / o : 0) : t.map(() => 0)
+}
+
+function Ct(t) {
+    const {
+        bars: e,
+        closes: n,
+        lastIdx: r,
+        n: i
+    } = t, o = Math.max(10, Math.min(252, t.dtwWindow ?? 60));
+    if (r < o) return {
+        matches: [],
+        info: `DTW · insufficient history (need ${o} bars)`
+    };
+    const a = new Array(n.length).fill(NaN);
+    for (let u = 1; u < n.length; u++) n[u - 1] > 0 && n[u] > 0 && (a[u] = Math.log(n[u] / n[u - 1]));
+    const l = W(a.slice(r - o + 1, r + 1));
+    if (l.length < o) return {
+        matches: [],
+        info: "DTW · insufficient history"
+    };
+    const s = [];
+    for (const u of e) {
+        const m = u.closeIdx;
+        if (m < o) continue;
+        const f = W(a.slice(m - o + 1, m + 1));
+        if (f.length < o) continue;
+        let d = 0;
+        for (let y = 0; y < f.length; y++) Number.isFinite(f[y]) || d++;
+        if (d > Math.floor(o * .1)) continue;
+        const h = It(l, f) / o;
+        s.push({
+            date: u.date,
+            closeIdx: u.closeIdx,
+            distance: h,
+            zVec: u.zVec,
+            fwd1M: u.fwd1M,
+            fwd3M: u.fwd3M,
+            fwd6M: u.fwd6M,
+            fwd1Y: u.fwd1Y
+        })
+    }
+    if (s.length === 0) return {
+        matches: [],
+        info: "DTW · no valid windows"
+    };
+    s.sort((u, m) => u.distance - m.distance);
+    const c = s.slice(0, i).map((u, m) => ({
+        i: m,
+        date: u.date,
+        distance: u.distance,
+        weight: 1,
+        zVec: u.zVec,
+        fwd1M: u.fwd1M,
+        fwd3M: u.fwd3M,
+        fwd6M: u.fwd6M,
+        fwd1Y: u.fwd1Y
+    }));
+    return {
+        matches: c,
+        info: `DTW · window=${o} bars · ${c.length} closest trajectories`
+    }
+}
+
+function Pt(t, e, n = 50) {
+    const r = t.length;
+    if (r === 0 || e <= 0) return {
+        assignments: [],
+        centroids: []
+    };
+    const i = t[0].length,
+        o = [];
+    let a = r * 2654435761 >>> 0;
+    const l = () => (a = a * 1664525 + 1013904223 >>> 0, a / 4294967295);
+    o.push(t[Math.floor(l() * r)].slice());
+    for (let c = 1; c < e; c++) {
+        const u = t.map(h => {
+                let y = 1 / 0;
+                for (const g of o) {
+                    let A = 0;
+                    for (let N = 0; N < i; N++) A += (h[N] - g[N]) ** 2;
+                    A < y && (y = A)
+                }
+                return y
+            }),
+            m = u.reduce((h, y) => h + y, 0);
+        if (m <= 0) {
+            o.push(t[Math.floor(l() * r)].slice());
+            continue
+        }
+        let f = l() * m,
+            d = 0;
+        for (; d < r - 1 && (f -= u[d], !(f <= 0)); d++);
+        o.push(t[d].slice())
+    }
+    const s = new Array(r).fill(0);
+    for (let c = 0; c < n; c++) {
+        let u = 0;
+        for (let d = 0; d < r; d++) {
+            let h = 0,
+                y = 1 / 0;
+            for (let g = 0; g < e; g++) {
+                let A = 0;
+                for (let N = 0; N < i; N++) A += (t[d][N] - o[g][N]) ** 2;
+                A < y && (y = A, h = g)
+            }
+            s[d] !== h && (s[d] = h, u++)
+        }
+        const m = Array.from({
+                length: e
+            }, () => new Array(i).fill(0)),
+            f = new Array(e).fill(0);
+        for (let d = 0; d < r; d++) {
+            const h = s[d];
+            f[h]++;
+            for (let y = 0; y < i; y++) m[h][y] += t[d][y]
+        }
+        for (let d = 0; d < e; d++)
+            if (f[d] > 0)
+                for (let h = 0; h < i; h++) o[d][h] = m[d][h] / f[d];
+        if (u === 0) break
+    }
+    return {
+        assignments: s,
+        centroids: o
+    }
+}
+
+function Bt(t) {
+    const {
+        bars: e,
+        todayZ: n,
+        n: r
+    } = t, i = Math.max(2, Math.min(12, t.regimeK ?? 5));
+    if (e.length < i * 5) return {
+        matches: [],
+        info: `Regime · need ≥${i*5} bars`
+    };
+    const o = e.map(f => f.zVec),
+        {
+            assignments: a,
+            centroids: l
+        } = Pt(o, i);
+    let s = 0,
+        c = 1 / 0;
+    for (let f = 0; f < l.length; f++) {
+        let d = 0;
+        for (let h = 0; h < n.length; h++) d += (n[h] - l[f][h]) ** 2;
+        d < c && (c = d, s = f)
+    }
+    const u = [];
+    for (let f = 0; f < e.length; f++) {
+        if (a[f] !== s) continue;
+        let d = 0;
+        for (let h = 0; h < n.length; h++) {
+            const y = e[f].zVec[h] - n[h];
+            d += y * y
+        }
+        u.push({
+            date: e[f].date,
+            distance: Math.sqrt(d),
+            zVec: e[f].zVec,
+            fwd1M: e[f].fwd1M,
+            fwd3M: e[f].fwd3M,
+            fwd6M: e[f].fwd6M,
+            fwd1Y: e[f].fwd1Y
+        })
+    }
+    return u.sort((f, d) => f.distance - d.distance), {
+        matches: u.slice(0, r).map((f, d) => ({
+            i: d,
+            date: f.date,
+            distance: f.distance,
+            weight: 1,
+            zVec: f.zVec,
+            fwd1M: f.fwd1M,
+            fwd3M: f.fwd3M,
+            fwd6M: f.fwd6M,
+            fwd1Y: f.fwd1Y
+        })),
+        info: `Regime · k=${i} clusters · today∈C${s+1} (${u.length} bars)`,
+        clusterId: s,
+        clusterSize: u.length
+    }
+}
+const Ut = {
+        knn: {
+            label: "KNN",
+            tooltip: "Euclidean nearest neighbors in z-space (top N, equal weight)"
+        },
+        kernel: {
+            label: "Kernel KNN",
+            tooltip: "Gaussian-weighted neighbors. Close matches count more, far matches fade smoothly."
+        },
+        dtw: {
+            label: "DTW path",
+            tooltip: "Match the recent price trajectory (log-return shape) against every window in history"
+        },
+        regime: {
+            label: "Regime",
+            tooltip: "K-Means cluster all bars; summarize forwards of bars in today's regime"
+        }
+    },
+    jt = ["knn", "kernel", "dtw", "regime"];
+
+function $t(t, e) {
+    switch (t) {
+        case "knn":
+            return Vt(e);
+        case "kernel":
+            return Tt(e);
+        case "dtw":
+            return Ct(e);
+        case "regime":
+            return Bt(e)
+    }
+}
+export {
+    Ut as A, xt as D, zt as F, Yt as T, jt as a, qt as b, Rt as c, Wt as d, Ht as e, $t as r
+};

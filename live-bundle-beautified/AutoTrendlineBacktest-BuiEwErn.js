@@ -1,0 +1,843 @@
+import {
+    a as ft,
+    r as i,
+    af as gt,
+    ag as q,
+    g as bt,
+    ae as kt,
+    dd as yt,
+    cJ as Nt,
+    cL as jt,
+    dJ as vt,
+    dK as Ve,
+    dI as Ye,
+    dL as wt,
+    N as qe,
+    j as t,
+    B as ge,
+    z as St,
+    dM as be,
+    de as Ct,
+    dN as Rt,
+    df as $t
+} from "./index-CsG73Aq_.js";
+import {
+    g as Tt
+} from "./yahooPairsRatio-DERC-reP.js";
+import {
+    u as Bt
+} from "./usePairComboPicker-h_S34tFb.js";
+import {
+    B as Mt
+} from "./BasketPicker-DkcKAXfe.js";
+import {
+    U as ke
+} from "./UnifiedTickerPicker-D927mSvl.js";
+import {
+    S as At
+} from "./square-DrnmFnpA.js";
+import {
+    P as Lt
+} from "./play-D7mVvggU.js";
+import "./ClassificationFiltersWithSource-D7v4WOtR.js";
+import "./globalUniverse-DuqPcp2u.js";
+const G = [{
+        days: 5,
+        label: "1W"
+    }, {
+        days: 10,
+        label: "2W"
+    }, {
+        days: 21,
+        label: "1M"
+    }, {
+        days: 42,
+        label: "2M"
+    }, {
+        days: 63,
+        label: "3M"
+    }, {
+        days: 126,
+        label: "6M"
+    }],
+    Z = ["cross_above_upper", "cross_above_lower", "cross_below_upper", "cross_below_lower"];
+
+function Pt(o) {
+    const f = [],
+        v = new Set;
+    for (const x of o.split(/[,\s]+/)) {
+        const M = Number(x);
+        if (!Number.isFinite(M)) continue;
+        const b = Math.max(2, Math.min(50, Math.round(M)));
+        v.has(b) || (v.add(b), f.push(b))
+    }
+    return f.length > 0 ? f : [10]
+}
+
+function ye(o) {
+    return o == null || !Number.isFinite(o) ? "—" : `${(o*100).toFixed(2)}%`
+}
+
+function ne(o) {
+    return o == null || !Number.isFinite(o) ? "—" : `${o>=0?"+":""}${(o*100).toFixed(2)}%`
+}
+
+function Ge(o) {
+    return Number.isFinite(o) ? o >= .7 ? "text-emerald-400 font-semibold" : o >= .6 ? "text-emerald-500" : o >= .5 ? "text-amber-400" : "text-red-400" : "text-muted-foreground"
+}
+
+function Ze(o) {
+    return Number.isFinite(o) ? o > 0 ? "text-emerald-400" : o < 0 ? "text-red-400" : "text-muted-foreground" : "text-muted-foreground"
+}
+
+function Dt(o) {
+    if (o.length === 0) return NaN;
+    const f = [...o].sort((x, M) => x - M),
+        v = Math.floor(f.length / 2);
+    return f.length % 2 ? f[v] : (f[v - 1] + f[v]) / 2
+}
+
+function Jt() {
+    const {
+        universeTickers: o,
+        filteredCount: f,
+        totalCount: v
+    } = ft(), [x, M] = i.useState([]);
+    i.useEffect(() => {
+        gt().then(e => M(e)).catch(() => {})
+    }, []);
+    const [b, Ne] = i.useState(10), [k, je] = i.useState(!1), [U, ve] = i.useState("5,8,10,15,20"), [l, we] = i.useState("universe"), [E, Se] = i.useState("ABR"), [g, ie] = q("auto-trendline-bt:input-selection", $t), [R, Ce] = i.useState("NEE"), [$, Re] = i.useState("SO"), [A, $e] = i.useState([]), [N, Te] = i.useState("daily"), w = Bt(x, l === "pairCombo", "atl-paircombo"), [z, Be] = i.useState(5), [y, Me] = i.useState(252), [T, Ae] = i.useState(() => new Set(Z)), [u, Le] = i.useState("1M"), [L, Pe] = i.useState("hitRate"), [K, oe] = i.useState("desc"), [P, De] = i.useState(!1), [H, Ie] = i.useState(20), [W, _e] = i.useState(!1), [Q, Fe] = i.useState({
+        current: 0,
+        total: 0
+    }), [le, Oe] = q("auto-trendline-bt:rows", []), [ce, Ue] = q("auto-trendline-bt:skipped", []), [Ee, Qe] = q("auto-trendline-bt:lastRunAt", null), [B, Xe] = q("auto-trendline-bt:lastRunTimeframe", "daily"), J = i.useRef(!1), et = i.useCallback(() => ({
+        n: b,
+        sweepMode: k,
+        nList: U,
+        scopeMode: l,
+        singleTicker: E,
+        pairTickerA: R,
+        pairTickerB: $,
+        basketTickers: A,
+        pc: w.serialize(),
+        timeframe: N,
+        minSignals: z,
+        minBars: y,
+        enabledKinds: Array.from(T),
+        primaryHorizon: u,
+        sortKey: L,
+        sortDir: K,
+        liveOnly: P,
+        liveMaxBars: H,
+        inputSelection: g
+    }), [b, k, U, l, E, R, $, A, w, N, z, y, T, u, L, K, P, H, g]), tt = i.useCallback(e => {
+        try {
+            if (typeof e?.n == "number" && Ne(e.n), typeof e?.sweepMode == "boolean" && je(e.sweepMode), typeof e?.nList == "string" && ve(e.nList), (e?.scopeMode === "single" || e?.scopeMode === "pair" || e?.scopeMode === "pairCombo" || e?.scopeMode === "universe" || e?.scopeMode === "basket") && we(e.scopeMode), typeof e?.singleTicker == "string" && Se(e.singleTicker), typeof e?.pairTickerA == "string" && Ce(e.pairTickerA), typeof e?.pairTickerB == "string" && Re(e.pairTickerB), Array.isArray(e?.basketTickers) && $e(e.basketTickers), e?.pc && w.hydrate(e.pc), (e?.timeframe === "daily" || e?.timeframe === "weekly") && Te(e.timeframe), typeof e?.minSignals == "number" && Be(e.minSignals), typeof e?.minBars == "number" && Me(e.minBars), Array.isArray(e?.enabledKinds) && Ae(new Set(e.enabledKinds.filter(a => Z.includes(a)))), typeof e?.primaryHorizon == "string" && Le(e.primaryHorizon), typeof e?.sortKey == "string" && Pe(e.sortKey), typeof e?.sortDir == "string" && oe(e.sortDir), typeof e?.liveOnly == "boolean" && De(e.liveOnly), typeof e?.liveMaxBars == "number" && Ie(e.liveMaxBars), e?.inputSelection && typeof e.inputSelection == "object") {
+                const a = e.inputSelection;
+                (a.kind === "close" || a.kind === "workbook" && typeof a.metric == "string") && ie(a)
+            }
+        } catch {}
+    }, [w, ie]);
+    bt("auto-trendline-backtest", et, tt);
+    const h = i.useMemo(() => {
+            if (l === "single") {
+                const a = (E || "").toUpperCase().trim();
+                return a ? [x.find(c => c.ticker === a) || {
+                    ticker: a,
+                    name: a
+                }] : []
+            }
+            if (l === "pair") {
+                const a = (R || "").toUpperCase().trim(),
+                    s = ($ || "").toUpperCase().trim();
+                if (!a || !s || a === s) return [];
+                const c = `${a}/${s}`;
+                return [{
+                    ticker: c,
+                    name: c,
+                    pairA: a,
+                    pairB: s
+                }]
+            }
+            return l === "pairCombo" ? w.pairs.map(a => ({
+                ticker: a.label,
+                name: a.label,
+                pairA: a.a,
+                pairB: a.b
+            })) : l === "basket" ? A.map(s => s.toUpperCase().trim()).filter(Boolean).map(s => x.find(c => c.ticker === s) || {
+                ticker: s,
+                name: s
+            }) : (o && o.length > 0 ? o : x) || []
+        }, [l, E, R, $, w.pairs, A, o, x]),
+        X = i.useMemo(() => k ? Pt(U) : [b], [k, U, b]),
+        st = e => {
+            Ae(a => {
+                const s = new Set(a);
+                return s.has(e) ? s.delete(e) : s.add(e), s
+            })
+        },
+        at = i.useCallback(async () => {
+            if (W) return;
+            J.current = !1, _e(!0), Oe([]), Ue([]), Fe({
+                current: 0,
+                total: h.length
+            }), Xe(N);
+            const e = [],
+                a = [],
+                s = l === "pair" || l === "pairCombo";
+            let c = [];
+            if (s) try {
+                c = await kt()
+            } catch {
+                c = []
+            }
+            const m = 6;
+            for (let d = 0; d < h.length && !J.current; d += m) {
+                const de = h.slice(d, d + m);
+                await Promise.all(de.map(async r => {
+                    if (!J.current) try {
+                        let S, p, ee, te;
+                        if (r.pairA && r.pairB) {
+                            const n = await Tt(r.pairA, r.pairB, c);
+                            if (!n || !n.prices || n.prices.length < y) {
+                                a.push({
+                                    ticker: r.ticker,
+                                    reason: n ? `only ${n.prices.length} pair bars` : "no pair data"
+                                });
+                                return
+                            }
+                            S = n.indices.map(F => c[F] || ""), p = n.prices.slice(), ee = p.slice(), te = p.slice()
+                        } else if (l === "single" && g.kind === "workbook") {
+                            const n = await yt(r.ticker, g);
+                            if (!n || n.closes.length < y) {
+                                a.push({
+                                    ticker: r.ticker,
+                                    reason: n ? `only ${n.closes.length} bars (need ${y}) for ${g.metric}` : `no workbook data for ${g.metric}`
+                                });
+                                return
+                            }
+                            S = n.priceDates, p = n.closes, ee = n.highs, te = n.lows
+                        } else {
+                            const n = await Nt(r.ticker);
+                            if (!n || !n.closes || n.closes.length < y) {
+                                a.push({
+                                    ticker: r.ticker,
+                                    reason: `only ${n?.closes?.length??0} bars`
+                                });
+                                return
+                            }
+                            S = n.dates, p = n.closes, ee = n.highs, te = n.lows
+                        }
+                        const V = jt({
+                                dates: S,
+                                closes: p,
+                                adjCloses: p,
+                                highs: ee,
+                                lows: te
+                            }, N),
+                            se = V.closes,
+                            lt = V.dates,
+                            ct = V.highs,
+                            dt = V.lows,
+                            pt = V.dailyIndexMap,
+                            ut = N === "weekly" ? Math.max(30, Math.floor(y / 5)) : y;
+                        if (se.length < ut) {
+                            a.push({
+                                ticker: r.ticker,
+                                reason: `only ${se.length} ${N} bars`
+                            });
+                            return
+                        }
+                        const mt = se.map((n, F) => ({
+                            high: ct[F] ?? n,
+                            low: dt[F] ?? n,
+                            close: n
+                        }));
+                        for (const n of X) {
+                            if (J.current) return;
+                            const F = vt(mt, n),
+                                pe = new Map;
+                            for (const j of Z) pe.set(j, []);
+                            for (const j of F.crosses) T.has(j.kind) && pe.get(j.kind).push(j);
+                            for (const j of Z) {
+                                const Y = pe.get(j);
+                                if (Y.length < z) continue;
+                                const ue = Ve[j],
+                                    ze = {},
+                                    Ke = {},
+                                    He = {};
+                                for (const ae of G) {
+                                    const C = [];
+                                    let xe = 0;
+                                    for (const he of Y) {
+                                        const O = pt[he.barIdx];
+                                        if (O == null || O < 0) continue;
+                                        const We = O + ae.days;
+                                        if (We >= p.length) continue;
+                                        const re = p[O];
+                                        if (!Number.isFinite(re) || re <= 0) continue;
+                                        const Je = p[We];
+                                        if (!Number.isFinite(Je)) continue;
+                                        const fe = (Je - re) / re;
+                                        C.push(fe), (ue === "long" && fe > 0 || ue === "short" && fe < 0) && xe++
+                                    }
+                                    ze[ae.label] = C.length > 0 ? xe / C.length : NaN, Ke[ae.label] = C.length > 0 ? C.reduce((he, O) => he + O, 0) / C.length : NaN, He[ae.label] = C.length > 0 ? Dt(C) : NaN
+                                }
+                                const me = Y[Y.length - 1].barIdx,
+                                    xt = lt[me] ?? "",
+                                    ht = se.length - 1 - me;
+                                e.push({
+                                    ticker: r.ticker,
+                                    name: r.name ?? r.ticker,
+                                    n,
+                                    kind: j,
+                                    direction: ue,
+                                    count: Y.length,
+                                    hitRate: ze,
+                                    avgReturn: Ke,
+                                    medReturn: He,
+                                    lastSignalBarIdx: me,
+                                    lastSignalDate: xt,
+                                    barsSinceLast: ht,
+                                    pairA: r.pairA,
+                                    pairB: r.pairB
+                                })
+                            }
+                        }
+                    } catch (S) {
+                        a.push({
+                            ticker: r.ticker,
+                            reason: S?.message ?? "error"
+                        })
+                    }
+                })), Fe({
+                    current: Math.min(d + m, h.length),
+                    total: h.length
+                }), await new Promise(r => setTimeout(r, 0))
+            }
+            Oe(e), Ue(a), _e(!1), Qe(Date.now())
+        }, [W, h, X, z, y, T, N, l, g]),
+        rt = i.useCallback(() => {
+            J.current = !0
+        }, []),
+        nt = i.useCallback(async e => {
+            if (!!(e.pairA && e.pairB)) {
+                Ye(e.pairA.toUpperCase(), e.pairB.toUpperCase());
+                return
+            }
+            try {
+                const s = l === "single" && g.kind === "workbook" && g.metric ? g.metric : "close",
+                    c = await wt({
+                        ticker: e.ticker,
+                        n: e.n,
+                        timeframe: B,
+                        futureBars: 60,
+                        metric: s
+                    });
+                c.success || console.warn(`[AutoTrendlineBacktest] ${e.ticker}: ${c.message}`)
+            } catch (s) {
+                console.error("[AutoTrendlineBacktest] sendRowToCharts failed", s)
+            }
+            qe(e.ticker)
+        }, [B, l, g]),
+        D = i.useMemo(() => {
+            let e = le.filter(s => T.has(s.kind));
+            P && (e = e.filter(s => s.barsSinceLast <= H));
+            const a = K === "asc" ? 1 : -1;
+            return e = e.slice().sort((s, c) => {
+                let m, d;
+                switch (L) {
+                    case "hitRate":
+                        m = s.hitRate[u] ?? -1 / 0, d = c.hitRate[u] ?? -1 / 0;
+                        break;
+                    case "avgReturn":
+                        m = s.avgReturn[u] ?? -1 / 0, d = c.avgReturn[u] ?? -1 / 0;
+                        break;
+                    case "count":
+                        m = s.count, d = c.count;
+                        break;
+                    case "n":
+                        m = s.n, d = c.n;
+                        break;
+                    case "barsSinceLast":
+                        m = s.barsSinceLast, d = c.barsSinceLast;
+                        break;
+                    default:
+                        m = s.ticker, d = c.ticker;
+                        break
+                }
+                return typeof m == "string" && typeof d == "string" ? a * m.localeCompare(d) : a * (m - d)
+            }), e
+        }, [le, T, P, H, L, K, u]),
+        I = e => {
+            L === e ? oe(a => a === "asc" ? "desc" : "asc") : (Pe(e), oe("desc"))
+        },
+        it = i.useCallback(() => {
+            if (D.length === 0) return;
+            const e = G.map(r => r.label),
+                s = [
+                    ["ticker", "name", "n", "timeframe", "kind", "direction", "signals", "last_signal_date", "bars_since_last", ...e.flatMap(r => [`hit_${r}`, `avg_${r}`, `med_${r}`])].join(",")
+                ];
+            for (const r of D) {
+                const S = [r.ticker, JSON.stringify(r.name), String(r.n), B, r.kind, r.direction, String(r.count), r.lastSignalDate, String(r.barsSinceLast), ...e.flatMap(p => [Number.isFinite(r.hitRate[p]) ? r.hitRate[p].toFixed(4) : "", Number.isFinite(r.avgReturn[p]) ? r.avgReturn[p].toFixed(6) : "", Number.isFinite(r.medReturn[p]) ? r.medReturn[p].toFixed(6) : ""])];
+                s.push(S.join(","))
+            }
+            const c = new Blob([s.join(`
+`)], {
+                    type: "text/csv"
+                }),
+                m = URL.createObjectURL(c),
+                d = document.createElement("a");
+            d.href = m;
+            const de = k ? "sweep" : `n${b}`;
+            d.download = `auto-trendline-backtest-${de}-${B}-${new Date().toISOString().slice(0,10)}.csv`, d.click(), URL.revokeObjectURL(m)
+        }, [D, b, k, B]),
+        _ = e => L !== e ? "" : K === "asc" ? " ↑" : " ↓",
+        ot = l === "single" ? `Single (${h.length})` : l === "pair" ? `Pair ${R||"?"}/${$||"?"}` : l === "pairCombo" ? `Pair combo (${h.length})` : l === "basket" ? `Basket (${h.length})` : `Universe ${f} / ${v}`;
+    return t.jsxs("div", {
+        className: "flex flex-col h-full overflow-hidden",
+        children: [t.jsxs("div", {
+            className: "flex-shrink-0 border-b border-border bg-card px-4 py-3",
+            children: [t.jsxs("div", {
+                className: "flex items-start justify-between gap-4 flex-wrap",
+                children: [t.jsxs("div", {
+                    children: [t.jsx("h1", {
+                        className: "text-lg font-bold text-foreground",
+                        children: "Auto Trendline Backtest"
+                    }), t.jsxs("p", {
+                        className: "text-[11px] text-muted-foreground mt-0.5",
+                        children: ["Port of DojiEmoji's ", t.jsx("span", {
+                            className: "font-mono",
+                            children: "Auto Trendline"
+                        }), " indicator. Detects pivot fractals (period ", t.jsx("span", {
+                            className: "font-mono",
+                            children: "n"
+                        }), "), draws trendlines through the most recent two up/down pivots, and backtests close-vs-line crosses. Hit = direction matches forward-return sign. Horizons are always in ", t.jsx("span", {
+                            className: "font-mono",
+                            children: "daily trading bars"
+                        }), " for cross-timeframe comparability."]
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex items-center gap-2",
+                    children: [W ? t.jsxs(ge, {
+                        size: "sm",
+                        variant: "destructive",
+                        onClick: rt,
+                        "data-testid": "atl-stop",
+                        children: [t.jsx(At, {
+                            className: "w-3 h-3 mr-1"
+                        }), " Stop"]
+                    }) : t.jsxs(ge, {
+                        size: "sm",
+                        onClick: at,
+                        disabled: h.length === 0,
+                        "data-testid": "atl-run",
+                        children: [t.jsx(Lt, {
+                            className: "w-3 h-3 mr-1"
+                        }), " Run Scan (", h.length, " tickers", k ? ` × ${X.length} n` : "", ")"]
+                    }), t.jsxs(ge, {
+                        size: "sm",
+                        variant: "outline",
+                        onClick: it,
+                        disabled: D.length === 0,
+                        children: [t.jsx(St, {
+                            className: "w-3 h-3 mr-1"
+                        }), " CSV"]
+                    })]
+                })]
+            }), t.jsxs("div", {
+                className: "flex flex-wrap items-end gap-x-4 gap-y-2 mt-3",
+                children: [t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Scope"
+                    }), t.jsx("div", {
+                        className: "flex gap-1",
+                        children: ["single", "pair", "pairCombo", "basket", "universe"].map(e => t.jsx("button", {
+                            onClick: () => we(e),
+                            className: `text-[10px] px-2 py-0.5 rounded border ${l===e?"bg-cyan-600/30 border-cyan-500 text-cyan-200":"bg-background border-border text-muted-foreground hover:border-foreground/30"}`,
+                            "data-testid": `atl-scope-${e}`,
+                            title: e === "pairCombo" ? "Generate all unordered A/B pair ratios from a classification-filter leg-set" : void 0,
+                            children: e === "single" ? "Single" : e === "pair" ? "Pair (A/B)" : e === "pairCombo" ? "Pair combo" : e === "basket" ? "Basket" : "Universe"
+                        }, e))
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        title: "Resample bars before running the detector. Forward returns still computed on daily.",
+                        children: "Timeframe"
+                    }), t.jsx("div", {
+                        className: "flex gap-1",
+                        children: ["daily", "weekly"].map(e => t.jsx("button", {
+                            onClick: () => Te(e),
+                            className: `text-[10px] px-2 py-0.5 rounded border ${N===e?"bg-cyan-600/30 border-cyan-500 text-cyan-200":"bg-background border-border text-muted-foreground hover:border-foreground/30"}`,
+                            "data-testid": `atl-tf-${e}`,
+                            children: e === "daily" ? "Daily" : "Weekly"
+                        }, e))
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsxs("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider flex items-center gap-1.5",
+                        title: "Toggle to test multiple fractal periods in one run.",
+                        children: [t.jsx("input", {
+                            type: "checkbox",
+                            id: "atl-sweep",
+                            checked: k,
+                            onChange: e => je(e.target.checked),
+                            className: "h-3 w-3"
+                        }), t.jsx("label", {
+                            htmlFor: "atl-sweep",
+                            className: "cursor-pointer",
+                            children: "Sweep mode"
+                        })]
+                    }), k ? t.jsx("input", {
+                        type: "text",
+                        value: U,
+                        onChange: e => ve(e.target.value),
+                        placeholder: "5,8,10,15,20",
+                        className: "w-36 px-1 py-0.5 text-[10px] bg-background border border-border rounded font-mono",
+                        "data-testid": "atl-n-list",
+                        title: "Comma-separated list of n values (each clamped to [2,50])."
+                    }) : t.jsx("input", {
+                        type: "number",
+                        min: 2,
+                        max: 50,
+                        value: b,
+                        onChange: e => Ne(Math.max(2, Math.min(50, Number(e.target.value) || 10))),
+                        className: "w-16 px-1 py-0.5 text-[10px] bg-background border border-border rounded",
+                        "data-testid": "atl-n",
+                        title: "Fractal period (DojiEmoji default 10)."
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        title: "Drop (ticker × n × cross-kind) buckets with fewer than this many signals.",
+                        children: "Min Signals"
+                    }), t.jsx("input", {
+                        type: "number",
+                        min: 1,
+                        max: 500,
+                        value: z,
+                        onChange: e => Be(Math.max(1, Number(e.target.value) || 5)),
+                        className: "w-16 px-1 py-0.5 text-[10px] bg-background border border-border rounded"
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        title: "Skip tickers with fewer than this many DAILY bars. Weekly mode requires ~30 weekly bars at minimum regardless.",
+                        children: "Min Bars"
+                    }), t.jsx("input", {
+                        type: "number",
+                        min: 50,
+                        max: 5e3,
+                        value: y,
+                        onChange: e => Me(Math.max(50, Number(e.target.value) || 252)),
+                        className: "w-20 px-1 py-0.5 text-[10px] bg-background border border-border rounded"
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        title: "Primary horizon used to sort and color-code hit rate / avg return.",
+                        children: "Primary Horizon"
+                    }), t.jsx("select", {
+                        value: u,
+                        onChange: e => Le(e.target.value),
+                        className: "w-20 px-1 py-0.5 text-[10px] bg-background border border-border rounded",
+                        children: G.map(e => t.jsx("option", {
+                            value: e.label,
+                            children: e.label
+                        }, e.label))
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex items-center gap-1.5",
+                    children: [t.jsx("input", {
+                        type: "checkbox",
+                        id: "atl-live",
+                        checked: P,
+                        onChange: e => De(e.target.checked),
+                        className: "h-3 w-3"
+                    }), t.jsx("label", {
+                        htmlFor: "atl-live",
+                        className: "text-[10px] text-muted-foreground",
+                        title: "Show only tickers whose most recent signal fired within Live Max bars of the latest bar.",
+                        children: "Live only ≤"
+                    }), t.jsx("input", {
+                        type: "number",
+                        min: 1,
+                        max: 500,
+                        value: H,
+                        onChange: e => Ie(Math.max(1, Number(e.target.value) || 20)),
+                        className: "w-14 px-1 py-0.5 text-[10px] bg-background border border-border rounded",
+                        disabled: !P
+                    }), t.jsx("span", {
+                        className: "text-[10px] text-muted-foreground",
+                        children: "bars"
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Cross Kinds"
+                    }), t.jsx("div", {
+                        className: "flex gap-1 flex-wrap",
+                        children: Z.map(e => {
+                            const a = Ve[e],
+                                s = T.has(e);
+                            return t.jsx("button", {
+                                onClick: () => st(e),
+                                className: `text-[10px] px-1.5 py-0.5 rounded border transition-colors ${s?a==="long"?"bg-emerald-600/30 border-emerald-500 text-emerald-200":"bg-red-600/30 border-red-500 text-red-200":"bg-background border-border text-muted-foreground"}`,
+                                title: `${be[e]} — direction: ${a.toUpperCase()}`,
+                                children: be[e]
+                            }, e)
+                        })
+                    })]
+                })]
+            }), l === "single" && t.jsxs("div", {
+                className: "mt-2 flex items-end gap-2",
+                children: [t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Ticker"
+                    }), t.jsx("div", {
+                        className: "w-56",
+                        children: t.jsx(ke, {
+                            tickers: x,
+                            value: E,
+                            onChange: Se
+                        })
+                    })]
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Input Series"
+                    }), t.jsx(Ct, {
+                        value: g,
+                        onChange: ie,
+                        family: "auto_trendline",
+                        label: ""
+                    })]
+                })]
+            }), l === "pair" && t.jsxs("div", {
+                className: "mt-2 flex items-end gap-2",
+                children: [t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Leg A (numerator)"
+                    }), t.jsx("div", {
+                        className: "w-48",
+                        children: t.jsx(ke, {
+                            tickers: x,
+                            value: R,
+                            onChange: Ce
+                        })
+                    })]
+                }), t.jsx("span", {
+                    className: "text-[10px] text-muted-foreground pb-1",
+                    children: "/"
+                }), t.jsxs("div", {
+                    className: "flex flex-col gap-0.5",
+                    children: [t.jsx("label", {
+                        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                        children: "Leg B (denominator)"
+                    }), t.jsx("div", {
+                        className: "w-48",
+                        children: t.jsx(ke, {
+                            tickers: x,
+                            value: $,
+                            onChange: Re
+                        })
+                    })]
+                }), t.jsxs("span", {
+                    className: "text-[10px] text-cyan-400 font-mono pb-1",
+                    "data-testid": "atl-pair-label",
+                    children: ["Ratio: ", R || "?", "/", $ || "?"]
+                })]
+            }), l === "pairCombo" && w.ui && t.jsx("div", {
+                className: "mt-2",
+                children: w.ui
+            }), l === "basket" && t.jsx("div", {
+                className: "mt-2",
+                children: t.jsx(Mt, {
+                    tickers: x,
+                    value: A,
+                    onChange: $e,
+                    label: "Basket constituents",
+                    testIdPrefix: "atl-basket",
+                    maxTickers: 200
+                })
+            }), t.jsxs("div", {
+                className: "flex items-center justify-between mt-2 text-[10px] text-muted-foreground",
+                children: [t.jsxs("div", {
+                    children: ["Scope: ", t.jsx("span", {
+                        className: "text-foreground font-mono",
+                        children: ot
+                    }), t.jsxs("span", {
+                        className: "ml-3",
+                        children: ["Timeframe: ", t.jsx("span", {
+                            className: "text-foreground font-mono",
+                            children: N
+                        })]
+                    }), k && t.jsxs("span", {
+                        className: "ml-3",
+                        children: ["n list: ", t.jsxs("span", {
+                            className: "text-foreground font-mono",
+                            children: ["[", X.join(", "), "]"]
+                        })]
+                    }), Ee && t.jsxs("span", {
+                        className: "ml-3",
+                        children: ["Last run: ", new Date(Ee).toLocaleTimeString(), " (", B, ")"]
+                    }), ce.length > 0 && t.jsxs("span", {
+                        className: "ml-3 text-amber-400",
+                        title: ce.slice(0, 20).map(e => `${e.ticker}: ${e.reason}`).join(`
+`),
+                        children: ["Skipped ", ce.length]
+                    })]
+                }), W && t.jsxs("div", {
+                    className: "font-mono",
+                    children: [Q.current, " / ", Q.total]
+                })]
+            })]
+        }), t.jsx("div", {
+            className: "flex-1 overflow-auto",
+            children: D.length === 0 ? t.jsx("div", {
+                className: "flex items-center justify-center h-full text-muted-foreground text-sm",
+                children: W ? `Scanning ${Q.current} / ${Q.total}…` : le.length === 0 ? l === "basket" && A.length === 0 ? "Add tickers to the basket, then click Run Scan." : l === "pairCombo" && h.length === 0 ? "Pick at least two legs in the pair-combo filter, then click Run Scan." : l === "pair" && h.length === 0 ? "Enter both A and B tickers, then click Run Scan." : "Configure and click Run Scan." : "No rows match the current filters."
+            }) : t.jsxs("table", {
+                className: "w-full text-[11px] font-mono border-collapse",
+                children: [t.jsx("thead", {
+                    className: "bg-muted/30 sticky top-0 z-10",
+                    children: t.jsxs("tr", {
+                        className: "border-b border-border",
+                        children: [t.jsxs("th", {
+                            className: "text-left px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("ticker"),
+                            children: ["Ticker", _("ticker")]
+                        }), t.jsx("th", {
+                            className: "text-left px-2 py-1.5",
+                            children: "Name"
+                        }), t.jsxs("th", {
+                            className: "text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("n"),
+                            children: ["n", _("n")]
+                        }), t.jsx("th", {
+                            className: "text-left px-2 py-1.5",
+                            children: "Cross Kind"
+                        }), t.jsx("th", {
+                            className: "text-center px-2 py-1.5",
+                            children: "Dir"
+                        }), t.jsxs("th", {
+                            className: "text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("count"),
+                            children: ["N", _("count")]
+                        }), t.jsxs("th", {
+                            className: "text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("barsSinceLast"),
+                            title: "Bars since most recent signal (in the detection timeframe).",
+                            children: ["Bars Ago", _("barsSinceLast")]
+                        }), t.jsx("th", {
+                            className: "text-right px-2 py-1.5",
+                            children: "Last Date"
+                        }), t.jsxs("th", {
+                            className: "text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("hitRate"),
+                            title: `Hit rate at ${u} — long hits when fwd ret > 0; short hits when fwd ret < 0.`,
+                            children: ["Hit ", u, _("hitRate")]
+                        }), t.jsxs("th", {
+                            className: "text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50",
+                            onClick: () => I("avgReturn"),
+                            title: `Mean forward return at ${u}.`,
+                            children: ["Avg Ret ", u, _("avgReturn")]
+                        }), G.map(e => t.jsx("th", {
+                            className: "text-right px-2 py-1.5",
+                            title: `Hit rate · avg return at ${e.label}`,
+                            children: e.label
+                        }, e.label)), t.jsx("th", {
+                            className: "text-center px-2 py-1.5",
+                            title: "Send auto-trendline overlay to Charts and open it.",
+                            children: "→"
+                        })]
+                    })
+                }), t.jsx("tbody", {
+                    children: D.map((e, a) => t.jsxs("tr", {
+                        className: "border-b border-border/30 hover:bg-muted/20",
+                        children: [t.jsx("td", {
+                            className: "px-2 py-1",
+                            children: t.jsx("button", {
+                                className: "text-blue-400 hover:underline",
+                                onClick: () => {
+                                    e.pairA && e.pairB ? Ye(e.pairA.toUpperCase(), e.pairB.toUpperCase()) : qe(e.ticker)
+                                },
+                                title: e.pairA && e.pairB ? `Open ${e.pairA}/${e.pairB} ratio in Charts (Pairs preset)` : "Open in Charts tab",
+                                children: e.ticker
+                            })
+                        }), t.jsx("td", {
+                            className: "px-2 py-1 text-muted-foreground truncate max-w-[180px]",
+                            title: e.name,
+                            children: e.name
+                        }), t.jsx("td", {
+                            className: "px-2 py-1 text-right text-muted-foreground",
+                            children: e.n
+                        }), t.jsx("td", {
+                            className: "px-2 py-1",
+                            children: be[e.kind]
+                        }), t.jsx("td", {
+                            className: `px-2 py-1 text-center font-bold ${e.direction==="long"?"text-emerald-400":"text-red-400"}`,
+                            children: e.direction === "long" ? "L" : "S"
+                        }), t.jsx("td", {
+                            className: "px-2 py-1 text-right",
+                            children: e.count
+                        }), t.jsx("td", {
+                            className: "px-2 py-1 text-right",
+                            children: e.barsSinceLast
+                        }), t.jsx("td", {
+                            className: "px-2 py-1 text-right text-muted-foreground",
+                            children: e.lastSignalDate
+                        }), t.jsx("td", {
+                            className: `px-2 py-1 text-right ${Ge(e.hitRate[u])}`,
+                            children: ye(e.hitRate[u])
+                        }), t.jsx("td", {
+                            className: `px-2 py-1 text-right ${Ze(e.avgReturn[u])}`,
+                            children: ne(e.avgReturn[u])
+                        }), G.map(s => t.jsxs("td", {
+                            className: "px-2 py-1 text-right",
+                            title: `hit ${ye(e.hitRate[s.label])} · avg ${ne(e.avgReturn[s.label])} · med ${ne(e.medReturn[s.label])}`,
+                            children: [t.jsx("span", {
+                                className: Ge(e.hitRate[s.label]),
+                                children: ye(e.hitRate[s.label])
+                            }), t.jsx("span", {
+                                className: "text-muted-foreground/60",
+                                children: " · "
+                            }), t.jsx("span", {
+                                className: Ze(e.avgReturn[s.label]),
+                                children: ne(e.avgReturn[s.label])
+                            })]
+                        }, s.label)), t.jsx("td", {
+                            className: "px-2 py-1 text-center",
+                            children: t.jsx("button", {
+                                className: "p-0.5 rounded hover:bg-cyan-500/20 text-cyan-400",
+                                title: e.pairA && e.pairB ? `Open ${e.pairA}/${e.pairB} ratio in Charts (overlay skipped — ratio is unitless)` : `Send auto-trendline overlay (n=${e.n}, ${B}) to Charts and open ${e.ticker}`,
+                                onClick: () => nt(e),
+                                "data-testid": `atl-row-overlay-${a}`,
+                                children: t.jsx(Rt, {
+                                    className: "w-3 h-3"
+                                })
+                            })
+                        })]
+                    }, `${e.ticker}-${e.n}-${e.kind}-${a}`))
+                })]
+            })
+        })]
+    })
+}
+export {
+    Jt as
+    default
+};

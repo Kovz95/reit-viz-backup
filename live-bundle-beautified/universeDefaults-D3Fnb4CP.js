@@ -1,0 +1,37 @@
+import {
+    a as n,
+    r as c
+} from "./index-CsG73Aq_.js";
+
+function i(t) {
+    const r = new Set;
+    for (const o of t)
+        if (Array.isArray(o.metrics))
+            for (const s of o.metrics) r.add(s);
+    return r
+}
+
+function e(t, r) {
+    for (const o of t)
+        if (r.has(o)) return o;
+    return t[0]
+}
+const F = ["P/FFO FY2", "P/AFFO FY2", "P/E FY2", "P/E LTM", "EV/EBITDA FY2", "EV/EBITDA LTM", "P/S FY2", "P/S LTM"],
+    a = ["FY2 FFO Growth", "FY1 FFO Growth", "FY2 EPS Growth", "FY1 EPS Growth"];
+
+function f() {
+    const {
+        allTickers: t
+    } = n();
+    return c.useMemo(() => {
+        const r = i(t);
+        return {
+            available: r,
+            valuationMetric: e(F, r),
+            growthMetric: e(a, r)
+        }
+    }, [t])
+}
+export {
+    f as u
+};

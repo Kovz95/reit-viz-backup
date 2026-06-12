@@ -1,43 +1,27 @@
-# reit-viz backup
+# live-runtime-bundle branch
 
-This repo holds the latest known state of the **reit-viz** REIT analysis application after a sandbox-recycle event on 2026-06-11 destroyed the active TypeScript source in the Perplexity Computer sandbox.
+This branch contains the production JavaScript bundle that was actually running on Vultr (`http://45.63.20.126:8090/`) as of **June 11, 2026 23:58 UTC**.
 
-## Repo layout
+## Why this exists
 
-- `stale-source/` — the older TypeScript source tree pulled from Vultr `/opt/reit-viz/`. **This is months behind the live deployment.** Use it to reference shared infrastructure (build config, server, server-side scripts) but treat all `client/src/` content as out-of-date.
-- `recovered-bundle/` — **beautified** JavaScript of the live production build downloaded from Vultr on 2026-06-12 02:07 UTC. 59 chunks + main entry + CSS + index.html. Each chunk corresponds to one route or large lazy-loaded component (e.g. `MACrossoverOptimizer-*.js`, `SlowStochOptimizer-*.js`). Variable and function names are minified to single letters; types and comments are gone, but the program structure is readable enough to re-derive original source.
-- `recovered-bundle-min/` — the original minified bundle, byte-for-byte what Vultr serves. Kept for reference and parity testing.
+The original TypeScript source for the features added between April 19, 2026 and June 11, 2026 was lost. The running app on Vultr is the only artifact that contains those features. This branch preserves that artifact so it can be reverse-engineered into source when needed.
 
-## Recovery notes
+## Contents
 
-- **Live site** (http://45.63.20.126:8090/) is unaffected — it serves the compiled bundle in `recovered-bundle-min/` from Vultr's `/opt/reit-viz/dist/public/assets/`.
-- **All recent work** (basket combined mode across optimizers, SlowStoch crash fix, MA Crossover Evaluate basket UI, ZScore Combined debug logging, basketOhlc helper, etc.) is **only** in the compiled bundle. To edit those components you must un-minify the relevant chunk.
-- **What's missing from `stale-source/client/src/`** but present in the live bundle:
-  - All recent optimizer pages: SlowStoch, Harsi, Combo, Range, TVA, DualMA, ROC, Oscillators, ZScore (with basket-combined branch), Momentum, RSI Regime
-  - All basket infrastructure: `lib/basketOhlc.ts`, `lib/useBaskets.ts`, components/BasketPicker.tsx, BasketTickerPill.tsx, BasketManager
-  - Presets infrastructure: `components/PresetBar.tsx`, `lib/optimizerPresets.tsx`
-  - The Charts page in its current form (drawings/channels/fibs/S-R/patterns logic)
-  - Many lib utilities: `dateRange.ts`, `useFrequency.ts`, `timeframe.ts`, `weeklyDownsample.ts`, `optimizerInputSeries.ts`, etc.
+- `live-bundle-raw/` — Exact files pulled from `/opt/reit-viz/dist/public/assets/` on Vultr. Minified, content-hashed. 88 chunks + main bundle + CSS.
+- `live-bundle-beautified/` — Same files run through `js-beautify`. Readable, but variable names are mangled (e.g. `a`, `b`, `t`, `c4`).
 
-## Reconstruction workflow
+## Entry point
 
-For any file you need to edit:
+`live-bundle-raw/index-CsG73Aq_.js` is the main bundle. Chunks are dynamic-imported by route.
 
-1. Find the chunk in `recovered-bundle/` that contains the symbol (search for known string literals).
-2. Trace minified identifiers back to readable React component / hook structure.
-3. Reconstruct a `.tsx` file in a new `recovered-src/` tree.
-4. Wire it into the build by replacing the stale equivalent in `stale-source/client/src/`.
-5. `npx vite build` and parity-test against the live site.
+## How to recover a feature
 
-## Deployment
+1. Identify the route or component (e.g. `/baskets` lives in `Baskets-CFu3VD0m.js`)
+2. Read the beautified file
+3. Rewrite as proper TypeScript on the `main` branch
+4. Verify build with `npx vite build`
 
-The production deploy pipeline is:
+## DO NOT deploy this branch
 
-```bash
-cd <project> && npx vite build
-tar --exclude='data.db*' --exclude='data/yahoo-cache' -czf /tmp/reit-viz-deploy.tar.gz -C dist/public .
-sshpass -p '<REDACTED>' scp /tmp/reit-viz-deploy.tar.gz root@45.63.20.126:/tmp/
-sshpass -p '<REDACTED>' ssh root@45.63.20.126 'tar xzf /tmp/reit-viz-deploy.tar.gz -C /opt/reit-viz/dist/public/ && pm2 restart reit-viz'
-```
-
-Do NOT use `npm run build` — it wipes `dist/`.
+This is a forensic artifact, not a deployable app. To deploy, build from `main` (or future source branches).

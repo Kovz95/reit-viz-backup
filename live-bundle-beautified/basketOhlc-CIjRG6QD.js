@@ -1,0 +1,217 @@
+import {
+    dD as _,
+    dE as T,
+    cJ as z,
+    cK as I,
+    a3 as J
+} from "./index-CsG73Aq_.js";
+const U = new Map;
+async function Q(e, o) {
+    try {
+        const u = await z(e),
+            s = I(u, o);
+        if (!s.adjCloses || s.adjCloses.length === 0) return null;
+        const i = s.adjCloses.length,
+            h = new Array(i),
+            v = new Array(i);
+        for (let n = 0; n < i; n++) {
+            const r = s.closes[n],
+                b = s.adjCloses[n],
+                w = Number.isFinite(r) && r > 0 && Number.isFinite(b) ? b / r : 1;
+            h[n] = s.highs[n] * w, v[n] = s.lows[n] * w
+        }
+        return {
+            dates: s.dates,
+            closes: s.adjCloses,
+            highs: h,
+            lows: v,
+            volumes: s.volumes ?? new Array(i).fill(0)
+        }
+    } catch {
+        return null
+    }
+}
+const H = async (e, o) => {
+    try {
+        return await J(e, o) ?? []
+    } catch {
+        return []
+    }
+};
+
+function V(e) {
+    const o = {};
+    for (const [u, s] of Object.entries(e)) o[u] = s.dates.map((i, h) => ({
+        time: i,
+        value: s.closes[h]
+    }));
+    return o
+}
+
+function Y(e, o) {
+    return o ? e.substring(0, 7) !== o.substring(0, 7) : !0
+}
+
+function G(e, o) {
+    if (!o) return !0;
+    const u = s => {
+        const i = parseInt(s.substring(5, 7), 10);
+        return Math.floor((i - 1) / 3)
+    };
+    return e.substring(0, 4) !== o.substring(0, 4) || u(e) !== u(o)
+}
+
+function N(e) {
+    let o = 0;
+    for (const s of Object.values(e)) s > 0 && (o += s);
+    if (o <= 0) return e;
+    const u = {};
+    for (const [s, i] of Object.entries(e)) u[s] = (i > 0 ? i : 0) / o;
+    return u
+}
+async function x(e, o = null) {
+    const {
+        rebalance: u,
+        weighting: s
+    } = _(e), i = e.tickers;
+    if (!i || i.length === 0) return null;
+    const h = `${e.id}:${e.updatedAt}:${s}:${u}:${o?.start??""}:${o?.end??""}`,
+        v = U.get(h);
+    if (v) return v.bundle;
+    const n = {};
+    await Promise.all(i.map(async t => {
+        const c = await Q(t, o);
+        c && c.closes.length > 0 && (n[t.toUpperCase()] = c)
+    }));
+    const r = Object.keys(n);
+    if (r.length === 0) return null;
+    const b = r.map(t => new Set(n[t].dates)),
+        w = n[r[0]].dates,
+        m = [];
+    for (const t of w) {
+        let c = !0;
+        for (let f = 1; f < b.length; f++)
+            if (!b[f].has(t)) {
+                c = !1;
+                break
+            } c && m.push(t)
+    }
+    if (m.length < 5) return null;
+    const j = {};
+    for (const t of r) {
+        const c = new Map,
+            f = n[t];
+        for (let g = 0; g < f.dates.length; g++) c.set(f.dates[g], {
+            c: f.closes[g],
+            h: f.highs[g],
+            l: f.lows[g],
+            v: f.volumes[g]
+        });
+        j[t] = c
+    }
+    const B = V(n),
+        K = m[0],
+        W = {};
+    for (const t of r) {
+        const c = B[t].filter(f => f.time <= K);
+        W[t] = c.length > 0 ? c : B[t].slice(0, 1)
+    }
+    const $ = {
+            ...e,
+            tickers: r
+        },
+        {
+            weights: P
+        } = await T($, W, H);
+    let k = N(Object.fromEntries(r.map(t => [t, P[t] ?? 0])));
+    const C = m.length,
+        d = new Array(C),
+        M = new Array(C),
+        D = new Array(C),
+        S = new Array(C);
+    d[0] = 100, M[0] = 100, D[0] = 100;
+    {
+        let t = 0;
+        for (const c of r) t += j[c].get(m[0])?.v ?? 0;
+        S[0] = t
+    }
+    for (let t = 1; t < C; t++) {
+        const c = m[t],
+            f = m[t - 1];
+        let g = 0,
+            F = 0,
+            q = 0,
+            L = 0;
+        for (const l of r) {
+            const p = j[l].get(c),
+                a = j[l].get(f);
+            if (!p || !a || !(a.c > 0)) continue;
+            const y = k[l] ?? 0;
+            g += y * ((p.c - a.c) / a.c), F += y * ((p.h - a.c) / a.c), q += y * ((p.l - a.c) / a.c), L += p.v ?? 0
+        }
+        d[t] = d[t - 1] * (1 + g), M[t] = d[t - 1] * (1 + F), D[t] = d[t - 1] * (1 + q), M[t] < d[t] && (M[t] = d[t]), D[t] > d[t] && (D[t] = d[t]), S[t] = L;
+        const A = {};
+        let O = 0;
+        for (const l of r) {
+            const p = j[l].get(c),
+                a = j[l].get(f);
+            if (!p || !a || !(a.c > 0)) {
+                A[l] = k[l] ?? 0, O += A[l];
+                continue
+            }
+            const y = (p.c - a.c) / a.c;
+            A[l] = (k[l] ?? 0) * (1 + y), O += A[l]
+        }
+        if (O > 0) {
+            for (const l of r) A[l] /= O;
+            k = A
+        }
+        const R = m[t + 1];
+        if (u === "monthly" ? Y(c, R) : u === "quarterly" ? G(c, R) : !1) {
+            const l = {};
+            for (const a of r) l[a] = B[a].filter(y => y.time <= c);
+            const {
+                weights: p
+            } = await T($, l, H);
+            k = N(Object.fromEntries(r.map(a => [a, p[a] ?? 0])))
+        }
+    }
+    const E = {
+        closes: d,
+        highs: M,
+        lows: D,
+        volumes: S,
+        priceDates: m
+    };
+    return U.set(h, {
+        updatedAt: e.updatedAt,
+        bundle: E
+    }), E
+}
+
+function tt(e, o, u = "Custom Basket") {
+    const s = (n, r) => {
+            if (n.length !== r.length) return !1;
+            const b = new Set(n.map(w => w.toUpperCase()));
+            for (const w of r)
+                if (!b.has(w.toUpperCase())) return !1;
+            return !0
+        },
+        i = o.filter(n => s(n.tickers, e)).sort((n, r) => r.updatedAt - n.updatedAt);
+    if (i.length > 0) return i[0];
+    const h = [...e].map(n => n.toUpperCase()).sort();
+    return {
+        id: `synth:${h.join(",")}`,
+        name: u,
+        tickers: h,
+        createdAt: 0,
+        updatedAt: 0,
+        weighting: "equal",
+        rebalance: "none",
+        customWeights: {},
+        volLookback: 60
+    }
+}
+export {
+    x as g, tt as r
+};

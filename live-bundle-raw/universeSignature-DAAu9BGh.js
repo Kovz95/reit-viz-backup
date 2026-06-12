@@ -1,0 +1,1 @@
+import{a as s,r as u}from"./index-CsG73Aq_.js";function i(t){if(!t||t.length===0)return"empty";const r=[...t].sort();let e=5381;for(const o of r){for(let n=0;n<o.length;n++)e=((e<<5)+e^o.charCodeAt(n))>>>0;e=((e<<5)+e^44)>>>0}return`${r.length}-${e.toString(16)}`}function c(){const{allTickers:t}=s();return u.useMemo(()=>i(t.map(r=>r.ticker)),[t])}export{c as u};

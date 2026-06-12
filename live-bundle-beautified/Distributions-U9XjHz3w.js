@@ -1,0 +1,880 @@
+import {
+    r as i,
+    aj as ce,
+    af as le,
+    a3 as de,
+    j as e,
+    di as xe,
+    a4 as ue
+} from "./index-CsG73Aq_.js";
+import {
+    u as he
+} from "./universeDefaults-D3Fnb4CP.js";
+import {
+    P as me
+} from "./play-D7mVvggU.js";
+const pe = ["close", "open", "high", "low", "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate", "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2", "Dividend Yield", "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2", "AFFO FY1", "AFFO FY2", "EBITDA FY1", "EBITDA FY2", "Sales FY1", "Sales FY2", "EPS LTM", "FFO LTM", "AFFO LTM", "EBITDA LTM", "Sales LTM", "EPS FY0", "FFO FY0", "AFFO FY0", "Dividend", "Enterprise Value", "FY1 EPS Growth", "FY2 EPS Growth", "FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth", "52wk High", "52wk Low", "% off 52wk High", "% off 52wk Low", "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%", "Short Interest%", "Buy Ratings", "Hold Ratings", "Sell Ratings", "Bull%", "Bear%"],
+    fe = {
+        "1Y": 1,
+        "3Y": 3,
+        "5Y": 5,
+        All: null
+    },
+    ge = 864e5;
+
+function be(s, o) {
+    if (!s.length || o === null) return s;
+    const c = new Date(s[s.length - 1].time).getTime() - o * 365 * ge;
+    let b = 0;
+    for (; b < s.length && new Date(s[b].time).getTime() < c;) b++;
+    return s.slice(b)
+}
+
+function _(s, o) {
+    if (!s.length) return NaN;
+    const h = (s.length - 1) * o,
+        c = Math.floor(h),
+        b = Math.ceil(h);
+    return c === b ? s[c] : s[c] + (s[b] - s[c]) * (h - c)
+}
+
+function je(s, o, h, c) {
+    const b = o.length,
+        m = [...o].sort((a, j) => a - j),
+        S = m[0],
+        k = m[b - 1],
+        M = o.reduce((a, j) => a + j, 0) / b,
+        v = o.reduce((a, j) => a + (j - M) ** 2, 0) / b,
+        A = Math.sqrt(v),
+        x = _(m, .5),
+        u = _(m, .25),
+        p = _(m, .75);
+    let L = 0;
+    for (const a of o) a <= h && L++;
+    const w = L / b,
+        r = A > 0 ? (h - M) / A : 0,
+        N = new Array(c).fill(0),
+        y = new Array(c + 1);
+    if (k === S) {
+        for (let a = 0; a <= c; a++) y[a] = S + (a - c / 2) * 1e-9;
+        N[Math.floor(c / 2)] = b
+    } else {
+        const a = (k - S) / c;
+        for (let j = 0; j <= c; j++) y[j] = S + j * a;
+        for (const j of o) {
+            let f = Math.floor((j - S) / a);
+            f >= c && (f = c - 1), f < 0 && (f = 0), N[f]++
+        }
+    }
+    return {
+        ticker: s,
+        n: b,
+        min: S,
+        max: k,
+        mean: M,
+        median: x,
+        p25: u,
+        p75: p,
+        stdev: A,
+        current: h,
+        percentile: w,
+        z: r,
+        values: o,
+        hist: N,
+        binEdges: y
+    }
+}
+
+function ke(s) {
+    let o = 2166136261;
+    for (let h = 0; h < s.length; h++) o ^= s.charCodeAt(h), o = Math.imul(o, 16777619);
+    return o >>> 0
+}
+
+function q(s, o = 1) {
+    return `hsla(${ke(s)%360}, 70%, 60%, ${o})`
+}
+
+function U(s) {
+    return s < -1 ? "text-emerald-400" : s > 1 ? "text-red-400" : "text-foreground/80"
+}
+
+function E(s) {
+    if (!Number.isFinite(s)) return "—";
+    const o = Math.abs(s);
+    return o >= 1e3 ? s.toFixed(0) : o >= 100 ? s.toFixed(1) : o >= 1 ? s.toFixed(2) : s.toFixed(3)
+}
+
+function ne(s) {
+    return Number.isFinite(s) ? `${(s*100).toFixed(0)}%` : "—"
+}
+
+function Ye() {
+    const {
+        available: s,
+        valuationMetric: o
+    } = he(), h = i.useRef(!1), [c, b] = i.useState(o);
+    i.useEffect(() => {
+        h.current || s.size !== 0 && (s.has(c) || b(o))
+    }, [s, o, c]);
+    const [m, S] = i.useState("workbook"), [k, M] = i.useState(""), [v, A] = i.useState("sector"), [x, u] = i.useState(""), [p, L] = i.useState("All"), [w, r] = i.useState("small"), [N, y] = i.useState(30), [a, j] = i.useState("ticker"), [f, n] = i.useState("asc"), [l, g] = i.useState([]), {
+        baskets: F
+    } = ce(), [Y, d] = i.useState(!1), [C, $] = i.useState({
+        done: 0,
+        total: 0,
+        current: ""
+    }), [O, D] = i.useState([]), [H, ee] = i.useState([]), X = i.useRef(0), [re, oe] = i.useState(null);
+    i.useEffect(() => {
+        le().then(t => g(t)).catch(() => g([]))
+    }, []);
+    const V = i.useMemo(() => {
+        const t = new Set;
+        for (const T of l) {
+            const R = T[v];
+            R && t.add(String(R))
+        }
+        return [...t].sort()
+    }, [l, v]);
+    i.useEffect(() => {
+        m === "classification" && V.length && !V.includes(x) && u(V[0])
+    }, [m, V, x]), i.useEffect(() => {
+        m === "basket" && F.length && !F.find(t => t.id === k) && M(F[0].id)
+    }, [m, F, k]);
+    const I = i.useMemo(() => {
+            if (m === "workbook") return l.map(t => t.ticker);
+            if (m === "basket") {
+                const t = F.find(T => T.id === k);
+                return t ? t.tickers : []
+            }
+            return l.filter(t => String(t[v] ?? "") === x).map(t => t.ticker)
+        }, [m, l, F, k, v, x]),
+        Z = i.useCallback(async () => {
+            const t = ++X.current;
+            d(!0), D([]), ee([]);
+            const T = [...I];
+            $({
+                done: 0,
+                total: T.length,
+                current: ""
+            });
+            const R = fe[p],
+                P = [],
+                z = [];
+            for (let K = 0; K < T.length; K++) {
+                if (X.current !== t) return;
+                const W = T[K];
+                $({
+                    done: K,
+                    total: T.length,
+                    current: W
+                });
+                try {
+                    const ie = await de(W, c),
+                        G = be(ie, R),
+                        J = [];
+                    for (const B of G) B.value != null && Number.isFinite(B.value) && J.push(B.value);
+                    if (J.length < 5) {
+                        z.push(W);
+                        continue
+                    }
+                    let Q = NaN;
+                    for (let B = G.length - 1; B >= 0; B--)
+                        if (G[B].value != null && Number.isFinite(G[B].value)) {
+                            Q = G[B].value;
+                            break
+                        } if (!Number.isFinite(Q)) {
+                        z.push(W);
+                        continue
+                    }
+                    P.push(je(W, J, Q, N))
+                } catch {
+                    z.push(W)
+                }
+            }
+            X.current === t && (D(P), ee(z), $({
+                done: T.length,
+                total: T.length,
+                current: ""
+            }), d(!1))
+        }, [I, c, p, N]),
+        te = i.useRef(!1);
+    i.useEffect(() => {
+        !te.current && l.length > 0 && I.length > 0 && (te.current = !0, Z())
+    }, [l.length, I, Z]);
+    const se = i.useMemo(() => {
+            const t = [...O],
+                T = f === "asc" ? 1 : -1;
+            return t.sort((R, P) => {
+                let z;
+                switch (a) {
+                    case "ticker":
+                        z = R.ticker.localeCompare(P.ticker);
+                        break;
+                    case "current":
+                        z = R.current - P.current;
+                        break;
+                    case "percentile":
+                        z = R.percentile - P.percentile;
+                        break;
+                    case "z":
+                        z = R.z - P.z;
+                        break;
+                    case "median":
+                        z = R.median - P.median;
+                        break
+                }
+                return z * T
+            }), t
+        }, [O, a, f]),
+        ae = t => {
+            a === t ? n(T => T === "asc" ? "desc" : "asc") : (j(t), n(t === "ticker" ? "asc" : "desc"))
+        };
+    return e.jsxs("div", {
+        className: "flex flex-col h-full bg-background text-foreground",
+        children: [e.jsxs("div", {
+            className: "flex-shrink-0 border-b border-border/40 bg-card/40",
+            children: [e.jsxs("div", {
+                className: "flex flex-wrap items-center gap-2 px-3 py-2 text-xs",
+                children: [e.jsxs("label", {
+                    className: "flex items-center gap-1.5 text-foreground/60",
+                    children: [e.jsx("span", {
+                        className: "font-mono uppercase tracking-wide",
+                        children: "Metric"
+                    }), e.jsx("select", {
+                        value: c,
+                        onChange: t => {
+                            h.current = !0, b(t.target.value)
+                        },
+                        className: "bg-background border border-border/40 rounded px-2 py-0.5 font-mono text-foreground",
+                        "data-testid": "dist-metric",
+                        children: pe.map(t => e.jsx("option", {
+                            value: t,
+                            children: t
+                        }, t))
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex items-center gap-1 border-l border-border/30 pl-2 ml-1",
+                    children: [e.jsx("span", {
+                        className: "text-foreground/60 font-mono uppercase tracking-wide",
+                        children: "Universe"
+                    }), e.jsx("div", {
+                        className: "flex rounded border border-border/40 overflow-hidden",
+                        children: ["workbook", "basket", "classification"].map(t => e.jsx("button", {
+                            onClick: () => S(t),
+                            className: `px-2 py-0.5 font-mono text-[11px] ${m===t?"bg-amber-500/15 text-amber-200":"text-foreground/60 hover:bg-accent"}`,
+                            "data-testid": `dist-universe-${t}`,
+                            children: t === "workbook" ? "All" : t === "basket" ? "Basket" : "Class"
+                        }, t))
+                    }), m === "basket" && e.jsxs("select", {
+                        value: k,
+                        onChange: t => M(t.target.value),
+                        className: "bg-background border border-border/40 rounded px-2 py-0.5 font-mono",
+                        children: [F.length === 0 && e.jsx("option", {
+                            value: "",
+                            children: "(no baskets)"
+                        }), F.map(t => e.jsx("option", {
+                            value: t.id,
+                            children: t.name
+                        }, t.id))]
+                    }), m === "classification" && e.jsxs(e.Fragment, {
+                        children: [e.jsx("select", {
+                            value: v,
+                            onChange: t => A(t.target.value),
+                            className: "bg-background border border-border/40 rounded px-2 py-0.5 font-mono",
+                            children: xe.map(t => e.jsx("option", {
+                                value: t,
+                                children: t
+                            }, t))
+                        }), e.jsx("select", {
+                            value: x,
+                            onChange: t => u(t.target.value),
+                            className: "bg-background border border-border/40 rounded px-2 py-0.5 font-mono max-w-[160px]",
+                            children: V.map(t => e.jsx("option", {
+                                value: t,
+                                children: t
+                            }, t))
+                        })]
+                    }), e.jsxs("span", {
+                        className: "text-foreground/40 font-mono ml-1",
+                        children: [I.length, " tickers"]
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex items-center gap-1 border-l border-border/30 pl-2 ml-1",
+                    children: [e.jsx("span", {
+                        className: "text-foreground/60 font-mono uppercase tracking-wide",
+                        children: "Window"
+                    }), e.jsx("div", {
+                        className: "flex rounded border border-border/40 overflow-hidden",
+                        children: ["1Y", "3Y", "5Y", "All"].map(t => e.jsx("button", {
+                            onClick: () => L(t),
+                            className: `px-2 py-0.5 font-mono text-[11px] ${p===t?"bg-amber-500/15 text-amber-200":"text-foreground/60 hover:bg-accent"}`,
+                            children: t
+                        }, t))
+                    })]
+                }), e.jsxs("div", {
+                    className: "flex items-center gap-1 border-l border-border/30 pl-2 ml-1",
+                    children: [e.jsx("span", {
+                        className: "text-foreground/60 font-mono uppercase tracking-wide",
+                        children: "View"
+                    }), e.jsx("div", {
+                        className: "flex rounded border border-border/40 overflow-hidden",
+                        children: [
+                            ["small", "Small Multiples"],
+                            ["overlay", "Overlay"],
+                            ["box", "Box / Violin"]
+                        ].map(([t, T]) => e.jsx("button", {
+                            onClick: () => r(t),
+                            className: `px-2 py-0.5 font-mono text-[11px] ${w===t?"bg-amber-500/15 text-amber-200":"text-foreground/60 hover:bg-accent"}`,
+                            "data-testid": `dist-view-${t}`,
+                            children: T
+                        }, t))
+                    })]
+                }), (w === "small" || w === "overlay") && e.jsxs("div", {
+                    className: "flex items-center gap-1.5 border-l border-border/30 pl-2 ml-1",
+                    children: [e.jsx("span", {
+                        className: "text-foreground/60 font-mono uppercase tracking-wide",
+                        children: "Bins"
+                    }), e.jsx("input", {
+                        type: "range",
+                        min: 10,
+                        max: 80,
+                        step: 1,
+                        value: N,
+                        onChange: t => y(Number(t.target.value)),
+                        className: "w-24"
+                    }), e.jsx("span", {
+                        className: "font-mono w-6 text-right text-foreground/80",
+                        children: N
+                    })]
+                }), e.jsx("div", {
+                    className: "flex-1"
+                }), e.jsxs("button", {
+                    onClick: Z,
+                    disabled: Y || I.length === 0,
+                    className: "flex items-center gap-1 px-3 py-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 disabled:opacity-50 font-mono text-xs",
+                    "data-testid": "dist-run",
+                    children: [Y ? e.jsx(ue, {
+                        className: "w-3 h-3 animate-spin"
+                    }) : e.jsx(me, {
+                        className: "w-3 h-3"
+                    }), "Run"]
+                })]
+            }), e.jsxs("div", {
+                className: "px-3 pb-1.5 text-[11px] font-mono text-foreground/50 flex items-center gap-3",
+                children: [Y ? e.jsxs("span", {
+                    children: ["Computing ", C.done, "/", C.total, " · ", C.current, "…"]
+                }) : e.jsxs("span", {
+                    children: [O.length, " computed", H.length > 0 && ` · ${H.length} n/a (${H.slice(0,6).join(", ")}${H.length>6?"…":""})`]
+                }), e.jsxs("span", {
+                    className: "text-foreground/40",
+                    children: ["Metric: ", e.jsx("span", {
+                        className: "text-foreground/70",
+                        children: c
+                    })]
+                }), (w === "small" || w === "box") && e.jsxs("div", {
+                    className: "ml-auto flex items-center gap-1",
+                    children: [e.jsx("span", {
+                        className: "text-foreground/40",
+                        children: "Sort:"
+                    }), ["ticker", "current", "percentile", "z", "median"].map(t => e.jsxs("button", {
+                        onClick: () => ae(t),
+                        className: `px-1.5 py-0.5 rounded font-mono ${a===t?"bg-amber-500/15 text-amber-200":"text-foreground/50 hover:text-foreground/80"}`,
+                        children: [t, a === t ? f === "asc" ? " ↑" : " ↓" : ""]
+                    }, t))]
+                })]
+            })]
+        }), e.jsxs("div", {
+            className: "flex-1 overflow-auto",
+            children: [Y && O.length === 0 && e.jsxs("div", {
+                className: "h-full flex items-center justify-center text-foreground/60 font-mono text-xs gap-2",
+                children: [e.jsx("span", {
+                    className: "inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse"
+                }), "Computing distribution for ", c, "…"]
+            }), O.length === 0 && !Y && H.length > 0 && e.jsxs("div", {
+                className: "h-full flex flex-col items-center justify-center text-foreground/50 font-mono text-xs gap-1 px-6 text-center",
+                children: [e.jsxs("div", {
+                    children: ["No tickers in this universe report ", c, "."]
+                }), e.jsxs("div", {
+                    className: "text-foreground/35",
+                    children: ["All ", H.length, " tickers returned n/a. Try a different metric in the sidebar."]
+                })]
+            }), O.length === 0 && !Y && H.length === 0 && e.jsx("div", {
+                className: "h-full flex items-center justify-center text-foreground/40 font-mono text-xs",
+                children: "No data yet — click Run."
+            }), w === "small" && O.length > 0 && e.jsx(ve, {
+                results: se
+            }), w === "overlay" && O.length > 0 && e.jsx(Ne, {
+                results: O,
+                hoverTicker: re,
+                setHoverTicker: oe,
+                metric: c
+            }), w === "box" && O.length > 0 && e.jsx(Fe, {
+                results: se,
+                metric: c
+            })]
+        })]
+    })
+}
+
+function ve({
+    results: s
+}) {
+    return e.jsx("div", {
+        className: "grid gap-2 p-2",
+        style: {
+            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))"
+        },
+        children: s.map(o => e.jsx(ye, {
+            r: o
+        }, o.ticker))
+    })
+}
+
+function ye({
+    r: s
+}) {
+    const k = Math.max(1, ...s.hist),
+        M = 212,
+        v = 92,
+        A = M / s.hist.length,
+        x = s.max - s.min || 1,
+        u = 4 + (s.current - s.min) / x * M;
+    return e.jsxs("div", {
+        className: "border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors",
+        children: [e.jsxs("div", {
+            className: "flex items-baseline justify-between mb-1",
+            children: [e.jsxs("div", {
+                className: "flex items-baseline gap-1.5",
+                children: [e.jsx("span", {
+                    className: "font-mono font-bold text-xs text-foreground",
+                    children: s.ticker
+                }), e.jsxs("span", {
+                    className: "font-mono text-[10px] text-foreground/40",
+                    children: ["n=", s.n]
+                })]
+            }), e.jsx("span", {
+                className: `font-mono text-xs ${U(s.z)}`,
+                children: E(s.current)
+            })]
+        }), e.jsxs("svg", {
+            width: "100%",
+            height: 100,
+            viewBox: "0 0 220 100",
+            preserveAspectRatio: "none",
+            className: "block",
+            children: [s.hist.map((p, L) => {
+                const w = p / k * v;
+                return e.jsx("rect", {
+                    x: 4 + L * A,
+                    y: 4 + (v - w),
+                    width: Math.max(.5, A - .5),
+                    height: w,
+                    fill: "rgba(14,165,233,0.45)"
+                }, L)
+            }), e.jsx("line", {
+                x1: u,
+                x2: u,
+                y1: 4,
+                y2: 4 + v,
+                stroke: "rgb(251 191 36)",
+                strokeWidth: 1.5
+            })]
+        }), e.jsxs("div", {
+            className: "flex items-center justify-between mt-0.5 font-mono text-[10px] text-foreground/50",
+            children: [e.jsxs("span", {
+                children: ["μ=", E(s.mean)]
+            }), e.jsxs("span", {
+                children: ["σ=", E(s.stdev)]
+            }), e.jsxs("span", {
+                className: U(s.z),
+                children: ["z=", s.z.toFixed(2)]
+            }), e.jsxs("span", {
+                children: ["pct=", ne(s.percentile)]
+            })]
+        })]
+    })
+}
+
+function Ne({
+    results: s,
+    hoverTicker: o,
+    setHoverTicker: h,
+    metric: c
+}) {
+    const m = i.useMemo(() => [...s].sort((n, l) => Math.abs(l.z) - Math.abs(n.z)), [s]),
+        S = i.useMemo(() => new Set(m.slice(0, 30).map(n => n.ticker)), [m]),
+        {
+            xMin: k,
+            xMax: M
+        } = i.useMemo(() => {
+            const n = [];
+            for (const d of s) n.push(d.min, d.p25, d.median, d.p75, d.max, d.current);
+            n.sort((d, C) => d - C);
+            const l = d => _(n, d),
+                g = l(.01),
+                F = l(.99),
+                Y = (F - g) * .02;
+            return {
+                xMin: g - Y,
+                xMax: F + Y
+            }
+        }, [s]),
+        v = 1200,
+        A = 520,
+        x = 50,
+        u = 200,
+        p = 16,
+        L = 36,
+        w = v - x - u,
+        r = A - p - L,
+        N = M - k || 1,
+        y = n => {
+            const l = Math.max(k, Math.min(M, n));
+            return x + (l - k) / N * w
+        },
+        a = i.useMemo(() => {
+            let n = 0;
+            return {
+                curves: s.map(g => {
+                    const F = (g.max - g.min) / g.hist.length,
+                        Y = [];
+                    for (let d = 0; d < g.hist.length; d++) {
+                        const C = g.binEdges[d] + F / 2,
+                            $ = g.n > 0 && F > 0 ? g.hist[d] / (g.n * F) : 0;
+                        $ > n && (n = $), Y.push({
+                            x: y(C),
+                            y: $
+                        })
+                    }
+                    return {
+                        ticker: g.ticker,
+                        current: g.current,
+                        pts: Y
+                    }
+                }),
+                yMax: n || 1
+            }
+        }, [s, k, M]),
+        j = n => p + r - n / a.yMax * r,
+        f = i.useMemo(() => {
+            const n = [];
+            for (let l = 0; l <= 5; l++) n.push(k + l / 5 * N);
+            return n
+        }, [k, M]);
+    return e.jsxs("div", {
+        className: "flex h-full",
+        children: [e.jsx("div", {
+            className: "flex-1 overflow-auto",
+            children: e.jsxs("svg", {
+                width: "100%",
+                viewBox: `0 0 ${v} ${A}`,
+                className: "block",
+                children: [e.jsx("line", {
+                    x1: x,
+                    x2: x + w,
+                    y1: p + r,
+                    y2: p + r,
+                    stroke: "rgba(255,255,255,0.15)"
+                }), e.jsx("line", {
+                    x1: x,
+                    x2: x,
+                    y1: p,
+                    y2: p + r,
+                    stroke: "rgba(255,255,255,0.15)"
+                }), f.map((n, l) => e.jsxs("g", {
+                    children: [e.jsx("line", {
+                        x1: y(n),
+                        x2: y(n),
+                        y1: p + r,
+                        y2: p + r + 4,
+                        stroke: "rgba(255,255,255,0.3)"
+                    }), e.jsx("text", {
+                        x: y(n),
+                        y: p + r + 16,
+                        fontSize: 10,
+                        textAnchor: "middle",
+                        fill: "rgba(255,255,255,0.5)",
+                        fontFamily: "ui-monospace, monospace",
+                        children: E(n)
+                    })]
+                }, l)), e.jsx("text", {
+                    x: x + w / 2,
+                    y: A - 6,
+                    fontSize: 10,
+                    textAnchor: "middle",
+                    fill: "rgba(255,255,255,0.45)",
+                    fontFamily: "ui-monospace, monospace",
+                    children: c
+                }), e.jsx("text", {
+                    x: 12,
+                    y: p + r / 2,
+                    fontSize: 10,
+                    textAnchor: "middle",
+                    fill: "rgba(255,255,255,0.45)",
+                    fontFamily: "ui-monospace, monospace",
+                    transform: `rotate(-90 12 ${p+r/2})`,
+                    children: "density"
+                }), a.curves.map(n => {
+                    const l = S.has(n.ticker),
+                        g = o === n.ticker,
+                        F = o !== null && !g,
+                        Y = l ? q(n.ticker, 1) : "rgba(150,150,150,0.4)",
+                        d = F ? .08 : l ? .65 : .18,
+                        C = l ? q(n.ticker, d) : `rgba(150,150,150,${d})`,
+                        $ = g ? 2.5 : 1,
+                        O = n.pts.map((D, H) => `${H===0?"M":"L"}${D.x.toFixed(1)},${j(D.y).toFixed(1)}`).join(" ");
+                    return e.jsxs("g", {
+                        children: [e.jsx("path", {
+                            d: O,
+                            fill: "none",
+                            stroke: C,
+                            strokeWidth: $
+                        }), e.jsx("line", {
+                            x1: y(n.current),
+                            x2: y(n.current),
+                            y1: p + r,
+                            y2: p + r + 6,
+                            stroke: l ? Y : "rgba(150,150,150,0.4)",
+                            strokeWidth: g ? 2 : 1,
+                            opacity: F ? .2 : 1
+                        })]
+                    }, n.ticker)
+                })]
+            })
+        }), e.jsxs("div", {
+            className: "w-[200px] border-l border-border/40 bg-card/20 overflow-y-auto p-1 text-[11px] font-mono",
+            children: [e.jsxs("div", {
+                className: "px-1 py-0.5 text-foreground/40 uppercase tracking-wide text-[10px]",
+                children: ["Top by |z| (", Math.min(30, m.length), ")"]
+            }), m.map(n => {
+                const l = S.has(n.ticker);
+                return e.jsxs("div", {
+                    onMouseEnter: () => h(n.ticker),
+                    onMouseLeave: () => h(null),
+                    className: `flex items-center gap-1.5 px-1 py-0.5 rounded cursor-pointer ${o===n.ticker?"bg-accent/40":"hover:bg-accent/20"}`,
+                    children: [e.jsx("span", {
+                        className: "w-2 h-2 rounded-sm flex-shrink-0",
+                        style: {
+                            backgroundColor: l ? q(n.ticker, 1) : "rgba(150,150,150,0.5)"
+                        }
+                    }), e.jsx("span", {
+                        className: l ? "text-foreground/90" : "text-foreground/40",
+                        children: n.ticker
+                    }), e.jsx("span", {
+                        className: "ml-auto text-foreground/50",
+                        children: n.z.toFixed(2)
+                    })]
+                }, n.ticker)
+            })]
+        })]
+    })
+}
+
+function Fe({
+    results: s,
+    metric: o
+}) {
+    const {
+        xMin: h,
+        xMax: c
+    } = i.useMemo(() => {
+        const r = [];
+        for (const f of s) r.push(f.min, f.p25, f.median, f.p75, f.max, f.current);
+        r.sort((f, n) => f - n);
+        const N = f => _(r, f),
+            y = N(.01),
+            a = N(.99),
+            j = (a - y) * .02;
+        return {
+            xMin: y - j,
+            xMax: a + j
+        }
+    }, [s]), b = c - h || 1, m = 60, S = m + 12, k = 60, M = 1e3, v = 18, A = M - S - k, x = r => {
+        const N = Math.max(h, Math.min(c, r));
+        return S + (N - h) / b * A
+    }, [u, p] = i.useState(null), L = [];
+    for (let r = 0; r <= 5; r++) L.push(h + r / 5 * b);
+    const w = 36 + s.length * v;
+    return e.jsxs("div", {
+        className: "relative",
+        children: [e.jsxs("svg", {
+            width: "100%",
+            viewBox: `0 0 ${M} ${w}`,
+            className: "block",
+            children: [e.jsx("line", {
+                x1: S,
+                x2: S + A,
+                y1: 20,
+                y2: 20,
+                stroke: "rgba(255,255,255,0.15)"
+            }), L.map((r, N) => e.jsxs("g", {
+                children: [e.jsx("line", {
+                    x1: x(r),
+                    x2: x(r),
+                    y1: 16,
+                    y2: 20,
+                    stroke: "rgba(255,255,255,0.3)"
+                }), e.jsx("text", {
+                    x: x(r),
+                    y: 12,
+                    fontSize: 10,
+                    textAnchor: "middle",
+                    fill: "rgba(255,255,255,0.5)",
+                    fontFamily: "ui-monospace, monospace",
+                    children: E(r)
+                })]
+            }, N)), e.jsx("text", {
+                x: M - k + 4,
+                y: 12,
+                fontSize: 9,
+                fill: "rgba(255,255,255,0.4)",
+                fontFamily: "ui-monospace, monospace",
+                children: o
+            }), s.map((r, N) => {
+                const y = 30 + N * v,
+                    a = y + v / 2,
+                    j = x(r.p25),
+                    f = x(r.p75),
+                    n = x(r.median),
+                    l = x(r.min),
+                    g = x(r.max),
+                    F = x(r.current),
+                    Y = q(r.ticker, 1);
+                return e.jsxs("g", {
+                    onMouseEnter: d => {
+                        const C = d.currentTarget.ownerSVGElement.getBoundingClientRect();
+                        p({
+                            r,
+                            x: d.clientX - C.left,
+                            y: d.clientY - C.top
+                        })
+                    },
+                    onMouseMove: d => {
+                        const C = d.currentTarget.ownerSVGElement.getBoundingClientRect();
+                        p({
+                            r,
+                            x: d.clientX - C.left,
+                            y: d.clientY - C.top
+                        })
+                    },
+                    onMouseLeave: () => p(null),
+                    style: {
+                        cursor: "pointer"
+                    },
+                    children: [e.jsx("rect", {
+                        x: 0,
+                        y,
+                        width: M,
+                        height: v,
+                        fill: "transparent"
+                    }), e.jsx("text", {
+                        x: m + 4,
+                        y: a + 3,
+                        fontSize: 11,
+                        textAnchor: "end",
+                        fill: "rgba(255,255,255,0.85)",
+                        fontFamily: "ui-monospace, monospace",
+                        children: r.ticker
+                    }), e.jsx("line", {
+                        x1: l,
+                        x2: g,
+                        y1: a,
+                        y2: a,
+                        stroke: "rgba(255,255,255,0.35)"
+                    }), e.jsx("line", {
+                        x1: l,
+                        x2: l,
+                        y1: a - 4,
+                        y2: a + 4,
+                        stroke: "rgba(255,255,255,0.35)"
+                    }), e.jsx("line", {
+                        x1: g,
+                        x2: g,
+                        y1: a - 4,
+                        y2: a + 4,
+                        stroke: "rgba(255,255,255,0.35)"
+                    }), e.jsx("rect", {
+                        x: j,
+                        y: y + 3,
+                        width: Math.max(1, f - j),
+                        height: v - 6,
+                        fill: q(r.ticker, .25),
+                        stroke: Y,
+                        strokeWidth: 1
+                    }), e.jsx("line", {
+                        x1: n,
+                        x2: n,
+                        y1: y + 3,
+                        y2: y + v - 3,
+                        stroke: "white",
+                        strokeWidth: 1.5
+                    }), e.jsx("circle", {
+                        cx: F,
+                        cy: a,
+                        r: 3.5,
+                        fill: Math.abs(r.z) > 1 ? r.z > 0 ? "rgb(248 113 113)" : "rgb(52 211 153)" : "rgb(251 191 36)",
+                        stroke: "rgba(0,0,0,0.6)",
+                        strokeWidth: .5
+                    })]
+                }, r.ticker)
+            })]
+        }), u && e.jsxs("div", {
+            className: "absolute pointer-events-none bg-popover border border-border/60 rounded shadow-lg px-2 py-1.5 text-[11px] font-mono z-10",
+            style: {
+                left: Math.min(u.x + 12, 800),
+                top: u.y + 12
+            },
+            children: [e.jsx("div", {
+                className: "font-bold text-foreground mb-0.5",
+                children: u.r.ticker
+            }), e.jsxs("div", {
+                className: "grid grid-cols-2 gap-x-3 gap-y-0 text-foreground/70",
+                children: [e.jsx("span", {
+                    children: "n"
+                }), e.jsx("span", {
+                    className: "text-right text-foreground",
+                    children: u.r.n
+                }), e.jsx("span", {
+                    children: "current"
+                }), e.jsx("span", {
+                    className: `text-right ${U(u.r.z)}`,
+                    children: E(u.r.current)
+                }), e.jsx("span", {
+                    children: "median"
+                }), e.jsx("span", {
+                    className: "text-right text-foreground",
+                    children: E(u.r.median)
+                }), e.jsx("span", {
+                    children: "p25–p75"
+                }), e.jsxs("span", {
+                    className: "text-right text-foreground",
+                    children: [E(u.r.p25), " – ", E(u.r.p75)]
+                }), e.jsx("span", {
+                    children: "min/max"
+                }), e.jsxs("span", {
+                    className: "text-right text-foreground",
+                    children: [E(u.r.min), " – ", E(u.r.max)]
+                }), e.jsx("span", {
+                    children: "μ / σ"
+                }), e.jsxs("span", {
+                    className: "text-right text-foreground",
+                    children: [E(u.r.mean), " / ", E(u.r.stdev)]
+                }), e.jsx("span", {
+                    children: "z"
+                }), e.jsx("span", {
+                    className: `text-right ${U(u.r.z)}`,
+                    children: u.r.z.toFixed(2)
+                }), e.jsx("span", {
+                    children: "pct"
+                }), e.jsx("span", {
+                    className: "text-right text-foreground",
+                    children: ne(u.r.percentile)
+                })]
+            })]
+        })]
+    })
+}
+export {
+    Ye as
+    default
+};
