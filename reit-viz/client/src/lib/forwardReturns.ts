@@ -459,3 +459,63 @@ export const RETURN_BAND_PRESETS: { label: string; band: ReturnBand }[] = [
   { label: "10–20%", band: { minReturn: 0.10, maxReturn: 0.20 } },
   { label: "15–30%", band: { minReturn: 0.15, maxReturn: 0.30 } },
 ];
+
+// ─── Additional exports used by SlowStochOptimizer ──────────────────────────
+
+export const TARGET_RETURN_OPTIONS = [0.02, 0.03, 0.05, 0.07, 0.10, 0.15, 0.20];
+
+export const RANK_BY_OPTIONS = [
+  { value: "hitRate", label: "Hit Rate" },
+  { value: "avgReturn", label: "Avg Return" },
+  { value: "composite", label: "Composite" },
+  { value: "profitFactor", label: "Profit Factor" },
+] as const;
+
+export const DATE_PRESETS = [
+  { label: "1Y", days: 252 },
+  { label: "2Y", days: 504 },
+  { label: "3Y", days: 756 },
+  { label: "5Y", days: 1260 },
+  { label: "All", days: 0 },
+] as const;
+
+export function createDateRangeFromPreset(preset: { days: number }): { start: string | null; end: string | null } {
+  if (!preset.days) return { start: null, end: null };
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - preset.days);
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10),
+  };
+}
+
+export function defaultInputSelection(): string {
+  return "close";
+}
+
+export function isBasketTicker(ticker: string): boolean {
+  return ticker.startsWith("$") || ticker.startsWith("BASKET:");
+}
+
+export function getScoreWeights(): Record<string, number> {
+  return { hitRate: 0.4, avgReturn: 0.3, profitFactor: 0.2, sharpe: 0.1 };
+}
+
+export function pickBestByRankMode(
+  signals: any[],
+  rankBy: string
+): any[] {
+  if (!signals.length) return signals;
+  return [...signals].sort((a, b) => {
+    const va = a?.[rankBy] ?? 0;
+    const vb = b?.[rankBy] ?? 0;
+    return vb - va;
+  });
+}
+
+export function scoreBackgroundColor(score: number): string {
+  if (score >= 0.7) return "rgba(34,197,94,0.15)";
+  if (score >= 0.5) return "rgba(234,179,8,0.15)";
+  return "rgba(239,68,68,0.15)";
+}

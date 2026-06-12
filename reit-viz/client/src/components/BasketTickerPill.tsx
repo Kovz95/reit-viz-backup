@@ -135,4 +135,5 @@ function BasketTickerPill({
   );
 }
 
-export { BasketTickerPill as B };
+export { BasketTickerPill, BasketTickerPill as B };
+export default BasketTickerPill;

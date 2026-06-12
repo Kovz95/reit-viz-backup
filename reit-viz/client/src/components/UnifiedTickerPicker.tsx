@@ -187,4 +187,5 @@ function UnifiedTickerPicker({
   );
 }
 
-export { UnifiedTickerPicker as U };
+export { UnifiedTickerPicker, UnifiedTickerPicker as U };
+export default UnifiedTickerPicker;

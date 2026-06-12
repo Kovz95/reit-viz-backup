@@ -2238,3 +2238,45 @@ export async function getSeasonalPatterns(
 
   return results;
 }
+
+// ─── ClassFilters helpers ─────────────────────────────────────────────────────
+// Re-exported here so pages can import from a single "@/lib/dataService" entry
+// point rather than reaching into "@/components/ClassificationFilters" directly.
+export type { ClassFilters } from "@/components/ClassificationFilters";
+export {
+  emptyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  applyClassFilters,
+} from "@/components/ClassificationFilters";
+
+// ─── Extra utilities used by optimizer pages ────────────────────────────────
+
+/**
+ * Filter an array of objects that have a `date` string property to a
+ * [startDate, endDate] range (inclusive). Both bounds are optional.
+ */
+export function filterByDateRange<T extends { date: string }>(
+  rows: T[],
+  startDate?: string | null,
+  endDate?: string | null
+): T[] {
+  let result = rows;
+  if (startDate) result = result.filter((r) => r.date >= startDate);
+  if (endDate) result = result.filter((r) => r.date <= endDate);
+  return result;
+}
+
+/**
+ * Invalidate cached ticker data so the next fetch re-hits the server.
+ * No-op in the current implementation — retained for API compatibility.
+ */
+export async function refreshTickerData(ticker: string): Promise<void> {
+  // Invalidate queryClient cache for this ticker if available
+  try {
+    const { queryClient: qc } = await import("./queryClient");
+    qc.invalidateQueries({ queryKey: ["ticker", ticker] });
+  } catch {
+    // silently ignore if queryClient not available
+  }
+}

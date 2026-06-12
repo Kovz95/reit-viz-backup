@@ -266,4 +266,5 @@ function PresetBar({ kind, captureInputs, applyInputs }: PresetBarProps) {
   );
 }
 
-export { PresetBar as P };
+export { PresetBar, PresetBar as P };
+export default PresetBar;

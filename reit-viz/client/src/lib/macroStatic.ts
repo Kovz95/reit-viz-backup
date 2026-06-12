@@ -200,3 +200,33 @@ export function clearMacroCache() {
 }
 
 export { isStaticMode };
+
+// ─── Additional aliases used by various pages ──────────────────────────────
+
+/**
+ * Alias for fetchStaticSeries — named `fetchFredSeries` in some pages because
+ * early versions used FRED as the primary data source before macro data was
+ * bundled as static JSON.
+ */
+export async function fetchFredSeries(id: string): Promise<DataPoint[]> {
+  return fetchStaticSeries(id);
+}
+
+/**
+ * Batch fetch multiple macro series in parallel.
+ * Returns a map of id → DataPoint[].
+ */
+export async function fetchMacroSeriesBatch(
+  ids: string[]
+): Promise<Record<string, DataPoint[]>> {
+  const results = await Promise.allSettled(
+    ids.map(async (id) => ({ id, data: await fetchMacroSeries(id) }))
+  );
+  const out: Record<string, DataPoint[]> = {};
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      out[r.value.id] = r.value.data;
+    }
+  }
+  return out;
+}

@@ -50,15 +50,15 @@ This file tracks reconstruction status for every file recovered from the live Vu
 | PairRatios-B1PiWPRS.js | 1125 | RECONSTRUCTED | Newer than stale PairRatios.tsx; uses lightweight-charts dual-panel + inline sparkline canvas |
 | Scatter-BxBV76dr.js | 1152 | RECONSTRUCTED | Newer than stale Scatter.tsx; canvas-based scatter with zoom/pan, regression, bubble-size, color-by-metric |
 | PatternScreener-BVupFpw-.js | 1288 | RECONSTRUCTED | New — Charts-related; pattern+channel screener across single/universe/pair/combo/basket scopes |
-| FactorBacktest-DTdYrgz4.js | ~ | RAW | New |
-| MacroRegime-DwnEMx4A.js | 1861 | RAW | New |
-| Macro-B6QgIETi.js | ~ | RAW | Newer than stale Macro.tsx |
-| Attribution-DFOfL3Ra.js | ~ | RAW | New |
-| RatesForward-CrzUd_CP.js | ~ | RAW | New |
-| RelativeStrength-DwYUHZhC.js | ~ | RAW | New |
-| Scanner-d2v1M_Z9.js | ~ | RAW | New |
-| SetupsScreener-BjAZdHTT.js | ~ | RAW | New |
-| EvaluatorPanel-BcObXxAZ.js | 2104 | RAW | New |
+| FactorBacktest-DTdYrgz4.js | ~ | RECONSTRUCTED | New; uses @/lib/workspaceContext (useWorkspaceTab), default CartesianGrid import |
+| MacroRegime-DwnEMx4A.js | 1861 | RECONSTRUCTED | New |
+| Macro-B6QgIETi.js | ~ | RECONSTRUCTED | Newer than stale Macro.tsx; pre-existing file, no header |
+| Attribution-DFOfL3Ra.js | ~ | RECONSTRUCTED | New |
+| RatesForward-CrzUd_CP.js | ~ | RECONSTRUCTED | New |
+| RelativeStrength-DwYUHZhC.js | ~ | RECONSTRUCTED | New; useWorkspaceTab, filteredTickersList, fillMatrixRow typed |
+| Scanner-d2v1M_Z9.js | ~ | RECONSTRUCTED | New |
+| SetupsScreener-BjAZdHTT.js | ~ | RECONSTRUCTED | New; useWorkspaceTab, wouter useLocation |
+| EvaluatorPanel-BcObXxAZ.js | 2104 | RECONSTRUCTED | New component (not page); unresolved: @/lib/signalUtils, @/lib/harsi, @/lib/tva |
 
 ### Tier 3 — Large pages
 | File | Lines | Status | Notes |
@@ -71,8 +71,8 @@ This file tracks reconstruction status for every file recovered from the live Vu
 | RSIRegimeOptimizer | 1870 | RAW | Newer than stale RSIRegimeOptimizer.tsx |
 | HarsiOptimizer | 1885 | RAW | New optimizer |
 | ComboOptimizer | 1915 | RAW | New optimizer |
-| SigmaMove | 1923 | RAW | New |
-| SimilarSetups | 2006 | RAW | New |
+| SigmaMove-BeLjHH1_.js | 1923 | RECONSTRUCTED | New; useAppStatus for setLastQuoteFetchedAt; unresolved: @/lib/appStatus, @/lib/fetchMetricSeriesBatch, @/lib/fetchEarningsDates |
+| SimilarSetups-B0jnj8dI.js | 2006 | RECONSTRUCTED | New; unresolved: @/lib/similarSetupsAlgorithms, @/lib/fetchOhlcSeries, @/lib/fetchCloseSeries, @/lib/basketSymbol, @/lib/filterTickersByClassification, @/lib/fetchTradingDates, @/hooks/usePairComboPicker |
 | Trendlines | 2127 | RAW | Charts-related |
 | Ratings | 2199 | RAW | Newer than stale Ratings.tsx |
 | SupportResistance | 2208 | RAW | Charts-related |

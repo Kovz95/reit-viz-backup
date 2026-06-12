@@ -393,4 +393,5 @@ function BasketPicker({
   );
 }
 
-export { BasketPicker as B };
+export { BasketPicker, BasketPicker as B };
+export default BasketPicker;
