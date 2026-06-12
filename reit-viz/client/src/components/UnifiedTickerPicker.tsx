@@ -44,19 +44,20 @@ function UnifiedTickerPicker({
 
   const filteredTickers = useMemo(() => {
     const query = inputValue.trim().toLowerCase();
+    const safe = (tickers ?? []).filter((t) => t && typeof t.ticker === "string");
     return query
-      ? tickers
+      ? safe
           .filter(
             (t) =>
               t.ticker.toLowerCase().includes(query) ||
               (t.name && t.name.toLowerCase().includes(query))
           )
           .slice(0, 50)
-      : tickers.slice(0, 50);
+      : safe.slice(0, 50);
   }, [tickers, inputValue]);
 
   const isInUniverse = useMemo(
-    () => tickers.some((t) => t.ticker.toUpperCase() === (value || "").toUpperCase()),
+    () => tickers.some((t) => (t?.ticker ?? "").toUpperCase() === (value || "").toUpperCase()),
     [tickers, value]
   );
 

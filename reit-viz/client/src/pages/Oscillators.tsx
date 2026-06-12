@@ -23,7 +23,7 @@ import { filterByDateRange, createDateRange } from "@/lib/optimizerInputSeries";
 import { useUniverse } from "@/lib/universeContext";
 import { useBaskets } from "@/lib/basketContext";
 import { getScoreWeights as getScoreWeightsAlias } from "@/lib/forwardReturns";
-import { getDates, getTickerRaw } from "@/lib/dataService";
+import { getDates, getTickers, getTickerRaw } from "@/lib/dataService";
 import { refreshTickerData } from "@/lib/dataService";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
@@ -214,12 +214,12 @@ export default function Oscillators() {
   const ht = frequency === "weekly" ? "weekly" : "daily";
 
   useEffect(() => {
-    (getDates as any)().then((dates: any[]) => {
-      setAllTickers(dates);
-      if (dates.length > 0 && !wasInitializedRef.current) {
-        setSelectedTicker((prev) => prev || dates[0].ticker);
-        setPairTickerA((prev) => prev || dates[0].ticker);
-        setPairTickerB((prev) => prev || (dates[1]?.ticker ?? dates[0].ticker));
+    (getTickers as any)().then((tickers: any[]) => {
+      setAllTickers(tickers);
+      if (tickers.length > 0 && !wasInitializedRef.current) {
+        setSelectedTicker((prev) => prev || tickers[0].ticker);
+        setPairTickerA((prev) => prev || tickers[0].ticker);
+        setPairTickerB((prev) => prev || (tickers[1]?.ticker ?? tickers[0].ticker));
       }
     });
   }, []);
