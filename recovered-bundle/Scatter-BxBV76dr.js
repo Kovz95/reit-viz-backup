@@ -1,0 +1,1153 @@
+import {
+  a as Yt,
+  r as a,
+  e as jt,
+  s as St,
+  f as Ct,
+  g as kt,
+  b as Nt,
+  h as Tt,
+  O as he,
+  N as ot,
+  j as s,
+  D as Xt,
+  i as Ot,
+  B as Le,
+  L as Rt,
+  k as Lt,
+  l as Pt,
+  m as Et,
+  n as $t,
+  o as Ye,
+  p as je,
+  q as Se,
+  t as Ce,
+  v as se,
+  I as Ie,
+  Y as Dt,
+  Z as Fe,
+  _ as At,
+  y as It,
+  $ as zt,
+  z as Bt,
+  a0 as Vt,
+  a1 as Gt,
+  w as lt,
+  a2 as _t
+} from "./index-CsG73Aq_.js";
+const ct = {
+    Valuation: ["P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
+      "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2"
+    ],
+    Yields: ["FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
+      "Dividend Yield"],
+    Growth: ["FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth",
+      "FY1 EPS Growth", "FY2 EPS Growth"
+    ],
+    Performance: ["1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
+      "% off 52wk High", "% off 52wk Low"
+    ],
+    Estimates: ["EPS FY2", "FFO FY2", "AFFO FY2", "EBITDA FY2"],
+    "Short Interest": ["Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M"],
+    Other: ["close", "Enterprise Value", "Buy Ratings"]
+  },
+  Wt = [{
+    label: "Subindustry",
+    field: "subindustry"
+  }, {
+    label: "Industry",
+    field: "industry"
+  }, {
+    label: "Industry Group",
+    field: "industryGroup"
+  }, {
+    label: "Subsector",
+    field: "subsector"
+  }, {
+    label: "Sector",
+    field: "sector"
+  }, {
+    label: "Economy",
+    field: "economy"
+  }];
+
+function we(T) {
+  return `hsl(${Math.max(0,Math.min(1,T))*120}, 85%, 50%)`
+}
+
+function Ht(T) {
+  const R = Math.max(0, Math.min(1, T)) * 120,
+    v = .85,
+    Y = .5,
+    m = (1 - Math.abs(2 * Y - 1)) * v,
+    k = m * (1 - Math.abs(R / 60 % 2 - 1)),
+    _ = Y - m / 2;
+  let A = 0,
+    F = 0,
+    E = 0;
+  R < 60 ? (A = m, F = k, E = 0) : R < 120 ? (A = k, F = m, E = 0) : (A = 0, F = m, E = k);
+  const N = ne => Math.round((ne + _) * 255).toString(16).padStart(2, "0");
+  return `#${N(A)}${N(F)}${N(E)}`
+}
+const rt = ["#0ea5e9", "#a855f7", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#f97316", "#ec4899",
+  "#14b8a6", "#8b5cf6", "#eab308", "#6366f1", "#84cc16", "#e11d48", "#0891b2", "#7c3aed",
+  "#64748b", "#d946ef", "#fb923c", "#4ade80"
+];
+
+function qt(T) {
+  return rt[T % rt.length]
+}
+const Jt = [{
+    label: "FFO Yield vs Growth",
+    x: "FY2 FFO Growth",
+    y: "FFO Yield FY2"
+  }, {
+    label: "AFFO Yield vs Growth",
+    x: "FY2 AFFO Growth",
+    y: "AFFO Yield FY2"
+  }, {
+    label: "P/FFO vs Div Yield",
+    x: "P/FFO FY2",
+    y: "Dividend Yield"
+  }, {
+    label: "P/FFO vs FFO Growth",
+    x: "P/FFO FY2",
+    y: "FY2 FFO Growth"
+  }, {
+    label: "P/AFFO vs AFFO Growth",
+    x: "P/AFFO FY2",
+    y: "FY2 AFFO Growth"
+  }, {
+    label: "EV/EBITDA vs Growth",
+    x: "EV/EBITDA FY2",
+    y: "FY2 FFO Growth"
+  }, {
+    label: "Implied Cap Rate vs Growth",
+    x: "Implied Cap Rate",
+    y: "FY2 FFO Growth"
+  }, {
+    label: "Price Chg vs SI%",
+    x: "Short Interest%",
+    y: "1M Price Chg%"
+  }, {
+    label: "SI% vs P/FFO",
+    x: "Short Interest%",
+    y: "P/FFO FY2"
+  }, {
+    label: "Yield vs 52wk Drawdown",
+    x: "% off 52wk High",
+    y: "Dividend Yield"
+  }, {
+    label: "6M vs 1M Momentum",
+    x: "6M Price Chg%",
+    y: "1M Price Chg%"
+  }, {
+    label: "Valuation vs Size",
+    x: "P/FFO FY2",
+    y: "Dividend Yield",
+    z: "Enterprise Value"
+  }],
+  Ut = [{
+    key: "none",
+    label: "All (universe)"
+  }, {
+    key: "economy",
+    label: "Economy"
+  }, {
+    key: "sector",
+    label: "Sector"
+  }, {
+    key: "subsector",
+    label: "Subsector"
+  }, {
+    key: "industryGroup",
+    label: "Industry Group"
+  }, {
+    key: "industry",
+    label: "Industry"
+  }, {
+    key: "subindustry",
+    label: "Subindustry"
+  }],
+  at = ["rgba(239, 68, 68, 0.7)", "rgba(34, 197, 94, 0.7)", "rgba(59, 130, 246, 0.7)",
+    "rgba(168, 85, 247, 0.7)", "rgba(245, 158, 11, 0.7)", "rgba(6, 182, 212, 0.7)",
+    "rgba(236, 72, 153, 0.7)", "rgba(132, 204, 22, 0.7)", "rgba(99, 102, 241, 0.7)",
+    "rgba(249, 115, 22, 0.7)", "rgba(20, 184, 166, 0.7)", "rgba(139, 92, 246, 0.7)",
+    "rgba(234, 179, 8, 0.7)", "rgba(225, 29, 72, 0.7)", "rgba(100, 116, 139, 0.7)"
+  ];
+
+function ze(T) {
+  const g = T.length;
+  if (g < 2) return {
+    slope: 0,
+    intercept: 0,
+    rSquared: 0
+  };
+  let R = 0,
+    v = 0,
+    Y = 0,
+    m = 0,
+    k = 0;
+  for (const w of T) R += w.x, v += w.y, Y += w.x * w.y, m += w.x * w.x, k += w.y * w.y;
+  const _ = R / g,
+    A = v / g,
+    F = m - g * _ * _,
+    E = Y - g * _ * A,
+    N = k - g * A * A,
+    ne = F === 0 ? 0 : E / F,
+    ie = A - ne * _,
+    ke = F === 0 || N === 0 ? 0 : E * E / (F * N);
+  return {
+    slope: ne,
+    intercept: ie,
+    rSquared: ke
+  }
+}
+
+function Qt() {
+  const {
+    universeTickers: T
+  } = Yt(), [g, R] = a.useState("P/FFO FY2"), [v, Y] = a.useState("Dividend Yield"), [m, k] = a
+    .useState("none"), [_, A] = a.useState(""), [F, E] = a.useState(null), [N, ne] = a.useState(jt),
+    [ie, ke] = a.useState(new Set), [w, Ve] = a.useState("subindustry"), [L, Ge] = a.useState(
+      "category"), [W, _e] = a.useState("Dividend Yield"), [Ne, We] = a.useState(""), oe = a.useRef(
+      null), Te = a.useRef(null), [I, He] = a.useState(!0), [H, qe] = a.useState(!0), [re, Je] = a
+    .useState(!1), [fe, Pe] = a.useState(""), [me, Ee] = a.useState(""), [U, Ue] = a.useState(!1), [
+      Z, Ze
+    ] = a.useState(!1), [ae, Qe] = a.useState("none"), it = a.useCallback(() => ({
+      metricX: g,
+      metricY: v,
+      metricZ: m,
+      classFilters: St(N),
+      manualTickers: [...ie],
+      colorBy: w,
+      colorMode: L,
+      colorMetric: W,
+      showRegression: I,
+      showOutliers: H,
+      showQuadrants: re,
+      refLineX: fe,
+      refLineY: me,
+      logX: U,
+      logY: Z,
+      regressionLevel: ae
+    }), [g, v, m, N, ie, w, L, W, I, H, re, fe, me, U, Z, ae]), dt = a.useCallback(e => {
+      e.metricX !== void 0 && R(e.metricX), e.metricY !== void 0 && Y(e.metricY), e.metricZ !==
+        void 0 && k(e.metricZ), e.classFilters !== void 0 && ne(Ct(e.classFilters)), e
+        .manualTickers !== void 0 && ke(new Set(e.manualTickers)), e.colorBy !== void 0 && Ve(e
+          .colorBy), e.colorMode !== void 0 && Ge(e.colorMode), e.colorMetric !== void 0 && _e(e
+          .colorMetric), e.showRegression !== void 0 && He(e.showRegression), e.showOutliers !==
+        void 0 && qe(e.showOutliers), e.showQuadrants !== void 0 && Je(e.showQuadrants), e
+        .refLineX !== void 0 && Pe(e.refLineX), e.refLineY !== void 0 && Ee(e.refLineY), e
+        .logX !== void 0 && Ue(e.logX), e.logY !== void 0 && Ze(e.logY), e.regressionLevel !==
+        void 0 && Qe(e.regressionLevel)
+    }, []);
+  kt("scatter", it, dt);
+  const [z, le] = a.useState(null), j = a.useRef(null), [B, Xe] = a.useState(null), ge = a.useRef(
+  []);
+  a.useEffect(() => {
+    le(null), ge.current = []
+  }, [g, v]);
+  const Ke = L === "metric" ? W : void 0,
+    {
+      data: et,
+      isLoading: xt
+    } = Nt({
+      queryKey: ["scatter", g, v, m, Ne, Ke],
+      queryFn: () => _t(g, v, m !== "none" ? m : void 0, Ne || void 0, void 0, Ke)
+    }),
+    ve = et?.points ?? [],
+    tt = et?.resolvedDate ?? "",
+    $e = a.useMemo(() => {
+      const e = new Set(ve.map(n => n[w]).filter(Boolean));
+      return Array.from(e).sort()
+    }, [ve, w]),
+    De = a.useMemo(() => {
+      const e = {};
+      return $e.forEach((n, r) => {
+        e[n] = qt(r)
+      }), e
+    }, [$e]),
+    st = a.useMemo(() => {
+      let e = ve.filter(n => n.x !== null && n.y !== null);
+      return T && (e = e.filter(n => T.has(n.ticker))), e = Tt(e, N, _, ie), e
+    }, [ve, _, N, ie, T]),
+    x = a.useMemo(() => st.filter(e => !(U && e.x <= 0 || Z && e.y <= 0)).map(e => ({
+      ...e,
+      x: U ? Math.log10(e.x) : e.x,
+      y: Z ? Math.log10(e.y) : e.y,
+      _rawX: e.x,
+      _rawY: e.y
+    })), [st, U, Z]),
+    $ = a.useMemo(() => !I || ae !== "none" || x.length < 3 ? null : ze(x.map(e => ({
+      x: e.x,
+      y: e.y
+    }))), [x, I, ae]),
+    Ae = a.useMemo(() => {
+      if (!I || ae === "none") return [];
+      const e = {};
+      for (const n of x) {
+        const r = n[ae] || "Other";
+        e[r] || (e[r] = []), e[r].push({
+          x: n.x,
+          y: n.y
+        })
+      }
+      return Object.entries(e).filter(([, n]) => n.length >= 3).map(([n, r]) => ({
+        group: n,
+        reg: ze(r),
+        points: r
+      })).sort((n, r) => n.group.localeCompare(r.group))
+    }, [x, I, ae]),
+    pe = a.useMemo(() => {
+      if (!H || x.length < 5) return {
+        above: [],
+        below: []
+      };
+      const e = $ ?? (x.length >= 3 ? ze(x.map(l => ({
+        x: l.x,
+        y: l.y
+      }))) : null);
+      if (!e) return {
+        above: [],
+        below: []
+      };
+      const {
+        slope: n,
+        intercept: r
+      } = e, i = x.map(l => ({
+        ticker: l.ticker,
+        residual: l.y - (n * l.x + r)
+      }));
+      return i.sort((l, u) => u.residual - l.residual), {
+        above: i.slice(0, 3).map(l => l.ticker),
+        below: i.slice(-3).map(l => l.ticker)
+      }
+    }, [x, $, H]),
+    Q = a.useMemo(() => {
+      if (m === "none") return null;
+      const e = x.map(n => n.z).filter(n => n !== null);
+      return e.length === 0 ? null : {
+        min: Math.min(...e),
+        max: Math.max(...e)
+      }
+    }, [x, m]),
+    ce = a.useMemo(() => {
+      if (L !== "metric") return null;
+      const e = x.map(n => n.colorVal).filter(n => n !== null);
+      return e.length === 0 ? null : {
+        min: Math.min(...e),
+        max: Math.max(...e)
+      }
+    }, [x, L]),
+    ye = fe !== "" ? parseFloat(fe) : null,
+    Me = me !== "" ? parseFloat(me) : null,
+    c = a.useMemo(() => ({
+      top: 20,
+      right: 30,
+      bottom: 50,
+      left: 60
+    }), []),
+    K = a.useMemo(() => {
+      if (x.length === 0) return {
+        xMin: 0,
+        xMax: 1,
+        yMin: 0,
+        yMax: 1
+      };
+      const e = x.map(f => f.x),
+        n = x.map(f => f.y),
+        r = Math.min(...e),
+        i = Math.max(...e),
+        l = Math.min(...n),
+        u = Math.max(...n),
+        t = i - r || 1,
+        h = u - l || 1;
+      return {
+        xMin: r - t * .05,
+        xMax: i + t * .05,
+        yMin: l - h * .05,
+        yMax: u + h * .05
+      }
+    }, [x]),
+    Oe = z ?? K,
+    ee = a.useCallback((e, n) => {
+      const r = e - c.left - c.right,
+        i = n - c.top - c.bottom,
+        {
+          xMin: l,
+          xMax: u,
+          yMin: t,
+          yMax: h
+        } = Oe,
+        f = u - l || 1,
+        y = h - t || 1;
+      return {
+        toCanvasX: C => c.left + (C - l) / f * r,
+        toCanvasY: C => c.top + i - (C - t) / y * i,
+        fromCanvasX: C => l + (C - c.left) / r * f,
+        fromCanvasY: C => t + (c.top + i - C) / i * y,
+        plotW: r,
+        plotH: i
+      }
+    }, [Oe, c]);
+  a.useEffect(() => {
+    const e = oe.current,
+      n = Te.current;
+    if (!e || !n || x.length === 0) return;
+    const r = n.getBoundingClientRect(),
+      i = window.devicePixelRatio || 1,
+      l = r.width,
+      u = r.height;
+    e.width = l * i, e.height = u * i, e.style.width = `${l}px`, e.style.height = `${u}px`;
+    const t = e.getContext("2d");
+    t.scale(i, i);
+    const {
+      toCanvasX: h,
+      toCanvasY: f,
+      plotW: y,
+      plotH: M
+    } = ee(l, u), {
+      xMin: X,
+      xMax: S,
+      yMin: V,
+      yMax: C
+    } = Oe;
+    t.fillStyle = "rgba(0,0,0,0)", t.fillRect(0, 0, l, u), t.strokeStyle =
+      "rgba(255,255,255,0.06)", t.lineWidth = .5;
+    const q = 6,
+      de = 6,
+      Re = S - X || 1,
+      be = C - V || 1;
+    for (let o = 0; o <= q; o++) {
+      const d = X + Re * o / q,
+        p = h(d);
+      t.beginPath(), t.moveTo(p, c.top), t.lineTo(p, c.top + M), t.stroke(), t.fillStyle =
+        "#7a8a9e", t.font = "10px 'JetBrains Mono', monospace", t.textAlign = "center";
+      const b = U ? Math.pow(10, d).toFixed(1) : d.toFixed(1);
+      t.fillText(b + (he(g) ? "%" : ""), p, c.top + M + 14)
+    }
+    for (let o = 0; o <= de; o++) {
+      const d = V + be * o / de,
+        p = f(d);
+      t.beginPath(), t.moveTo(c.left, p), t.lineTo(c.left + y, p), t.stroke(), t.fillStyle =
+        "#7a8a9e", t.font = "10px 'JetBrains Mono', monospace", t.textAlign = "right";
+      const b = Z ? Math.pow(10, d).toFixed(2) : d.toFixed(2);
+      t.fillText(b + (he(v) ? "%" : ""), c.left - 6, p + 3)
+    }
+    if (t.fillStyle = "#94a3b8", t.font = "11px 'JetBrains Mono', monospace", t.textAlign =
+      "center", t.fillText(g + (U ? " (log)" : ""), c.left + y / 2, u - 8), t.save(), t
+      .translate(14, c.top + M / 2), t.rotate(-Math.PI / 2), t.textAlign = "center", t.fillText(
+        v + (Z ? " (log)" : ""), 0, 0), t.restore(), t.strokeStyle = "rgba(255,255,255,0.1)", t
+      .lineWidth = 1, t.strokeRect(c.left, c.top, y, M), t.save(), t.beginPath(), t.rect(c.left,
+        c.top, y, M), t.clip(), re) {
+      if (t.setLineDash([6, 4]), t.lineWidth = 1, ye !== null) {
+        const o = h(ye);
+        t.strokeStyle = "rgba(251, 191, 36, 0.5)", t.beginPath(), t.moveTo(o, c.top), t.lineTo(
+          o, c.top + M), t.stroke()
+      }
+      if (Me !== null) {
+        const o = f(Me);
+        t.strokeStyle = "rgba(251, 191, 36, 0.5)", t.beginPath(), t.moveTo(c.left, o), t.lineTo(
+          c.left + y, o), t.stroke()
+      }
+      if (ye !== null && Me !== null) {
+        t.setLineDash([]), t.font = "bold 10px 'JetBrains Mono', monospace", t.fillStyle =
+          "rgba(251, 191, 36, 0.35)";
+        const o = h(ye),
+          d = f(Me);
+        t.textAlign = "center", t.fillText("Low X · High Y", (c.left + o) / 2, (c.top + d) / 2),
+          t.fillText("High X · High Y", (o + c.left + y) / 2, (c.top + d) / 2), t.fillText(
+            "Low X · Low Y", (c.left + o) / 2, (d + c.top + M) / 2), t.fillText(
+            "High X · Low Y", (o + c.left + y) / 2, (d + c.top + M) / 2)
+      }
+      t.setLineDash([])
+    }
+    if (I && $) {
+      const {
+        slope: o,
+        intercept: d,
+        rSquared: p
+      } = $;
+      t.strokeStyle = "rgba(239, 68, 68, 0.7)", t.lineWidth = 2, t.setLineDash([8, 4]);
+      const b = X,
+        D = S,
+        P = o * b + d,
+        O = o * D + d;
+      t.beginPath(), t.moveTo(h(b), f(P)), t.lineTo(h(D), f(O)), t.stroke(), t.setLineDash([]),
+        t.fillStyle = "rgba(239, 68, 68, 0.85)", t.font =
+        "bold 10px 'JetBrains Mono', monospace", t.textAlign = "left";
+      const G = `R²=${p.toFixed(3)}  β=${o.toFixed(3)}  α=${d.toFixed(2)}`;
+      t.fillText(G, c.left + 6, c.top + 14), t.font = "9px 'JetBrains Mono', monospace", t
+        .fillStyle = "rgba(239, 68, 68, 0.45)";
+      const J = x.map(te => te.x),
+        xe = (Math.min(...J) + Math.max(...J)) / 2,
+        ue = o * xe + d;
+      t.textAlign = "left", t.fillText("Above = expensive", c.left + 6, f(ue) - 8), t.fillText(
+        "Below = cheap", c.left + 6, f(ue) + 14)
+    }
+    if (I && Ae.length > 0) {
+      let o = c.top + 14;
+      Ae.forEach((d, p) => {
+        const b = at[p % at.length],
+          {
+            slope: D,
+            intercept: P,
+            rSquared: O
+          } = d.reg;
+        t.strokeStyle = b, t.lineWidth = 1.5, t.setLineDash([6, 3]);
+        const G = d.points.map(wt => wt.x),
+          J = Math.min(...G),
+          xe = Math.max(...G),
+          ue = D * J + P,
+          te = D * xe + P;
+        t.beginPath(), t.moveTo(h(J), f(ue)), t.lineTo(h(xe), f(te)), t.stroke(), t
+          .setLineDash([]), t.fillStyle = b, t.font =
+          "bold 9px 'JetBrains Mono', monospace", t.textAlign = "left";
+        const Ft = d.group.replace(" Equity REITs", "").slice(0, 20);
+        t.fillText(`${Ft} R²=${O.toFixed(2)} n=${d.points.length}`, c.left + 6, o), o += 12
+      })
+    }
+    const vt = [...x].sort((o, d) => {
+        const p = o.z ?? 0,
+          b = d.z ?? 0;
+        return Math.abs(b) - Math.abs(p)
+      }),
+      nt = o => pe.above.includes(o),
+      yt = o => pe.below.includes(o),
+      Mt = o => {
+        if (L === "metric" && ce) {
+          if (o.colorVal === null || o.colorVal === void 0) return "#64748b";
+          const p = ce.max - ce.min,
+            b = p === 0 ? .5 : (o.colorVal - ce.min) / p;
+          return Ht(b)
+        }
+        const d = o[w] || "";
+        return De[d] || "#64748b"
+      };
+    for (const o of vt) {
+      const d = h(o.x),
+        p = f(o.y),
+        b = o.ticker === F,
+        D = Mt(o),
+        P = nt(o.ticker) || yt(o.ticker);
+      let O = 4;
+      Q && o.z !== null && (O = 3 + (Q.max === Q.min ? .5 : (o.z - Q.min) / (Q.max - Q.min)) *
+          18), b && (O = Math.max(O, 7)), P && H && (O = Math.max(O, 6)), t.beginPath(), t.arc(
+          d, p, O, 0, Math.PI * 2), Q ? (t.fillStyle = D + "88", t.fill(), t.strokeStyle = D, t
+          .lineWidth = 1.5, t.stroke()) : (t.fillStyle = b ? D : D + "cc", t.fill()), P && H &&
+        (t.strokeStyle = nt(o.ticker) ? "#ef4444" : "#22c55e", t.lineWidth = 2, t.beginPath(), t
+          .arc(d, p, O + 3, 0, Math.PI * 2), t.stroke()), b && (t.strokeStyle = "#fff", t
+          .lineWidth = 2, t.stroke()), (b || P && H || !P) && (t.fillStyle = b || P ? "#fff" :
+          "rgba(255,255,255,0.7)", t.font = b || P ? "bold 11px 'JetBrains Mono', monospace" :
+          "10px 'JetBrains Mono', monospace", t.textAlign = "center", t.fillText(o.ticker, d,
+            p - O - 4))
+    }
+    if (t.restore(), F) {
+      const o = x.find(d => d.ticker === F);
+      if (o) {
+        const d = h(o.x),
+          p = f(o.y),
+          b = he(g) ? "%" : "",
+          D = he(v) ? "%" : "",
+          P = o._rawX !== void 0 ? o._rawX : o.x,
+          O = o._rawY !== void 0 ? o._rawY : o.y;
+        let G = `${o.ticker}: ${g}=${P.toFixed(2)}${b}, ${v}=${O.toFixed(2)}${D}`;
+        if (m !== "none" && o.z !== null) {
+          const te = he(m) ? "%" : "";
+          G += `, ${m}=${o.z.toFixed(2)}${te}`
+        }
+        if (L === "metric" && o.colorVal !== null && o.colorVal !== void 0) {
+          const te = he(W) ? "%" : "";
+          G += `, ${W}=${o.colorVal.toFixed(2)}${te}`
+        }
+        if ($) {
+          const te = o.y - ($.slope * o.x + $.intercept);
+          G += ` (resid=${te.toFixed(2)})`
+        }
+        t.font = "11px 'JetBrains Mono', monospace";
+        const J = t.measureText(G).width,
+          xe = Math.max(c.left + 4, Math.min(d - J / 2, l - c.right - J - 4)),
+          ue = p - (Q ? 26 : 22);
+        t.fillStyle = "rgba(0,0,0,0.85)", t.fillRect(xe - 4, ue - 12, J + 8, 16), t.fillStyle =
+          "#fff", t.textAlign = "left", t.fillText(G, xe, ue)
+      }
+    }
+    if (B && B.type === "select") {
+      const o = Math.min(B.startX, B.currentX),
+        d = Math.min(B.startY, B.currentY),
+        p = Math.abs(B.currentX - B.startX),
+        b = Math.abs(B.currentY - B.startY);
+      t.strokeStyle = "rgba(14, 165, 233, 0.8)", t.lineWidth = 1.5, t.setLineDash([4, 3]), t
+        .strokeRect(o, d, p, b), t.setLineDash([]), t.fillStyle = "rgba(14, 165, 233, 0.1)", t
+        .fillRect(o, d, p, b)
+    }
+    z && (t.fillStyle = "rgba(14, 165, 233, 0.7)", t.font =
+      "bold 9px 'JetBrains Mono', monospace", t.textAlign = "right", t.fillText(
+        "ZOOMED — scroll to zoom, drag to select, dbl-click to reset", l - c.right, c.top - 6)
+      )
+  }, [x, g, v, m, F, w, De, Q, I, $, Ae, H, pe, re, ye, Me, Oe, ee, c, B, z, U, Z, L, W, ce]);
+  const ut = a.useCallback(e => {
+      const n = oe.current;
+      if (!n) return;
+      const r = n.getBoundingClientRect(),
+        i = e.clientX - r.left,
+        l = e.clientY - r.top,
+        u = e.button === 1 || e.button === 2 || e.shiftKey,
+        t = {
+          type: u ? "pan" : "select",
+          startX: i,
+          startY: l,
+          currentX: i,
+          currentY: l
+        };
+      j.current = t, u || Xe(t)
+    }, []),
+    ht = a.useCallback(e => {
+      const n = oe.current,
+        r = Te.current;
+      if (!n || !r || x.length === 0) return;
+      const i = n.getBoundingClientRect(),
+        l = e.clientX - i.left,
+        u = e.clientY - i.top;
+      if (j.current) {
+        if (j.current.type === "pan") {
+          const S = i.width,
+            V = i.height,
+            {
+              fromCanvasX: C,
+              fromCanvasY: q
+            } = ee(S, V),
+            de = C(l) - C(j.current.currentX),
+            Re = q(u) - q(j.current.currentY),
+            be = z ?? K;
+          le({
+            xMin: be.xMin - de,
+            xMax: be.xMax - de,
+            yMin: be.yMin - Re,
+            yMax: be.yMax - Re
+          }), j.current.currentX = l, j.current.currentY = u
+        } else j.current = {
+          ...j.current,
+          currentX: l,
+          currentY: u
+        }, Xe({
+          ...j.current
+        });
+        return
+      }
+      const t = i.width,
+        h = i.height,
+        {
+          toCanvasX: f,
+          toCanvasY: y
+        } = ee(t, h);
+      let M = null,
+        X = 20;
+      for (const S of x) {
+        const V = f(S.x),
+          C = y(S.y),
+          q = Math.sqrt((l - V) ** 2 + (u - C) ** 2);
+        q < X && (X = q, M = S.ticker)
+      }
+      E(M)
+    }, [x, ee, z, K]),
+    ft = a.useCallback(e => {
+      const n = j.current;
+      if (j.current = null, Xe(null), !n || n.type !== "select") return;
+      const r = oe.current;
+      if (!r) return;
+      const i = r.getBoundingClientRect(),
+        l = i.width,
+        u = i.height,
+        t = Math.abs(n.currentX - n.startX),
+        h = Math.abs(n.currentY - n.startY);
+      if (t < 5 && h < 5) {
+        F && ot(F);
+        return
+      }
+      const {
+        fromCanvasX: f,
+        fromCanvasY: y
+      } = ee(l, u), M = f(Math.min(n.startX, n.currentX)), X = f(Math.max(n.startX, n.currentX)),
+        S = y(Math.max(n.startY, n.currentY)), V = y(Math.min(n.startY, n.currentY));
+      z ? ge.current.push(z) : ge.current.push(K), le({
+        xMin: M,
+        xMax: X,
+        yMin: S,
+        yMax: V
+      })
+    }, [ee, z, K, F, ot]),
+    mt = a.useCallback(e => {
+      e.preventDefault();
+      const n = oe.current;
+      if (!n) return;
+      const r = n.getBoundingClientRect(),
+        i = r.width,
+        l = r.height,
+        u = e.clientX - r.left,
+        t = e.clientY - r.top,
+        {
+          fromCanvasX: h,
+          fromCanvasY: f
+        } = ee(i, l),
+        y = h(u),
+        M = f(t),
+        X = e.deltaY > 0 ? 1.15 : 1 / 1.15,
+        S = z ?? K,
+        V = y - (y - S.xMin) * X,
+        C = y + (S.xMax - y) * X,
+        q = M - (M - S.yMin) * X,
+        de = M + (S.yMax - M) * X;
+      le({
+        xMin: V,
+        xMax: C,
+        yMin: q,
+        yMax: de
+      })
+    }, [ee, z, K]),
+    gt = a.useCallback(() => {
+      if (ge.current.length > 0) {
+        const e = ge.current.pop(),
+          n = K;
+        Math.abs(e.xMin - n.xMin) < 1e-9 && Math.abs(e.xMax - n.xMax) < 1e-9 ? le(null) : le(e)
+      } else le(null)
+    }, [K]),
+    pt = a.useCallback(() => {
+      le(null), ge.current = []
+    }, []);
+  a.useEffect(() => {
+    const e = Te.current;
+    if (!e) return;
+    const n = new ResizeObserver(() => {
+      E(r => r)
+    });
+    return n.observe(e), () => n.disconnect()
+  }, []), a.useEffect(() => {
+    const e = oe.current;
+    if (!e) return;
+    const n = i => i.preventDefault();
+    e.addEventListener("contextmenu", n);
+    const r = i => i.preventDefault();
+    return e.addEventListener("wheel", r, {
+      passive: !1
+    }), () => {
+      e.removeEventListener("contextmenu", n), e.removeEventListener("wheel", r)
+    }
+  }, []), a.useEffect(() => {
+    if (re && x.length > 2) {
+      const e = x.map(l => l.x).sort((l, u) => l - u),
+        n = x.map(l => l.y).sort((l, u) => l - u),
+        r = e[Math.floor(e.length / 2)],
+        i = n[Math.floor(n.length / 2)];
+      fe === "" && Pe(r.toFixed(2)), me === "" && Ee(i.toFixed(2))
+    }
+  }, [re, x.length]);
+  const bt = () => {
+    const e = L === "metric" ? "," + W : "",
+      n = `Ticker,Name,Subindustry,${g},${v}${m!=="none"?","+m:""}${e}${$?",Residual":""}`,
+      r = x.map(h => {
+        let f =
+          `${h.ticker},"${h.name}","${h.subindustry}",${h.x},${h.y}${m!=="none"?","+(h.z??""):""}`;
+        if (L === "metric" && (f += `,${h.colorVal??""}`), $) {
+          const y = h.y - ($.slope * h.x + $.intercept);
+          f += `,${y.toFixed(4)}`
+        }
+        return f
+      }),
+      i = [n, ...r].join(`
+`),
+      l = new Blob([i], {
+        type: "text/csv"
+      }),
+      u = URL.createObjectURL(l),
+      t = document.createElement("a");
+    t.href = u, t.download = `scatter_${g}_vs_${v}.csv`.replace(/[^a-zA-Z0-9._-]/g, "_"), t
+    .click(), URL.revokeObjectURL(u)
+  };
+  return s.jsxs("div", {
+    className: "flex flex-col h-full bg-background",
+    "data-testid": "scatter-page",
+    children: [s.jsxs("div", {
+      className: "flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-wrap",
+      children: [s.jsxs(Xt, {
+        children: [s.jsx(Ot, {
+          asChild: !0,
+          children: s.jsxs(Le, {
+            variant: "outline",
+            size: "sm",
+            className: "h-6 gap-1 text-[11px] px-2",
+            children: [s.jsx(Rt, {
+              className: "w-3 h-3"
+            }), "Templates"]
+          })
+        }), s.jsxs(Lt, {
+          align: "start",
+          className: "w-56",
+          children: [s.jsx(Pt, {
+            className: "text-[10px]",
+            children: "Preset Views"
+          }), s.jsx(Et, {}), Jt.map(e => s.jsx($t, {
+            className: "text-[11px] cursor-pointer",
+            onClick: () => {
+              R(e.x), Y(e.y), e.z ? k(e.z) : k("none")
+            },
+            children: e.label
+          }, e.label))]
+        })]
+      }), s.jsx("div", {
+        className: "h-5 w-px bg-border"
+      }), s.jsx("span", {
+        className: "text-xs font-semibold text-muted-foreground",
+        children: "X"
+      }), s.jsx(Be, {
+        value: g,
+        onChange: R,
+        testId: "scatter-x"
+      }), s.jsx("span", {
+        className: "text-xs font-semibold text-muted-foreground",
+        children: "Y"
+      }), s.jsx(Be, {
+        value: v,
+        onChange: Y,
+        testId: "scatter-y"
+      }), s.jsx("span", {
+        className: "text-xs font-semibold text-muted-foreground",
+        children: "Size"
+      }), s.jsxs(Ye, {
+        value: m,
+        onValueChange: k,
+        children: [s.jsx(je, {
+          className: "h-6 text-[11px] w-[180px]",
+          "data-testid": "scatter-z",
+          children: s.jsx(Se, {})
+        }), s.jsxs(Ce, {
+          className: "max-h-[420px]",
+          children: [s.jsx(se, {
+            value: "none",
+            children: "None (uniform)"
+          }), Object.entries(ct).map(([e, n]) => s.jsxs("div", {
+            children: [s.jsx("div", {
+              className: "px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
+              children: e
+            }), n.map(r => s.jsx(se, {
+              value: r,
+              children: r
+            }, r))]
+          }, e)), (() => {
+            const e = lt();
+            return e.length > 0 ? s.jsxs("div", {
+              children: [s.jsx("div", {
+                className: "px-2 py-1 text-[10px] font-semibold text-emerald-400 uppercase tracking-wider",
+                children: "Uploaded Fundamental"
+              }), e.map(n => s.jsx(se, {
+                value: n,
+                children: n
+              }, n))]
+            }) : null
+          })()]
+        })]
+      }), s.jsx("div", {
+        className: "h-5 w-px bg-border mx-0.5"
+      }), s.jsx("span", {
+        className: "text-xs font-semibold text-muted-foreground",
+        children: "Color"
+      }), s.jsxs(Ye, {
+        value: L,
+        onValueChange: e => Ge(e),
+        children: [s.jsx(je, {
+          className: "h-6 text-[11px] w-[90px]",
+          "data-testid": "scatter-color-mode",
+          children: s.jsx(Se, {})
+        }), s.jsxs(Ce, {
+          children: [s.jsx(se, {
+            value: "category",
+            children: "Category"
+          }), s.jsx(se, {
+            value: "metric",
+            children: "Metric"
+          })]
+        })]
+      }), L === "category" ? s.jsxs(Ye, {
+        value: w,
+        onValueChange: Ve,
+        children: [s.jsx(je, {
+          className: "h-6 text-[11px] w-[160px]",
+          "data-testid": "scatter-color-by",
+          children: s.jsx(Se, {})
+        }), s.jsx(Ce, {
+          children: Wt.map(e => s.jsx(se, {
+            value: e.field,
+            children: e.label
+          }, e.field))
+        })]
+      }) : s.jsx(Be, {
+        value: W,
+        onChange: _e,
+        testId: "scatter-color-metric"
+      }), s.jsx("div", {
+        className: "h-5 w-px bg-border mx-0.5"
+      }), s.jsx("span", {
+        className: "text-xs font-semibold text-muted-foreground",
+        children: "Date"
+      }), s.jsx(Ie, {
+        type: "date",
+        value: Ne,
+        onChange: e => We(e.target.value),
+        className: "h-6 text-[11px] w-[130px] bg-background",
+        "data-testid": "scatter-date"
+      }), Ne && s.jsx(Le, {
+        variant: "ghost",
+        size: "sm",
+        className: "h-6 text-[11px] px-2",
+        onClick: () => We(""),
+        children: "Latest"
+      })]
+    }), s.jsxs("div", {
+      className: "flex items-center gap-3 px-3 py-1 border-b border-border/50 flex-wrap",
+      children: [s.jsxs("div", {
+        className: "flex items-center gap-1.5",
+        children: [s.jsx(Dt, {
+          className: "w-3 h-3 text-red-400"
+        }), s.jsx("span", {
+          className: "text-[11px] text-muted-foreground",
+          children: "Regression"
+        }), s.jsx(Fe, {
+          checked: I,
+          onCheckedChange: He,
+          className: "scale-75",
+          "data-testid": "toggle-regression"
+        })]
+      }), I && s.jsxs(Ye, {
+        value: ae,
+        onValueChange: e => Qe(e),
+        children: [s.jsx(je, {
+          className: "h-6 text-[11px] w-[130px]",
+          children: s.jsx(Se, {})
+        }), s.jsx(Ce, {
+          children: Ut.map(e => s.jsx(se, {
+            value: e.key,
+            children: e.label
+          }, e.key))
+        })]
+      }), s.jsxs("div", {
+        className: "flex items-center gap-1.5",
+        children: [s.jsx("span", {
+          className: "text-[11px] text-muted-foreground",
+          children: "Outliers"
+        }), s.jsx(Fe, {
+          checked: H,
+          onCheckedChange: qe,
+          className: "scale-75",
+          "data-testid": "toggle-outliers"
+        })]
+      }), s.jsx("div", {
+        className: "h-5 w-px bg-border"
+      }), s.jsxs("div", {
+        className: "flex items-center gap-1.5",
+        children: [s.jsx(At, {
+          className: "w-3 h-3 text-amber-400"
+        }), s.jsx("span", {
+          className: "text-[11px] text-muted-foreground",
+          children: "Quadrants"
+        }), s.jsx(Fe, {
+          checked: re,
+          onCheckedChange: Je,
+          className: "scale-75",
+          "data-testid": "toggle-quadrants"
+        })]
+      }), re && s.jsxs(s.Fragment, {
+        children: [s.jsx(Ie, {
+          type: "number",
+          step: "any",
+          placeholder: "X ref",
+          value: fe,
+          onChange: e => Pe(e.target.value),
+          className: "h-6 text-[11px] w-[70px] bg-background",
+          "data-testid": "ref-line-x"
+        }), s.jsx(Ie, {
+          type: "number",
+          step: "any",
+          placeholder: "Y ref",
+          value: me,
+          onChange: e => Ee(e.target.value),
+          className: "h-6 text-[11px] w-[70px] bg-background",
+          "data-testid": "ref-line-y"
+        })]
+      }), s.jsx("div", {
+        className: "h-5 w-px bg-border"
+      }), s.jsxs("div", {
+        className: "flex items-center gap-1.5",
+        children: [s.jsx("span", {
+          className: "text-[11px] text-muted-foreground",
+          children: "Log X"
+        }), s.jsx(Fe, {
+          checked: U,
+          onCheckedChange: Ue,
+          className: "scale-75"
+        })]
+      }), s.jsxs("div", {
+        className: "flex items-center gap-1.5",
+        children: [s.jsx("span", {
+          className: "text-[11px] text-muted-foreground",
+          children: "Log Y"
+        }), s.jsx(Fe, {
+          checked: Z,
+          onCheckedChange: Ze,
+          className: "scale-75"
+        })]
+      })]
+    }), s.jsx("div", {
+      className: "flex items-center gap-1.5 px-3 py-1 border-b border-border/50 flex-wrap",
+      children: s.jsxs(It, {
+        filters: N,
+        onFiltersChange: ne,
+        search: _,
+        onSearchChange: A,
+        manualTickers: ie,
+        onManualTickersChange: ke,
+        filteredCount: x.length,
+        totalCount: ve.length,
+        testIdPrefix: "scatter",
+        children: [tt && s.jsx("span", {
+          className: "text-[10px] text-muted-foreground font-mono",
+          children: tt
+        }), s.jsx(zt, {
+          getCanvas: () => oe.current,
+          label: `Scatter_${g}_vs_${v}`
+        }), s.jsxs(Le, {
+          variant: "outline",
+          size: "sm",
+          className: "h-6 gap-1 text-[11px]",
+          onClick: bt,
+          children: [s.jsx(Bt, {
+            className: "w-3 h-3"
+          }), "CSV"]
+        })]
+      })
+    }), s.jsxs("div", {
+      className: "flex items-center gap-2 px-3 py-0.5 border-b border-border/30 overflow-x-auto flex-shrink-0",
+      children: [L === "metric" && ce ? s.jsxs("div", {
+        className: "flex items-center gap-2",
+        children: [s.jsx(Vt, {
+          className: "w-3 h-3 text-muted-foreground"
+        }), s.jsxs("span", {
+          className: "text-[10px] text-muted-foreground font-mono",
+          children: [W, he(W) ? "%" : ""]
+        }), s.jsx("span", {
+          className: "text-[10px] text-muted-foreground font-mono",
+          children: ce.min.toFixed(1)
+        }), s.jsx("div", {
+          className: "h-2.5 rounded-sm flex-shrink-0",
+          style: {
+            width: 120,
+            background: `linear-gradient(to right, ${we(0)}, ${we(.25)}, ${we(.5)}, ${we(.75)}, ${we(1)})`
+          }
+        }), s.jsx("span", {
+          className: "text-[10px] text-muted-foreground font-mono",
+          children: ce.max.toFixed(1)
+        })]
+      }) : $e.slice(0, 20).map(e => s.jsxs("button", {
+        className: `flex items-center gap-1 text-[10px] whitespace-nowrap ${N.subindustry.has(e)?"text-foreground font-semibold":"text-muted-foreground"}`,
+        onClick: () => {
+          if (w === "subindustry") {
+            const n = w,
+              r = new Set(N[n]);
+            r.has(e) ? r.delete(e) : (r.clear(), r.add(e)), ne({
+              ...N,
+              [n]: r
+            })
+          }
+        },
+        children: [s.jsx("span", {
+          className: "w-2 h-2 rounded-full flex-shrink-0",
+          style: {
+            backgroundColor: De[e]
+          }
+        }), e.replace(" Equity REITs", "")]
+      }, e)), H && pe.above.length > 0 && s.jsxs(s.Fragment, {
+        children: [s.jsx("div", {
+          className: "h-3 w-px bg-border mx-1"
+        }), s.jsxs("span", {
+          className: "text-[10px] text-red-400 font-mono",
+          children: ["Expensive: ", pe.above.join(", ")]
+        }), s.jsxs("span", {
+          className: "text-[10px] text-green-400 font-mono",
+          children: ["Cheap: ", pe.below.join(", ")]
+        })]
+      })]
+    }), s.jsxs("div", {
+      ref: Te,
+      className: "flex-1 relative min-h-0",
+      children: [xt ? s.jsx("div", {
+        className: "flex items-center justify-center h-full text-muted-foreground text-sm",
+        children: "Loading..."
+      }) : s.jsx("canvas", {
+        ref: oe,
+        className: "w-full h-full",
+        style: {
+          cursor: j.current ? j.current.type === "pan" ? "grabbing" : "crosshair" :
+            F ? "pointer" : "crosshair"
+        },
+        onMouseDown: ut,
+        onMouseMove: ht,
+        onMouseUp: ft,
+        onMouseLeave: e => {
+          E(null), j.current && (j.current = null, Xe(null))
+        },
+        onWheel: mt,
+        onDoubleClick: gt,
+        "data-testid": "scatter-canvas"
+      }), z && s.jsxs(Le, {
+        variant: "outline",
+        size: "sm",
+        className: "absolute top-2 right-2 h-6 gap-1 text-[11px] bg-background/90 backdrop-blur-sm z-10",
+        onClick: pt,
+        "data-testid": "scatter-reset-zoom",
+        children: [s.jsx(Gt, {
+          className: "w-3 h-3"
+        }), "Reset Zoom"]
+      })]
+    })]
+  })
+}
+
+function Be({
+  value: T,
+  onChange: g,
+  testId: R
+}) {
+  const v = lt();
+  return s.jsxs(Ye, {
+    value: T,
+    onValueChange: g,
+    children: [s.jsx(je, {
+      className: "h-6 text-[11px] w-[180px]",
+      "data-testid": R,
+      children: s.jsx(Se, {})
+    }), s.jsxs(Ce, {
+      className: "max-h-[420px]",
+      children: [Object.entries(ct).map(([Y, m]) => s.jsxs("div", {
+        children: [s.jsx("div", {
+          className: "px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground",
+          children: Y
+        }), m.map(k => s.jsx(se, {
+          value: k,
+          children: k
+        }, k))]
+      }, Y)), v.length > 0 && s.jsxs("div", {
+        children: [s.jsx("div", {
+          className: "px-2 py-1 text-[10px] font-semibold text-emerald-400 uppercase tracking-wider",
+          children: "Uploaded Fundamental"
+        }), v.map(Y => s.jsx(se, {
+          value: Y,
+          children: Y
+        }, Y))]
+      })]
+    })]
+  })
+}
+export {
+  Qt as
+  default
+};

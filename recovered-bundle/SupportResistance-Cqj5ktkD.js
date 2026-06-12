@@ -1,0 +1,2209 @@
+import {
+  dn as ut,
+  r as l,
+  aF as Ct,
+  aG as wt,
+  aH as Tt,
+  aU as At,
+  ak as Ee,
+  aJ as qe,
+  j as t,
+  a as Lt,
+  af as Rt,
+  e as Mt,
+  h as Pt,
+  cG as Bt,
+  dI as Ft,
+  g as $t,
+  ae as Dt,
+  cJ as It,
+  cK as zt,
+  cL as Et,
+  cN as lt,
+  cO as _t,
+  cP as Ot,
+  y as Ut
+} from "./index-CsG73Aq_.js";
+import {
+  g as Ht
+} from "./yahooPairsRatio-DERC-reP.js";
+import {
+  U as Xe
+} from "./UnifiedTickerPicker-D927mSvl.js";
+import {
+  B as Wt
+} from "./BasketTickerPill-DA9Wjwwc.js";
+import {
+  B as Vt
+} from "./BasketPicker-DkcKAXfe.js";
+import {
+  C as Gt
+} from "./ClassificationFiltersWithSource-D7v4WOtR.js";
+import {
+  u as Yt
+} from "./globalUniverse-DuqPcp2u.js";
+const _e = {
+  tolerancePct: .005,
+  bounceLookahead: 5,
+  bounceThresholdPct: .015,
+  holdBars: 5,
+  pivotLeft: 5,
+  pivotRight: 5,
+  pivotClusterPct: .01,
+  enableHorizontal: !0,
+  enableMA: !0,
+  enableFib: !0,
+  maTypes: ["SMA", "EMA", "WMA", "HMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"],
+  maPeriods: [20, 50, 100, 200],
+  fibLookbackBars: 252,
+  minTouches: 3
+};
+
+function pt(r, u) {
+  const y = Date.parse(r),
+    v = Date.parse(u);
+  return isNaN(y) || isNaN(v) ? 0 : Math.round(Math.abs(v - y) / 864e5)
+}
+
+function ht() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function ft(r, u, y) {
+  const {
+    closes: v,
+    highs: T,
+    lows: C,
+    dates: A
+  } = u, F = v.length, {
+    tolerancePct: S,
+    bounceLookahead: z,
+    bounceThresholdPct: M,
+    holdBars: p
+  } = y, i = [];
+  for (let k = 0; k < F; k++) {
+    const O = v[k],
+      X = T[k],
+      he = C[k],
+      ne = Math.abs(O - r) / O <= S,
+      g = Math.abs(X - r) / r <= S,
+      P = Math.abs(he - r) / r <= S;
+    if (!ne && !g && !P) continue;
+    const re = O >= r ? "support" : "resistance";
+    let K = !1,
+      le = null;
+    const de = Math.min(F - 1, k + z);
+    if (re === "support") {
+      const J = r * (1 + M);
+      let R = -1 / 0;
+      for (let G = k + 1; G <= de; G++) {
+        v[G] >= J && (K = !0);
+        const Q = (v[G] - r) / r;
+        Q > R && (R = Q)
+      }
+      R > -1 / 0 && (le = R * 100)
+    } else {
+      const J = r * (1 - M);
+      let R = -1 / 0;
+      for (let G = k + 1; G <= de; G++) {
+        v[G] <= J && (K = !0);
+        const Q = (r - v[G]) / r;
+        Q > R && (R = Q)
+      }
+      R > -1 / 0 && (le = R * 100)
+    }
+    const ke = Math.min(F - 1, k + p);
+    let ae = !0;
+    if (re === "support") {
+      const J = r * (1 - S);
+      for (let R = k + 1; R <= ke; R++)
+        if (v[R] < J) {
+          ae = !1;
+          break
+        }
+    } else {
+      const J = r * (1 + S);
+      for (let R = k + 1; R <= ke; R++)
+        if (v[R] > J) {
+          ae = !1;
+          break
+        }
+    }
+    i.push({
+      date: A[k],
+      index: k,
+      side: re,
+      bouncedReverse: K,
+      bounceMagnitudePct: le,
+      heldWithoutBreak: ae
+    })
+  }
+  const B = i.length;
+  if (B === 0) return {
+    touches: i,
+    touchCount: 0,
+    bounceReverseCount: 0,
+    bounceReverseRate: 0,
+    avgBounceMagnitudePct: 0,
+    holdCount: 0,
+    holdRate: 0,
+    lastTouchDate: null,
+    daysSinceLastTouch: null,
+    compositeScore: 0
+  };
+  const n = i.filter(k => k.bouncedReverse).length,
+    h = n / B,
+    b = i.map(k => k.bounceMagnitudePct).filter(k => k !== null && k >= 0),
+    m = b.length > 0 ? b.reduce((k, O) => k + O, 0) / b.length : 0,
+    a = i.filter(k => k.heldWithoutBreak).length,
+    w = a / B,
+    N = [...i.map(k => k.date)].sort(),
+    U = N[N.length - 1] ?? null,
+    pe = ht(),
+    te = U !== null ? pt(U, pe) : null,
+    se = Math.min(B / 10, 1),
+    H = h,
+    _ = w,
+    W = te !== null ? Math.max(0, 1 - te / 365) : 0,
+    oe = .3 * se + .3 * H + .2 * _ + .2 * W;
+  return {
+    touches: i,
+    touchCount: B,
+    bounceReverseCount: n,
+    bounceReverseRate: h,
+    avgBounceMagnitudePct: m,
+    holdCount: a,
+    holdRate: w,
+    lastTouchDate: U,
+    daysSinceLastTouch: te,
+    compositeScore: oe
+  }
+}
+
+function mt(r, u) {
+  return {
+    type: r.type,
+    price: r.price,
+    maType: r.maType,
+    maPeriod: r.maPeriod,
+    fibLevel: r.fibLevel,
+    fibSwingHigh: r.fibSwingHigh,
+    fibSwingLow: r.fibSwingLow,
+    ...u
+  }
+}
+
+function Kt(r, u) {
+  const {
+    closes: y,
+    highs: v,
+    lows: T
+  } = r, {
+    pivotLeft: C,
+    pivotRight: A,
+    pivotClusterPct: F,
+    minTouches: S
+  } = u, z = y.length, M = [];
+  for (let n = C; n < z - A; n++) {
+    let h = !0;
+    for (let m = n - C; m < n; m++)
+      if (v[n] <= v[m]) {
+        h = !1;
+        break
+      } if (h) {
+      for (let m = n + 1; m <= n + A; m++)
+        if (v[n] <= v[m]) {
+          h = !1;
+          break
+        }
+    }
+    h && M.push(v[n]);
+    let b = !0;
+    for (let m = n - C; m < n; m++)
+      if (T[n] >= T[m]) {
+        b = !1;
+        break
+      } if (b) {
+      for (let m = n + 1; m <= n + A; m++)
+        if (T[n] >= T[m]) {
+          b = !1;
+          break
+        }
+    }
+    b && M.push(T[n])
+  }
+  if (M.length === 0) return [];
+  M.sort((n, h) => n - h);
+  const p = [];
+  let i = [M[0]];
+  for (let n = 1; n < M.length; n++) {
+    const h = i[i.length - 1];
+    Math.abs(M[n] - h) / h <= F ? i.push(M[n]) : (p.push(i), i = [M[n]])
+  }
+  p.push(i);
+  const B = [];
+  for (const n of p) {
+    const h = n.reduce((m, a) => m + a, 0) / n.length,
+      b = ft(h, r, u);
+    b.touchCount < S || B.push(mt({
+      type: "horizontal",
+      price: h
+    }, b))
+  }
+  return B
+}
+
+function Jt(r, u) {
+  const {
+    closes: y,
+    highs: v,
+    lows: T
+  } = r, C = y.length, {
+    maTypes: A,
+    maPeriods: F,
+    tolerancePct: S,
+    minTouches: z
+  } = u, M = [];
+  for (const p of A)
+    for (const i of F) {
+      const n = ut(y, i, p, {
+        highs: v,
+        lows: T
+      });
+      let h = null;
+      for (let g = C - 1; g >= 0; g--)
+        if (n[g] !== null) {
+          h = n[g];
+          break
+        } if (h === null) continue;
+      const b = h,
+        m = [];
+      for (let g = 0; g < C; g++) {
+        const P = n[g];
+        if (P === null) continue;
+        const re = y[g],
+          K = v[g],
+          le = T[g],
+          de = Math.abs(re - P) / re <= S,
+          ke = Math.abs(K - P) / P <= S,
+          ae = Math.abs(le - P) / P <= S;
+        if (!de && !ke && !ae) continue;
+        const J = re >= P ? "support" : "resistance",
+          {
+            bounceLookahead: R,
+            bounceThresholdPct: G,
+            holdBars: Q
+          } = u;
+        let Se = !1,
+          fe = null;
+        const Ae = Math.min(C - 1, g + R);
+        if (J === "support") {
+          const Z = P * (1 + G);
+          let E = -1 / 0;
+          for (let Y = g + 1; Y <= Ae; Y++) {
+            y[Y] >= Z && (Se = !0);
+            const ge = (y[Y] - P) / P;
+            ge > E && (E = ge)
+          }
+          E > -1 / 0 && (fe = E * 100)
+        } else {
+          const Z = P * (1 - G);
+          let E = -1 / 0;
+          for (let Y = g + 1; Y <= Ae; Y++) {
+            y[Y] <= Z && (Se = !0);
+            const ge = (P - y[Y]) / P;
+            ge > E && (E = ge)
+          }
+          E > -1 / 0 && (fe = E * 100)
+        }
+        const be = Math.min(C - 1, g + Q);
+        let Ne = !0;
+        if (J === "support") {
+          const Z = P * (1 - S);
+          for (let E = g + 1; E <= be; E++)
+            if (y[E] < Z) {
+              Ne = !1;
+              break
+            }
+        } else {
+          const Z = P * (1 + S);
+          for (let E = g + 1; E <= be; E++)
+            if (y[E] > Z) {
+              Ne = !1;
+              break
+            }
+        }
+        m.push({
+          date: r.dates[g],
+          index: g,
+          side: J,
+          bouncedReverse: Se,
+          bounceMagnitudePct: fe,
+          heldWithoutBreak: Ne
+        })
+      }
+      const a = m.length;
+      if (a < z) continue;
+      const w = m.filter(g => g.bouncedReverse).length,
+        N = w / a,
+        U = m.map(g => g.bounceMagnitudePct).filter(g => g !== null && g >= 0),
+        pe = U.length > 0 ? U.reduce((g, P) => g + P, 0) / U.length : 0,
+        te = m.filter(g => g.heldWithoutBreak).length,
+        se = te / a,
+        H = [...m.map(g => g.date)].sort(),
+        _ = H[H.length - 1] ?? null,
+        W = ht(),
+        oe = _ !== null ? pt(_, W) : null,
+        k = Math.min(a / 10, 1),
+        O = N,
+        X = se,
+        he = oe !== null ? Math.max(0, 1 - oe / 365) : 0,
+        ne = .3 * k + .3 * O + .2 * X + .2 * he;
+      M.push({
+        type: "ma",
+        price: b,
+        maType: p,
+        maPeriod: i,
+        touches: m,
+        touchCount: a,
+        bounceReverseCount: w,
+        bounceReverseRate: N,
+        avgBounceMagnitudePct: pe,
+        holdCount: te,
+        holdRate: se,
+        lastTouchDate: _,
+        daysSinceLastTouch: oe,
+        compositeScore: ne
+      })
+    }
+  return M
+}
+const qt = [.236, .382, .5, .618, .786];
+
+function Xt(r, u) {
+  const {
+    highs: y,
+    lows: v
+  } = r, {
+    fibLookbackBars: T,
+    minTouches: C
+  } = u, A = r.closes.length, F = Math.max(0, A - T);
+  let S = F,
+    z = F;
+  for (let n = F; n < A; n++) y[n] > y[S] && (S = n), v[n] < v[z] && (z = n);
+  const M = y[S],
+    p = v[z],
+    i = M - p;
+  if (i <= 0) return [];
+  const B = [];
+  for (const n of qt) {
+    let h;
+    S >= z ? h = M - i * n : h = p + i * n;
+    const b = ft(h, r, u);
+    b.touchCount < C || B.push(mt({
+      type: "fib",
+      price: h,
+      fibLevel: n,
+      fibSwingHigh: M,
+      fibSwingLow: p
+    }, b))
+  }
+  return B
+}
+
+function Qt(r, u) {
+  const y = {
+    ..._e,
+    ...u
+  };
+  if (r.closes.length === 0) return [];
+  const T = [];
+  if (y.enableHorizontal) {
+    const C = Kt(r, y);
+    T.push(...C)
+  }
+  if (y.enableMA) {
+    const C = Jt(r, y);
+    T.push(...C)
+  }
+  if (y.enableFib) {
+    const C = Xt(r, y);
+    T.push(...C)
+  }
+  return T.sort((C, A) => A.compositeScore - C.compositeScore), T
+}
+
+function Zt(r) {
+  return r.type === "ma" ? `${r.maType??"MA"} ${r.maPeriod??""}`.trim() : r.type === "fib" ?
+    `Fib ${((r.fibLevel??0)*100).toFixed(1)}%` : "Horizontal"
+}
+
+function er(r, u) {
+  if (u <= 0) return [];
+  const y = [],
+    [v, T, C] = r.split("-").map(S => parseInt(S, 10));
+  if (!v || !T || !C) return [];
+  const A = new Date(v, T - 1, C);
+  let F = 0;
+  for (; F < u;) {
+    A.setDate(A.getDate() + 1);
+    const S = A.getDay();
+    if (S === 0 || S === 6) continue;
+    const z = A.getFullYear(),
+      M = String(A.getMonth() + 1).padStart(2, "0"),
+      p = String(A.getDate()).padStart(2, "0");
+    y.push(`${z}-${M}-${p}`), F++
+  }
+  return y
+}
+
+function tr({
+  bars: r,
+  levels: u,
+  ticker: y,
+  height: v = 480,
+  futureBars: T = 60
+}) {
+  const C = l.useRef(null),
+    A = l.useRef(null),
+    F = l.useRef(null),
+    S = l.useRef([]),
+    z = l.useRef([]);
+  l.useEffect(() => {
+    const p = C.current;
+    if (!p) return;
+    const i = Ct(p, {
+      width: p.clientWidth,
+      height: v,
+      layout: {
+        background: {
+          type: Tt.Solid,
+          color: "transparent"
+        },
+        textColor: "#9ca3af",
+        fontSize: 11,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+      },
+      grid: {
+        vertLines: {
+          color: "rgba(75,85,99,0.15)"
+        },
+        horzLines: {
+          color: "rgba(75,85,99,0.15)"
+        }
+      },
+      crosshair: {
+        mode: wt.Normal
+      },
+      rightPriceScale: {
+        borderColor: "rgba(75,85,99,0.3)"
+      },
+      timeScale: {
+        borderColor: "rgba(75,85,99,0.3)",
+        timeVisible: !1,
+        secondsVisible: !1
+      }
+    });
+    A.current = i;
+    const B = i.addSeries(At, {
+      upColor: "#22c55e",
+      downColor: "#ef4444",
+      borderVisible: !1,
+      wickUpColor: "#22c55e",
+      wickDownColor: "#ef4444",
+      priceFormat: {
+        type: "price",
+        precision: 2,
+        minMove: .01
+      }
+    });
+    F.current = B;
+    const n = new ResizeObserver(() => {
+      C.current && A.current && A.current.applyOptions({
+        width: C.current.clientWidth
+      })
+    });
+    return n.observe(p), () => {
+      n.disconnect(), i.remove(), A.current = null, F.current = null, S.current = [], z
+        .current = []
+    }
+  }, [v]), l.useEffect(() => {
+    const p = F.current;
+    if (!p) return;
+    const i = r.dates.length,
+      B = [];
+    let n = r.closes[0] ?? 0;
+    for (let h = 0; h < i; h++) {
+      const b = r.closes[h],
+        m = r.highs[h],
+        a = r.lows[h];
+      if (!Number.isFinite(b) || !Number.isFinite(m) || !Number.isFinite(a)) continue;
+      const w = h === 0 ? b : n;
+      B.push({
+        time: r.dates[h],
+        open: w,
+        high: m,
+        low: a,
+        close: b
+      }), n = b
+    }
+    p.setData(B), A.current?.timeScale().fitContent()
+  }, [r]), l.useEffect(() => {
+    const p = F.current,
+      i = A.current;
+    if (!p || !i) return;
+    for (const a of z.current) try {
+      p.removePriceLine(a)
+    } catch {}
+    z.current = [];
+    for (const a of S.current) try {
+      i.removeSeries(a)
+    } catch {}
+    if (S.current = [], !u || u.length === 0) return;
+    const B = r.closes[r.closes.length - 1],
+      n = r.dates[r.dates.length - 1],
+      h = u.some(a => a.type === "horizontal" || a.type === "fib"),
+      b = T > 0 && h ? er(n, T) : [];
+    u.forEach((a, w) => {
+      if (!a) return;
+      const N = a.price > B,
+        U = N ? "#ef4444" : "#22c55e",
+        pe = N ? "#fca5a5" : "#86efac",
+        te = `${Zt(a)} @ $${a.price.toFixed(2)} · ${(a.compositeScore*100).toFixed(1)}`;
+      if (a.type === "horizontal" || a.type === "fib") {
+        const se = p.createPriceLine({
+          price: a.price,
+          color: U,
+          lineWidth: 2,
+          lineStyle: a.type === "fib" ? Ee.Dashed : Ee.Solid,
+          axisLabelVisible: w === 0,
+          title: te
+        });
+        if (z.current.push(se), b.length > 0) {
+          const H = [{
+            time: n,
+            value: a.price
+          }, ...b.map(_ => ({
+            time: _,
+            value: a.price
+          }))];
+          try {
+            const _ = i.addSeries(qe, {
+              color: pe,
+              lineWidth: 2,
+              lineStyle: Ee.Dotted,
+              priceLineVisible: !1,
+              lastValueVisible: !1,
+              crosshairMarkerVisible: !1,
+              autoscaleInfoProvider: () => null
+            });
+            _.setData(H), S.current.push(_)
+          } catch {}
+        }
+      } else if (a.type === "ma" && a.maType && a.maPeriod) {
+        const se = a.maPeriod,
+          H = {};
+        try {
+          const _ = ut(r.closes, se, a.maType, H),
+            W = [];
+          for (let k = 0; k < _.length; k++) {
+            const O = _[k];
+            O !== null && Number.isFinite(O) && W.push({
+              time: r.dates[k],
+              value: O
+            })
+          }
+          const oe = i.addSeries(qe, {
+            color: U,
+            lineWidth: 2,
+            priceLineVisible: !1,
+            lastValueVisible: w === 0,
+            title: w === 0 ? te : ""
+          });
+          oe.setData(W), S.current.push(oe)
+        } catch {
+          try {
+            const W = p.createPriceLine({
+              price: a.price,
+              color: U,
+              lineWidth: 2,
+              lineStyle: Ee.Dotted,
+              axisLabelVisible: w === 0,
+              title: te
+            });
+            z.current.push(W)
+          } catch {}
+        }
+      }
+    });
+    const m = u.find(a => a && a.touches && a.touches.length > 0 && (a.type === "horizontal" ||
+      a.type === "fib"));
+    if (m) try {
+      const a = m.touches.filter(w => w.date).map(w => ({
+        time: w.date,
+        value: m.price
+      })).sort((w, N) => w.time < N.time ? -1 : w.time > N.time ? 1 : 0).filter((w, N, U) =>
+        N === 0 || U[N - 1].time !== w.time);
+      if (a.length > 0) {
+        const w = i.addSeries(qe, {
+          color: "rgba(250,204,21,0.9)",
+          lineWidth: 1,
+          lineStyle: Ee.Dotted,
+          pointMarkersVisible: !0,
+          pointMarkersRadius: 3,
+          priceLineVisible: !1,
+          lastValueVisible: !1,
+          crosshairMarkerVisible: !1
+        });
+        w.setData(a), S.current.push(w)
+      }
+    } catch {}
+  }, [u, r, T]);
+  const M = T > 0 ? ` · projected ${T}b forward` : "";
+  return t.jsxs("div", {
+    className: "border border-border rounded bg-card p-2",
+    children: [t.jsxs("div", {
+      className: "text-[10px] font-mono text-muted-foreground mb-1 flex items-center justify-between",
+      children: [t.jsxs("span", {
+        children: [y, " ·", " ", u && u.length > 0 ?
+          `${u.length} level${u.length===1?"":"s"} plotted${M}` :
+          "select one or more levels from the table above"
+        ]
+      }), u && u.length === 1 && t.jsxs("span", {
+        className: "flex items-center gap-2",
+        children: [t.jsx("span", {
+          className: `px-1 py-0.5 rounded text-[9px] font-bold ${u[0].price>r.closes[r.closes.length-1]?"bg-red-500/20 text-red-400":"bg-green-500/20 text-green-400"}`,
+          children: u[0].price > r.closes[r.closes.length - 1] ? "R" : "S"
+        }), t.jsxs("span", {
+          children: ["Touches: ", u[0].touchCount]
+        }), t.jsxs("span", {
+          children: ["Bounce: ", (u[0].bounceReverseRate * 100).toFixed(1),
+            "%"
+          ]
+        }), t.jsxs("span", {
+          children: ["Hold: ", (u[0].holdRate * 100).toFixed(1), "%"]
+        }), t.jsxs("span", {
+          children: ["Score: ", (u[0].compositeScore * 100).toFixed(1)]
+        })]
+      })]
+    }), t.jsx("div", {
+      ref: C,
+      style: {
+        width: "100%",
+        height: `${v}px`
+      },
+      "data-testid": "sr-level-chart"
+    })]
+  })
+}
+const We = 200;
+
+function Ve(r) {
+  return r.type === "ma" ? `${r.maType??"MA"} ${r.maPeriod??""}`.trim() : r.type === "fib" ?
+    `Fib ${((r.fibLevel??0)*100).toFixed(1)}%` : "Horizontal"
+}
+
+function rr(r) {
+  return `${r>=0?"+":""}${(r*100).toFixed(2)}%`
+}
+
+function dt(r) {
+  return r >= .7 ? "rgba(34,197,94,0.20)" : r >= .5 ? "rgba(234,179,8,0.20)" : r >= .3 ?
+    "rgba(249,115,22,0.20)" : "rgba(239,68,68,0.15)"
+}
+
+function sr() {
+  const [r, u] = l.useState([]), {
+    universeTickers: y,
+    filters: v,
+    setFilters: T,
+    search: C,
+    setSearch: A,
+    manualTickers: F,
+    setManualTickers: S,
+    filteredCount: z,
+    totalCount: M
+  } = Lt(), p = l.useMemo(() => y ? r.filter(e => y.has(e.ticker)) : r, [r, y]);
+  l.useEffect(() => {
+    Rt().then(e => {
+      u(e)
+    })
+  }, []);
+  const [i, B] = l.useState("single"), [n, h] = l.useState(""), [b, m] = l.useState(""), [a, w] = l
+    .useState(""), [N, U] = l.useState(() => Mt()), [pe, te] = l.useState("workbook"), {
+      metas: se
+    } = Yt(), [H, _] = l.useState(""), [W, oe] = l.useState(() => new Set), k = 50, O = 500, X = l
+    .useMemo(() => N.economy.size + N.sector.size + N.subsector.size + N.industryGroup.size + N
+      .industry.size + N.subindustry.size + W.size + (H.trim().length > 0 ? 1 : 0) === 0 ? [] : Pt(
+        pe === "global" ? se : r, N, H, W).map(f => f.ticker.toUpperCase()).filter((f, s, c) => c
+        .indexOf(f) === s), [r, se, pe, N, H, W]), he = l.useMemo(() => {
+      const e = X.length;
+      return e >= 2 ? e * (e - 1) / 2 : 0
+    }, [X]), [ne, g] = l.useState([]);
+  l.useEffect(() => {
+    r.length > 0 && (h(e => e || r[0].ticker), m(e => e || r[0].ticker), w(e => e || (r[1]
+      ?.ticker ?? r[0].ticker)))
+  }, [r]);
+  const [P, re] = l.useState("10y"), [K, le] = l.useState(() => Bt()), [de, ke] = l.useState(
+      "daily"), [ae, J] = l.useState(!0), [R, G] = l.useState(!0), [Q, Se] = l.useState(!0), [fe,
+      Ae] = l.useState(.5), [be, Ne] = l.useState(1.5), [Z, E] = l.useState(5), [Y, ge] = l
+    .useState(5), [Le, Qe] = l.useState(3), [Re, Ze] = l.useState(5), [Me, et] = l.useState(5), [Pe,
+      tt
+    ] = l.useState(10), [Be, rt] = l.useState(_e.maTypes), [Fe, st] = l.useState(_e.maPeriods),
+    xt = ["SMA", "EMA", "WMA", "HMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"], bt = [10, 20,
+      50, 100, 150, 200
+    ], gt = e => {
+      rt(d => d.includes(e) ? d.filter(j => j !== e) : [...d, e])
+    }, yt = e => {
+      st(d => d.includes(e) ? d.filter(j => j !== e) : [...d, e].sort((j, f) => j - f))
+    }, [L, $e] = l.useState(!1), [Oe, Ce] = l.useState({
+      current: 0,
+      total: 0
+    }), [me, Ge] = l.useState([]), [ve, Ye] = l.useState([]), [Ke, Ue] = l.useState(null), [He,
+    De] = l.useState({}), ot = l.useCallback((e, d) => {
+      De(j => {
+        const f = j[e] ? new Set(j[e]) : new Set([0]);
+        return f.has(d) ? f.delete(d) : f.add(d), {
+          ...j,
+          [e]: f
+        }
+      })
+    }, []), [we, nt] = l.useState(60), at = l.useCallback((e, d) => {
+      if (!(!d || d.length === 0)) try {
+        const j = "reit-viz-srlevel-seeds-v1",
+          f = "reit-viz-srlevel-persistent-v1",
+          s = me.find(I => I.ticker.toUpperCase() === e.toUpperCase()),
+          c = !!(s && s.pairA && s.pairB),
+          o = c && s && s.pairA ? s.pairA.toUpperCase() : e.toUpperCase(),
+          x = d.map(I => ({
+            type: I.type,
+            price: I.price,
+            maType: I.maType ?? null,
+            maPeriod: I.maPeriod ?? null,
+            fibLevel: I.fibLevel ?? null,
+            touchCount: I.touchCount,
+            bounceReverseRate: I.bounceReverseRate,
+            holdRate: I.holdRate,
+            compositeScore: I.compositeScore,
+            futureBars: we,
+            createdAt: Date.now()
+          }));
+        for (const I of [j, f]) {
+          const ce = localStorage.getItem(I);
+          let ye = {};
+          try {
+            ye = ce ? JSON.parse(ce) : {}
+          } catch {
+            ye = {}
+          }
+          const V = Array.isArray(ye[o]) ? ye[o] : [];
+          V.push(...x), ye[o] = V, localStorage.setItem(I, JSON.stringify(ye))
+        }
+        const $ = "Charts",
+          D = c && s && s.pairA && s.pairB ?
+          `${s.pairA.toUpperCase()}/${s.pairB.toUpperCase()}` : o;
+        console.log(`[SupportResistance] Sent ${d.length} level(s) for ${D} → ${$} tab.`);
+        const q = document.createElement("div");
+        q.textContent = `Sent ${d.length} level${d.length===1?"":"s"} for ${D} → ${$}`, q
+          .className =
+          "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-cyan-500/20 text-cyan-300 text-xs font-mono border border-cyan-500/40 shadow-lg",
+          document.body.appendChild(q), setTimeout(() => {
+            q.remove()
+          }, 2500), c && s && s.pairA && s.pairB && Ft(s.pairA.toUpperCase(), s.pairB
+            .toUpperCase())
+      } catch (j) {
+        console.error("[SupportResistance] Failed to send to Charts:", j)
+      }
+    }, [we, me]), [Te, it] = l.useState({
+      key: "score",
+      dir: "desc"
+    }), ie = l.useCallback(e => {
+      it(d => d.key === e ? {
+        key: e,
+        dir: d.dir === "asc" ? "desc" : "asc"
+      } : {
+        key: e,
+        dir: e === "rank" || e === "type" || e === "sr" ? "asc" : "desc"
+      })
+    }, []), Je = l.useRef(!1), kt = l.useCallback(() => {
+      const e = {};
+      for (const [f, s] of Object.entries(He)) e[f] = Array.from(s);
+      const d = {
+          economy: Array.from(N.economy),
+          sector: Array.from(N.sector),
+          subsector: Array.from(N.subsector),
+          industryGroup: Array.from(N.industryGroup),
+          industry: Array.from(N.industry),
+          subindustry: Array.from(N.subindustry)
+        },
+        j = Array.from(W);
+      return {
+        mode: i,
+        selectedTicker: n,
+        pairTickerA: b,
+        pairTickerB: a,
+        basketTickers: ne,
+        pcFiltersSer: d,
+        pcClassSearch: H,
+        pcManualTickersSer: j,
+        datePreset: P,
+        dateRange: K,
+        timeframe: de,
+        enableHorizontal: ae,
+        enableMA: R,
+        enableFib: Q,
+        tolerancePct: fe,
+        bounceThresholdPct: be,
+        bounceLookahead: Z,
+        holdBars: Y,
+        minTouches: Le,
+        pivotLeft: Re,
+        pivotRight: Me,
+        topN: Pe,
+        maTypes: Be,
+        maPeriods: Fe,
+        futureBars: we,
+        results: me,
+        skipped: ve,
+        expandedTicker: Ke,
+        selIdxs: e,
+        levelSort: Te
+      }
+    }, [i, n, b, a, ne, N, H, W, P, K, de, ae, R, Q, fe, be, Z, Y, Le, Re, Me, Pe, Be, Fe, we, me,
+      ve, Ke, He, Te
+    ]), vt = l.useCallback(e => {
+      if (!(!e || typeof e != "object")) {
+        if (e.mode && B(e.mode), typeof e.selectedTicker == "string" && h(e.selectedTicker),
+          typeof e.pairTickerA == "string" && m(e.pairTickerA), typeof e.pairTickerB ==
+          "string" && w(e.pairTickerB), Array.isArray(e.basketTickers) && g(e.basketTickers), e
+          .pcFiltersSer && typeof e.pcFiltersSer == "object") {
+          const d = e.pcFiltersSer;
+          U({
+            economy: new Set(Array.isArray(d.economy) ? d.economy : []),
+            sector: new Set(Array.isArray(d.sector) ? d.sector : []),
+            subsector: new Set(Array.isArray(d.subsector) ? d.subsector : []),
+            industryGroup: new Set(Array.isArray(d.industryGroup) ? d.industryGroup : []),
+            industry: new Set(Array.isArray(d.industry) ? d.industry : []),
+            subindustry: new Set(Array.isArray(d.subindustry) ? d.subindustry : [])
+          })
+        }
+        if (typeof e.pcClassSearch == "string" && _(e.pcClassSearch), Array.isArray(e
+            .pcManualTickersSer) && oe(new Set(e.pcManualTickersSer)), typeof e.datePreset ==
+          "string" && re(e.datePreset), e.dateRange && le(e.dateRange), e.timeframe && ke(e
+            .timeframe), typeof e.enableHorizontal == "boolean" && J(e.enableHorizontal), typeof e
+          .enableMA == "boolean" && G(e.enableMA), typeof e.enableFib == "boolean" && Se(e
+            .enableFib), typeof e.tolerancePct == "number" && Ae(e.tolerancePct), typeof e
+          .bounceThresholdPct == "number" && Ne(e.bounceThresholdPct), typeof e.bounceLookahead ==
+          "number" && E(e.bounceLookahead), typeof e.holdBars == "number" && ge(e.holdBars),
+          typeof e.minTouches == "number" && Qe(e.minTouches), typeof e.pivotLeft == "number" &&
+          Ze(e.pivotLeft), typeof e.pivotRight == "number" && et(e.pivotRight), typeof e.topN ==
+          "number" && tt(e.topN), Array.isArray(e.maTypes) && rt(e.maTypes), Array.isArray(e
+            .maPeriods) && st(e.maPeriods), typeof e.futureBars == "number" && nt(e.futureBars),
+          Array.isArray(e.results) && Ge(e.results), Array.isArray(e.skipped) && Ye(e.skipped), (e
+            .expandedTicker === null || typeof e.expandedTicker == "string") && Ue(e
+            .expandedTicker), e.selIdxs && typeof e.selIdxs == "object") {
+          const d = {};
+          for (const [j, f] of Object.entries(e.selIdxs)) d[j] = new Set(Array.isArray(f) ? f :
+          []);
+          De(d)
+        }
+        e.levelSort && it(e.levelSort)
+      }
+    }, []);
+  $t("support-resistance", kt, vt);
+  const ct = l.useMemo(() => ({
+      tolerancePct: fe / 100,
+      bounceThresholdPct: be / 100,
+      bounceLookahead: Z,
+      holdBars: Y,
+      minTouches: Le,
+      pivotLeft: Re,
+      pivotRight: Me,
+      enableHorizontal: ae,
+      enableMA: R,
+      enableFib: Q,
+      maTypes: Be,
+      maPeriods: Fe,
+      fibLookbackBars: _e.fibLookbackBars,
+      pivotClusterPct: _e.pivotClusterPct
+    }), [fe, be, Z, Y, Le, Re, Me, ae, R, Q, Be, Fe]),
+    jt = l.useCallback(() => {
+      Je.current = !0
+    }, []),
+    St = l.useCallback(async () => {
+      if (L) return;
+      Je.current = !1, $e(!0), Ge([]), Ye([]), Ue(null);
+      let e;
+      if (i === "pair") {
+        if (!b || !a || b === a) {
+          $e(!1);
+          return
+        }
+        const s = b.toUpperCase().trim(),
+          c = a.toUpperCase().trim(),
+          o = `${s}/${c}`;
+        e = [{
+          ticker: o,
+          name: o,
+          pairA: s,
+          pairB: c
+        }]
+      } else if (i === "pairCombo") {
+        const s = X;
+        if (s.length < 2) {
+          $e(!1);
+          return
+        }
+        const c = [];
+        for (let o = 0; o < s.length; o++) {
+          for (let x = o + 1; x < s.length; x++) {
+            const $ = s[o],
+              D = s[x],
+              q = `${$}/${D}`;
+            if (c.push({
+                ticker: q,
+                name: q,
+                pairA: $,
+                pairB: D
+              }), c.length >= O) break
+          }
+          if (c.length >= O) break
+        }
+        e = c
+      } else if (i === "single") {
+        const s = p.find(c => c.ticker === n);
+        e = s ? [s] : n ? [{
+          ticker: n,
+          name: n
+        }] : []
+      } else i === "basket" ? e = ne.map(s => p.find(o => o.ticker.toUpperCase() === s
+        .toUpperCase()) ?? {
+        ticker: s,
+        name: s
+      }) : e = p;
+      if (e.length === 0) {
+        $e(!1);
+        return
+      }
+      Ce({
+        current: 0,
+        total: e.length
+      });
+      const d = [],
+        j = [];
+      let f = [];
+      if (i === "pair" || i === "pairCombo") try {
+        f = await Dt()
+      } catch {
+        f = []
+      }
+      for (let s = 0; s < e.length && !Je.current; s++) {
+        const c = e[s];
+        try {
+          let o, x, $, D, q;
+          if (i === "pair" || i === "pairCombo") {
+            const V = c.pairA || b,
+              ee = c.pairB || a,
+              ue = await Ht(V, ee, f);
+            if (!ue || ue.prices.length < We) {
+              d.push({
+                ticker: c.ticker,
+                reason: "insufficient pair history"
+              }), Ce({
+                current: s + 1,
+                total: e.length
+              });
+              continue
+            }
+            o = ue.prices, x = ue.prices, $ = ue.prices, D = ue.indices.map(je => f[je] || ""),
+              q = o[o.length - 1]
+          } else {
+            const V = await It(c.ticker);
+            if (!V) {
+              d.push({
+                ticker: c.ticker,
+                reason: "no data"
+              }), Ce({
+                current: s + 1,
+                total: e.length
+              });
+              continue
+            }
+            const ee = zt(V, K),
+              ue = ee.adjCloses.length;
+            if (ue < We) {
+              d.push({
+                ticker: c.ticker,
+                reason: `only ${ue} bars (need ${We})`
+              }), Ce({
+                current: s + 1,
+                total: e.length
+              });
+              continue
+            }
+            o = ee.adjCloses, x = ee.highs.map((je, Ie) => {
+              const xe = ee.closes[Ie],
+                ze = ee.adjCloses[Ie];
+              return xe && xe > 0 && Number.isFinite(xe) && Number.isFinite(ze) ? je * (ze /
+                xe) : je
+            }), $ = ee.lows.map((je, Ie) => {
+              const xe = ee.closes[Ie],
+                ze = ee.adjCloses[Ie];
+              return xe && xe > 0 && Number.isFinite(xe) && Number.isFinite(ze) ? je * (ze /
+                xe) : je
+            }), D = ee.dates.slice(0, ue), q = o[o.length - 1]
+          }
+          if (de === "weekly") {
+            const V = Et({
+              dates: D,
+              closes: o,
+              adjCloses: o,
+              highs: x,
+              lows: $
+            }, "weekly");
+            if (V.closes.length < 40) {
+              d.push({
+                ticker: c.ticker,
+                reason: `only ${V.closes.length} weekly bars (need 40)`
+              }), Ce({
+                current: s + 1,
+                total: e.length
+              });
+              continue
+            }
+            D = V.dates, o = V.closes, x = V.highs, $ = V.lows, q = o[o.length - 1]
+          }
+          const I = Qt({
+              dates: D,
+              closes: o,
+              highs: x,
+              lows: $
+            }, ct),
+            ce = I.slice(0, Pe),
+            ye = ce.length > 0 ? ce.reduce((V, ee) => V + ee.compositeScore, 0) / ce.length : 0;
+          j.push({
+            ticker: c.ticker,
+            name: c.name || c.ticker,
+            currentPrice: q,
+            levels: I,
+            topLevels: ce,
+            tickerComposite: ye,
+            totalLevels: I.length,
+            bars: {
+              dates: D,
+              closes: o,
+              highs: x,
+              lows: $
+            },
+            pairA: c.pairA,
+            pairB: c.pairB
+          })
+        } catch (o) {
+          d.push({
+            ticker: c.ticker,
+            reason: o?.message || "error"
+          })
+        }
+        Ce({
+          current: s + 1,
+          total: e.length
+        }), s % 5 === 4 && await new Promise(o => setTimeout(o, 0))
+      }
+      j.sort((s, c) => {
+        const o = s.topLevels[0]?.compositeScore ?? 0;
+        return (c.topLevels[0]?.compositeScore ?? 0) - o
+      }), Ye(d), Ge(j), De(() => {
+        const s = {};
+        for (const c of j) s[c.ticker] = new Set([0]);
+        return s
+      }), j.length === 1 && Ue(j[0].ticker), $e(!1)
+    }, [L, i, p, n, b, a, ne, K, ct, Pe, de, X, N, H, W]),
+    Nt = l.useMemo(() => i === "single" ? !!n : i === "pair" ? !!b && !!a && b !== a : i ===
+      "pairCombo" ? X.length >= 2 : i === "basket" ? ne.length > 0 : p.length > 0, [i, n, b, a, ne,
+        p, X
+      ]);
+  return t.jsxs("div", {
+    className: "flex flex-col h-full text-foreground bg-background",
+    children: [t.jsxs("div", {
+      className: "px-4 py-2 border-b border-border bg-card/30 flex-shrink-0",
+      children: [t.jsx("h2", {
+        className: "text-sm font-bold font-mono",
+        children: "Support / Resistance Detector"
+      }), t.jsx("p", {
+        className: "text-[10px] font-mono text-muted-foreground",
+        children: "Detects horizontal pivots, moving-average bounces, and Fibonacci retracements — scored and ranked"
+      })]
+    }), t.jsxs("div", {
+      className: "flex flex-wrap items-end gap-3 px-4 py-2 border-b border-border bg-card/30 flex-shrink-0",
+      children: [t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          children: "Mode"
+        }), t.jsx("div", {
+          className: "flex gap-px",
+          children: ["single", "universe", "basket", "pair", "pairCombo"].map(
+            e => t.jsx("button", {
+              className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${i===e?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+              onClick: () => B(e),
+              disabled: L,
+              "data-testid": `sr-mode-${e}`,
+              title: e === "pairCombo" ?
+                "Generate all unordered A/B pair ratios from a classification-filter selection" :
+                void 0,
+              children: e === "single" ? "Single" : e === "universe" ?
+                "Universe" : e === "pair" ? "Pair (A/B)" : e ===
+                "pairCombo" ? "Pair combo" : "Basket"
+            }, e))
+        })]
+      }), i === "single" && t.jsxs("div", {
+        className: "flex items-end gap-2",
+        children: [t.jsx("div", {
+          className: lt(n) ? "opacity-40 pointer-events-none" : "",
+          children: t.jsx(Xe, {
+            tickers: p,
+            value: lt(n) ? "" : n,
+            onChange: h,
+            disabled: L,
+            label: "Ticker"
+          })
+        }), t.jsxs("div", {
+          className: "flex flex-col gap-0.5",
+          children: [t.jsx("label", {
+            className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+            children: "Basket"
+          }), t.jsx(Wt, {
+            activeTicker: n,
+            onSelectTicker: h,
+            fallbackTicker: p[0]?.ticker ?? null
+          })]
+        })]
+      }), i === "pair" && t.jsxs(t.Fragment, {
+        children: [t.jsx(Xe, {
+          tickers: p,
+          value: b,
+          onChange: m,
+          disabled: L,
+          label: "A"
+        }), t.jsx(Xe, {
+          tickers: p,
+          value: a,
+          onChange: w,
+          disabled: L,
+          label: "B"
+        }), t.jsxs("span", {
+          className: "text-[10px] font-mono text-muted-foreground pb-1",
+          children: ["Ratio: ", t.jsxs("span", {
+            className: "text-foreground font-bold",
+            children: [b || "A", "/", a || "B"]
+          })]
+        })]
+      }), i === "basket" && t.jsx(Vt, {
+        tickers: p,
+        value: ne,
+        onChange: g,
+        disabled: L,
+        testIdPrefix: "sr-basket"
+      }), i === "pairCombo" && t.jsx("div", {
+        className: "text-[10px] font-mono text-muted-foreground pb-1",
+        children: "Use the classification filter below to pick a leg-set. Unordered pairs (A/B == B/A) are generated automatically."
+      }), t.jsxs("div", {
+        className: "flex items-center gap-1 flex-wrap",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          children: "DATE RANGE"
+        }), t.jsx("div", {
+          className: "flex items-center gap-0.5",
+          children: _t.map(e => t.jsx("button", {
+            "data-testid": `sr-date-preset-${e.value}`,
+            className: `text-[9px] font-mono px-1.5 py-0.5 rounded ${P===e.value?"bg-primary text-primary-foreground":"bg-background text-muted-foreground border border-border hover:text-foreground"}`,
+            onClick: () => {
+              re(e.value), le(Ot(e.value))
+            },
+            disabled: L,
+            children: e.label
+          }, e.value))
+        }), t.jsx("input", {
+          type: "date",
+          "data-testid": "sr-date-start",
+          value: K.start,
+          onChange: e => {
+            re("custom"), le({
+              ...K,
+              start: e.target.value
+            })
+          },
+          disabled: L,
+          className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+        }), t.jsx("span", {
+          className: "text-[10px] font-mono text-muted-foreground",
+          children: "→"
+        }), t.jsx("input", {
+          type: "date",
+          "data-testid": "sr-date-end",
+          value: K.end,
+          onChange: e => {
+            re("custom"), le({
+              ...K,
+              end: e.target.value
+            })
+          },
+          disabled: L,
+          className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          children: "Frequency"
+        }), t.jsx("div", {
+          className: "flex gap-px",
+          children: ["daily", "weekly"].map(e => t.jsx("button", {
+            "data-testid": `sr-freq-${e}`,
+            className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${de===e?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+            onClick: () => ke(e),
+            disabled: L,
+            children: e === "daily" ? "Daily" : "Weekly"
+          }, e))
+        })]
+      })]
+    }), i === "pairCombo" && t.jsxs("div", {
+      className: "flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border bg-card/10 flex-shrink-0",
+      children: [t.jsx("label", {
+        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1",
+        children: "Pair legs"
+      }), t.jsx(Gt, {
+        workbookTickers: r,
+        filters: N,
+        onFiltersChange: U,
+        search: H,
+        onSearchChange: _,
+        manualTickers: W,
+        onManualTickersChange: oe,
+        filteredCount: X.length,
+        totalCount: r.length,
+        testIdPrefix: "sr-paircombo-filter",
+        source: pe,
+        onSourceChange: te
+      }), t.jsx("span", {
+        className: "text-[10px] font-mono text-muted-foreground ml-auto",
+        children: X.length < 2 ? t.jsx(t.Fragment, {
+          children: "Pick at least two legs to generate pairs."
+        }) : t.jsxs(t.Fragment, {
+          children: [X.length, " legs → ", t.jsx("span", {
+            className: "text-cyan-400 font-bold",
+            children: Math.min(he, O)
+          }), " unordered pairs (A/B == B/A)", " ", he > O && t.jsxs(
+          "span", {
+            className: "text-amber-400 font-bold",
+            children: ["— capped at ", O, " (from ", he, ")"]
+          }), he >= k && he <= O && t.jsx("span", {
+            className: "ml-2 text-amber-400 font-bold",
+            title: "Each pair fetches two Yahoo series and runs full S/R detection. Large scans take a while.",
+            children: "⚠ large scan"
+          })]
+        })
+      })]
+    }), i === "universe" && t.jsxs("div", {
+      className: "flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border bg-card/10 flex-shrink-0",
+      children: [t.jsx("label", {
+        className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1",
+        children: "Universe"
+      }), t.jsx(Ut, {
+        filters: v,
+        onFiltersChange: T,
+        search: C,
+        onSearchChange: A,
+        manualTickers: F,
+        onManualTickersChange: S,
+        filteredCount: z,
+        totalCount: M,
+        testIdPrefix: "sr-universe"
+      }), t.jsxs("span", {
+        className: "text-[10px] font-mono text-muted-foreground ml-auto",
+        children: [t.jsx("span", {
+          className: "text-foreground font-bold",
+          "data-testid": "sr-universe-count",
+          children: p.length
+        }), " ", "ticker", p.length === 1 ? "" : "s", " selected"]
+      })]
+    }), t.jsxs("div", {
+      className: "flex flex-wrap items-end gap-3 px-4 py-2 border-b border-border bg-card/20 flex-shrink-0",
+      children: [t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          children: "Methods"
+        }), t.jsxs("div", {
+          className: "flex gap-3 text-[10px] font-mono",
+          children: [t.jsxs("label", {
+            className: "flex items-center gap-1 cursor-pointer",
+            children: [t.jsx("input", {
+              type: "checkbox",
+              "data-testid": "sr-enable-horizontal",
+              checked: ae,
+              onChange: e => J(e.target.checked),
+              disabled: L
+            }), "Horizontal levels (pivots)"]
+          }), t.jsxs("label", {
+            className: "flex items-center gap-1 cursor-pointer",
+            children: [t.jsx("input", {
+              type: "checkbox",
+              "data-testid": "sr-enable-ma",
+              checked: R,
+              onChange: e => G(e.target.checked),
+              disabled: L
+            }), "Moving average bounces"]
+          })]
+        }), R && t.jsxs("div", {
+          className: "flex flex-col gap-1 mt-1",
+          children: [t.jsxs("div", {
+            className: "flex flex-wrap items-center gap-1",
+            children: [t.jsx("label", {
+              className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+              children: "MA Types"
+            }), xt.map(e => t.jsx("button", {
+              type: "button",
+              "data-testid": `sr-ma-type-${e.toLowerCase()}`,
+              onClick: () => gt(e),
+              disabled: L,
+              className: `text-[9px] font-mono px-1.5 py-0.5 rounded ${Be.includes(e)?"bg-primary text-primary-foreground":"bg-background text-muted-foreground border border-border hover:text-foreground"}`,
+              children: e
+            }, e))]
+          }), t.jsxs("div", {
+            className: "flex flex-wrap items-center gap-1",
+            children: [t.jsx("label", {
+              className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+              children: "MA Periods"
+            }), bt.map(e => t.jsx("button", {
+              type: "button",
+              "data-testid": `sr-ma-period-${e}`,
+              onClick: () => yt(e),
+              disabled: L,
+              className: `text-[9px] font-mono px-1.5 py-0.5 rounded ${Fe.includes(e)?"bg-primary text-primary-foreground":"bg-background text-muted-foreground border border-border hover:text-foreground"}`,
+              children: e
+            }, e))]
+          })]
+        }), t.jsx("div", {
+          className: "flex flex-wrap items-center gap-3 text-[10px] font-mono mt-1",
+          children: t.jsxs("label", {
+            className: "flex items-center gap-1 cursor-pointer",
+            children: [t.jsx("input", {
+              type: "checkbox",
+              "data-testid": "sr-enable-fib",
+              checked: Q,
+              onChange: e => Se(e.target.checked),
+              disabled: L
+            }), "Fibonacci retracements"]
+          })
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "% band around each level. A 'touch' fires when the bar's close, high, or low is within this % of the level price. Smaller = stricter touches, fewer hits.",
+          children: "Tolerance %"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-tolerance",
+          value: fe,
+          min: .1,
+          max: 5,
+          step: .1,
+          onChange: e => Ae(parseFloat(e.target.value) || .5),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Minimum % reversal away from the level to count as a clean bounce. Larger = stricter (only big reversals count).",
+          children: "Bounce Threshold %"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-bounce-threshold",
+          value: be,
+          min: .5,
+          max: 10,
+          step: .1,
+          onChange: e => Ne(parseFloat(e.target.value) || 1.5),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Number of bars after each touch to look for a bounce reversal. In daily mode these are trading days; in weekly mode these are weeks.",
+          children: "Bounce Lookahead (bars)"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-bounce-lookahead",
+          value: Z,
+          min: 1,
+          max: 20,
+          step: 1,
+          onChange: e => E(parseInt(e.target.value) || 5),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Number of bars after each touch over which the level must NOT be violated (price doesn't close through it by more than Tolerance %) for the touch to count as a 'hold'. Bars = trading days (daily) or weeks (weekly).",
+          children: "Hold Bars"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-hold-bars",
+          value: Y,
+          min: 1,
+          max: 20,
+          step: 1,
+          onChange: e => ge(parseInt(e.target.value) || 5),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Discard any level with fewer than this many touches. Raise to filter out weak/untested levels.",
+          children: "Min Touches"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-min-touches",
+          value: Le,
+          min: 1,
+          max: 10,
+          step: 1,
+          onChange: e => Qe(parseInt(e.target.value) || 3),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Pivot detection window: a swing high/low must have this many bars to its left and right that are lower/higher. Larger = fewer, more significant pivots. Bars = trading days (daily) or weeks (weekly).",
+          children: "Pivot L / R (bars)"
+        }), t.jsxs("div", {
+          className: "flex gap-1",
+          children: [t.jsx("input", {
+            type: "number",
+            "data-testid": "sr-pivot-left",
+            value: Re,
+            min: 1,
+            max: 50,
+            step: 1,
+            onChange: e => Ze(parseInt(e.target.value) || 5),
+            disabled: L,
+            className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[52px]"
+          }), t.jsx("input", {
+            type: "number",
+            "data-testid": "sr-pivot-right",
+            value: Me,
+            min: 1,
+            max: 50,
+            step: 1,
+            onChange: e => et(parseInt(e.target.value) || 5),
+            disabled: L,
+            className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[52px]"
+          })]
+        })]
+      }), t.jsxs("div", {
+        className: "flex flex-col gap-0.5",
+        children: [t.jsx("label", {
+          className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+          title: "Show the top N highest-scoring levels per ticker in the results table.",
+          children: "Top N"
+        }), t.jsx("input", {
+          type: "number",
+          "data-testid": "sr-top-n",
+          value: Pe,
+          min: 1,
+          max: 50,
+          step: 1,
+          onChange: e => tt(parseInt(e.target.value) || 10),
+          disabled: L,
+          className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+        })]
+      }), t.jsx("div", {
+        className: "flex items-end gap-2 ml-auto",
+        children: L ? t.jsx("button", {
+          className: "text-xs font-mono font-bold px-4 py-1 rounded bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          onClick: jt,
+          children: "Cancel"
+        }) : t.jsx("button", {
+          "data-testid": "sr-run",
+          className: "text-xs font-mono font-bold px-4 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50",
+          onClick: St,
+          disabled: !Nt,
+          children: "Run Detection"
+        })
+      })]
+    }), L && t.jsxs("div", {
+      className: "px-4 py-1 text-[10px] font-mono text-muted-foreground border-b border-border bg-card/20 flex-shrink-0",
+      children: ["Running… ", Oe.current, " / ", Oe.total, " tickers", t.jsx("div", {
+        className: "h-1 bg-background rounded overflow-hidden mt-1",
+        children: t.jsx("div", {
+          className: "h-full bg-primary transition-all",
+          style: {
+            width: `${Oe.current/Math.max(1,Oe.total)*100}%`
+          }
+        })
+      })]
+    }), t.jsxs("div", {
+      className: "flex-1 overflow-auto",
+      children: [me.length === 0 && !L && t.jsxs("div", {
+        className: "p-6 text-xs font-mono text-muted-foreground text-center",
+        children: [
+          "Configure settings above and click Run Detection. Tickers with fewer than ",
+          We, " bars will be skipped."
+        ]
+      }), me.length > 0 && t.jsxs(t.Fragment, {
+        children: [t.jsxs("div", {
+          className: "px-4 py-1.5 flex items-center gap-3 border-b border-border bg-card/10 sticky top-0 z-10 text-[10px] font-mono",
+          children: [t.jsxs("span", {
+            className: "text-muted-foreground",
+            children: [me.length, " ticker", me.length !== 1 ? "s" : ""]
+          }), ve.length > 0 && t.jsxs("span", {
+            className: "text-muted-foreground",
+            children: [ve.length, " skipped"]
+          }), t.jsx("span", {
+            className: "text-muted-foreground ml-auto",
+            children: "sorted by composite score ↓"
+          })]
+        }), t.jsxs("div", {
+          className: "grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_auto] gap-0 px-4 py-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider border-b border-border bg-card/10 sticky top-[28px] z-10",
+          children: [t.jsx("span", {
+            children: "Ticker"
+          }), t.jsx("span", {
+            children: "Current Price"
+          }), t.jsx("span", {
+            children: "Best Type"
+          }), t.jsx("span", {
+            children: "Best Level"
+          }), t.jsx("span", {
+            children: "Best Score"
+          }), t.jsx("span", {
+            children: "Levels Found"
+          }), t.jsx("span", {
+            className: "w-6"
+          })]
+        }), me.map(e => {
+          const d = Ke === e.ticker,
+            j = e.topLevels[0];
+          return t.jsxs("div", {
+            className: "border-b border-border",
+            children: [t.jsxs("button", {
+              className: "w-full grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_auto] gap-0 px-4 py-2 hover:bg-accent/30 text-left items-center",
+              onClick: () => Ue(d ? null : e.ticker),
+              children: [t.jsx("span", {
+                className: "font-mono text-xs font-bold",
+                children: e.ticker
+              }), t.jsxs("span", {
+                className: "font-mono text-[11px]",
+                children: ["$", e.currentPrice.toFixed(2)]
+              }), t.jsx("span", {
+                className: "font-mono text-[10px] text-muted-foreground",
+                children: j ? Ve(j) : "—"
+              }), t.jsx("span", {
+                className: "font-mono text-[11px]",
+                children: j ? `$${j.price.toFixed(2)}` : "—"
+              }), t.jsx("span", {
+                className: "font-mono text-[11px] font-bold px-1.5 py-0.5 rounded w-fit",
+                style: {
+                  backgroundColor: dt(j?.compositeScore ?? 0)
+                },
+                "data-testid": "sr-best-score",
+                children: j ? (j.compositeScore * 100)
+                  .toFixed(1) : "—"
+              }), t.jsx("span", {
+                className: "font-mono text-[10px] text-muted-foreground",
+                children: e.totalLevels
+              }), t.jsx("span", {
+                className: "text-[10px] font-mono text-muted-foreground w-6 text-center",
+                children: d ? "▾" : "▸"
+              })]
+            }), d && e.topLevels.length > 0 && t.jsxs("div", {
+              className: "px-4 pb-3 bg-card/20",
+              children: [t.jsxs("div", {
+                className: "text-[9px] font-mono text-muted-foreground mb-1 pt-1",
+                children: ["Top ", e.topLevels.length,
+                  " levels (of ", e.totalLevels,
+                  " total detected):"
+                ]
+              }), t.jsxs("table", {
+                className: "w-full text-[10px] font-mono border-collapse",
+                children: [t.jsx("thead", {
+                  children: t.jsx("tr", {
+                    className: "border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider",
+                    children: (() => {
+                      const f = o => Te.key ===
+                        o ? Te.dir === "asc" ?
+                        " ▲" : " ▼" : "",
+                        s =
+                        "text-left py-1 px-1 cursor-pointer hover:text-foreground select-none",
+                        c =
+                        "text-right py-1 px-1 cursor-pointer hover:text-foreground select-none";
+                      return t.jsxs(t
+                      .Fragment, {
+                        children: [t.jsx(
+                          "th", {
+                            className: "py-1 px-1 w-6",
+                            title: "Toggle this level on the chart. Multiple may be selected."
+                          }), t.jsxs(
+                          "th", {
+                            className: s,
+                            onClick: () =>
+                              ie(
+                              "rank"),
+                            title: "Click to sort by original rank (composite score order).",
+                            "data-testid": "sr-sort-rank",
+                            children: [
+                              "#", f(
+                                "rank"
+                                )
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: s,
+                            onClick: () =>
+                              ie(
+                              "type"),
+                            title: "Click to sort by level type (Horizontal, MA, Fibonacci).",
+                            "data-testid": "sr-sort-type",
+                            children: [
+                              "Type",
+                              f(
+                                "type")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: s,
+                            onClick: () =>
+                              ie("sr"),
+                            title: "S/R role based on where the level sits relative to current price. Level ABOVE current price = Resistance (price must rally through it). Level BELOW current price = Support (price must break down through it). Click to sort.",
+                            "data-testid": "sr-sort-sr",
+                            children: [
+                              "S/R",
+                              f("sr")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                                "price"),
+                            title: "Click to sort by level price.",
+                            "data-testid": "sr-sort-price",
+                            children: [
+                              "Level $",
+                              f(
+                                "price")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                              "dist"),
+                            title: "Distance from current price to the level, as a signed %. Positive = level is above current price (resistance). Negative = level is below (support). Click to sort.",
+                            "data-testid": "sr-sort-dist",
+                            children: [
+                              "Dist %",
+                              f(
+                                "dist")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                                "touches"
+                                ),
+                            title: "Total number of times price touched this level (close, high, or low within the Tolerance % band). Higher = more historically tested. Click to sort.",
+                            "data-testid": "sr-sort-touches",
+                            children: [
+                              "Touches",
+                              f(
+                                "touches")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                                "bounce"
+                                ),
+                            title: "Fraction of touches that produced a clean reversal: price moved at least Bounce Threshold % in the opposite direction within Bounce Lookahead bars after the touch. 100% means every touch produced a clean bounce. Click to sort.",
+                            "data-testid": "sr-sort-bounce",
+                            children: [
+                              "Bounce %",
+                              f(
+                                "bounce")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                                "avgBounce"
+                                ),
+                            title: "Average size of the favorable move after a touch, in %. Measured as the max % move away from the level (in the bounce direction) within Bounce Lookahead bars. Larger = bigger reversals on average. Click to sort.",
+                            "data-testid": "sr-sort-avgBounce",
+                            children: [
+                              "Avg Bounce",
+                              f(
+                                "avgBounce")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                              "hold"),
+                            title: "Fraction of touches where price did NOT violate the level (close beyond it by more than Tolerance %) within Hold Bars bars after the touch. Different from Bounce %: a level can hold (price stays on the right side) without bouncing (no big reversal). Click to sort.",
+                            "data-testid": "sr-sort-hold",
+                            children: [
+                              "Hold %",
+                              f(
+                                "hold")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                              "days"),
+                            title: "Calendar days since the most recent touch. Recency is weighted in the composite score: a level last touched today scores higher than one last touched a year ago (linear decay to zero over 365 days). Click to sort.",
+                            "data-testid": "sr-sort-days",
+                            children: [
+                              "Days Since",
+                              f(
+                                "days")
+                            ]
+                          }), t.jsxs(
+                          "th", {
+                            className: c,
+                            onClick: () =>
+                              ie(
+                                "score"),
+                            title: "Composite score 0–100. Weights: 30% touch count (capped at 10 touches), 30% bounce rate, 20% hold rate, 20% recency. Click to sort.",
+                            "data-testid": "sr-sort-score",
+                            children: [
+                              "Score",
+                              f(
+                                "score")
+                            ]
+                          }), t.jsx(
+                          "th", {
+                            className: "py-1 px-1 text-right",
+                            title: "Send this level to the Charts tab.",
+                            children: "Action"
+                          })]
+                      })
+                    })()
+                  })
+                }), t.jsx("tbody", {
+                  children: (() => {
+                    const f = e.topLevels.map((o,
+                        x) => {
+                          const $ = e.currentPrice >
+                            0 ? (o.price - e
+                              .currentPrice) / e
+                            .currentPrice : 0,
+                            D = o.price > e
+                            .currentPrice;
+                          return {
+                            level: o,
+                            originalIdx: x,
+                            dist: $,
+                            isResistance: D
+                          }
+                        }),
+                      s = Te.dir === "asc" ? 1 : -1;
+                    f.sort((o, x) => {
+                      switch (Te.key) {
+                        case "rank":
+                          return (o
+                            .originalIdx - x
+                            .originalIdx) * s;
+                        case "type": {
+                          const $ = Ve(o.level),
+                            D = Ve(x.level);
+                          return $
+                            .localeCompare(D) *
+                            s
+                        }
+                        case "sr":
+                          return ((o
+                            .isResistance ?
+                            1 : 0) - (x
+                            .isResistance ?
+                            1 : 0)) * s;
+                        case "price":
+                          return (o.level
+                            .price - x.level
+                            .price) * s;
+                        case "dist":
+                          return (o.dist - x
+                            .dist) * s;
+                        case "touches":
+                          return (o.level
+                              .touchCount - x
+                              .level.touchCount
+                              ) * s;
+                        case "bounce":
+                          return (o.level
+                            .bounceReverseRate -
+                            x.level
+                            .bounceReverseRate
+                            ) * s;
+                        case "avgBounce":
+                          return (o.level
+                            .avgBounceMagnitudePct -
+                            x.level
+                            .avgBounceMagnitudePct
+                            ) * s;
+                        case "hold":
+                          return (o.level
+                              .holdRate - x
+                              .level.holdRate) *
+                            s;
+                        case "days": {
+                          const $ = o.level
+                            .daysSinceLastTouch ??
+                            Number
+                            .POSITIVE_INFINITY,
+                            D = x.level
+                            .daysSinceLastTouch ??
+                            Number
+                            .POSITIVE_INFINITY;
+                          return ($ - D) * s
+                        }
+                        case "score":
+                          return (o.level
+                              .compositeScore -
+                              x.level
+                              .compositeScore) *
+                            s
+                      }
+                    });
+                    const c = He[e.ticker] ??
+                      new Set([0]);
+                    return f.map(({
+                      level: o,
+                      originalIdx: x,
+                      dist: $,
+                      isResistance: D
+                    }) => {
+                      const q = x,
+                        I = c.has(x);
+                      return t.jsxs("tr", {
+                        className: `border-b border-border/30 cursor-pointer transition-colors ${I?"bg-cyan-500/15 ring-1 ring-cyan-400/40":"hover:bg-accent/10"}`,
+                        onClick: () => ot(e
+                          .ticker, x),
+                        "data-testid": `sr-level-row-${x}`,
+                        children: [t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-center",
+                            onClick: ce => {
+                              ce.stopPropagation(),
+                                ot(e
+                                  .ticker,
+                                  x)
+                            },
+                            children: t
+                              .jsx(
+                                "input", {
+                                  type: "checkbox",
+                                  checked: I,
+                                  readOnly:
+                                    !0,
+                                  className: "cursor-pointer",
+                                  "data-testid": `sr-level-check-${x}`
+                                })
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-muted-foreground",
+                            children: q +
+                              1
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1",
+                            children: t
+                              .jsx(
+                                "span", {
+                                  className: `px-1 py-0.5 rounded text-[9px] font-bold ${o.type==="horizontal"?"bg-blue-500/20 text-blue-400":o.type==="ma"?"bg-violet-500/20 text-violet-400":"bg-amber-500/20 text-amber-400"}`,
+                                  children: Ve(
+                                    o)
+                                })
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1",
+                            children: t
+                              .jsx(
+                                "span", {
+                                  className: `px-1 py-0.5 rounded text-[9px] font-bold ${D?"bg-red-500/20 text-red-400":"bg-green-500/20 text-green-400"}`,
+                                  children: D ?
+                                    "R" :
+                                    "S"
+                                })
+                          }), t.jsxs(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: [
+                              "$", o
+                              .price
+                              .toFixed(
+                                2)
+                            ]
+                          }), t.jsx(
+                          "td", {
+                            className: `py-1 px-1 text-right ${$>=0?"text-green-400":"text-red-400"}`,
+                            children: rr(
+                              $)
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: o
+                              .touchCount
+                          }), t.jsxs(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: [(
+                                o
+                                .bounceReverseRate *
+                                100)
+                              .toFixed(
+                                1),
+                              "%"
+                            ]
+                          }), t.jsxs(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: [o
+                              .avgBounceMagnitudePct
+                              .toFixed(
+                                2),
+                              "%"
+                            ]
+                          }), t.jsxs(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: [(
+                                o
+                                .holdRate *
+                                100)
+                              .toFixed(
+                                1),
+                              "%"
+                            ]
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-right text-muted-foreground",
+                            children: o
+                              .daysSinceLastTouch !==
+                              null ?
+                              `${o.daysSinceLastTouch}d` :
+                              "—"
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: t
+                              .jsx(
+                                "span", {
+                                  className: "px-1 py-0.5 rounded font-bold",
+                                  style: {
+                                    backgroundColor: dt(
+                                      o
+                                      .compositeScore
+                                      )
+                                  },
+                                  children: (
+                                      o
+                                      .compositeScore *
+                                      100
+                                      )
+                                    .toFixed(
+                                      1)
+                                })
+                          }), t.jsx(
+                          "td", {
+                            className: "py-1 px-1 text-right",
+                            children: t
+                              .jsx(
+                                "button", {
+                                  onClick: ce => {
+                                    ce.stopPropagation(),
+                                      at(
+                                        e
+                                        .ticker,
+                                        [
+                                          o]
+                                        )
+                                  },
+                                  className: "px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300",
+                                  title: "Send this level to the Charts tab as a drawing.",
+                                  "data-testid": `sr-send-charts-${x}`,
+                                  children: "→ Charts"
+                                })
+                          })]
+                      }, x)
+                    })
+                  })()
+                })]
+              }), t.jsx("div", {
+                className: "mt-3",
+                children: (() => {
+                  const f = He[e.ticker] ?? new Set([0]),
+                    s = Array.from(f).sort((c, o) => c -
+                      o).map(c => e.topLevels[c]).filter(
+                      c => !!c);
+                  return t.jsxs(t.Fragment, {
+                    children: [t.jsxs("div", {
+                      className: "flex items-center justify-between mb-1 gap-3 flex-wrap",
+                      children: [t.jsxs("div", {
+                        className: "flex items-center gap-2 text-[10px]",
+                        children: [t.jsxs(
+                          "span", {
+                            className: "text-muted-foreground",
+                            children: [
+                              "Plotting ",
+                              s
+                              .length,
+                              " of ",
+                              e
+                              .topLevels
+                              .length
+                            ]
+                          }), t.jsx(
+                          "button", {
+                            onClick: () =>
+                              De(c =>
+                                ({
+                                  ...
+                                  c,
+                                  [e
+                                    .ticker]: new Set(
+                                    e
+                                    .topLevels
+                                    .map(
+                                      (o,
+                                        x
+                                        ) =>
+                                      x
+                                      )
+                                    )
+                                })),
+                            className: "px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:text-foreground",
+                            "data-testid": `sr-select-all-${e.ticker}`,
+                            children: "Select all"
+                          }), t.jsx(
+                          "button", {
+                            onClick: () =>
+                              De(c =>
+                                ({
+                                  ...
+                                  c,
+                                  [e
+                                    .ticker]: new Set
+                                })),
+                            className: "px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:text-foreground",
+                            "data-testid": `sr-clear-${e.ticker}`,
+                            children: "Clear"
+                          }), t.jsxs(
+                          "button", {
+                            onClick: () =>
+                              at(e
+                                .ticker,
+                                s),
+                            disabled: s
+                              .length ===
+                              0,
+                            className: `px-2 py-0.5 rounded ${s.length===0?"bg-muted text-muted-foreground/40 cursor-not-allowed":"bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30"}`,
+                            "data-testid": `sr-send-all-charts-${e.ticker}`,
+                            title: "Send all selected levels to the Charts tab.",
+                            children: [
+                              "Send ",
+                              s
+                              .length,
+                              " → Charts"
+                            ]
+                          })]
+                      }), t.jsxs("div", {
+                        className: "flex items-center gap-2 text-[10px]",
+                        children: [t.jsx(
+                          "label", {
+                            className: "text-muted-foreground",
+                            title: "Number of weekday bars to extend horizontal/fib levels into the future. MA levels are historical only.",
+                            children: "Project (bars)"
+                          }), t.jsx(
+                          "input", {
+                            type: "number",
+                            min: 0,
+                            max: 500,
+                            value: we,
+                            onChange: c =>
+                              nt(Math
+                                .max(
+                                  0,
+                                  Math
+                                  .min(
+                                    500,
+                                    parseInt(
+                                      c
+                                      .target
+                                      .value
+                                      ) ||
+                                    0)
+                                  )),
+                            className: "w-14 bg-background border border-border rounded px-1 py-0.5 text-foreground",
+                            "data-testid": "sr-future-bars"
+                          })]
+                      })]
+                    }), t.jsx(tr, {
+                      ticker: e.ticker,
+                      bars: e.bars,
+                      levels: s,
+                      height: 480,
+                      futureBars: we
+                    })]
+                  })
+                })()
+              })]
+            }), d && e.topLevels.length === 0 && t.jsx("div", {
+              className: "px-4 py-2 text-[10px] font-mono text-muted-foreground bg-card/20",
+              children: "No levels detected with current settings."
+            })]
+          }, e.ticker)
+        }), ve.length > 0 && !L && t.jsx("div", {
+          className: "p-4 text-[10px] font-mono text-muted-foreground border-t border-border",
+          children: t.jsxs("details", {
+            children: [t.jsxs("summary", {
+              className: "cursor-pointer",
+              children: ["Skipped (", ve.length, ")"]
+            }), t.jsx("ul", {
+              className: "mt-2 space-y-0.5",
+              children: ve.map((e, d) => t.jsxs("li", {
+                children: [e.ticker, ": ", e.reason]
+              }, d))
+            })]
+          })
+        })]
+      })]
+    })]
+  })
+}
+const ur = Object.freeze(Object.defineProperty({
+  __proto__: null,
+  default: sr
+}, Symbol.toStringTag, {
+  value: "Module"
+}));
+export {
+  _e as D, sr as S, ur as a, Qt as d
+};

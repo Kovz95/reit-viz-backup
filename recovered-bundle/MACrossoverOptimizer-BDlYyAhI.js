@@ -1,0 +1,5455 @@
+import {
+  r as $,
+  ag as Wt,
+  cG as ds,
+  aj as us,
+  cH as ps,
+  a as ms,
+  af as fs,
+  ae as Ur,
+  dg as Or,
+  cL as vo,
+  d0 as wo,
+  dh as Hr,
+  d1 as Mt,
+  c_ as St,
+  c$ as Ct,
+  di as xs,
+  g as gs,
+  cM as bs,
+  j as e,
+  cN as nr,
+  de as hs,
+  cO as No,
+  cP as jo,
+  dj as ys,
+  cQ as ks,
+  cR as vs,
+  cU as Ve,
+  cT as Bt,
+  cX as mt,
+  cY as kt,
+  cZ as lr,
+  cV as ws,
+  B as Ns,
+  z as js,
+  cW as vt,
+  cS as Mo,
+  df as Eo,
+  dd as Ms,
+  cJ as Ss,
+  cK as Cs
+} from "./index-CsG73Aq_.js";
+import {
+  g as Vr
+} from "./yahooPairsRatio-DERC-reP.js";
+import {
+  u as As
+} from "./useOptimizerClassFilter-COCFGQs0.js";
+import {
+  u as Ts
+} from "./usePairComboPicker-h_S34tFb.js";
+import {
+  u as _s,
+  F as $s,
+  a as Fs
+} from "./useFrequency-DK9YJz0p.js";
+import {
+  P as Rs
+} from "./PresetBar-B4InBSQb.js";
+import {
+  U as Lt
+} from "./UnifiedTickerPicker-D927mSvl.js";
+import {
+  B as So
+} from "./BasketTickerPill-DA9Wjwwc.js";
+import {
+  e as Ps,
+  E as Bs,
+  H as Co
+} from "./EvaluatorPanel-BcObXxAZ.js";
+import {
+  B as Ao
+} from "./BasketPicker-DkcKAXfe.js";
+import {
+  r as Yt,
+  g as Gr
+} from "./basketOhlc-CIjRG6QD.js";
+import "./globalUniverse-DuqPcp2u.js";
+import "./ClassificationFiltersWithSource-D7v4WOtR.js";
+import "./harsi-NMVnsDcX.js";
+import "./tva-DaeKqI67.js";
+const ar = {
+    price_cross: ["price_above", "price_below"],
+    slope: ["slope_up", "slope_down"],
+    curvature: ["accel_up", "accel_down"],
+    all: ["price_above", "price_below", "slope_up", "slope_down", "accel_up", "accel_down"]
+  },
+  Ce = {
+    price_above: {
+      label: "Price Cross Above",
+      shortLabel: "Px↑MA",
+      description: "Price crosses above MA from below — bullish breakout",
+      direction: "buy",
+      family: "price_cross"
+    },
+    price_below: {
+      label: "Price Cross Below",
+      shortLabel: "Px↓MA",
+      description: "Price crosses below MA from above — bearish breakdown",
+      direction: "sell",
+      family: "price_cross"
+    },
+    slope_up: {
+      label: "MA Slope Turn Up",
+      shortLabel: "Slp↑",
+      description: "MA slope turns positive — trend re-acceleration",
+      direction: "buy",
+      family: "slope"
+    },
+    slope_down: {
+      label: "MA Slope Turn Down",
+      shortLabel: "Slp↓",
+      description: "MA slope turns negative — trend rollover",
+      direction: "sell",
+      family: "slope"
+    },
+    accel_up: {
+      label: "MA Curvature Turn Up",
+      shortLabel: "Crv↑",
+      description: "MA curvature crosses above 0 — slope accelerating up",
+      direction: "buy",
+      family: "curvature"
+    },
+    accel_down: {
+      label: "MA Curvature Turn Down",
+      shortLabel: "Crv↓",
+      description: "MA curvature crosses below 0 — slope decelerating",
+      direction: "sell",
+      family: "curvature"
+    }
+  };
+
+function Ls(r, o) {
+  const i = r.length,
+    a = new Array(i).fill(NaN);
+  if (o < 1) return a;
+  for (let u = o; u < i; u++) {
+    const x = r[u],
+      c = r[u - o];
+    x === null || c === null || !Number.isFinite(x) || !Number.isFinite(c) || c === 0 || (a[u] = x /
+      c - 1)
+  }
+  return a
+}
+
+function Is(r) {
+  const o = r.length,
+    i = new Array(o).fill(NaN);
+  for (let a = 1; a < o; a++) {
+    const u = r[a],
+      x = r[a - 1];
+    !Number.isFinite(u) || !Number.isFinite(x) || (i[a] = u - x)
+  }
+  return i
+}
+
+function ir(r, o) {
+  const i = [];
+  let a = NaN,
+    u = 0;
+  const x = 5;
+  for (let c = 0; c < r.length; c++) {
+    const E = r[c];
+    if (!Number.isFinite(E)) {
+      u += 1, u > x && (a = NaN);
+      continue
+    }
+    u = 0, Number.isFinite(a) && (o === "up" && a <= 0 && E > 0 || o === "down" && a >= 0 && E <
+      0) && i.push(c), a = E
+  }
+  return i
+}
+
+function cr(r, o, i, a, u) {
+  const x = {
+      price_above: [],
+      price_below: [],
+      slope_up: [],
+      slope_down: [],
+      accel_up: [],
+      accel_down: []
+    },
+    c = a.includes("price_above"),
+    E = a.includes("price_below");
+  if (c || E) {
+    let b = null;
+    for (let G = u; G < r.length; G++) {
+      if (o[G] === null) continue;
+      const z = o[G],
+        K = r[G] > z ? !0 : r[G] < z ? !1 : b ?? !0;
+      b !== null && K !== b && (K && c ? x.price_above.push(G) : !K && E && x.price_below.push(G)),
+        b = K
+    }
+  }
+  const X = a.includes("slope_up") || a.includes("slope_down"),
+    Y = a.includes("accel_up") || a.includes("accel_down");
+  if (X || Y) {
+    const b = Ls(o, i);
+    if (X) {
+      const G = ir(b, "up"),
+        z = ir(b, "down");
+      for (const K of G) K >= u && a.includes("slope_up") && x.slope_up.push(K);
+      for (const K of z) K >= u && a.includes("slope_down") && x.slope_down.push(K)
+    }
+    if (Y) {
+      const G = Is(b),
+        z = ir(G, "up"),
+        K = ir(G, "down");
+      for (const ae of z) ae >= u && a.includes("accel_up") && x.accel_up.push(ae);
+      for (const ae of K) ae >= u && a.includes("accel_down") && x.accel_down.push(ae)
+    }
+  }
+  return x
+}
+
+function Ds(r, o) {
+  const i = r.length,
+    a = new Array(i).fill(NaN);
+  if (o < 1) return a;
+  for (let u = o; u < i; u++) {
+    const x = r[u],
+      c = r[u - o];
+    !Number.isFinite(x) || !Number.isFinite(c) || c === 0 || (a[u] = x / c - 1)
+  }
+  return a
+}
+
+function Es(r, o) {
+  const i = r.length,
+    a = new Array(i).fill(NaN);
+  if (o < 1 || i < o + 1) return a;
+  let u = 0,
+    x = 0;
+  for (let c = 1; c <= o; c++) {
+    const E = r[c] - r[c - 1];
+    Number.isFinite(E) && (E > 0 ? u += E : x += -E)
+  }
+  u /= o, x /= o, a[o] = x === 0 ? 100 : u === 0 ? 0 : 100 - 100 / (1 + u / x);
+  for (let c = o + 1; c < i; c++) {
+    const E = r[c] - r[c - 1];
+    if (!Number.isFinite(E)) {
+      a[c] = a[c - 1];
+      continue
+    }
+    const X = E > 0 ? E : 0,
+      Y = E < 0 ? -E : 0;
+    u = (u * (o - 1) + X) / o, x = (x * (o - 1) + Y) / o, a[c] = x === 0 ? 100 : u === 0 ? 0 : 100 -
+      100 / (1 + u / x)
+  }
+  return a
+}
+
+function Us(r, o) {
+  const i = r.length,
+    a = new Array(i).fill(NaN);
+  if (o < 1) return a;
+  for (let u = o; u < i; u++) {
+    const x = r[u],
+      c = r[u - o];
+    !Number.isFinite(x) || !Number.isFinite(c) || (a[u] = x - c)
+  }
+  return a
+}
+
+function It(r, o) {
+  if (o.kind === "price") return r.slice();
+  const i = o.period ?? 14;
+  return o.kind === "roc" ? Ds(r, i) : o.kind === "rsi" ? Es(r, i) : o.kind === "momentum" ? Us(r,
+    i) : r.slice()
+}
+
+function To(r) {
+  if (r.kind === "price") return "Price";
+  const o = r.period ?? 14;
+  return r.kind === "roc" ? `ROC(${o})` : r.kind === "rsi" ? `RSI(${o})` : r.kind === "momentum" ?
+    `Momentum(${o})` : "Price"
+}
+
+function Os(r) {
+  if (r.kind === "price") return "Px";
+  const o = r.period ?? 14;
+  return r.kind === "roc" ? `ROC${o}` : r.kind === "rsi" ? `RSI${o}` : r.kind === "momentum" ?
+    `MOM${o}` : "Px"
+}
+
+function _o(r) {
+  return r.kind === "price" ? 0 : r.period ?? 14
+}
+const Fe = ["SMA", "EMA", "HMA", "WMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"],
+  Kt = {
+    price_cross: "Price Cross",
+    slope: "Slope",
+    curvature: "Curvature",
+    all: "All"
+  },
+  $o = {
+    price_cross: "Price crosses above/below the MA",
+    slope: "MA slope flips sign — trend turns up or down",
+    curvature: "MA curvature flips sign — slope accelerates / decelerates",
+    all: "All six signals: price-cross + slope + curvature"
+  };
+
+function At(r) {
+  return r.slowMaType ?? r.maType
+}
+const Hs = ["golden_cross", "price_above", "combo_bull", "slope_up", "accel_up"],
+  Vs = ["death_cross", "price_below", "combo_bear", "slope_down", "accel_down"];
+
+function Fo(r, o) {
+  const i = o === "long" ? Hs : Vs;
+  return r.categories.find(a => i.includes(a.category)) ?? null
+}
+const zr = {
+    golden_cross: {
+      label: "Golden Cross",
+      description: "Fast MA crosses above slow MA — bullish trend change"
+    },
+    death_cross: {
+      label: "Death Cross",
+      description: "Fast MA crosses below slow MA — bearish trend change"
+    }
+  },
+  qr = {
+    price_above: {
+      label: "Price Cross Above",
+      description: "Price crosses above MA from below — bullish breakout"
+    },
+    price_below: {
+      label: "Price Cross Below",
+      description: "Price crosses below MA from above — bearish breakdown"
+    }
+  },
+  Wr = {
+    combo_bull: {
+      label: "Combo Bull",
+      description: "Both legs flipped to true together — confluence entry"
+    },
+    combo_bear: {
+      label: "Combo Bear",
+      description: "At least one leg dropped — confluence broken"
+    }
+  },
+  Ro = [10, 20, 50],
+  Po = [50, 100, 200],
+  Dt = Array.from({
+    length: 100
+  }, (r, o) => (o + 1) * 2);
+
+function Gs(r, o) {
+  const i = new Array(r.length).fill(null);
+  let a = 0;
+  for (let u = 0; u < r.length; u++) a += r[u], u >= o && (a -= r[u - o]), u >= o - 1 && (i[u] = a /
+    o);
+  return i
+}
+
+function zs(r, o) {
+  const i = new Array(r.length).fill(null),
+    a = 2 / (o + 1);
+  let u = 0;
+  for (let c = 0; c < o && c < r.length; c++) u += r[c];
+  if (r.length < o) return i;
+  let x = u / o;
+  i[o - 1] = x;
+  for (let c = o; c < r.length; c++) x = r[c] * a + x * (1 - a), i[c] = x;
+  return i
+}
+
+function qs(r, o) {
+  const i = Math.max(1, Math.floor(o / 2)),
+    a = Math.max(1, Math.floor(Math.sqrt(o))),
+    u = Yr(r, i),
+    x = Yr(r, o),
+    c = new Array(r.length).fill(null);
+  for (let Y = 0; Y < r.length; Y++) u[Y] !== null && x[Y] !== null && (c[Y] = 2 * u[Y] - x[Y]);
+  const E = new Array(r.length).fill(null),
+    X = a * (a + 1) / 2;
+  for (let Y = a - 1; Y < r.length; Y++) {
+    let b = 0,
+      G = !1;
+    for (let z = 0; z < a; z++) {
+      const K = c[Y - z];
+      if (K === null) {
+        G = !0;
+        break
+      }
+      b += K * (a - z)
+    }
+    G || (E[Y] = b / X)
+  }
+  return E
+}
+
+function Yr(r, o) {
+  const i = new Array(r.length).fill(null);
+  if (o < 1 || r.length < o) return i;
+  const a = o * (o + 1) / 2;
+  for (let u = o - 1; u < r.length; u++) {
+    let x = 0;
+    for (let c = 0; c < o; c++) x += r[u - c] * (o - c);
+    i[u] = x / a
+  }
+  return i
+}
+
+function Ws(r, o) {
+  const i = new Array(r.length).fill(null);
+  if (r.length <= o) return i;
+  const a = .666,
+    u = .0645;
+  let x = r[o];
+  i[o] = x;
+  for (let c = o + 1; c < r.length; c++) {
+    const E = Math.abs(r[c] - r[c - o]);
+    let X = 0;
+    for (let G = 0; G < o; G++) X += Math.abs(r[c - G] - r[c - G - 1]);
+    const Y = X !== 0 ? E / X : 0,
+      b = Math.pow(Y * (a - u) + u, 2);
+    x = x + b * (r[c] - x), i[c] = x
+  }
+  return i
+}
+
+function Ys(r, o, i, a = 1, u = 198) {
+  const x = new Array(r.length).fill(null),
+    c = i,
+    E = Math.floor(c / 2);
+  if (c < 2 || E < 1 || r.length < c + E) return x;
+  const X = Math.log(2 / (u + 1)),
+    Y = 2 / (u + 1),
+    b = new Array(r.length);
+  for (let K = 0; K < r.length; K++) b[K] = (r[K] + o[K]) / 2;
+  let G = b[0],
+    z = null;
+  for (let K = 0; K < r.length; K++) {
+    let ae, Ge = null;
+    if (K >= c + E - 1) {
+      let xe = -1 / 0,
+        Ke = 1 / 0;
+      for (let se = K - E + 1; se <= K; se++) r[se] > xe && (xe = r[se]), o[se] < Ke && (Ke = o[
+      se]);
+      let re = -1 / 0,
+        at = 1 / 0;
+      for (let se = K - E - c + 1; se <= K - E; se++) r[se] > re && (re = r[se]), o[se] < at && (
+        at = o[se]);
+      let pe = -1 / 0,
+        rt = 1 / 0;
+      for (let se = K - c + 1; se <= K; se++) r[se] > pe && (pe = r[se]), o[se] < rt && (rt = o[
+      se]);
+      const Ne = (xe - Ke) / E,
+        Ut = (re - at) / E,
+        F = (pe - rt) / c;
+      let ft;
+      Ne > 0 && Ut > 0 && F > 0 ? (ft = (Math.log(Ne + Ut) - Math.log(F)) / Math.log(2), z = ft) :
+        ft = z ?? 0, Ge = ft
+    }
+    if (Ge !== null) {
+      const xe = Math.exp(X * (Ge - 1));
+      let Ke = xe > 1 ? 1 : xe < .01 ? .01 : xe;
+      const re = (2 - Ke) / Ke,
+        pe = 2 / ((u - a) * (re - 1) / (u - 1) + a + 1);
+      ae = pe < Y ? Y : pe > 1 ? 1 : pe
+    } else ae = Y;
+    G = (1 - ae) * G + ae * b[K], K >= c + E - 1 && (x[K] = G)
+  }
+  return x
+}
+
+function Ks(r, o, i = .7) {
+  const a = r.length,
+    u = new Array(a).fill(null);
+  if (a === 0 || o < 1) return u;
+  const x = 2 / (o + 1),
+    c = pe => {
+      const rt = new Array(pe.length);
+      rt[0] = pe[0];
+      for (let Ne = 1; Ne < pe.length; Ne++) rt[Ne] = x * pe[Ne] + (1 - x) * rt[Ne - 1];
+      return rt
+    },
+    E = c(r),
+    X = c(E),
+    Y = c(X),
+    b = c(Y),
+    G = c(b),
+    z = c(G),
+    K = i * i,
+    ae = K * i,
+    Ge = -ae,
+    xe = 3 * K + 3 * ae,
+    Ke = -6 * K - 3 * i - 3 * ae,
+    re = 1 + 3 * i + ae + 3 * K,
+    at = Math.min(a, 3 * o);
+  for (let pe = at; pe < a; pe++) u[pe] = Ge * z[pe] + xe * G[pe] + Ke * b[pe] + re * Y[pe];
+  return u
+}
+
+function Zs(r, o, i = .85, a = 6) {
+  const u = r.length,
+    x = new Array(u).fill(null);
+  if (u === 0 || o < 2 || u < o) return x;
+  const c = i * (o - 1),
+    E = o / a,
+    X = new Array(o);
+  let Y = 0;
+  for (let b = 0; b < o; b++) {
+    const G = Math.exp(-Math.pow(b - c, 2) / (2 * E * E));
+    X[b] = G, Y += G
+  }
+  if (Y === 0) return x;
+  for (let b = o - 1; b < u; b++) {
+    let G = 0;
+    for (let z = 0; z < o; z++) G += X[z] * r[b - o + 1 + z];
+    x[b] = G / Y
+  }
+  return x
+}
+
+function Kr(r, o, i = 0) {
+  const a = r.length,
+    u = new Array(a).fill(null);
+  if (a === 0 || o < 2 || a < o) return u;
+  const x = o,
+    c = x * (x - 1) / 2,
+    E = (x - 1) * x * (2 * x - 1) / 6,
+    X = x * E - c * c;
+  if (X === 0) return u;
+  for (let Y = o - 1; Y < a; Y++) {
+    let b = 0,
+      G = 0,
+      z = !0;
+    for (let Ge = 0; Ge < o; Ge++) {
+      const xe = r[Y - o + 1 + Ge];
+      if (xe === null || !Number.isFinite(xe)) {
+        z = !1;
+        break
+      }
+      b += xe, G += Ge * xe
+    }
+    if (!z) continue;
+    const K = (x * G - c * b) / X,
+      ae = (b - K * c) / x;
+    u[Y] = ae + K * (o - 1 - i)
+  }
+  return u
+}
+
+function Xs(r, o, i = 0) {
+  return Kr(r, o, i)
+}
+
+function Qs(r, o, i = 0) {
+  const a = Kr(r, o, i);
+  return Kr(a, o, i)
+}
+
+function nt(r, o, i, a) {
+  if (i === "SMA") return Gs(r, o);
+  if (i === "EMA") return zs(r, o);
+  if (i === "HMA") return qs(r, o);
+  if (i === "WMA") return Yr(r, o);
+  if (i === "KAMA") return Ws(r, o);
+  if (i === "T3") return Ks(r, o, a?.t3VolumeFactor ?? .7);
+  if (i === "ALMA") return Zs(r, o, a?.almaOffset ?? .85, a?.almaSigma ?? 6);
+  if (i === "LSMA") return Xs(r, o, a?.lsmaOffset ?? 0);
+  if (i === "SLSMA") return Qs(r, o, a?.lsmaOffset ?? 0);
+  const u = a?.highs ?? r,
+    x = a?.lows ?? r,
+    c = a?.framaFC ?? 1,
+    E = a?.framaSC ?? 198;
+  return Ys(u, x, o, c, E)
+}
+
+function lt(r) {
+  const o = r.polarity === "above" ? ">" : "<";
+  return r.kind === "price_cross" ? `Px ${o} ${r.maType}${r.fastPeriod}` :
+    `${r.maType}${r.fastPeriod} ${o} ${At(r)}${r.slowPeriod}`
+}
+
+function Bo(r) {
+  return r === "SLSMA" ? 2 : 1.25
+}
+
+function Et(r) {
+  const o = r.fastPeriod,
+    i = r.kind === "price_cross" ? 0 : r.slowPeriod,
+    a = Math.max(o, i),
+    u = Math.max(Bo(r.maType), Bo(At(r)));
+  return Math.ceil(a * u) + Math.ceil(Math.sqrt(a))
+}
+const Zr = [20, 50, 100, 200],
+  Xr = [
+    [10, 50],
+    [10, 100],
+    [10, 200],
+    [20, 50],
+    [20, 100],
+    [20, 200],
+    [50, 100],
+    [50, 200],
+    [100, 200]
+  ],
+  Lo = Fe.length * Zr.length * Fe.length * Fe.length * Xr.length;
+
+function Io(r, o, i) {
+  const a = o === "long" ? r.bullSummary : r.bearSummary,
+    u = o === "long" ? r.bullSignals : r.bearSignals,
+    x = o === "long" ? r.bullScore : r.bearScore;
+  switch (i) {
+    case "side":
+      return o === "long" ? "Long" : "Short";
+    case "legA":
+      return r.legAlabel;
+    case "legB":
+      return r.legBlabel;
+    case "signals":
+      return u;
+    case "score":
+      return x;
+    case "hit-1M":
+      return a?.hitRate?.["1M"] ?? -1 / 0;
+    case "hit-3M":
+      return a?.hitRate?.["3M"] ?? -1 / 0;
+    case "hit-6M":
+      return a?.hitRate?.["6M"] ?? -1 / 0;
+    case "avg-3M":
+      return a?.avgReturn?.["3M"] ?? -1 / 0;
+    case "pf-3M":
+      return a?.profitFactor?.["3M"] ?? -1 / 0;
+    default:
+      return -1 / 0
+  }
+}
+
+function Do(r, o, i) {
+  const a = [...r];
+  return a.sort((u, x) => {
+    const c = Io(u, o, i.col),
+      E = Io(x, o, i.col);
+    let X = 0;
+    return typeof c == "string" || typeof E == "string" ? X = String(c).localeCompare(String(
+      E)) : X = c - E, i.dir === "asc" ? X : -X
+  }), a
+}
+
+function dr(r, o, i) {
+  const a = [],
+    u = [];
+  let x = "",
+    c = -1 / 0,
+    E = 1 / 0,
+    X = !1;
+  const Y = b => {
+    const G = new Date(b + "T00:00:00Z");
+    if (isNaN(G.getTime())) return b;
+    const z = new Date(Date.UTC(G.getUTCFullYear(), G.getUTCMonth(), G.getUTCDate()));
+    z.setUTCDate(z.getUTCDate() + 4 - (z.getUTCDay() || 7));
+    const K = new Date(Date.UTC(z.getUTCFullYear(), 0, 1)),
+      ae = Math.ceil(((z.getTime() - K.getTime()) / 864e5 + 1) / 7);
+    return `${z.getUTCFullYear()}-W${String(ae).padStart(2,"0")}`
+  };
+  for (let b = 0; b < r.length; b++) {
+    const G = Y(i[b]);
+    G !== x && (X && (a.push(c), u.push(E)), x = G, c = -1 / 0, E = 1 / 0, X = !0), r[b] > c && (c =
+      r[b]), o[b] < E && (E = o[b])
+  }
+  return X && (a.push(c), u.push(E)), {
+    highs: a,
+    lows: u
+  }
+}
+
+function ur(r, o) {
+  const i = [],
+    a = [];
+  let u = "",
+    x = NaN,
+    c = -1;
+  const E = X => {
+    const Y = new Date(X + "T00:00:00Z");
+    if (isNaN(Y.getTime())) return X;
+    const b = new Date(Date.UTC(Y.getUTCFullYear(), Y.getUTCMonth(), Y.getUTCDate()));
+    b.setUTCDate(b.getUTCDate() + 4 - (b.getUTCDay() || 7));
+    const G = new Date(Date.UTC(b.getUTCFullYear(), 0, 1)),
+      z = Math.ceil(((b.getTime() - G.getTime()) / 864e5 + 1) / 7);
+    return `${b.getUTCFullYear()}-W${String(z).padStart(2,"0")}`
+  };
+  for (let X = 0; X < r.length; X++) {
+    const Y = E(o[X]);
+    Y !== u && (c >= 0 && (i.push(x), a.push(c)), u = Y), x = r[X], c = X
+  }
+  return c >= 0 && (i.push(x), a.push(c)), {
+    prices: i,
+    weekIndex: a
+  }
+}
+async function pr(r, o, i, a) {
+  const u = a ?? Eo;
+  if (u.kind !== "close") {
+    const x = await Ms(r, u, {
+      dateRange: i ?? null
+    });
+    return x ? {
+      closes: x.closes,
+      highs: x.highs,
+      lows: x.lows,
+      volumes: x.volumes,
+      priceDates: x.priceDates
+    } : null
+  }
+  try {
+    const x = await Ss(r),
+      c = Cs(x, i ?? null);
+    if (c.adjCloses.length > 0) {
+      const E = c.adjCloses.length,
+        X = new Array(E),
+        Y = new Array(E);
+      for (let b = 0; b < E; b++) {
+        const G = c.closes[b],
+          z = c.adjCloses[b],
+          K = Number.isFinite(G) && G > 0 && Number.isFinite(z) ? z / G : 1;
+        X[b] = c.highs[b] * K, Y[b] = c.lows[b] * K
+      }
+      return {
+        closes: c.adjCloses,
+        highs: X,
+        lows: Y,
+        volumes: c.volumes ?? [],
+        priceDates: c.dates
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function xn() {
+  const [r, o] = $.useState([]), [i, a] = $.useState(""), [u, x] = Wt("macross-input-selection",
+    Eo), [c, E] = $.useState(null), [X, Y] = $.useState(!1), [b, G] = $.useState("threshold"), [z,
+      K] = $.useState(.05), [ae, Ge] = $.useState(.05), [xe, Ke] = $.useState(.1), [re, at] = $
+    .useState(0), [pe, rt] = $.useState("absolute"), [Ne, Ut] = $.useState("subsector"), [F, ft] = $
+    .useState("crossover"), [se, mr] = $.useState("slope"), [me, fr] = $.useState(5), [qe, xr] = $
+    .useState("roc"), [ot, gr] = $.useState(12), [je, Qr] = $.useState("SMA"), [Re, br] = $
+    .useState(1), [Pe, hr] = $.useState(198), [Be, yr] = $.useState(.7), [Le, kr] = $.useState(.85),
+    [Ie, vr] = $.useState(6), [ut, Jr] = $.useState("all"), [Ee, Zt] = $.useState({
+      kind: "price_cross",
+      maType: "SMA",
+      fastPeriod: 50,
+      slowPeriod: 200,
+      polarity: "above"
+    }), [Ue, Xt] = $.useState({
+      kind: "ma_cross",
+      maType: "SMA",
+      fastPeriod: 50,
+      slowPeriod: 200,
+      polarity: "above"
+    }), [O, Ot] = $.useState("single"), [eo, Tt] = $.useState("10y"), [Ae, _t] = $.useState(() =>
+      ds()), [we, wr] = $.useState(""), [Me, Nr] = $.useState(""), [Te, jr] = $.useState([]), [Ze,
+      Mr
+    ] = Wt("macross-basket-mode", "stocks"), {
+      baskets: xt
+    } = us(), [ne, Xe] = $.useState(!1), {
+      frequency: fe,
+      setFrequency: Sr,
+      frequencyUI: Uo
+    } = _s("ma", "daily", ne), to = fe === "weekly" ? "weekly" : "daily", [wt, it] = $.useState({
+      current: 0,
+      total: 0
+    }), [gt, Qt] = Wt("ma:results", []), [Ht, ro] = $.useState(null), [Oo, Ho] = $.useState(
+    new Set), Vo = $.useCallback(t => {
+      Ho(l => {
+        const s = new Set(l);
+        return s.has(t) ? s.delete(t) : s.add(t), s
+      })
+    }, []), [oo, Go] = $.useState("score"), [Cr, zo] = $.useState("composite"), so = $.useMemo(() =>
+      ps(Cr), [Cr]), [Vt, no] = $.useState(""), [Nt, lo] = $.useState({
+      col: "score",
+      dir: "desc"
+    }), [$t, ao] = $.useState({
+      col: "score",
+      dir: "desc"
+    }), [Ft, io] = $.useState({
+      col: "score",
+      dir: "desc"
+    }), [bt, Jt] = Wt("ma:gridResults", []), [Ar, co] = $.useState(null), [er, uo] = $.useState(
+      "optimize"), [Qe, po] = $.useState("long"), [tr, mo] = Wt("ma:evalResult", null), [rr, fo] = $
+    .useState(null), [Rt, Je] = $.useState(!1), [Oe, qo] = $.useState(50), [jt, Wo] = $.useState(
+      200), [pt, Yo] = $.useState("SMA"), Pt = $.useRef(!1), xo = $.useRef(!1), {
+      universeTickers: Tr,
+      isFiltered: Ko
+    } = ms(), ge = $.useMemo(() => Tr ? r.filter(t => Tr.has(t.ticker)) : r, [r, Tr]), or = As(ge,
+      O === "universe", "ma-clf"), ht = Ts(ge.map(t => t.ticker), O === "pairCombo", "ma-pc"), sr =
+    or.filteredTickers;
+  $.useEffect(() => {
+    fs().then(t => {
+      o(t), t.length > 0 && !xo.current && a(t[0].ticker), t.length > 0 && (wr(l => l || t[
+        0].ticker), Nr(l => l || (t[1]?.ticker ?? t[0].ticker)))
+    })
+  }, []), $.useEffect(() => {
+    ge.length > 0 && i && r.some(t => t.ticker === i) && !ge.find(t => t.ticker === i) && a(ge[
+      0].ticker)
+  }, [ge, i, r]);
+  const Zo = $.useCallback(async () => {
+      Xe(!0), Qt([]), Pt.current = !1;
+      const t = ut === "all" ? Fe : [ut],
+        l = await Ur();
+      let s;
+      if (O === "pair") {
+        if (!we || !Me || we === Me) {
+          Xe(!1);
+          return
+        }
+        s = [{
+          ticker: `${we}/${Me}`
+        }]
+      } else if (O === "single") {
+        const d = i,
+          S = ge.find(f => f.ticker === d);
+        s = S ? [S] : d ? [{
+          ticker: d,
+          name: d
+        }] : []
+      } else if (O === "basket")
+        if (Ze === "combined") {
+          if (Te.length === 0) {
+            Xe(!1);
+            return
+          }
+          const d = Yt(Te, xt);
+          s = [{
+            ticker: `BASKET:${d.name}`,
+            name: `BASKET:${d.name}`
+          }]
+        } else s = Te.map(d => ge.find(f => f.ticker.toUpperCase() === d.toUpperCase()) ?? {
+          ticker: d,
+          name: d
+        });
+      else if (O === "pairCombo") {
+        if (ht.pairs.length === 0) {
+          Xe(!1);
+          return
+        }
+        s = ht.pairs.map(d => ({
+          ticker: d.label,
+          name: d.label,
+          pairA: d.a,
+          pairB: d.b
+        }))
+      } else s = sr;
+      if (s.length === 0) {
+        Xe(!1);
+        return
+      }
+      it({
+        current: 0,
+        total: s.length
+      });
+      const M = O === "basket" && Ze === "combined" ? Yt(Te, xt) : null,
+        w = [];
+      for (let d = 0; d < s.length && !Pt.current; d++) {
+        const S = s[d];
+        it({
+          current: d + 1,
+          total: s.length
+        });
+        try {
+          let f, p, v, n, T = null,
+            Q;
+          const he = O === "pairCombo" ? S.pairA : we,
+            ye = O === "pairCombo" ? S.pairB : Me;
+          if (O === "pair" || O === "pairCombo") {
+            const m = await Vr(he, ye, l);
+            if (!m || m.indices.length < 252) continue;
+            const R = new Map;
+            for (let A = 0; A < m.indices.length; A++) R.set(m.indices[A], m.prices[A]);
+            const _ = [];
+            for (let A = 0; A < l.length; A++) R.has(A) && _.push(A);
+            const h = _.map(A => l[A]),
+              N = Or(h, Ae),
+              k = N ? _.slice(N.start, N.end + 1) : [];
+            if (k.length < 252) continue;
+            f = k.map(A => R.get(A)), p = k.map(A => l[A]), v = f.slice(), n = f.slice(), Q = k
+          } else {
+            const m = M ? await Gr(M, Ae) : await pr(S.ticker, l, Ae, u);
+            if (!m || m.closes.length < 252) continue;
+            f = m.closes, p = m.priceDates, v = m.highs, n = m.lows, T = m.volumes;
+            const R = new Map;
+            for (let _ = 0; _ < l.length; _++) R.set(l[_], _);
+            Q = p.map(_ => R.get(_) ?? -1)
+          }
+          const et = f.slice();
+          let ve = null;
+          if (to === "weekly" && O !== "pair") {
+            if (ve = vo({
+                dates: p,
+                highs: v,
+                lows: n,
+                closes: f,
+                adjCloses: f
+              }, "weekly"), ve.closes.length < 52) continue;
+            if (T) {
+              const R = new Array(ve.dailyIndexMap.length);
+              let _ = -1;
+              for (let h = 0; h < ve.dailyIndexMap.length; h++) {
+                const N = ve.dailyIndexMap[h];
+                let k = 0;
+                for (let A = _ + 1; A <= N; A++) k += T[A] || 0;
+                R[h] = k, _ = N
+              }
+              T = R
+            }
+            f = ve.closes, p = ve.dates, v = ve.highs, n = ve.lows, Q = ve.dailyIndexMap.map(
+              R => Q[R] ?? -1)
+          }
+          const Se = ve ? et : f,
+            _e = m => ve ? wo(m, ve) : m;
+          let ke, ie, $e, I = null,
+            P, H, y = null,
+            q = null;
+          if (fe === "weekly") {
+            const m = ur(f, p),
+              R = dr(v, n, p);
+            if (ke = m.prices, ie = R.highs, $e = R.lows, P = m.weekIndex.map(_ => p[_] ?? ""),
+              H = m.weekIndex.map(_ => Q[_] ?? -1), T) {
+              const _ = new Array(m.weekIndex.length);
+              let h = -1;
+              for (let N = 0; N < m.weekIndex.length; N++) {
+                const k = m.weekIndex[N];
+                let A = 0;
+                for (let C = h + 1; C <= k; C++) A += T[C] || 0;
+                _[N] = A, h = k
+              }
+              I = _
+            }
+            if (ke.length < 60) continue
+          } else if (fe === "weekly_on_daily") {
+            if (ke = f, ie = v, $e = n, I = T, P = p, H = Q, y = ur(f, p), q = dr(v, n, p), y
+              .prices.length < 60) continue
+          } else ke = f, ie = v, $e = n, I = T, P = p, H = Q;
+          const Z = fe === "weekly" ? 5 : 1,
+            g = ke;
+          let L = null;
+          if (pe === "relative") {
+            const m = S[Ne];
+            if (m && m.trim() !== "") try {
+              const R = await Hr(Ne, m, S.ticker, "median"),
+                _ = Q.map(h => {
+                  if (h < 0) return NaN;
+                  const N = R[h];
+                  return Number.isFinite(N) ? N : NaN
+                });
+              if (fe === "weekly") {
+                const h = [];
+                let N = "",
+                  k = NaN;
+                const A = le => {
+                  const B = new Date(le + "T00:00:00Z");
+                  if (isNaN(B.getTime())) return le;
+                  const U = new Date(Date.UTC(B.getUTCFullYear(), B.getUTCMonth(), B
+                    .getUTCDate()));
+                  U.setUTCDate(U.getUTCDate() + 4 - (U.getUTCDay() || 7));
+                  const D = new Date(Date.UTC(U.getUTCFullYear(), 0, 1)),
+                    V = Math.ceil(((U.getTime() - D.getTime()) / 864e5 + 1) / 7);
+                  return `${U.getUTCFullYear()}-W${String(V).padStart(2,"0")}`
+                };
+                let C = !1;
+                for (let le = 0; le < _.length; le++) {
+                  const B = A(p[le]);
+                  B !== N && (C && h.push(k), N = B, C = !0), Number.isFinite(_[le]) && (k =
+                    _[le])
+                }
+                C && h.push(k), L = h
+              } else L = _;
+              if (L) {
+                let h = NaN;
+                for (let N = 0; N < L.length; N++) Number.isFinite(L[N]) ? h = L[N] : L[N] = h
+              }
+            } catch {
+              L = null
+            }
+          }
+          const ee = [],
+            ce = (m, R) => {
+              if (fe === "weekly_on_daily" && y) {
+                const _ = nt(y.prices, R, m, {
+                    highs: q?.highs,
+                    lows: q?.lows,
+                    framaFC: Re,
+                    framaSC: Pe,
+                    t3VolumeFactor: Be,
+                    almaOffset: Le,
+                    almaSigma: Ie
+                  }),
+                  h = new Array(ke.length).fill(null),
+                  N = y.weekIndex;
+                let k = -1;
+                for (let A = 0; A < ke.length; A++) {
+                  for (; k + 1 < N.length && N[k + 1] <= A;) k++;
+                  k >= 0 && _[k] !== null && (h[A] = _[k])
+                }
+                return h
+              }
+              return nt(ke, R, m, {
+                highs: ie,
+                lows: $e,
+                framaFC: Re,
+                framaSC: Pe,
+                t3VolumeFactor: Be,
+                almaOffset: Le,
+                almaSigma: Ie
+              })
+            },
+            oe = m => fe === "weekly_on_daily" ? Math.max(m * 5, 21) + 126 : fe === "weekly" ?
+            m + Math.ceil(126 / Z) : m + 126;
+          if (F === "crossover") {
+            const m = new Map,
+              R = (_, h) => {
+                const N = `${_}-${h}`;
+                let k = m.get(N);
+                return k || (k = ce(_, h), m.set(N, k)), k
+              };
+            for (const _ of t)
+              for (const h of t)
+                for (const N of Ro)
+                  for (const k of Po) {
+                    if (N >= k) continue;
+                    const A = R(_, N),
+                      C = R(h, k),
+                      le = {
+                        golden_cross: [],
+                        death_cross: []
+                      };
+                    let B = null,
+                      U = -1;
+                    const D = oe(k);
+                    for (let J = D; J < g.length; J++) {
+                      if (A[J] === null || C[J] === null) continue;
+                      const ue = A[J] > C[J];
+                      if (B !== null && ue !== B && J >= U) {
+                        const Ye = ue ? "golden_cross" : "death_cross",
+                          st = ue ? "buy" : "sell",
+                          ze = b === "band" ? {
+                            minReturn: ae,
+                            maxReturn: xe
+                          } : null,
+                          He = _e(J);
+                        He >= 0 && le[Ye].push(Mt(Se, He, z, st, ze, re, L)), re > 0 && (U = J +
+                          re)
+                      }
+                      B = ue
+                    }
+                    const V = [];
+                    for (const [J, ue] of Object.entries(le)) {
+                      const Ye = J,
+                        st = Ye === "golden_cross" ? "buy" : "sell",
+                        ze = b === "band",
+                        He = St(ue, st),
+                        yt = Ct(He, st, ze);
+                      V.push({
+                        category: Ye,
+                        label: zr[Ye].label,
+                        description: zr[Ye].description,
+                        summary: He,
+                        composite: yt,
+                        profiles: ue
+                      })
+                    }
+                    const W = V.reduce((J, ue) => J.composite.score > ue.composite.score ? J :
+                        ue, V[0]),
+                      de = _ === h;
+                    ee.push({
+                      config: {
+                        signalType: "crossover",
+                        maType: _,
+                        slowMaType: h,
+                        fastPeriod: N,
+                        slowPeriod: k
+                      },
+                      configLabel: de ? `${_} ${N}/${k}` : `${_}${N}/${h}${k}`,
+                      categories: V,
+                      bestCategory: W.category,
+                      bestScore: W.composite.score
+                    })
+                  }
+          } else if (F === "price_cross") {
+            const m = new Map,
+              R = (_, h) => {
+                const N = `${_}-${h}`;
+                let k = m.get(N);
+                return k || (k = ce(_, h), m.set(N, k)), k
+              };
+            for (const _ of t)
+              for (const h of Dt) {
+                const N = R(_, h),
+                  k = {
+                    price_above: [],
+                    price_below: []
+                  };
+                let A = null,
+                  C = -1;
+                const le = oe(h);
+                for (let D = le; D < g.length; D++) {
+                  if (N[D] === null) continue;
+                  const V = g[D] > N[D];
+                  if (A !== null && V !== A && D >= C) {
+                    const W = V ? "price_above" : "price_below",
+                      de = V ? "buy" : "sell",
+                      J = b === "band" ? {
+                        minReturn: ae,
+                        maxReturn: xe
+                      } : null,
+                      ue = _e(D);
+                    ue >= 0 && k[W].push(Mt(Se, ue, z, de, J, re, L)), re > 0 && (C = D + re)
+                  }
+                  A = V
+                }
+                const B = [];
+                for (const [D, V] of Object.entries(k)) {
+                  const W = D,
+                    de = W === "price_above" ? "buy" : "sell",
+                    J = b === "band",
+                    ue = St(V, de),
+                    Ye = Ct(ue, de, J);
+                  B.push({
+                    category: W,
+                    label: qr[W].label,
+                    description: qr[W].description,
+                    summary: ue,
+                    composite: Ye,
+                    profiles: V
+                  })
+                }
+                const U = B.reduce((D, V) => D.composite.score > V.composite.score ? D : V, B[
+                  0]);
+                ee.push({
+                  config: {
+                    signalType: "price_cross",
+                    maType: _,
+                    fastPeriod: h,
+                    slowPeriod: 0
+                  },
+                  configLabel: `Price × ${_} ${h}`,
+                  categories: B,
+                  bestCategory: U.category,
+                  bestScore: U.composite.score
+                })
+              }
+          } else if (F === "combo") {
+            const m = B => {
+                const U = new Array(g.length).fill(null),
+                  D = ce(B.maType, B.fastPeriod);
+                if (B.kind === "price_cross")
+                  for (let V = 0; V < g.length; V++) {
+                    if (D[V] === null) continue;
+                    const W = g[V] > D[V];
+                    U[V] = B.polarity === "above" ? W : !W
+                  } else {
+                    const V = ce(At(B), B.slowPeriod);
+                    for (let W = 0; W < g.length; W++) {
+                      if (D[W] === null || V[W] === null) continue;
+                      const de = D[W] > V[W];
+                      U[W] = B.polarity === "above" ? de : !de
+                    }
+                  }
+                return U
+              },
+              R = m(Ee),
+              _ = m(Ue),
+              h = {
+                combo_bull: [],
+                combo_bear: []
+              };
+            let N = null,
+              k = -1;
+            const A = Math.max(oe(Et(Ee)), oe(Et(Ue)));
+            for (let B = A; B < g.length; B++) {
+              const U = R[B],
+                D = _[B];
+              if (U === null || D === null) continue;
+              const V = U && D;
+              if (N !== null && V !== N && B >= k) {
+                const W = V ? "combo_bull" : "combo_bear",
+                  de = V ? "buy" : "sell",
+                  J = b === "band" ? {
+                    minReturn: ae,
+                    maxReturn: xe
+                  } : null,
+                  ue = _e(B);
+                ue >= 0 && h[W].push(Mt(Se, ue, z, de, J, re, L)), re > 0 && (k = B + re)
+              }
+              N = V
+            }
+            const C = [];
+            for (const [B, U] of Object.entries(h)) {
+              const D = B,
+                V = D === "combo_bull" ? "buy" : "sell",
+                W = b === "band",
+                de = St(U, V),
+                J = Ct(de, V, W);
+              C.push({
+                category: D,
+                label: Wr[D].label,
+                description: Wr[D].description,
+                summary: de,
+                composite: J,
+                profiles: U
+              })
+            }
+            const le = C.reduce((B, U) => B.composite.score > U.composite.score ? B : U, C[0]);
+            ee.push({
+              config: {
+                signalType: "combo",
+                maType: je,
+                fastPeriod: 0,
+                slowPeriod: 0,
+                legA: Ee,
+                legB: Ue
+              },
+              configLabel: `${lt(Ee)} ∧ ${lt(Ue)}`,
+              categories: C,
+              bestCategory: le.category,
+              bestScore: le.composite.score
+            })
+          } else if (F === "slope_curvature") {
+            const m = new Map,
+              R = (N, k) => {
+                const A = `${N}-${k}`;
+                let C = m.get(A);
+                return C || (C = ce(N, k), m.set(A, C)), C
+              },
+              _ = ar[se],
+              h = Dt;
+            for (const N of t)
+              for (const k of h) {
+                const A = R(N, k),
+                  C = oe(k);
+                if (g.length <= C + 5) continue;
+                const le = cr(g, A, me, _, C),
+                  B = b === "band" ? {
+                    minReturn: ae,
+                    maxReturn: xe
+                  } : null,
+                  U = [];
+                let D = 0;
+                for (const W of _) {
+                  const de = Ce[W].direction,
+                    J = [];
+                  let ue = -1;
+                  for (const He of le[W]) {
+                    if (re > 0 && ue >= 0 && He < ue + re) continue;
+                    const yt = _e(He);
+                    yt >= 0 && J.push(Mt(Se, yt, z, de, B, re, L)), ue = He
+                  }
+                  const Ye = b === "band",
+                    st = St(J, de),
+                    ze = Ct(st, de, Ye);
+                  D += st.count, U.push({
+                    category: W,
+                    label: Ce[W].label,
+                    description: Ce[W].description,
+                    summary: st,
+                    composite: ze,
+                    profiles: J
+                  })
+                }
+                if (D < 3) continue;
+                const V = U.reduce((W, de) => W.composite.score > de.composite.score ? W : de,
+                  U[0]);
+                ee.push({
+                  config: {
+                    signalType: "slope_curvature",
+                    maType: N,
+                    fastPeriod: k,
+                    slowPeriod: 0
+                  },
+                  configLabel: `${N}(${k}) ${Kt[se]}`,
+                  categories: U,
+                  bestCategory: V.category,
+                  bestScore: V.composite.score
+                })
+              }
+          } else {
+            const m = {
+                kind: qe,
+                period: ot
+              },
+              R = It(ke, m),
+              _ = fe === "weekly_on_daily" && y ? It(y.prices, m) : null,
+              h = (U, D) => {
+                if (fe === "weekly_on_daily" && y && _) {
+                  const V = nt(_, D, U, {
+                      framaFC: Re,
+                      framaSC: Pe,
+                      t3VolumeFactor: Be,
+                      almaOffset: Le,
+                      almaSigma: Ie
+                    }),
+                    W = new Array(ke.length).fill(null),
+                    de = y.weekIndex;
+                  let J = -1;
+                  for (let ue = 0; ue < ke.length; ue++) {
+                    for (; J + 1 < de.length && de[J + 1] <= ue;) J++;
+                    J >= 0 && V[J] !== null && (W[ue] = V[J])
+                  }
+                  return W
+                }
+                return nt(R, D, U, {
+                  framaFC: Re,
+                  framaSC: Pe,
+                  t3VolumeFactor: Be,
+                  almaOffset: Le,
+                  almaSigma: Ie
+                })
+              },
+              N = _o(m),
+              k = new Map,
+              A = (U, D) => {
+                const V = `${U}-${D}`;
+                let W = k.get(V);
+                return W || (W = h(U, D), k.set(V, W)), W
+              },
+              C = ar[se],
+              le = Dt,
+              B = To(m);
+            for (const U of t)
+              for (const D of le) {
+                const V = A(U, D),
+                  W = oe(D) + N;
+                if (ke.length <= W + 5) continue;
+                const de = cr(R, V, me, C, W),
+                  J = b === "band" ? {
+                    minReturn: ae,
+                    maxReturn: xe
+                  } : null,
+                  ue = [];
+                let Ye = 0;
+                for (const ze of C) {
+                  const He = Ce[ze].direction,
+                    yt = [];
+                  let Ir = -1;
+                  for (const Er of de[ze]) {
+                    if (re > 0 && Ir >= 0 && Er < Ir + re) continue;
+                    const ko = _e(Er);
+                    ko >= 0 && yt.push(Mt(Se, ko, z, He, J, re, L)), Ir = Er
+                  }
+                  const is = b === "band",
+                    Dr = St(yt, He),
+                    cs = Ct(Dr, He, is);
+                  Ye += Dr.count, ue.push({
+                    category: ze,
+                    label: Ce[ze].label,
+                    description: Ce[ze].description,
+                    summary: Dr,
+                    composite: cs,
+                    profiles: yt
+                  })
+                }
+                if (Ye < 3) continue;
+                const st = ue.reduce((ze, He) => ze.composite.score > He.composite.score ? ze :
+                  He, ue[0]);
+                ee.push({
+                  config: {
+                    signalType: "indicator_cross",
+                    maType: U,
+                    fastPeriod: D,
+                    slowPeriod: 0
+                  },
+                  configLabel: `${B} × ${U}${D} ${Kt[se]}`,
+                  categories: ue,
+                  bestCategory: st.category,
+                  bestScore: st.composite.score
+                })
+              }
+          }
+          if (ee.length === 0) continue;
+          const be = ee.reduce((m, R) => m.bestScore > R.bestScore ? m : R),
+            te = {},
+            We = {},
+            tt = {},
+            j = g.length - 1;
+          for (const m of ee) {
+            let R = "None",
+              _ = null;
+            if (F === "crossover") {
+              const h = m.config.maType,
+                N = m.config.slowMaType ?? m.config.maType,
+                k = ce(h, m.config.fastPeriod),
+                A = ce(N, m.config.slowPeriod);
+              if (k[j] !== null && A[j] !== null) {
+                for (let C = j; C > Math.max(0, j - 63); C--) {
+                  if (k[C] === null || A[C] === null || k[C - 1] === null || A[C - 1] === null)
+                    continue;
+                  const le = k[C] > A[C],
+                    B = k[C - 1] > A[C - 1];
+                  if (le !== B) {
+                    R = le ? "Golden Cross" : "Death Cross";
+                    break
+                  }
+                }
+                R === "None" && (R = k[j] > A[j] ? "Above (Bullish)" : "Below (Bearish)"), A[
+                  j] !== 0 && (_ = k[j] / A[j] - 1), tt[m.configLabel] = {
+                    price: g[j],
+                    fastMA: k[j],
+                    slowMA: A[j],
+                    fastType: h,
+                    slowType: N,
+                    fastPeriod: m.config.fastPeriod,
+                    slowPeriod: m.config.slowPeriod,
+                    freq: fe
+                  }
+              }
+            } else if (F === "price_cross") {
+              const h = ce(m.config.maType, m.config.fastPeriod);
+              if (h[j] !== null) {
+                for (let N = j; N > Math.max(0, j - 21); N--) {
+                  if (h[N] === null || h[N - 1] === null) continue;
+                  const k = g[N] > h[N],
+                    A = g[N - 1] > h[N - 1];
+                  if (k !== A) {
+                    R = k ? "Price Cross Above" : "Price Cross Below";
+                    break
+                  }
+                }
+                R === "None" && (R = g[j] > h[j] ? "Above MA" : "Below MA"), h[j] !== 0 && (_ =
+                  g[j] / h[j] - 1), tt[m.configLabel] = {
+                  price: g[j],
+                  ma: h[j],
+                  maType: m.config.maType,
+                  fastPeriod: m.config.fastPeriod,
+                  freq: fe
+                }
+              }
+            } else if (F === "combo") {
+              const h = A => {
+                  const C = new Array(g.length).fill(null),
+                    le = ce(A.maType, A.fastPeriod);
+                  if (A.kind === "price_cross")
+                    for (let B = 0; B < g.length; B++) {
+                      if (le[B] === null) continue;
+                      const U = g[B] > le[B];
+                      C[B] = A.polarity === "above" ? U : !U
+                    } else {
+                      const B = ce(At(A), A.slowPeriod);
+                      for (let U = 0; U < g.length; U++) {
+                        if (le[U] === null || B[U] === null) continue;
+                        const D = le[U] > B[U];
+                        C[U] = A.polarity === "above" ? D : !D
+                      }
+                    }
+                  return C
+                },
+                N = h(Ee),
+                k = h(Ue);
+              if (N[j] !== null && k[j] !== null) {
+                const A = N[j] && k[j];
+                for (let C = j; C > Math.max(0, j - 63); C--) {
+                  const le = N[C],
+                    B = k[C],
+                    U = N[C - 1],
+                    D = k[C - 1];
+                  if (le === null || B === null || U === null || D === null) continue;
+                  const V = le && B;
+                  if (V !== (U && D)) {
+                    R = V ? "Combo Bull" : "Combo Bear";
+                    break
+                  }
+                }
+                R === "None" && (R = A ? "Combo On" : "Combo Off")
+              }
+            } else if (F === "slope_curvature") {
+              const h = ce(m.config.maType, m.config.fastPeriod);
+              if (h[j] !== null) {
+                const N = Ce[m.bestCategory]?.family;
+                if (tt[m.configLabel] = {
+                    price: g[j],
+                    ma: h[j],
+                    maType: m.config.maType,
+                    fastPeriod: m.config.fastPeriod,
+                    freq: fe
+                  }, N === "price_cross") R = g[j] > h[j] ? "Above MA" : "Below MA", h[j] !==
+                  0 && (_ = g[j] / h[j] - 1);
+                else if (N === "slope" && j > me) {
+                  const k = h[j] !== null && h[j - me] !== null && h[j - me] !== 0 ? h[j] / h[
+                    j - me] - 1 : NaN;
+                  R = Number.isFinite(k) ? k > 0 ? "Slope Up" : "Slope Down" : "None", Number
+                    .isFinite(k) && (_ = k)
+                } else if (N === "curvature" && j > me + 1) {
+                  const k = h[j] !== null && h[j - me] !== null && h[j - me] !== 0 ? h[j] / h[
+                      j - me] - 1 : NaN,
+                    A = h[j - 1] !== null && h[j - 1 - me] !== null && h[j - 1 - me] !== 0 ? h[
+                      j - 1] / h[j - 1 - me] - 1 : NaN,
+                    C = Number.isFinite(k) && Number.isFinite(A) ? k - A : NaN;
+                  R = Number.isFinite(C) ? C > 0 ? "Curvature Up" : "Curvature Down" : "None",
+                    Number.isFinite(C) && (_ = C)
+                }
+              }
+            } else {
+              const h = {
+                  kind: qe,
+                  period: ot
+                },
+                N = It(g, h),
+                k = fe === "weekly_on_daily" && y ? It(y.prices, h) : null,
+                C = ((B, U) => {
+                  if (fe === "weekly_on_daily" && y && k) {
+                    const D = nt(k, U, B, {
+                        framaFC: Re,
+                        framaSC: Pe,
+                        t3VolumeFactor: Be,
+                        almaOffset: Le,
+                        almaSigma: Ie
+                      }),
+                      V = new Array(g.length).fill(null),
+                      W = y.weekIndex;
+                    let de = -1;
+                    for (let J = 0; J < g.length; J++) {
+                      for (; de + 1 < W.length && W[de + 1] <= J;) de++;
+                      de >= 0 && D[de] !== null && (V[J] = D[de])
+                    }
+                    return V
+                  }
+                  return nt(N, U, B, {
+                    framaFC: Re,
+                    framaSC: Pe,
+                    t3VolumeFactor: Be,
+                    almaOffset: Le,
+                    almaSigma: Ie
+                  })
+                })(m.config.maType, m.config.fastPeriod),
+                le = N[j];
+              if (Number.isFinite(le) && C[j] !== null) {
+                const B = Ce[m.bestCategory]?.family,
+                  U = Os(h);
+                if (tt[m.configLabel] = {
+                    price: le,
+                    ma: C[j],
+                    maType: m.config.maType,
+                    fastPeriod: m.config.fastPeriod,
+                    freq: fe
+                  }, B === "price_cross") R = le > C[j] ? `${U} Above MA` : `${U} Below MA`, _ =
+                  le - C[j];
+                else if (B === "slope" && j > me) {
+                  const D = C[j] !== null && C[j - me] !== null ? C[j] - C[j - me] : NaN;
+                  R = Number.isFinite(D) ? D > 0 ? "Slope Up" : "Slope Down" : "None", Number
+                    .isFinite(D) && (_ = D)
+                } else if (B === "curvature" && j > me + 1) {
+                  const D = C[j] !== null && C[j - me] !== null ? C[j] - C[j - me] : NaN,
+                    V = C[j - 1] !== null && C[j - 1 - me] !== null ? C[j - 1] - C[j - 1 - me] :
+                    NaN,
+                    W = Number.isFinite(D) && Number.isFinite(V) ? D - V : NaN;
+                  R = Number.isFinite(W) ? W > 0 ? "Curvature Up" : "Curvature Down" : "None",
+                    Number.isFinite(W) && (_ = W)
+                }
+              }
+            }
+            te[m.configLabel] = R, _ !== null && Number.isFinite(_) && (We[m.configLabel] = _)
+          }
+          if (F === "combo")
+            for (const m of ee) tt[m.configLabel] || (tt[m.configLabel] = {
+              price: g[j],
+              freq: fe
+            });
+          const Gt = te[be.configLabel] ?? "None",
+            zt = {
+              price_above: {
+                label: Ce.price_above.label,
+                description: Ce.price_above.description
+              },
+              price_below: {
+                label: Ce.price_below.label,
+                description: Ce.price_below.description
+              },
+              slope_up: {
+                label: Ce.slope_up.label,
+                description: Ce.slope_up.description
+              },
+              slope_down: {
+                label: Ce.slope_down.label,
+                description: Ce.slope_down.description
+              },
+              accel_up: {
+                label: Ce.accel_up.label,
+                description: Ce.accel_up.description
+              },
+              accel_down: {
+                label: Ce.accel_down.label,
+                description: Ce.accel_down.description
+              }
+            },
+            qt = {
+              ...zr,
+              ...qr,
+              ...Wr,
+              ...zt
+            },
+            Br = 6,
+            Lr = [...ee].sort((m, R) => R.bestScore - m.bestScore),
+            De = new Set(Lr.slice(0, Br).map(m => m.configLabel));
+          for (const m of ee)
+            if (!De.has(m.configLabel))
+              for (const R of m.categories) R.profiles = void 0;
+          const dt = {
+            prices: g,
+            highs: ie,
+            lows: $e,
+            volumes: I,
+            dates: P,
+            globalIndices: H,
+            benchmarkPrices: L,
+            mode: O === "pair" || O === "pairCombo" ? "pair" : "single",
+            pairLegA: O === "pair" || O === "pairCombo" ? he : void 0,
+            pairLegB: O === "pair" || O === "pairCombo" ? ye : void 0
+          };
+          w.push({
+            ticker: S.ticker,
+            name: S.name,
+            configs: ee,
+            bestCategory: qt[be.bestCategory]?.label ?? be.bestCategory,
+            bestScore: be.bestScore,
+            currentSignal: Gt,
+            currentSignalByConfig: te,
+            currentValueByConfig: We,
+            currentDetailByConfig: tt,
+            priceContext: dt
+          }), (d % 5 === 0 || d === s.length - 1) && Qt([...w])
+        } catch {}
+      }
+      Qt(w), Xe(!1)
+    }, [ge, i, we, Me, O, F, je, z, b, ae, xe, re, Ee, Ue, fe, se, me, pe, Ne, Re, Pe, Be, Le,
+      Ie, ut, Ae, qe, ot, sr, Te, Ze, xt, ht.pairs, u
+    ]),
+    Xo = $.useCallback(async () => {
+      Je(!0), mo(null), fo(null);
+      try {
+        const t = await Ur();
+        let l, s, M, w = null,
+          d, S = "",
+          f;
+        if (O === "pair") {
+          if (!we || !Me || we === Me) {
+            Je(!1);
+            return
+          }
+          const I = await Vr(we, Me, t);
+          if (!I || I.indices.length < 252) {
+            Je(!1);
+            return
+          }
+          const P = I.indices.map(Z => t[Z] ?? ""),
+            H = Or(P, Ae),
+            y = H ? I.indices.slice(H.start, H.end + 1) : [],
+            q = H ? I.prices.slice(H.start, H.end + 1) : [];
+          if (y.length < 252) {
+            Je(!1);
+            return
+          }
+          l = q, d = y.map(Z => t[Z] ?? ""), s = l.slice(), M = l.slice(), S = we, f = y.slice()
+        } else if (O === "basket") {
+          if (Te.length === 0) {
+            Je(!1);
+            return
+          }
+          if (Ze === "combined") {
+            const I = Yt(Te, xt),
+              P = await Gr(I, Ae);
+            if (!P || P.closes.length < 252) {
+              Je(!1);
+              return
+            }
+            l = P.closes, d = P.priceDates, s = P.highs, M = P.lows, w = P.volumes, S = Te[0];
+            const H = new Map;
+            for (let y = 0; y < t.length; y++) H.set(t[y], y);
+            f = P.priceDates.map(y => H.get(y) ?? -1)
+          } else {
+            const I = Te[0],
+              P = await pr(I, t, Ae, u);
+            if (!P || P.closes.length < 252) {
+              Je(!1);
+              return
+            }
+            l = P.closes, d = P.priceDates, s = P.highs, M = P.lows, w = P.volumes, S = I;
+            const H = new Map;
+            for (let y = 0; y < t.length; y++) H.set(t[y], y);
+            f = P.priceDates.map(y => H.get(y) ?? -1)
+          }
+        } else {
+          const I = O === "single" ? i : ge[0]?.ticker ?? "";
+          if (!I) {
+            Je(!1);
+            return
+          }
+          const P = await pr(I, t, Ae, u);
+          if (!P || P.closes.length < 252) {
+            Je(!1);
+            return
+          }
+          l = P.closes, d = P.priceDates, s = P.highs, M = P.lows, w = P.volumes, S = I;
+          const H = new Map;
+          for (let y = 0; y < t.length; y++) H.set(t[y], y);
+          f = P.priceDates.map(y => H.get(y) ?? -1)
+        }
+        let p, v, n, T = null,
+          Q, he, ye = null,
+          et = null;
+        if (fe === "weekly") {
+          const I = ur(l, d),
+            P = dr(s, M, d);
+          if (I.prices.length < 60) {
+            Je(!1);
+            return
+          }
+          if (p = I.prices, v = P.highs, n = P.lows, Q = I.weekIndex.map(H => d[H] ?? ""), he =
+            I.weekIndex.map(H => f[H] ?? -1), w) {
+            const H = new Array(I.weekIndex.length);
+            let y = -1;
+            for (let q = 0; q < I.weekIndex.length; q++) {
+              const Z = I.weekIndex[q];
+              let g = 0;
+              for (let L = y + 1; L <= Z; L++) g += w[L] || 0;
+              H[q] = g, y = Z
+            }
+            T = H
+          }
+        } else if (fe === "weekly_on_daily") {
+          if (ye = ur(l, d), et = dr(s, M, d), ye.prices.length < 60) {
+            Je(!1);
+            return
+          }
+          p = l, v = s, n = M, T = w, Q = d, he = f
+        } else p = l, v = s, n = M, T = w, Q = d, he = f;
+        const ve = (I, P) => {
+            if (fe === "weekly_on_daily" && ye) {
+              const H = nt(ye.prices, P, I, {
+                  highs: et?.highs,
+                  lows: et?.lows,
+                  framaFC: Re,
+                  framaSC: Pe,
+                  t3VolumeFactor: Be,
+                  almaOffset: Le,
+                  almaSigma: Ie
+                }),
+                y = new Array(p.length).fill(null),
+                q = ye.weekIndex;
+              let Z = -1;
+              for (let g = 0; g < p.length; g++) {
+                for (; Z + 1 < q.length && q[Z + 1] <= g;) Z++;
+                Z >= 0 && H[Z] !== null && (y[g] = H[Z])
+              }
+              return y
+            }
+            return nt(p, P, I, {
+              highs: v,
+              lows: n,
+              framaFC: Re,
+              framaSC: Pe,
+              t3VolumeFactor: Be,
+              almaOffset: Le,
+              almaSigma: Ie
+            })
+          },
+          Se = I => {
+            const P = new Array(p.length).fill(null),
+              H = ve(I.maType, I.fastPeriod);
+            if (I.kind === "price_cross")
+              for (let y = 0; y < p.length; y++) {
+                if (H[y] === null) continue;
+                const q = p[y] > H[y];
+                P[y] = I.polarity === "above" ? q : !q
+              } else {
+                const y = ve(At(I), I.slowPeriod);
+                for (let q = 0; q < p.length; q++) {
+                  if (H[q] === null || y[q] === null) continue;
+                  const Z = H[q] > y[q];
+                  P[q] = I.polarity === "above" ? Z : !Z
+                }
+              }
+            return P
+          },
+          _e = [],
+          ke = Qe === "long";
+        if (F === "crossover") {
+          const I = ve(je, Oe),
+            P = ve(pt, jt),
+            H = jt + 5;
+          let y = null;
+          for (let q = H; q < p.length; q++) {
+            if (I[q] === null || P[q] === null) continue;
+            const Z = I[q] > P[q];
+            y !== null && Z !== y && (ke && Z || !ke && !Z) && _e.push(q), y = Z
+          }
+        } else if (F === "price_cross") {
+          const I = ve(je, Oe),
+            P = Oe + 5;
+          let H = null;
+          for (let y = P; y < p.length; y++) {
+            if (I[y] === null) continue;
+            const q = p[y] > I[y];
+            H !== null && q !== H && (ke && q || !ke && !q) && _e.push(y), H = q
+          }
+        } else if (F === "combo") {
+          const I = Se(Ee),
+            P = Se(Ue),
+            H = Math.max(Et(Ee), Et(Ue)) + 5;
+          let y = null;
+          for (let q = H; q < p.length; q++) {
+            const Z = I[q],
+              g = P[q];
+            if (Z === null || g === null) continue;
+            const L = Z && g;
+            y !== null && L !== y && (ke && L || !ke && !L) && _e.push(q), y = L
+          }
+        } else if (F === "slope_curvature") {
+          const I = ve(je, Oe),
+            P = Oe + 5,
+            H = ar[se],
+            y = cr(p, I, me, H, P),
+            q = ke ? "buy" : "sell",
+            Z = new Set;
+          for (const g of H)
+            if (Ce[g].direction === q)
+              for (const L of y[g]) Z.has(L) || (Z.add(L), _e.push(L))
+        } else {
+          const I = {
+              kind: qe,
+              period: ot
+            },
+            P = It(p, I),
+            H = fe === "weekly_on_daily" && ye ? It(ye.prices, I) : null,
+            y = (() => {
+              if (fe === "weekly_on_daily" && ye && H) {
+                const ce = nt(H, Oe, je, {
+                    framaFC: Re,
+                    framaSC: Pe,
+                    t3VolumeFactor: Be,
+                    almaOffset: Le,
+                    almaSigma: Ie
+                  }),
+                  oe = new Array(p.length).fill(null),
+                  be = ye.weekIndex;
+                let te = -1;
+                for (let We = 0; We < p.length; We++) {
+                  for (; te + 1 < be.length && be[te + 1] <= We;) te++;
+                  te >= 0 && ce[te] !== null && (oe[We] = ce[te])
+                }
+                return oe
+              }
+              return nt(P, Oe, je, {
+                framaFC: Re,
+                framaSC: Pe,
+                t3VolumeFactor: Be,
+                almaOffset: Le,
+                almaSigma: Ie
+              })
+            })(),
+            q = Oe + _o(I) + 5,
+            Z = ar[se],
+            g = cr(P, y, me, Z, q),
+            L = ke ? "buy" : "sell",
+            ee = new Set;
+          for (const ce of Z)
+            if (Ce[ce].direction === L)
+              for (const oe of g[ce]) ee.has(oe) || (ee.add(oe), _e.push(oe))
+        }
+        _e.sort((I, P) => I - P);
+        let ie = null;
+        if (pe === "relative" && S && O !== "pair") {
+          const I = ge.find(H => H.ticker === S),
+            P = I ? I[Ne] : "";
+          if (P && P.trim() !== "") try {
+            const H = await Hr(Ne, P, S, "median"),
+              y = f.map(Z => {
+                if (Z < 0) return NaN;
+                const g = H[Z];
+                return Number.isFinite(g) ? g : NaN
+              });
+            let q = NaN;
+            for (let Z = 0; Z < y.length; Z++) Number.isFinite(y[Z]) ? q = y[Z] : y[Z] = q;
+            if (fe === "weekly") {
+              const Z = [];
+              let g = "",
+                L = NaN;
+              const ee = oe => {
+                const be = new Date(oe + "T00:00:00Z");
+                if (isNaN(be.getTime())) return oe;
+                const te = new Date(Date.UTC(be.getUTCFullYear(), be.getUTCMonth(), be
+                  .getUTCDate()));
+                te.setUTCDate(te.getUTCDate() + 4 - (te.getUTCDay() || 7));
+                const We = new Date(Date.UTC(te.getUTCFullYear(), 0, 1)),
+                  tt = Math.ceil(((te.getTime() - We.getTime()) / 864e5 + 1) / 7);
+                return `${te.getUTCFullYear()}-W${String(tt).padStart(2,"0")}`
+              };
+              let ce = !1;
+              for (let oe = 0; oe < y.length; oe++) {
+                const be = ee(d[oe]);
+                be !== g && (ce && Z.push(L), g = be, ce = !0), Number.isFinite(y[oe]) && (L =
+                  y[oe])
+              }
+              ce && Z.push(L), ie = Z
+            } else ie = y
+          } catch {
+            ie = null
+          }
+        }
+        const $e = Ps(p, Q, _e, Qe, z, re, ie, "3M");
+        mo($e), fo({
+          prices: p,
+          highs: v,
+          lows: n,
+          volumes: T,
+          dates: Q,
+          globalIndices: he,
+          benchmarkPrices: ie,
+          mode: O === "pair" ? "pair" : "single",
+          pairLegA: O === "pair" ? we : void 0,
+          pairLegB: O === "pair" ? Me : void 0
+        })
+      } finally {
+        Je(!1)
+      }
+    }, [O, we, Me, i, ge, F, je, pt, Oe, jt, Ee, Ue, se, me, z, re, Qe, Re, Pe, Be, Le, Ie, fe,
+      pe, Ne, Ae, qe, ot, Te, Ze, xt, u
+    ]),
+    go = $.useMemo(() => F === "crossover" ?
+      `${je===pt?`${je} ${Oe}/${jt}`:`${je}${Oe}/${pt}${jt}`} crossover [${Qe}]` : F ===
+      "price_cross" ? `Price × ${je}${Oe} [${Qe}]` : F === "combo" ?
+      `${lt(Ee)} ∧ ${lt(Ue)} [${Qe}]` : F === "indicator_cross" ?
+      `${To({kind:qe,period:ot})} × ${je}${Oe} ${Kt[se]} [${Qe}]` :
+      `${je}(${Oe}) ${Kt[se]} [${Qe}]`, [F, je, pt, Oe, jt, Ee, Ue, se, Qe, qe, ot]),
+    bo = $.useMemo(() => O === "pair" ? `${we||"A"}/${Me||"B"}` : O === "single" ? i || "—" : ge[0]
+      ?.ticker || "—", [O, we, Me, i, ge]),
+    Qo = $.useCallback(async () => {
+      Xe(!0), Jt([]), Pt.current = !1;
+      const t = await Ur();
+      let l;
+      if (O === "pair") {
+        if (!we || !Me || we === Me) {
+          Xe(!1);
+          return
+        }
+        l = [{
+          ticker: `${we}/${Me}`
+        }]
+      } else if (O === "single") {
+        const f = i,
+          p = ge.find(v => v.ticker === f);
+        l = p ? [p] : f ? [{
+          ticker: f,
+          name: f
+        }] : []
+      } else if (O === "basket")
+        if (Ze === "combined") {
+          if (Te.length === 0) {
+            Xe(!1);
+            return
+          }
+          const f = Yt(Te, xt);
+          l = [{
+            ticker: `BASKET:${f.name}`,
+            name: `BASKET:${f.name}`
+          }]
+        } else l = Te.map(f => ge.find(v => v.ticker.toUpperCase() === f.toUpperCase()) ?? {
+          ticker: f,
+          name: f
+        });
+      else if (O === "pairCombo") {
+        if (ht.pairs.length === 0) {
+          Xe(!1);
+          return
+        }
+        l = ht.pairs.map(f => ({
+          ticker: f.label,
+          name: f.label,
+          pairA: f.a,
+          pairB: f.b
+        }))
+      } else l = sr;
+      if (l.length === 0) {
+        Xe(!1);
+        return
+      }
+      const s = O === "basket" && Ze === "combined" ? Yt(Te, xt) : null,
+        M = [],
+        w = ut === "all" ? Fe : [ut];
+      for (const f of w)
+        for (const p of Zr)
+          for (const v of w)
+            for (const n of w)
+              for (const [T, Q] of Xr) M.push({
+                legA: {
+                  kind: "price_cross",
+                  maType: f,
+                  fastPeriod: p,
+                  slowPeriod: 0,
+                  polarity: "above"
+                },
+                legB: {
+                  kind: "ma_cross",
+                  maType: v,
+                  slowMaType: n,
+                  fastPeriod: T,
+                  slowPeriod: Q,
+                  polarity: "above"
+                }
+              });
+      const d = l.length * M.length;
+      it({
+        current: 0,
+        total: d
+      });
+      const S = [];
+      for (let f = 0; f < l.length && !Pt.current; f++) {
+        const p = l[f];
+        try {
+          let v, n, T, Q, he;
+          const ye = O === "pairCombo" ? p.pairA : we,
+            et = O === "pairCombo" ? p.pairB : Me;
+          if (O === "pair" || O === "pairCombo") {
+            const g = await Vr(ye, et, t);
+            if (!g || g.indices.length < 252) {
+              it({
+                current: (f + 1) * M.length,
+                total: d
+              });
+              continue
+            }
+            const L = new Map;
+            for (let te = 0; te < g.indices.length; te++) L.set(g.indices[te], g.prices[te]);
+            const ee = [];
+            for (let te = 0; te < t.length; te++) L.has(te) && ee.push(te);
+            const ce = ee.map(te => t[te] ?? ""),
+              oe = Or(ce, Ae),
+              be = oe ? ee.slice(oe.start, oe.end + 1) : [];
+            if (be.length < 252) {
+              it({
+                current: (f + 1) * M.length,
+                total: d
+              });
+              continue
+            }
+            v = be.map(te => L.get(te)), n = v.slice(), T = v.slice(), Q = be.map(te => t[te] ??
+              ""), he = be
+          } else {
+            const g = s ? await Gr(s, Ae) : await pr(p.ticker, t, Ae, u);
+            if (!g || g.closes.length < 252) {
+              it({
+                current: (f + 1) * M.length,
+                total: d
+              });
+              continue
+            }
+            v = g.closes, n = g.highs, T = g.lows, Q = g.priceDates;
+            const L = new Map;
+            for (let ee = 0; ee < t.length; ee++) L.set(t[ee], ee);
+            he = g.priceDates.map(ee => L.get(ee) ?? -1)
+          }
+          const ve = v.slice();
+          let Se = null;
+          if (to === "weekly" && O !== "pair") {
+            if (Se = vo({
+                dates: Q,
+                highs: n,
+                lows: T,
+                closes: v,
+                adjCloses: v
+              }, "weekly"), Se.closes.length < 52) {
+              it({
+                current: (f + 1) * M.length,
+                total: d
+              });
+              continue
+            }
+            v = Se.closes, n = Se.highs, T = Se.lows, he = Se.dailyIndexMap.map(L => he[L] ?? -
+              1)
+          }
+          const _e = Se ? ve : v,
+            ke = g => Se ? wo(g, Se) : g;
+          let ie = null;
+          if (pe === "relative") {
+            const g = p[Ne];
+            if (g && g.trim() !== "") try {
+              const L = await Hr(Ne, g, p.ticker, "median"),
+                ee = he.map(oe => {
+                  if (oe < 0) return NaN;
+                  const be = L[oe];
+                  return Number.isFinite(be) ? be : NaN
+                });
+              let ce = NaN;
+              for (let oe = 0; oe < ee.length; oe++) Number.isFinite(ee[oe]) ? ce = ee[oe] :
+                ee[oe] = ce;
+              ie = ee
+            } catch {
+              ie = null
+            }
+          }
+          const $e = new Map,
+            I = (g, L) => {
+              const ee = `${g}-${L}`;
+              let ce = $e.get(ee);
+              return ce || (ce = nt(v, L, g, {
+                highs: n,
+                lows: T,
+                framaFC: Re,
+                framaSC: Pe,
+                t3VolumeFactor: Be,
+                almaOffset: Le,
+                almaSigma: Ie
+              }), $e.set(ee, ce)), ce
+            },
+            P = [],
+            H = b === "band",
+            y = H ? {
+              minReturn: ae,
+              maxReturn: xe
+            } : null;
+          for (let g = 0; g < M.length && !Pt.current; g++) {
+            const L = M[g],
+              ee = (() => {
+                const De = I(L.legA.maType, L.legA.fastPeriod),
+                  dt = new Array(v.length).fill(null);
+                for (let m = 0; m < v.length; m++) De[m] !== null && (dt[m] = v[m] > De[m]);
+                return dt
+              })(),
+              ce = (() => {
+                const De = I(L.legB.maType, L.legB.fastPeriod),
+                  dt = I(At(L.legB), L.legB.slowPeriod),
+                  m = new Array(v.length).fill(null);
+                for (let R = 0; R < v.length; R++) De[R] === null || dt[R] === null || (m[R] =
+                  De[R] > dt[R]);
+                return m
+              })(),
+              oe = Math.max(Et(L.legA), Et(L.legB)) + 126,
+              be = [],
+              te = [];
+            let We = null,
+              tt = -1;
+            for (let De = oe; De < v.length; De++) {
+              const dt = ee[De],
+                m = ce[De];
+              if (dt === null || m === null) continue;
+              const R = dt && m;
+              if (We !== null && R !== We && De >= tt) {
+                const _ = ke(De);
+                _ >= 0 && (R ? be.push(Mt(_e, _, z, "buy", y, re, ie)) : te.push(Mt(_e, _, z,
+                  "sell", y, re, ie))), re > 0 && (tt = De + re)
+              }
+              We = R
+            }
+            const j = be.length > 0 ? St(be, "buy") : null,
+              Gt = te.length > 0 ? St(te, "sell") : null,
+              zt = j ? Ct(j, "buy", H).score : 0,
+              qt = Gt ? Ct(Gt, "sell", H).score : 0,
+              Br = zt >= qt ? "bull" : "bear",
+              Lr = Math.max(zt, qt);
+            P.push({
+              legA: L.legA,
+              legB: L.legB,
+              legAlabel: lt(L.legA),
+              legBlabel: lt(L.legB),
+              bullSummary: j,
+              bullScore: zt,
+              bullSignals: be.length,
+              bearSummary: Gt,
+              bearScore: qt,
+              bearSignals: te.length,
+              bestSide: Br,
+              bestScore: Lr
+            }), (g & 31) === 0 && (it({
+              current: f * M.length + g + 1,
+              total: d
+            }), await new Promise(De => setTimeout(De, 0)))
+          }
+          const q = P.filter(g => g.bullSignals + g.bearSignals > 0);
+          q.sort((g, L) => L.bestScore - g.bestScore);
+          const Z = q.slice(0, 25);
+          S.push({
+            ticker: p.ticker,
+            name: p.name,
+            topCombos: Z
+          }), it({
+            current: (f + 1) * M.length,
+            total: d
+          }), Jt([...S])
+        } catch {
+          it({
+            current: (f + 1) * M.length,
+            total: d
+          })
+        }
+      }
+      Jt(S), Xe(!1)
+    }, [ge, i, we, Me, O, z, b, ae, xe, re, pe, Ne, Re, Pe, Be, Le, Ie, ut, fe, Ae, sr, Te, Ze,
+      xt, ht.pairs, u
+    ]),
+    _r = $.useCallback(() => ({
+      selectedTicker: i,
+      targetReturn: z,
+      signalType: F,
+      maType: je,
+      mode: O,
+      results: gt,
+      expandedTicker: Ht,
+      sortBy: oo,
+      runSort: Nt,
+      gridLongSort: $t,
+      gridShortSort: Ft,
+      returnMode: b,
+      bandMin: ae,
+      bandMax: xe,
+      minHold: re,
+      legA: Ee,
+      legB: Ue,
+      gridResults: bt,
+      expandedGridTicker: Ar,
+      frequency: fe,
+      signalFamily: se,
+      slopeLookback: me,
+      returnBasis: pe,
+      peerLevel: Ne,
+      framaFC: Re,
+      framaSC: Pe,
+      t3Vf: Be,
+      almaOffset: Le,
+      almaSigma: Ie,
+      optimizerMaScope: ut,
+      pairTickerA: we,
+      pairTickerB: Me,
+      basketTickers: Te,
+      basketMode: Ze,
+      indicatorSource: qe,
+      indicatorSourcePeriod: ot,
+      inputSelection: u
+    }), [i, z, F, je, O, gt, Ht, oo, Nt, $t, Ft, b, ae, xe, re, Ee, Ue, bt, Ar, fe, se, me, pe,
+      Ne, Re, Pe, Be, Le, Ie, ut, we, Me, Te, Ze, qe, ot, u
+    ]),
+    $r = $.useCallback(t => {
+      if (t && (t.selectedTicker && (a(t.selectedTicker), xo.current = !0), typeof t
+          .targetReturn == "number" && K(t.targetReturn), t.returnMode && G(t.returnMode),
+          typeof t.bandMin == "number" && Ge(t.bandMin), typeof t.bandMax == "number" && Ke(t
+            .bandMax), typeof t.minHold == "number" && at(t.minHold), t.signalType && ft(t
+            .signalType), t.frequency === "daily" || t.frequency === "weekly" || t.frequency ===
+          "weekly_on_daily" ? Sr(t.frequency) : t.timeframe === "weekly" && t.frequency ===
+          void 0 && Sr("weekly"), (t.signalFamily === "slope" || t.signalFamily === "curvature" ||
+            t.signalFamily === "all" || t.signalFamily === "price_cross") && mr(t.signalFamily),
+          typeof t.slopeLookback == "number" && fr(t.slopeLookback), t.legA && Zt(t.legA), t
+          .legB && Xt(t.legB), t.maType && Qr(t.maType), (t.mode === "single" || t.mode ===
+            "universe" || t.mode === "pair" || t.mode === "pairCombo" || t.mode === "basket") &&
+          Ot(t.mode), t.pairCombo && ht.hydrate(t.pairCombo), Array.isArray(t.results) && Qt(t
+            .results), t.expandedTicker !== void 0 && ro(t.expandedTicker), t.sortBy && Go(t
+            .sortBy), t.runSort && t.runSort.col && t.runSort.dir && lo(t.runSort), t
+          .gridLongSort && t.gridLongSort.col && t.gridLongSort.dir && ao(t.gridLongSort), t
+          .gridShortSort && t.gridShortSort.col && t.gridShortSort.dir && io(t.gridShortSort),
+          Array.isArray(t.gridResults) && Jt(t.gridResults), t.expandedGridTicker !== void 0 &&
+          co(t.expandedGridTicker), (t.returnBasis === "absolute" || t.returnBasis ===
+          "relative") && rt(t.returnBasis), typeof t.peerLevel == "string" && xs.includes(t
+            .peerLevel) && Ut(t.peerLevel), typeof t.framaFC == "number" && t.framaFC >= 1 && br(t
+            .framaFC), typeof t.framaSC == "number" && t.framaSC > 1 && hr(t.framaSC), typeof t
+          .t3Vf == "number" && t.t3Vf >= 0 && t.t3Vf <= 1 && yr(t.t3Vf), typeof t.almaOffset ==
+          "number" && t.almaOffset >= 0 && t.almaOffset <= 1 && kr(t.almaOffset), typeof t
+          .almaSigma == "number" && t.almaSigma > 0 && vr(t.almaSigma), (t.optimizerMaScope ===
+            "all" || Fe.includes(t.optimizerMaScope)) && Jr(t.optimizerMaScope), Array.isArray(t
+            .basketTickers) && jr(t.basketTickers.filter(l => typeof l == "string")), (t
+            .basketMode === "stocks" || t.basketMode === "combined") && Mr(t.basketMode), (t
+            .indicatorSource === "price" || t.indicatorSource === "roc" || t.indicatorSource ===
+            "rsi" || t.indicatorSource === "momentum") && xr(t.indicatorSource), typeof t
+          .indicatorSourcePeriod == "number" && t.indicatorSourcePeriod >= 1 && gr(t
+            .indicatorSourcePeriod), t.inputSelection && typeof t.inputSelection == "object")) {
+        const l = t.inputSelection;
+        l.kind === "close" ? x({
+          kind: "close"
+        }) : l.kind === "workbook" && typeof l.metric == "string" && x({
+          kind: "workbook",
+          metric: l.metric
+        })
+      }
+    }, [x]);
+  gs("ma-crossover-optimizer", _r, $r);
+  const Jo = $.useCallback(() => {
+      const t = _r(),
+        {
+          selectedTicker: l,
+          pairTickerA: s,
+          pairTickerB: M,
+          results: w,
+          gridResults: d,
+          expandedTicker: S,
+          expandedGridTicker: f,
+          sortBy: p,
+          runSort: v,
+          gridLongSort: n,
+          gridShortSort: T,
+          evalResult: Q,
+          evalTriggerKey: he,
+          evalFilterKeys: ye,
+          ...et
+        } = t;
+      return et
+    }, [_r]),
+    es = $.useCallback(t => {
+      $r(t)
+    }, [$r]),
+    Fr = $.useMemo(() => gt.map(t => ({
+      ...t,
+      configs: t.configs.map(l => {
+        let s = -1 / 0,
+          M = l.categories[0];
+        for (const w of l.categories) {
+          const d = w.category === "golden_cross" || w.category === "price_above" || w
+            .category === "combo_bull" || w.category === "slope_up" || w.category ===
+            "accel_up" ? "buy" : "sell",
+            S = bs(w.summary, w.composite.score, d, so);
+          S > s && (s = S, M = w)
+        }
+        return {
+          ...l,
+          bestScore: s,
+          bestCategory: M.category,
+          _bestCategoryResult: M
+        }
+      })
+    })), [gt, so]),
+    Rr = $.useMemo(() => Fr.map(t => {
+      const l = s => {
+        let M = null,
+          w = null,
+          d = -1 / 0;
+        for (const S of t.configs) {
+          const f = Fo(S, s);
+          !f || f.summary.count === 0 || S.bestScore > d && (d = S.bestScore, M = S, w = f)
+        }
+        return M && w ? {
+          cfg: M,
+          cat: w,
+          score: d
+        } : null
+      };
+      return {
+        tr: t,
+        longBest: l("long"),
+        shortBest: l("short")
+      }
+    }), [Fr]),
+    ho = (t, l) => {
+      const {
+        tr: s,
+        longBest: M,
+        shortBest: w
+      } = t, d = M && w ? M.score >= w.score ? M : w : M ?? w, S = d?.cat.summary;
+      switch (l) {
+        case "ticker":
+          return s.ticker;
+        case "currentSignal":
+          return s.currentSignal;
+        case "side":
+          return d === M ? "Long" : "Short";
+        case "bestConfig":
+          return d?.cfg.configLabel ?? "";
+        case "bestSignal":
+          return d?.cat.label ?? "";
+        case "score":
+          return Math.max(M?.score ?? -1, w?.score ?? -1);
+        case "signals":
+          return d?.cat.summary.count ?? -1;
+        default: {
+          const f = l.match(/^(hit|avg|pf)-(1M|2M|3M|6M)$/);
+          if (!f || !S) return -1 / 0;
+          const [, p, v] = f, n = v;
+          return p === "hit" ? b === "band" ? S.bandHitRate?.[n] ?? S.hitRate[n] : S.hitRate[n] :
+            p === "avg" ? S.avgReturn[n] : p === "pf" ? S.profitFactor[n] : -1 / 0
+        }
+      }
+    },
+    Pr = $.useMemo(() => {
+      const t = Vt.trim().toLowerCase(),
+        l = t ? Rr.filter(w => w.tr.ticker.toLowerCase().includes(t) || w.tr.name && w.tr.name
+          .toLowerCase().includes(t)) : [...Rr],
+        {
+          col: s,
+          dir: M
+        } = Nt;
+      return l.sort((w, d) => {
+        const S = ho(w, s),
+          f = ho(d, s);
+        let p = 0;
+        return typeof S == "string" || typeof f == "string" ? p = String(S).localeCompare(
+          String(f)) : p = S - f, M === "asc" ? p : -p
+      }), l
+    }, [Rr, Nt, b, Vt]),
+    ct = t => {
+      lo(l => l.col === t ? {
+        col: t,
+        dir: l.dir === "desc" ? "asc" : "desc"
+      } : {
+        col: t,
+        dir: t === "ticker" || t === "currentSignal" || t === "side" || t === "bestConfig" ||
+          t === "bestSignal" ? "asc" : "desc"
+      })
+    },
+    ts = () => {
+      const t = vt.filter((d, S) => S >= 2),
+        l = [];
+      for (const d of Pr) {
+        const S = d.tr;
+        for (const f of ["long", "short"]) {
+          let p = null,
+            v = null,
+            n = -1;
+          for (const he of S.configs) {
+            const ye = Fo(he, f);
+            !ye || ye.summary.count === 0 || ye.composite.score > n && (n = ye.composite.score, p =
+              he, v = ye)
+          }
+          const T = v?.summary,
+            Q = {
+              ticker: S.ticker,
+              name: S.name,
+              side: f === "long" ? "Long" : "Short",
+              currentSignal: S.currentSignal,
+              bestConfig: p?.configLabel ?? "",
+              bestSignal: v?.label ?? "",
+              score: n < 0 ? null : n
+            };
+          t.forEach(he => {
+            Q[`hitRate_${he.label}`] = T?.hitRate[he.label] ?? null, Q[
+              `avgReturn_${he.label}`] = T?.avgReturn[he.label] ?? null, Q[`pf_${he.label}`] = T
+              ?.profitFactor[he.label] ?? null
+          }), l.push(Q)
+        }
+      }
+      const s = Object.keys(l[0] || {}),
+        M = [s.join(","), ...l.map(d => s.map(S => `"${String(d[S]??"").replace(/"/g,'""')}"`).join(
+          ","))].join(`
+`),
+        w = document.createElement("a");
+      w.href = URL.createObjectURL(new Blob([M], {
+        type: "text/csv"
+      })), w.download = "ma_crossover_optimizer.csv", w.click()
+    },
+    yo = t => t.includes("Combo Bull") || t.includes("Combo On") ?
+    "bg-emerald-600/20 text-emerald-400 border-emerald-600/30" : t.includes("Combo Bear") || t
+    .includes("Combo Off") ? "bg-red-600/20 text-red-400 border-red-600/30" : t.includes(
+    "Golden") || t.includes("Above") || t.includes("Slope Up") || t.includes("Curvature Up") ?
+    "bg-emerald-600/20 text-emerald-400 border-emerald-600/30" : t.includes("Death") || t.includes(
+      "Below") || t.includes("Slope Down") || t.includes("Curvature Down") ?
+    "bg-red-600/20 text-red-400 border-red-600/30" : t.includes("Bullish") ?
+    "bg-blue-600/20 text-blue-400 border-blue-600/30" : t.includes("Bearish") ?
+    "bg-orange-600/20 text-orange-400 border-orange-600/30" :
+    "bg-muted text-muted-foreground border-border",
+    rs = t => !t || t === "None" ? "neutral" : t.includes("Combo Bull") || t.includes("Combo On") ?
+    "buy" : t.includes("Combo Bear") || t.includes("Combo Off") ? "short" : t.includes("Golden") ||
+    t.includes("Above") || t.includes("Bullish") || t.includes("Slope Up") || t.includes(
+      "Curvature Up") ? "buy" : t.includes("Death") || t.includes("Below") || t.includes(
+    "Bearish") || t.includes("Slope Down") || t.includes("Curvature Down") ? "short" : "neutral",
+    os = (t, l) => {
+      if (!l) return "None";
+      const s = t.currentSignalByConfig;
+      return s && s[l] ? s[l] : t.currentSignal
+    },
+    ss = (t, l) => {
+      if (!l) return null;
+      const s = t.currentValueByConfig?.[l];
+      return s === void 0 || !Number.isFinite(s) ? null : kt(s)
+    },
+    ns = (t, l) => {
+      if (!l) return null;
+      const s = t.currentDetailByConfig?.[l];
+      if (!s) return null;
+      const M = d => d === void 0 || !Number.isFinite(d) ? "–" : d >= 1e3 ? `$${d.toFixed(0)}` :
+        d >= 10 ? `$${d.toFixed(2)}` : `$${d.toFixed(3)}`,
+        w = s.freq === "weekly" ? "weekly" : s.freq === "weekly_on_daily" ? "weekly→daily" :
+        "daily";
+      return s.ma !== void 0 && s.maType && s.fastPeriod !== void 0 ?
+        `${M(s.price)} vs ${s.maType}${s.fastPeriod} ${M(s.ma)} · ${w}` : s.fastMA !== void 0 && s
+        .slowMA !== void 0 && s.fastType && s.slowType ?
+        `${s.fastType}${s.fastPeriod} ${M(s.fastMA)} vs ${s.slowType}${s.slowPeriod} ${M(s.slowMA)} · ${w}` :
+        s.price !== void 0 ? `${M(s.price)} · ${w}` : null
+    },
+    ls = (() => {
+      let t = 0;
+      for (const l of Ro)
+        for (const s of Po) l < s && t++;
+      return t
+    })(),
+    as = F === "crossover" ? Fe.length * Fe.length * ls : F === "price_cross" || F ===
+    "slope_curvature" || F === "indicator_cross" ? Fe.length * Dt.length : 1;
+  return e.jsxs("div", {
+    className: "flex flex-col h-full overflow-hidden",
+    children: [e.jsxs("div", {
+      className: "flex-shrink-0 px-4 pt-2 pb-1 border-b border-border bg-card flex items-center gap-3",
+      children: [e.jsx("h2", {
+        className: "text-sm font-bold text-foreground tracking-tight",
+        children: "MA Cross"
+      }), e.jsxs("div", {
+        className: "flex gap-px",
+        children: [e.jsx("button", {
+          "data-testid": "ma-view-optimize",
+          className: `text-[10px] font-mono font-bold px-2.5 py-1 rounded transition-colors ${er==="optimize"?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+          onClick: () => uo("optimize"),
+          children: "Optimize"
+        }), e.jsx("button", {
+          "data-testid": "ma-view-evaluate",
+          className: `text-[10px] font-mono font-bold px-2.5 py-1 rounded transition-colors ${er==="evaluate"?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+          onClick: () => uo("evaluate"),
+          children: "Evaluate"
+        })]
+      }), e.jsx("span", {
+        className: "text-[10px] text-muted-foreground",
+        children: er === "optimize" ? "Search MA parameter space by hit rate" :
+          "Score one specific MA setup"
+      })]
+    }), er === "evaluate" ? e.jsxs(e.Fragment, {
+      children: [e.jsxs("div", {
+        className: "flex-shrink-0 px-4 py-3 border-b border-border bg-card",
+        children: [e.jsxs("div", {
+          className: "flex items-start gap-4 flex-wrap",
+          children: [e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Mode"
+              }), e.jsxs("div", {
+                className: "flex gap-px",
+                children: [e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${O==="single"?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => Ot("single"),
+                  children: "Single"
+                }), e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${O==="pair"?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => Ot("pair"),
+                  children: "Pair"
+                }), e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${O==="basket"?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => Ot("basket"),
+                  children: "Basket"
+                })]
+              })]
+            }), O === "basket" && e.jsxs("div", {
+              className: "flex flex-col gap-2",
+              children: [e.jsx(Ao, {
+                tickers: ge,
+                value: Te,
+                onChange: jr,
+                disabled: Rt,
+                testIdPrefix: "ma-eval-basket"
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Basket Run Mode"
+                }), e.jsx("div", {
+                  className: "flex gap-px",
+                  "data-testid": "ma-eval-basket-mode",
+                  children: ["stocks", "combined"].map(t => e
+                    .jsx("button", {
+                      "data-testid": `ma-eval-basket-mode-${t}`,
+                      className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${Ze===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                      onClick: () => Mr(t),
+                      disabled: Rt,
+                      title: t === "stocks" ?
+                        "Evaluate the first basket constituent" :
+                        "Evaluate a single synthetic series using the basket's weighting scheme",
+                      children: t === "stocks" ?
+                        "Stock by Stock" : "Combined"
+                    }, t))
+                })]
+              })]
+            }), O === "single" && e.jsxs("div", {
+              className: "flex items-end gap-2",
+              children: [e.jsx("div", {
+                className: nr(i) ?
+                  "opacity-40 pointer-events-none" : "",
+                children: e.jsx(Lt, {
+                  tickers: ge,
+                  value: nr(i) ? "" : i,
+                  onChange: a,
+                  label: "Ticker"
+                })
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Basket"
+                }), e.jsx(So, {
+                  activeTicker: i,
+                  onSelectTicker: a,
+                  fallbackTicker: ge[0]?.ticker ?? null
+                })]
+              })]
+            }), O === "pair" && e.jsxs(e.Fragment, {
+              children: [e.jsx(Lt, {
+                tickers: ge,
+                value: we,
+                onChange: wr,
+                label: "Ticker A"
+              }), e.jsx(Lt, {
+                tickers: ge,
+                value: Me,
+                onChange: Nr,
+                label: "Ticker B"
+              })]
+            }), O === "single" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Input Series"
+              }), e.jsx(hs, {
+                value: u,
+                onChange: x,
+                family: "ma_cross",
+                label: ""
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Side"
+              }), e.jsxs("div", {
+                className: "flex gap-px",
+                children: [e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${Qe==="long"?"bg-emerald-600 text-white":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => po("long"),
+                  children: "Long"
+                }), e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${Qe==="short"?"bg-red-600 text-white":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => po("short"),
+                  children: "Short"
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Signal"
+              }), e.jsxs("select", {
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                value: F,
+                onChange: t => ft(t.target.value),
+                children: [e.jsx("option", {
+                  value: "crossover",
+                  children: "MA Crossover"
+                }), e.jsx("option", {
+                  value: "price_cross",
+                  children: "Price Cross MA"
+                }), e.jsx("option", {
+                  value: "combo",
+                  children: "Combo (A ∧ B)"
+                }), e.jsx("option", {
+                  value: "slope_curvature",
+                  children: "Slope/Curvature"
+                }), e.jsx("option", {
+                  value: "indicator_cross",
+                  children: "Indicator × MA"
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "Frequency at which MAs and signals are computed. Forward-return horizons stay in BAR units of the chosen frequency.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Frequency"
+              }), e.jsx("div", {
+                className: "flex gap-px",
+                children: ["daily", "weekly", "weekly_on_daily"]
+                  .map(t => e.jsx("button", {
+                    "data-testid": `eval-frequency-${t}`,
+                    className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${fe===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                    onClick: () => Sr(t),
+                    disabled: Rt,
+                    title: Fs[t],
+                    children: $s[t]
+                  }, t))
+              })]
+            }), F !== "combo" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: F === "crossover" ? "Fast Type" :
+                  "MA Type"
+              }), e.jsx("select", {
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                value: je,
+                onChange: t => Qr(t.target.value),
+                children: Fe.map(t => e.jsx("option", {
+                  value: t,
+                  children: t
+                }, t))
+              })]
+            }), F === "crossover" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Slow Type"
+              }), e.jsx("select", {
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                value: pt,
+                onChange: t => Yo(t.target.value),
+                children: Fe.map(t => e.jsx("option", {
+                  value: t,
+                  children: t
+                }, t))
+              })]
+            }), (je === "FRAMA" || F === "crossover" && pt === "FRAMA" ||
+              F === "combo" || F === "slope_curvature" || F ===
+              "indicator_cross") && e.jsxs(e.Fragment, {
+              children: [e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "FRAMA fast constant (Pine FC). Default 1.",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "FRAMA FC"
+                }), e.jsx("input", {
+                  "data-testid": "frama-fc-eval",
+                  type: "number",
+                  min: 1,
+                  max: 200,
+                  value: Re,
+                  onChange: t => br(Math.max(1, parseInt(t
+                    .target.value) || 1)),
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "FRAMA slow constant (Pine SC). Default 198.",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "FRAMA SC"
+                }), e.jsx("input", {
+                  "data-testid": "frama-sc-eval",
+                  type: "number",
+                  min: 2,
+                  max: 500,
+                  value: Pe,
+                  onChange: t => hr(Math.max(2, parseInt(t
+                    .target.value) || 198)),
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+                })]
+              })]
+            }), (je === "T3" || F === "crossover" && pt === "T3" || F ===
+              "combo" || F === "slope_curvature" || F === "indicator_cross"
+              ) && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "T3 volume factor (0..1). Tillson default 0.7. Higher = more responsive (DEMA-like), lower = smoother (EMA-like).",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "T3 VF"
+              }), e.jsx("input", {
+                "data-testid": "t3-vf-eval",
+                type: "number",
+                min: 0,
+                max: 1,
+                step: .01,
+                value: Be,
+                onChange: t => yr(Math.max(0, Math.min(1,
+                  parseFloat(t.target.value) || .7))),
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), (je === "ALMA" || F === "crossover" && pt === "ALMA" ||
+              F === "combo" || F === "slope_curvature" || F ===
+              "indicator_cross") && e.jsxs(e.Fragment, {
+              children: [e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "ALMA Gaussian peak position (0..1). TradingView default 0.85. Higher = more responsive to recent prices.",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "ALMA Off"
+                }), e.jsx("input", {
+                  "data-testid": "alma-offset-eval",
+                  type: "number",
+                  min: 0,
+                  max: 1,
+                  step: .01,
+                  value: Le,
+                  onChange: t => kr(Math.max(0, Math.min(1,
+                    parseFloat(t.target.value) || .85))),
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "ALMA Gaussian width. TradingView default 6. Higher = smoother, lower = sharper.",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "ALMA Sig"
+                }), e.jsx("input", {
+                  "data-testid": "alma-sigma-eval",
+                  type: "number",
+                  min: .5,
+                  max: 50,
+                  step: .5,
+                  value: Ie,
+                  onChange: t => vr(Math.max(.5, parseFloat(t
+                    .target.value) || 6)),
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+                })]
+              })]
+            }), F !== "combo" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: F === "crossover" ? "Fast Period" :
+                  "Period"
+              }), e.jsx("input", {
+                type: "number",
+                min: 2,
+                max: 400,
+                value: Oe,
+                onChange: t => qo(parseInt(t.target.value) || 50),
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+              })]
+            }), F === "crossover" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Slow Period"
+              }), e.jsx("input", {
+                type: "number",
+                min: 3,
+                max: 400,
+                value: jt,
+                onChange: t => Wo(parseInt(t.target.value) || 200),
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+              })]
+            }), (F === "slope_curvature" || F === "indicator_cross") && e
+            .jsxs(e.Fragment, {
+              children: [F === "indicator_cross" && e.jsxs(e.Fragment, {
+                children: [e.jsxs("div", {
+                  className: "flex flex-col gap-0.5",
+                  children: [e.jsx("label", {
+                    className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                    children: "Source"
+                  }), e.jsxs("select", {
+                    className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                    value: qe,
+                    onChange: t => xr(t.target.value),
+                    children: [e.jsx("option", {
+                      value: "roc",
+                      children: "ROC"
+                    }), e.jsx("option", {
+                      value: "rsi",
+                      children: "RSI"
+                    }), e.jsx("option", {
+                      value: "momentum",
+                      children: "Momentum"
+                    }), e.jsx("option", {
+                      value: "price",
+                      children: "Price"
+                    })]
+                  })]
+                }), qe !== "price" && e.jsxs("div", {
+                  className: "flex flex-col gap-0.5",
+                  children: [e.jsx("label", {
+                    className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                    children: "Src Period"
+                  }), e.jsx("input", {
+                    type: "number",
+                    min: 1,
+                    max: 200,
+                    value: ot,
+                    onChange: t => gr(Math.max(1, Math
+                      .min(200, parseInt(t.target
+                        .value) || 12))),
+                    className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+                  })]
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Family"
+                }), e.jsxs("select", {
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                  value: se,
+                  onChange: t => mr(t.target.value),
+                  children: [e.jsx("option", {
+                    value: "price_cross",
+                    children: F === "indicator_cross" ?
+                      "Ind × MA" : "Price Cross"
+                  }), e.jsx("option", {
+                    value: "slope",
+                    children: "Slope"
+                  }), e.jsx("option", {
+                    value: "curvature",
+                    children: "Curvature"
+                  }), e.jsx("option", {
+                    value: "all",
+                    children: "All"
+                  })]
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Slope LB"
+                }), e.jsx("input", {
+                  type: "number",
+                  min: 2,
+                  max: 50,
+                  value: me,
+                  onChange: t => fr(parseInt(t.target
+                    .value) || 5),
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Target %"
+              }), e.jsx("input", {
+                type: "number",
+                step: .5,
+                min: .5,
+                value: +(z * 100).toFixed(4),
+                onChange: t => K((parseFloat(t.target.value) || 5) /
+                  100),
+                title: "Hit-rate threshold in percent. 5 = 5%.",
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[70px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Hold"
+              }), e.jsx("input", {
+                type: "number",
+                min: 0,
+                value: re,
+                onChange: t => at(parseInt(t.target.value) || 0),
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex items-center gap-1",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "DATE RANGE"
+              }), e.jsx("div", {
+                className: "flex items-center gap-0.5",
+                children: No.map(t => e.jsx("button", {
+                  "data-testid": `ma-date-preset-${t.value}`,
+                  className: `text-[9px] font-mono px-1.5 py-0.5 rounded ${eo===t.value?"bg-primary text-primary-foreground":"bg-background text-muted-foreground border border-border hover:text-foreground"}`,
+                  onClick: () => {
+                    Tt(t.value), _t(jo(t.value))
+                  },
+                  children: t.label
+                }, t.value))
+              }), e.jsx("input", {
+                type: "date",
+                "data-testid": "ma-date-start",
+                value: Ae.start,
+                onChange: t => {
+                  Tt("custom"), _t({
+                    ...Ae,
+                    start: t.target.value
+                  })
+                },
+                className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+              }), e.jsx("span", {
+                className: "text-[10px] font-mono text-muted-foreground",
+                children: "→"
+              }), e.jsx("input", {
+                type: "date",
+                "data-testid": "ma-date-end",
+                value: Ae.end,
+                onChange: t => {
+                  Tt("custom"), _t({
+                    ...Ae,
+                    end: t.target.value
+                  })
+                },
+                className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: " "
+              }), e.jsx("button", {
+                "data-testid": "ma-eval-run",
+                className: "text-xs font-mono font-bold px-4 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50",
+                onClick: Xo,
+                disabled: Rt,
+                children: Rt ? "Evaluating…" : "Evaluate"
+              })]
+            })
+          ]
+        }), F === "combo" && e.jsxs("div", {
+          className: "mt-2 text-[10px] font-mono text-muted-foreground",
+          children: ["Using Combo legs from Optimize tab: ", lt(Ee), " ∧ ",
+            lt(Ue)
+          ]
+        })]
+      }), e.jsxs("div", {
+        className: "flex-1 overflow-auto p-4 space-y-3",
+        children: [e.jsx(Bs, {
+          result: tr,
+          loading: Rt,
+          setupLabel: go,
+          tickerLabel: bo
+        }), tr && rr && tr.profiles.length >= 10 ? e.jsx(Co, {
+          ticker: rr.mode === "pair" ? rr.pairLegA || "" : i || ge[0]
+            ?.ticker || "",
+          priceContext: rr,
+          signals: tr.profiles,
+          direction: Qe === "long" ? "buy" : "sell",
+          title: `Hit Conditions — ${go} on ${bo}`,
+          useBand: !1
+        }) : null]
+      })]
+    }) : e.jsxs(e.Fragment, {
+      children: [e.jsx(Rs, {
+        kind: "ma",
+        captureInputs: Jo,
+        applyInputs: es
+      }), e.jsx("div", {
+        className: "flex-shrink-0 px-4 py-3 border-b border-border bg-card",
+        children: e.jsxs("div", {
+          className: "flex items-center gap-4 flex-wrap",
+          children: [e.jsxs("div", {
+              children: [e.jsxs("div", {
+                className: "flex items-center gap-2",
+                children: [e.jsx("h2", {
+                  className: "text-sm font-bold text-foreground tracking-tight",
+                  children: "MA Crossover"
+                }), Ko && e.jsxs("span", {
+                  className: "text-[9px] font-mono px-1.5 py-0.5 rounded bg-red-600/20 text-red-400 border border-red-600/30",
+                  children: [ge.length, "/", r.length]
+                }), e.jsxs("span", {
+                  className: "inline-flex items-center gap-1 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20",
+                  children: [e.jsx("svg", {
+                    xmlns: "http://www.w3.org/2000/svg",
+                    width: "8",
+                    height: "8",
+                    viewBox: "0 0 24 24",
+                    fill: "currentColor",
+                    children: e.jsx("circle", {
+                      cx: "12",
+                      cy: "12",
+                      r: "10"
+                    })
+                  }), "Yahoo Finance"]
+                }), c && e.jsxs("span", {
+                  className: "text-[9px] font-mono text-muted-foreground",
+                  children: [Math.round((Date.now() - c) / 6e4),
+                    "m ago"
+                  ]
+                }), e.jsx("button", {
+                  onClick: async () => {
+                    const t = i;
+                    if (t) {
+                      Y(!0);
+                      try {
+                        await ys(t), E(Date.now())
+                      } catch {} finally {
+                        Y(!1)
+                      }
+                    }
+                  },
+                  disabled: X,
+                  title: "Force refresh Yahoo price cache",
+                  className: "text-[9px] font-mono px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50",
+                  children: X ? "…" : "↻"
+                })]
+              }), e.jsx("p", {
+                className: "text-[10px] text-muted-foreground mt-0.5",
+                children: "Test MA crossover & price-cross-MA signals against forward returns"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Signal"
+              }), e.jsx("div", {
+                className: "flex gap-px",
+                children: ["crossover", "price_cross", "combo",
+                  "slope_curvature", "indicator_cross"
+                ].map(t => e.jsx("button", {
+                  "data-testid": `signal-type-${t}`,
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${F===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => ft(t),
+                  disabled: ne,
+                  title: t === "indicator_cross" ?
+                    "Apply an MA to an indicator (ROC, RSI, Momentum) instead of price. Detects indicator-vs-MA crossings plus slope/curvature of the MA-of-indicator." :
+                    void 0,
+                  children: t === "crossover" ? "MA Crossover" :
+                    t === "price_cross" ? "Price × MA" : t ===
+                    "combo" ? "Combo" : t ===
+                    "slope_curvature" ? "Slope/Curv" :
+                    "Indicator × MA"
+                }, t))
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "Relative: subtract the peer-group median return at each horizon. Peer group = tickers sharing the chosen classification value.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Return Basis"
+              }), e.jsx("div", {
+                className: "flex gap-px",
+                children: ["absolute", "relative"].map(t => e.jsx(
+                  "button", {
+                    "data-testid": `return-basis-${t}`,
+                    className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${pe===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                    onClick: () => rt(t),
+                    disabled: ne,
+                    children: t === "absolute" ? "Absolute" :
+                      "Relative"
+                  }, t))
+              })]
+            }), pe === "relative" && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "Each ticker is compared to the median forward return of all tickers sharing its value at this classification level.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Peer Level"
+              }), e.jsxs("select", {
+                "data-testid": "peer-level",
+                className: "text-[10px] font-mono bg-background border border-border rounded px-1.5 py-1",
+                value: Ne,
+                onChange: t => Ut(t.target.value),
+                disabled: ne,
+                children: [e.jsx("option", {
+                  value: "economy",
+                  children: "Economy"
+                }), e.jsx("option", {
+                  value: "sector",
+                  children: "Sector"
+                }), e.jsx("option", {
+                  value: "subsector",
+                  children: "Subsector"
+                }), e.jsx("option", {
+                  value: "industryGroup",
+                  children: "Ind. Group"
+                }), e.jsx("option", {
+                  value: "industry",
+                  children: "Industry"
+                }), e.jsx("option", {
+                  value: "subindustry",
+                  children: "Subindustry"
+                })]
+              })]
+            }), F === "indicator_cross" && e.jsxs(e.Fragment, {
+              children: [e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "Series to feed into the MA. ROC = pct change over N bars. RSI = Wilder's RSI. Momentum = price[i] - price[i-N]. Price = same as Price × MA mode.",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Source"
+                }), e.jsxs("select", {
+                  "data-testid": "indicator-source",
+                  className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                  value: qe,
+                  onChange: t => xr(t.target.value),
+                  disabled: ne,
+                  children: [e.jsx("option", {
+                    value: "roc",
+                    children: "ROC"
+                  }), e.jsx("option", {
+                    value: "rsi",
+                    children: "RSI"
+                  }), e.jsx("option", {
+                    value: "momentum",
+                    children: "Momentum"
+                  }), e.jsx("option", {
+                    value: "price",
+                    children: "Price"
+                  })]
+                })]
+              }), qe !== "price" && e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                title: "Indicator lookback period (in current-frequency bars).",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Src Period"
+                }), e.jsx("input", {
+                  type: "number",
+                  min: 1,
+                  max: 200,
+                  step: 1,
+                  "data-testid": "indicator-source-period",
+                  className: "text-xs font-mono bg-background border border-border rounded px-1.5 py-1 w-14",
+                  value: ot,
+                  onChange: t => gr(Math.max(1, Math.min(200,
+                    Number(t.target.value) || 1))),
+                  disabled: ne
+                })]
+              })]
+            }), (F === "slope_curvature" || F === "indicator_cross") && e
+            .jsxs(e.Fragment, {
+              children: [e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Family"
+                }), e.jsx("div", {
+                  className: "flex gap-px",
+                  children: ["price_cross", "slope",
+                    "curvature", "all"
+                  ].map(t => e.jsx("button", {
+                    "data-testid": `signal-family-${t}`,
+                    className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${se===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                    onClick: () => mr(t),
+                    disabled: ne,
+                    title: t === "price_cross" && F ===
+                      "indicator_cross" ?
+                      "Indicator vs MA-of-indicator crossings" :
+                      $o[t],
+                    children: t === "price_cross" ? F ===
+                      "indicator_cross" ? "Ind × MA" :
+                      "Px × MA" : Kt[t]
+                  }, t))
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  title: "Slope lookback in bars (matches selected frequency). Slope = (MA[i] / MA[i−L]) − 1",
+                  children: "Slope LB"
+                }), e.jsx("input", {
+                  type: "number",
+                  min: 1,
+                  max: 100,
+                  step: 1,
+                  "data-testid": "slope-lookback",
+                  className: "text-xs font-mono bg-background border border-border rounded px-1.5 py-1 w-12",
+                  value: me,
+                  onChange: t => fr(Math.max(1, Math.min(100,
+                    Number(t.target.value) || 1))),
+                  disabled: ne,
+                  title: `Slope lookback: ${me} ${fe==="weekly"?"weekly":"daily"} bars`
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "Run Optimizer scope. 'All' scans every MA type with mixed fast/slow combinations. Picking a single type restricts the search to that one MA only — useful for finding the best setup for a specific MA.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "MA Scope"
+              }), e.jsxs("select", {
+                "data-testid": "optimizer-ma-scope",
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground",
+                value: ut,
+                onChange: t => Jr(t.target.value),
+                disabled: ne,
+                children: [e.jsx("option", {
+                  value: "all",
+                  children: "All (mixed)"
+                }), Fe.map(t => e.jsxs("option", {
+                  value: t,
+                  children: [t, " only"]
+                }, t))]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "FRAMA fast constant (Pine FC). Default 1. Lower = more responsive when market trends.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "FRAMA FC"
+              }), e.jsx("input", {
+                "data-testid": "frama-fc",
+                type: "number",
+                min: 1,
+                max: 200,
+                step: 1,
+                value: Re,
+                onChange: t => br(Math.max(1, parseInt(t.target
+                  .value) || 1)),
+                disabled: ne,
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "FRAMA slow constant (Pine SC). Default 198. Higher = more smoothing when market is choppy.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "FRAMA SC"
+              }), e.jsx("input", {
+                "data-testid": "frama-sc",
+                type: "number",
+                min: 2,
+                max: 500,
+                step: 1,
+                value: Pe,
+                onChange: t => hr(Math.max(2, parseInt(t.target
+                  .value) || 198)),
+                disabled: ne,
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "T3 volume factor (0..1). Tillson default 0.7. Higher = more responsive (DEMA-like), lower = smoother (EMA-like).",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "T3 VF"
+              }), e.jsx("input", {
+                "data-testid": "t3-vf",
+                type: "number",
+                min: 0,
+                max: 1,
+                step: .01,
+                value: Be,
+                onChange: t => yr(Math.max(0, Math.min(1, parseFloat(t
+                  .target.value) || .7))),
+                disabled: ne,
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "ALMA Gaussian peak position (0..1). TradingView default 0.85. Higher = more responsive to recent prices, lower = smoother.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "ALMA Off"
+              }), e.jsx("input", {
+                "data-testid": "alma-offset",
+                type: "number",
+                min: 0,
+                max: 1,
+                step: .01,
+                value: Le,
+                onChange: t => kr(Math.max(0, Math.min(1, parseFloat(t
+                  .target.value) || .85))),
+                disabled: ne,
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              title: "ALMA Gaussian width. TradingView default 6. Larger = wider/smoother, smaller = tighter/sharper.",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "ALMA Sig"
+              }), e.jsx("input", {
+                "data-testid": "alma-sigma",
+                type: "number",
+                min: .5,
+                max: 50,
+                step: .5,
+                value: Ie,
+                onChange: t => vr(Math.max(.5, parseFloat(t.target
+                  .value) || 6)),
+                disabled: ne,
+                className: "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground w-[60px]"
+              })]
+            }), e.jsxs("div", {
+              className: "flex items-center gap-1",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "DATE RANGE"
+              }), e.jsx("div", {
+                className: "flex items-center gap-0.5",
+                children: No.map(t => e.jsx("button", {
+                  "data-testid": `ma-date-preset-${t.value}`,
+                  className: `text-[9px] font-mono px-1.5 py-0.5 rounded ${eo===t.value?"bg-primary text-primary-foreground":"bg-background text-muted-foreground border border-border hover:text-foreground"}`,
+                  onClick: () => {
+                    Tt(t.value), _t(jo(t.value))
+                  },
+                  children: t.label
+                }, t.value))
+              }), e.jsx("input", {
+                type: "date",
+                "data-testid": "ma-date-start",
+                value: Ae.start,
+                onChange: t => {
+                  Tt("custom"), _t({
+                    ...Ae,
+                    start: t.target.value
+                  })
+                },
+                className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+              }), e.jsx("span", {
+                className: "text-[10px] font-mono text-muted-foreground",
+                children: "→"
+              }), e.jsx("input", {
+                type: "date",
+                "data-testid": "ma-date-end",
+                value: Ae.end,
+                onChange: t => {
+                  Tt("custom"), _t({
+                    ...Ae,
+                    end: t.target.value
+                  })
+                },
+                className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+              })]
+            }), F === "combo" && e.jsx(e.Fragment, {
+              children: ["A", "B"].map(t => {
+                const l = t === "A" ? Ee : Ue,
+                  s = t === "A" ? Zt : Xt,
+                  M = w => `leg-${t.toLowerCase()}-${w}`;
+                return e.jsxs("div", {
+                  className: "flex flex-col gap-0.5 border border-border rounded px-2 py-1 bg-background/40",
+                  children: [e.jsxs("label", {
+                    className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                    children: ["Leg ", t]
+                  }), e.jsxs("div", {
+                    className: "flex items-center gap-1 flex-wrap",
+                    children: [e.jsxs("select", {
+                      "data-testid": M("kind"),
+                      className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5",
+                      value: l.kind,
+                      onChange: w => s({
+                        ...l,
+                        kind: w.target.value
+                      }),
+                      disabled: ne,
+                      children: [e.jsx("option", {
+                        value: "price_cross",
+                        children: "Px vs MA"
+                      }), e.jsx("option", {
+                        value: "ma_cross",
+                        children: "MA vs MA"
+                      })]
+                    }), e.jsxs("select", {
+                      "data-testid": M("polarity"),
+                      className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5",
+                      value: l.polarity,
+                      onChange: w => s({
+                        ...l,
+                        polarity: w.target.value
+                      }),
+                      disabled: ne,
+                      title: "For Px vs MA: price above/below MA. For MA vs MA: fast MA above/below slow MA.",
+                      children: [e.jsx("option", {
+                        value: "above",
+                        children: "above"
+                      }), e.jsx("option", {
+                        value: "below",
+                        children: "below"
+                      })]
+                    }), e.jsx("select", {
+                      "data-testid": M("ma-type"),
+                      className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5",
+                      value: l.maType,
+                      onChange: w => s({
+                        ...l,
+                        maType: w.target.value
+                      }),
+                      disabled: ne,
+                      title: l.kind === "ma_cross" ?
+                        "Fast MA type" : "MA type",
+                      children: Fe.map(w => e.jsx(
+                        "option", {
+                          value: w,
+                          children: w
+                        }, w))
+                    }), e.jsx("input", {
+                      type: "number",
+                      min: "2",
+                      max: "400",
+                      step: "1",
+                      "data-testid": M("fast"),
+                      className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5 w-12",
+                      value: l.fastPeriod,
+                      onChange: w => s({
+                        ...l,
+                        fastPeriod: Math.max(2, Math
+                          .min(400, Math.floor(
+                            Number(w.target
+                              .value) || 0)))
+                      }),
+                      disabled: ne,
+                      title: "Fast period (or single MA period for Px vs MA)"
+                    }), l.kind === "ma_cross" && e.jsxs(e
+                      .Fragment, {
+                        children: [e.jsx("span", {
+                          className: "text-[10px] font-mono text-muted-foreground px-0.5",
+                          children: "vs"
+                        }), e.jsx("select", {
+                          "data-testid": M(
+                            "slow-ma-type"),
+                          className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5",
+                          value: At(l),
+                          onChange: w => s({
+                            ...l,
+                            slowMaType: w.target
+                              .value
+                          }),
+                          disabled: ne,
+                          title: "Slow MA type — can differ from fast MA type",
+                          children: Fe.map(w => e
+                            .jsx("option", {
+                              value: w,
+                              children: w
+                            }, w))
+                        }), e.jsx("input", {
+                          type: "number",
+                          min: "2",
+                          max: "400",
+                          step: "1",
+                          "data-testid": M("slow"),
+                          className: "text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5 w-12",
+                          value: l.slowPeriod,
+                          onChange: w => s({
+                            ...l,
+                            slowPeriod: Math
+                              .max(2, Math.min(
+                                400, Math
+                                .floor(Number(
+                                    w.target
+                                    .value) ||
+                                  0)))
+                          }),
+                          disabled: ne,
+                          title: "Slow period"
+                        })]
+                      })]
+                  }), e.jsx("span", {
+                    className: "text-[9px] font-mono text-muted-foreground",
+                    "data-testid": M("label"),
+                    children: lt(l)
+                  })]
+                }, t)
+              })
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Mode"
+              }), e.jsx("div", {
+                className: "flex gap-px",
+                children: ["single", "universe", "pair", "pairCombo",
+                  "basket"
+                ].map(t => e.jsx("button", {
+                  className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${O===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                  onClick: () => Ot(t),
+                  disabled: ne,
+                  "data-testid": `optimizer-mode-${t}`,
+                  children: t === "single" ? "Single Ticker" :
+                    t === "universe" ? "Universe" : t ===
+                    "pair" ? "Pair (A/B)" : t === "pairCombo" ?
+                    "Pair Combo" : "Basket"
+                }, t))
+              })]
+            }), O !== "pair" && O !== "pairCombo" && Uo, O === "pairCombo" &&
+            e.jsxs("div", {
+              className: "flex flex-col gap-1 w-full",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Pair Combo — Leg Set"
+              }), ht.ui]
+            }), O === "universe" && or.classFilterUI && e.jsxs("div", {
+              className: "flex flex-col gap-1 w-full",
+              "data-testid": "ma-clf-row",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Classification Filter"
+              }), or.universeSourceUI, or.classFilterUI]
+            }), O === "single" && e.jsx("div", {
+              className: "flex items-end gap-2",
+              children: e.jsxs("div", {
+                className: "flex items-end gap-2",
+                children: [e.jsx("div", {
+                  className: nr(i) ?
+                    "opacity-40 pointer-events-none" : "",
+                  children: e.jsx(Lt, {
+                    tickers: ge,
+                    value: nr(i) ? "" : i,
+                    onChange: a,
+                    disabled: ne,
+                    label: "Ticker"
+                  })
+                }), e.jsxs("div", {
+                  className: "flex flex-col gap-0.5",
+                  children: [e.jsx("label", {
+                    className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                    children: "Basket"
+                  }), e.jsx(So, {
+                    activeTicker: i,
+                    onSelectTicker: a,
+                    fallbackTicker: ge[0]?.ticker ?? null
+                  })]
+                })]
+              })
+            }), O === "pair" && e.jsxs("div", {
+              className: "flex items-end gap-2",
+              children: [e.jsx(Lt, {
+                tickers: ge,
+                value: we,
+                onChange: wr,
+                disabled: ne,
+                label: "A"
+              }), e.jsx(Lt, {
+                tickers: ge,
+                value: Me,
+                onChange: Nr,
+                disabled: ne,
+                label: "B"
+              }), e.jsxs("span", {
+                className: "text-[10px] font-mono text-muted-foreground pb-1",
+                children: ["Ratio: ", e.jsxs("span", {
+                  className: "text-foreground font-bold",
+                  children: [we || "A", "/", Me || "B"]
+                })]
+              })]
+            }), O === "basket" && e.jsxs("div", {
+              className: "flex flex-col gap-2",
+              children: [e.jsx(Ao, {
+                tickers: ge,
+                value: Te,
+                onChange: jr,
+                disabled: ne,
+                testIdPrefix: "ma-basket"
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Basket Run Mode"
+                }), e.jsx("div", {
+                  className: "flex gap-px",
+                  "data-testid": "ma-basket-mode",
+                  children: ["stocks", "combined"].map(t => e
+                    .jsx("button", {
+                      "data-testid": `ma-basket-mode-${t}`,
+                      className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${Ze===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                      onClick: () => Mr(t),
+                      disabled: ne,
+                      title: t === "stocks" ?
+                        "Run optimizer on each basket constituent separately" :
+                        "Run optimizer on a single synthetic series using the basket's weighting scheme",
+                      children: t === "stocks" ?
+                        "Stock by Stock" : "Combined"
+                    }, t))
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Return Measure"
+              }), e.jsx("div", {
+                className: "flex gap-px",
+                children: ["threshold", "band"].map(t => e.jsx(
+                  "button", {
+                    className: `text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${b===t?"bg-primary text-primary-foreground":"bg-background text-muted-foreground hover:text-foreground border border-border"}`,
+                    onClick: () => G(t),
+                    disabled: ne,
+                    children: t === "threshold" ? "Threshold" :
+                      "Band"
+                  }, t))
+              })]
+            }), b === "threshold" ? e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: "Target"
+              }), e.jsx("select", {
+                className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[70px]",
+                value: z,
+                onChange: t => K(Number(t.target.value)),
+                disabled: ne,
+                children: ks.map(t => e.jsx("option", {
+                  value: t.value,
+                  children: t.label
+                }, t.value))
+              })]
+            }) : e.jsxs(e.Fragment, {
+              children: [e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Band"
+                }), e.jsx("select", {
+                  className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[80px]",
+                  value: `${ae}-${xe}`,
+                  onChange: t => {
+                    const [l, s] = t.target.value.split("-")
+                      .map(Number);
+                    Ge(l), Ke(s)
+                  },
+                  disabled: ne,
+                  children: vs.map(t => e.jsx("option", {
+                    value: `${t.band.minReturn}-${t.band.maxReturn}`,
+                    children: t.label
+                  }, t.label))
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Min %"
+                }), e.jsx("input", {
+                  type: "number",
+                  step: "1",
+                  min: "0",
+                  max: "100",
+                  className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14",
+                  value: Math.round(ae * 100),
+                  onChange: t => Ge(Number(t.target.value) /
+                    100),
+                  disabled: ne
+                })]
+              }), e.jsxs("div", {
+                className: "flex flex-col gap-0.5",
+                children: [e.jsx("label", {
+                  className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                  children: "Max %"
+                }), e.jsx("input", {
+                  type: "number",
+                  step: "1",
+                  min: "0",
+                  max: "100",
+                  className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14",
+                  value: Math.round(xe * 100),
+                  onChange: t => Ke(Number(t.target.value) /
+                    100),
+                  disabled: ne
+                })]
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                title: "Minimum holding period in trading days. Hit/peak/trough detection ignores the first N days, and new signals are suppressed during the hold window. 0 = off.",
+                children: "Min Hold"
+              }), e.jsx("input", {
+                type: "number",
+                step: "1",
+                min: "0",
+                max: "126",
+                "data-testid": "min-hold",
+                className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-14",
+                value: re,
+                onChange: t => at(Math.max(0, Math.min(126, Math
+                  .floor(Number(t.target.value) || 0)))),
+                disabled: ne,
+                title: "Trading days. Forces hold for at least N days before counting hits and before allowing a new signal."
+              })]
+            }), e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: " "
+              }), ne ? e.jsxs("button", {
+                className: "text-xs font-mono font-bold px-4 py-1 rounded bg-red-600 text-white hover:bg-red-500",
+                onClick: () => {
+                  Pt.current = !0
+                },
+                children: ["Cancel (", wt.current, "/", wt.total, ")"]
+              }) : e.jsx("button", {
+                className: "text-xs font-mono font-bold px-4 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90",
+                onClick: Zo,
+                title: F === "combo" ?
+                  "Test the specific Leg A + Leg B combo configured in the header against every ticker. Output: per-ticker hit rate for THIS one combo." :
+                  "Sweep the full MA-type × period parameter space and rank results by hit rate.",
+                children: F === "combo" ? "Test Combo" :
+                  "Run Optimizer"
+              })]
+            }), F === "combo" && !ne && e.jsxs("div", {
+              className: "flex flex-col gap-0.5",
+              children: [e.jsx("label", {
+                className: "text-[9px] font-mono text-muted-foreground uppercase tracking-wider",
+                children: " "
+              }), e.jsxs("button", {
+                "data-testid": "grid-search-btn",
+                className: "text-xs font-mono font-bold px-4 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-500",
+                onClick: Qo,
+                title: `Brute-force search ${Lo} combo variations per ticker and rank them by hit rate. Searches: ${Fe.length} Leg A types × ${Zr.length} Px periods × ${Fe.length} Leg B fast types × ${Fe.length} Leg B slow types × ${Xr.length} fast/slow pairs. Fast and slow MAs can differ. Each combo evaluated for both bull and bear. Use this to discover the best combo per ticker; use "Test Combo" to backtest one chosen combo across all tickers.`,
+                children: ["Find Best Combo (", Lo, ")"]
+              })]
+            })
+          ]
+        })
+      }), e.jsxs("div", {
+        className: "flex-1 overflow-auto px-4 py-3",
+        children: [gt.length === 0 && bt.length === 0 && !ne && e.jsx("div", {
+          className: "flex items-center justify-center h-full text-muted-foreground text-sm",
+          children: "Tests SMA/EMA/HMA/WMA/KAMA crossover, price-cross-MA, and combo signals against forward returns"
+        }), F === "combo" && bt.length > 0 && e.jsxs("div", {
+          className: "mb-6",
+          "data-testid": "grid-results",
+          children: [e.jsxs("div", {
+            className: "flex items-center justify-between mb-2",
+            children: [e.jsxs("h3", {
+              className: "text-xs font-bold text-foreground uppercase tracking-wider",
+              children: ["Find Best Combo — ", bt.length,
+                " ticker", bt.length !== 1 ? "s" : "", " — ",
+                b === "band" ? `band ${Ve(ae)}–${Ve(xe)}` :
+                `target ${Ve(z)}`, re > 0 ?
+                ` — min hold ${re}d` : ""
+              ]
+            }), e.jsx("span", {
+              className: "text-[10px] font-mono text-muted-foreground",
+              children: "Top 25 combos per ticker, ranked by composite score"
+            })]
+          }), bt.map(t => {
+            const l = Ar === t.ticker,
+              s = [...t.topCombos].filter(p => p.bullSignals > 0).sort((
+                p, v) => v.bullScore - p.bullScore).slice(0, 25),
+              M = [...t.topCombos].filter(p => p.bearSignals > 0).sort((
+                p, v) => v.bearScore - p.bearScore).slice(0, 25),
+              w = Do(s, "long", $t),
+              d = Do(M, "short", Ft),
+              S = s[0],
+              f = M[0];
+            return e.jsxs("div", {
+              className: "mb-3 border border-border rounded overflow-hidden",
+              children: [e.jsxs("button", {
+                className: "w-full flex items-start justify-between px-3 py-2 bg-card hover:bg-accent text-left",
+                onClick: () => co(l ? null : t.ticker),
+                "data-testid": `grid-row-${t.ticker}`,
+                children: [e.jsxs("div", {
+                  className: "flex flex-col gap-1",
+                  children: [e.jsxs("div", {
+                    className: "flex items-center gap-3",
+                    children: [e.jsx("span", {
+                      className: "text-xs font-bold font-mono text-foreground w-16",
+                      children: t.ticker
+                    }), e.jsx("span", {
+                      className: "text-[10px] text-muted-foreground",
+                      children: t.name
+                    })]
+                  }), S && e.jsxs("div", {
+                    className: "flex items-center gap-2 ml-16",
+                    children: [e.jsx("span", {
+                      className: "text-[10px] font-mono text-muted-foreground w-20",
+                      children: "best long:"
+                    }), e.jsx("span", {
+                      className: "text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border bg-emerald-600/20 text-emerald-400 border-emerald-600/30",
+                      children: "Combo Bull"
+                    }), e.jsxs("span", {
+                      className: "text-[10px] font-mono text-foreground",
+                      children: [S
+                        .legAlabel, " ∧ ",
+                        S.legBlabel
+                      ]
+                    }), e.jsxs("span", {
+                      className: `text-[10px] font-mono font-bold ${Bt(S.bullScore)}`,
+                      children: ["score ", S
+                        .bullScore
+                        .toFixed(0)
+                      ]
+                    })]
+                  }), f && e.jsxs("div", {
+                    className: "flex items-center gap-2 ml-16",
+                    children: [e.jsx("span", {
+                      className: "text-[10px] font-mono text-muted-foreground w-20",
+                      children: "best short:"
+                    }), e.jsx("span", {
+                      className: "text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border bg-red-600/20 text-red-400 border-red-600/30",
+                      children: "Combo Bear"
+                    }), e.jsxs("span", {
+                      className: "text-[10px] font-mono text-foreground",
+                      children: [f
+                        .legAlabel, " ∧ ",
+                        f.legBlabel
+                      ]
+                    }), e.jsxs("span", {
+                      className: `text-[10px] font-mono font-bold ${Bt(f.bearScore)}`,
+                      children: ["score ", f
+                        .bearScore
+                        .toFixed(0)
+                      ]
+                    })]
+                  })]
+                }), e.jsxs("span", {
+                  className: "text-[10px] font-mono text-muted-foreground self-center",
+                  children: [l ? "▾" : "▸", " L:", w
+                    .length, " S:", d.length
+                  ]
+                })]
+              }), l && e.jsxs("div", {
+                className: "overflow-x-auto bg-background",
+                children: [w.length > 0 && e.jsxs(e
+                .Fragment, {
+                  children: [e.jsx("div", {
+                    className: "px-3 py-1.5 bg-emerald-600/10 border-b border-emerald-600/20",
+                    children: e.jsx("span", {
+                      className: "text-[10px] font-bold font-mono text-emerald-400 uppercase tracking-wider",
+                      children: "Top Long Combos — Bull Signals"
+                    })
+                  }), e.jsxs("table", {
+                    className: "w-full text-[10px] font-mono",
+                    children: [e.jsx("thead", {
+                      className: "bg-card border-b border-border",
+                      children: e.jsx(
+                      "tr", {
+                        className: "text-muted-foreground",
+                        children: (
+                      () => {
+                          const p =
+                            (T,
+                            Q) =>
+                            `${Q} cursor-pointer select-none hover:text-foreground ${$t.col===T?"text-foreground":""}`,
+                            v = T =>
+                            $t
+                            .col ===
+                            T ? $t
+                            .dir ===
+                            "desc" ?
+                            " ▼" :
+                            " ▲" :
+                            "",
+                            n = T =>
+                            ao(Q =>
+                              Q
+                              .col ===
+                              T ? {
+                                col: T,
+                                dir: Q
+                                  .dir ===
+                                  "desc" ?
+                                  "asc" :
+                                  "desc"
+                              } : {
+                                col: T,
+                                dir: T ===
+                                  "legA" ||
+                                  T ===
+                                  "legB" ||
+                                  T ===
+                                  "side" ?
+                                  "asc" :
+                                  "desc"
+                              });
+                          return e
+                            .jsxs(e
+                              .Fragment, {
+                                children: [
+                                  e
+                                  .jsx(
+                                    "th", {
+                                      className: "text-left px-2 py-1 font-medium",
+                                      children: "#"
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "side",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "side"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-side`,
+                                      children: [
+                                        "Side",
+                                        v(
+                                          "side")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "legA",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "legA"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-legA`,
+                                      children: [
+                                        "Leg A (Px vs MA)",
+                                        v(
+                                          "legA")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "legB",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "legB"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-legB`,
+                                      children: [
+                                        "Leg B (MA vs MA)",
+                                        v(
+                                          "legB")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "signals",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "signals"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-signals`,
+                                      children: [
+                                        "Signals",
+                                        v(
+                                          "signals")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-1M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-1M"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-hit-1M`,
+                                      children: [
+                                        "Hit 1M",
+                                        v(
+                                          "hit-1M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-3M"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-hit-3M`,
+                                      children: [
+                                        "Hit 3M",
+                                        v(
+                                          "hit-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-6M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-6M"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-hit-6M`,
+                                      children: [
+                                        "Hit 6M",
+                                        v(
+                                          "hit-6M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "avg-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "avg-3M"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-avg-3M`,
+                                      children: [
+                                        "Avg 3M",
+                                        v(
+                                          "avg-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "pf-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "pf-3M"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-pf-3M`,
+                                      children: [
+                                        "PF 3M",
+                                        v(
+                                          "pf-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "score",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "score"),
+                                      "data-testid": `sort-grid-long-${t.ticker}-score`,
+                                      children: [
+                                        "Score",
+                                        v(
+                                          "score")
+                                      ]
+                                    }
+                                    )
+                                ]
+                              })
+                        })()
+                      })
+                    }), e.jsx("tbody", {
+                      children: w.map((p,
+                        v) => {
+                          const n = p
+                            .bullSummary,
+                            T = p
+                            .bullSignals;
+                          return e.jsxs(
+                            "tr", {
+                              className: "border-b border-border/50 hover:bg-accent/30",
+                              children: [
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-muted-foreground",
+                                    children: v +
+                                      1
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: e
+                                      .jsx(
+                                        "span", {
+                                          className: "px-1.5 py-0.5 rounded border text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border-emerald-600/30",
+                                          children: "Long"
+                                        }
+                                        )
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: p
+                                      .legAlabel
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: p
+                                      .legBlabel
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-right text-muted-foreground",
+                                    children: T
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["1M"]!==null&&n?.hitRate["1M"]!==void 0?mt(n.hitRate["1M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "1M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "1M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "1M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["3M"]!==null&&n?.hitRate["3M"]!==void 0?mt(n.hitRate["3M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "3M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["6M"]!==null&&n?.hitRate["6M"]!==void 0?mt(n.hitRate["6M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "6M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "6M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "6M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-right",
+                                    children: n
+                                      ?.avgReturn[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.avgReturn[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      kt(
+                                        n
+                                        .avgReturn[
+                                          "3M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.profitFactor["3M"]!==null&&n?.profitFactor["3M"]!==void 0?lr(n.profitFactor["3M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.profitFactor[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.profitFactor[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      n
+                                      .profitFactor[
+                                        "3M"
+                                        ]
+                                      .toFixed(
+                                        2
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right font-bold ${Bt(p.bullScore)}`,
+                                    children: p
+                                      .bullScore
+                                      .toFixed(
+                                        0
+                                        )
+                                  })
+                              ]
+                            }, `l-${v}`)
+                        })
+                    })]
+                  })]
+                }), d.length > 0 && e.jsxs(e.Fragment, {
+                  children: [e.jsx("div", {
+                    className: "px-3 py-1.5 bg-red-600/10 border-b border-t border-red-600/20",
+                    children: e.jsx("span", {
+                      className: "text-[10px] font-bold font-mono text-red-400 uppercase tracking-wider",
+                      children: "Top Short Combos — Bear Signals"
+                    })
+                  }), e.jsxs("table", {
+                    className: "w-full text-[10px] font-mono",
+                    children: [e.jsx("thead", {
+                      className: "bg-card border-b border-border",
+                      children: e.jsx(
+                      "tr", {
+                        className: "text-muted-foreground",
+                        children: (
+                      () => {
+                          const p =
+                            (T,
+                            Q) =>
+                            `${Q} cursor-pointer select-none hover:text-foreground ${Ft.col===T?"text-foreground":""}`,
+                            v = T =>
+                            Ft
+                            .col ===
+                            T ? Ft
+                            .dir ===
+                            "desc" ?
+                            " ▼" :
+                            " ▲" :
+                            "",
+                            n = T =>
+                            io(Q =>
+                              Q
+                              .col ===
+                              T ? {
+                                col: T,
+                                dir: Q
+                                  .dir ===
+                                  "desc" ?
+                                  "asc" :
+                                  "desc"
+                              } : {
+                                col: T,
+                                dir: T ===
+                                  "legA" ||
+                                  T ===
+                                  "legB" ||
+                                  T ===
+                                  "side" ?
+                                  "asc" :
+                                  "desc"
+                              });
+                          return e
+                            .jsxs(e
+                              .Fragment, {
+                                children: [
+                                  e
+                                  .jsx(
+                                    "th", {
+                                      className: "text-left px-2 py-1 font-medium",
+                                      children: "#"
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "side",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "side"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-side`,
+                                      children: [
+                                        "Side",
+                                        v(
+                                          "side")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "legA",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "legA"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-legA`,
+                                      children: [
+                                        "Leg A (Px vs MA)",
+                                        v(
+                                          "legA")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "legB",
+                                        "text-left px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "legB"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-legB`,
+                                      children: [
+                                        "Leg B (MA vs MA)",
+                                        v(
+                                          "legB")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "signals",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "signals"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-signals`,
+                                      children: [
+                                        "Signals",
+                                        v(
+                                          "signals")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-1M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-1M"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-hit-1M`,
+                                      children: [
+                                        "Hit 1M",
+                                        v(
+                                          "hit-1M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-3M"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-hit-3M`,
+                                      children: [
+                                        "Hit 3M",
+                                        v(
+                                          "hit-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "hit-6M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "hit-6M"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-hit-6M`,
+                                      children: [
+                                        "Hit 6M",
+                                        v(
+                                          "hit-6M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "avg-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "avg-3M"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-avg-3M`,
+                                      children: [
+                                        "Avg 3M",
+                                        v(
+                                          "avg-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "pf-3M",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "pf-3M"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-pf-3M`,
+                                      children: [
+                                        "PF 3M",
+                                        v(
+                                          "pf-3M")
+                                      ]
+                                    }
+                                    ),
+                                  e
+                                  .jsxs(
+                                    "th", {
+                                      className: p(
+                                        "score",
+                                        "text-right px-2 py-1 font-medium"
+                                        ),
+                                      onClick: () =>
+                                        n(
+                                          "score"),
+                                      "data-testid": `sort-grid-short-${t.ticker}-score`,
+                                      children: [
+                                        "Score",
+                                        v(
+                                          "score")
+                                      ]
+                                    }
+                                    )
+                                ]
+                              })
+                        })()
+                      })
+                    }), e.jsx("tbody", {
+                      children: d.map((p,
+                        v) => {
+                          const n = p
+                            .bearSummary,
+                            T = p
+                            .bearSignals;
+                          return e.jsxs(
+                            "tr", {
+                              className: "border-b border-border/50 hover:bg-accent/30",
+                              children: [
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-muted-foreground",
+                                    children: v +
+                                      1
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: e
+                                      .jsx(
+                                        "span", {
+                                          className: "px-1.5 py-0.5 rounded border text-[9px] font-bold bg-red-600/20 text-red-400 border-red-600/30",
+                                          children: "Short"
+                                        }
+                                        )
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: p
+                                      .legAlabel
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1",
+                                    children: p
+                                      .legBlabel
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-right text-muted-foreground",
+                                    children: T
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["1M"]!==null&&n?.hitRate["1M"]!==void 0?mt(n.hitRate["1M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "1M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "1M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "1M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["3M"]!==null&&n?.hitRate["3M"]!==void 0?mt(n.hitRate["3M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "3M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.hitRate["6M"]!==null&&n?.hitRate["6M"]!==void 0?mt(n.hitRate["6M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.hitRate[
+                                        "6M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.hitRate[
+                                        "6M"
+                                        ] !==
+                                      void 0 ?
+                                      Ve(
+                                        n
+                                        .hitRate[
+                                          "6M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: "px-2 py-1 text-right",
+                                    children: n
+                                      ?.avgReturn[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.avgReturn[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      kt(
+                                        n
+                                        .avgReturn[
+                                          "3M"
+                                          ]
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right ${n?.profitFactor["3M"]!==null&&n?.profitFactor["3M"]!==void 0?lr(n.profitFactor["3M"]):"text-muted-foreground/40"}`,
+                                    children: n
+                                      ?.profitFactor[
+                                        "3M"
+                                        ] !==
+                                      null &&
+                                      n
+                                      ?.profitFactor[
+                                        "3M"
+                                        ] !==
+                                      void 0 ?
+                                      n
+                                      .profitFactor[
+                                        "3M"
+                                        ]
+                                      .toFixed(
+                                        2
+                                        ) :
+                                      "—"
+                                  }),
+                                e.jsx(
+                                  "td", {
+                                    className: `px-2 py-1 text-right font-bold ${Bt(p.bearScore)}`,
+                                    children: p
+                                      .bearScore
+                                      .toFixed(
+                                        0
+                                        )
+                                  })
+                              ]
+                            }, `s-${v}`)
+                        })
+                    })]
+                  })]
+                }), e.jsxs("div", {
+                  className: "px-2 py-2 flex justify-end gap-2",
+                  children: [S && e.jsx("button", {
+                    className: "text-[10px] font-mono px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700",
+                    onClick: () => {
+                      Zt(S.legA), Xt(S.legB)
+                    },
+                    "data-testid": `apply-top-long-${t.ticker}`,
+                    children: "Apply Top Long"
+                  }), f && e.jsx("button", {
+                    className: "text-[10px] font-mono px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700",
+                    onClick: () => {
+                      Zt(f.legA), Xt(f.legB)
+                    },
+                    "data-testid": `apply-top-short-${t.ticker}`,
+                    children: "Apply Top Short"
+                  })]
+                })]
+              })]
+            }, t.ticker)
+          })]
+        }), ne && gt.length === 0 && bt.length === 0 && e.jsx("div", {
+          className: "flex items-center justify-center h-full",
+          children: e.jsxs("div", {
+            className: "text-center",
+            children: [e.jsx("div", {
+              className: "text-sm text-muted-foreground mb-2",
+              children: "Computing MA signals..."
+            }), e.jsxs("div", {
+              className: "text-xs font-mono text-muted-foreground",
+              children: [wt.current, "/", wt.total, " ", F ===
+                "combo" ? "combos" : "tickers × " + as +
+                " configs"
+              ]
+            }), e.jsx("div", {
+              className: "w-48 h-1 bg-border rounded-full mt-2 mx-auto overflow-hidden",
+              children: e.jsx("div", {
+                className: "h-full bg-primary rounded-full transition-all duration-300",
+                style: {
+                  width: `${wt.total>0?wt.current/wt.total*100:0}%`
+                }
+              })
+            })]
+          })
+        }), gt.length > 0 && e.jsxs("div", {
+          children: [e.jsxs("div", {
+            className: "flex items-center justify-between mb-2 gap-2 flex-wrap",
+            children: [e.jsxs("h3", {
+              className: "text-xs font-bold text-foreground uppercase tracking-wider",
+              children: [Pr.length, Vt ? ` of ${gt.length}` : "",
+                " tickers — ", F === "combo" ?
+                `combo: ${lt(Ee)} ∧ ${lt(Ue)}` :
+                `${je} ${F==="crossover"?"crossover":"price cross"}`,
+                " — ", b === "band" ?
+                `band ${Ve(ae)}–${Ve(xe)}` : `target ${Ve(z)}`,
+                pe === "relative" ? ` — vs ${Ne} median` : ""
+              ]
+            }), e.jsxs("div", {
+              className: "flex items-center gap-1",
+              children: [e.jsx("input", {
+                type: "text",
+                placeholder: "Filter ticker / name…",
+                value: Vt,
+                onChange: t => no(t.target.value),
+                "data-testid": "input-results-filter",
+                className: "text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[180px] focus:outline-none focus:ring-1 focus:ring-primary"
+              }), Vt && e.jsx("button", {
+                onClick: () => no(""),
+                "data-testid": "button-clear-results-filter",
+                className: "text-[10px] font-mono px-2 py-1 rounded border border-border bg-background text-muted-foreground hover:text-foreground",
+                children: "Clear"
+              }), e.jsx("span", {
+                className: "text-[9px] font-mono text-muted-foreground/70 mx-1",
+                children: "click column to sort"
+              }), e.jsxs("div", {
+                className: "flex items-center gap-1",
+                children: [e.jsx("label", {
+                  className: "text-[10px] font-mono text-muted-foreground",
+                  children: "RANK BY"
+                }), e.jsx("select", {
+                  "data-testid": "ma-rank-by",
+                  value: Cr,
+                  onChange: t => zo(t.target.value),
+                  className: "text-[10px] font-mono bg-background border border-border rounded px-1.5 py-0.5",
+                  children: ws.map(t => e.jsx(
+                    "option", {
+                      value: t.value,
+                      children: t.label
+                    }, t.value))
+                })]
+              }), e.jsx(Ns, {
+                variant: "outline",
+                size: "sm",
+                className: "h-6 gap-1 text-[11px]",
+                onClick: ts,
+                "data-testid": "export-csv",
+                children: e.jsx(js, {
+                  className: "w-3 h-3"
+                })
+              })]
+            })]
+          }), e.jsx("div", {
+            className: "border border-border rounded mb-4",
+            children: e.jsxs("table", {
+              className: "w-full text-[10px] font-mono",
+              children: [e.jsx("thead", {
+                className: "sticky top-0 z-20",
+                children: e.jsx("tr", {
+                  className: "bg-card text-muted-foreground shadow-[0_1px_0_0_hsl(var(--border))]",
+                  children: (() => {
+                    const t = (s, M) =>
+                      `${M} cursor-pointer select-none hover:text-foreground ${Nt.col===s?"text-foreground":""}`,
+                      l = s => Nt.col === s ? Nt
+                      .dir === "desc" ? " ▼" : " ▲" :
+                      "";
+                    return e.jsxs(e.Fragment, {
+                      children: [e.jsxs("th", {
+                          className: t(
+                            "ticker",
+                            "text-left px-2 py-1 font-bold sticky left-0 bg-card z-30 border-r border-border"
+                            ),
+                          onClick: () => ct(
+                            "ticker"),
+                          "data-testid": "sort-header-ticker",
+                          children: ["Ticker",
+                            l("ticker")
+                          ]
+                        }), e.jsxs("th", {
+                          className: t(
+                            "currentSignal",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                              "currentSignal"
+                              ),
+                          "data-testid": "sort-header-currentSignal",
+                          children: [
+                            "Current Signal",
+                            l(
+                              "currentSignal")
+                          ]
+                        }), e.jsxs("th", {
+                          className: t("side",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                            "side"),
+                          "data-testid": "sort-header-side",
+                          children: ["Side",
+                            l("side")
+                          ]
+                        }), e.jsxs("th", {
+                          className: t(
+                            "bestConfig",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                            "bestConfig"),
+                          "data-testid": "sort-header-bestConfig",
+                          children: [
+                            "Best Config",
+                            l("bestConfig")
+                          ]
+                        }), e.jsxs("th", {
+                          className: t(
+                            "bestSignal",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                            "bestSignal"),
+                          "data-testid": "sort-header-bestSignal",
+                          children: [
+                            "Best Signal",
+                            l("bestSignal")
+                          ]
+                        }), e.jsxs("th", {
+                          className: t(
+                            "signals",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                            "signals"),
+                          "data-testid": "sort-header-signals",
+                          children: ["N", l(
+                            "signals")]
+                        }), vt.filter((s, M) =>
+                          M >= 2).map(s => e
+                          .jsxs("th", {
+                            className: t(
+                              `hit-${s.label}`,
+                              "text-center px-2 py-1 font-bold bg-card"
+                              ),
+                            onClick: () => ct(
+                              `hit-${s.label}`
+                              ),
+                            "data-testid": `sort-header-hit-${s.label}`,
+                            children: [b ===
+                              "band" ?
+                              "Band" :
+                              "Hit", " ", s
+                              .label, l(
+                                `hit-${s.label}`
+                                )
+                            ]
+                          }, s.label)), vt
+                        .filter((s, M) => M >=
+                          2).map(s => e.jsxs(
+                            "th", {
+                              className: t(
+                                `avg-${s.label}`,
+                                "text-center px-2 py-1 font-bold bg-card"
+                                ),
+                              onClick: () => ct(
+                                `avg-${s.label}`
+                                ),
+                              "data-testid": `sort-header-avg-${s.label}`,
+                              children: ["Avg ",
+                                s.label, l(
+                                  `avg-${s.label}`
+                                  )
+                              ]
+                            }, `avg-${s.label}`
+                            )), vt.filter((s,
+                          M) => M >= 2).map(s =>
+                          e.jsxs("th", {
+                            className: t(
+                              `pf-${s.label}`,
+                              "text-center px-2 py-1 font-bold bg-card"
+                              ),
+                            onClick: () => ct(
+                              `pf-${s.label}`
+                              ),
+                            "data-testid": `sort-header-pf-${s.label}`,
+                            children: ["PF ",
+                              s.label, l(
+                                `pf-${s.label}`
+                                )
+                            ]
+                          }, `pf-${s.label}`)),
+                        e.jsxs("th", {
+                          className: t(
+                            "score",
+                            "text-center px-2 py-1 font-bold bg-card"
+                            ),
+                          onClick: () => ct(
+                            "score"),
+                          "data-testid": "sort-header-score",
+                          children: ["Score",
+                            l("score")
+                          ]
+                        })
+                      ]
+                    })
+                  })()
+                })
+              }), e.jsx("tbody", {
+                children: Pr.flatMap(t => {
+                  const l = t.tr,
+                    s = Ht === l.ticker,
+                    M = t.longBest,
+                    w = t.shortBest;
+                  return [{
+                    key: "long",
+                    data: M
+                  }, {
+                    key: "short",
+                    data: w
+                  }].map(({
+                    key: S,
+                    data: f
+                  }, p) => {
+                    const v = S === "long" ? "Long" :
+                      "Short",
+                      n = S === "long" ?
+                      "bg-emerald-600/20 text-emerald-400 border-emerald-600/30" :
+                      "bg-red-600/20 text-red-400 border-red-600/30",
+                      T = f?.cat.summary ?? null,
+                      Q = f?.score ?? 0,
+                      he = p === 0,
+                      ye = os(l, f?.cfg.configLabel),
+                      et = ss(l, f?.cfg.configLabel),
+                      ve = f ? l.currentValueByConfig
+                      ?.[f.cfg.configLabel] : void 0,
+                      Se = ns(l, f?.cfg.configLabel),
+                      _e = rs(ye),
+                      ke = s ? "bg-primary/10" :
+                      _e === "buy" ?
+                      "bg-emerald-600/10 hover:bg-emerald-600/15" :
+                      _e === "short" ?
+                      "bg-red-600/10 hover:bg-red-600/15" :
+                      "hover:bg-white/5";
+                    return e.jsxs("tr", {
+                      className: `${ke} cursor-pointer ${he?"border-t border-border":"border-t border-border/30"}`,
+                      onClick: () => ro(s ? null :
+                        l.ticker),
+                      "data-testid": `row-${l.ticker}-${S}`,
+                      children: [e.jsx("td", {
+                          className: "px-2 py-1 font-bold text-foreground sticky left-0 bg-card z-10 border-r border-border",
+                          children: he ? l
+                            .ticker : ""
+                        }), e.jsx("td", {
+                          className: "text-center px-2 py-1",
+                          children: f ? e
+                            .jsxs("div", {
+                              className: "flex flex-col items-center justify-center gap-0.5",
+                              children: [e
+                                .jsxs(
+                                  "div", {
+                                    className: "flex items-center justify-center gap-1.5 flex-wrap",
+                                    children: [
+                                      e
+                                      .jsx(
+                                        "span", {
+                                          className: `inline-block px-1.5 py-0.5 rounded text-[9px] font-bold border ${yo(ye)}`,
+                                          "data-testid": `current-signal-${l.ticker}-${S}`,
+                                          children: ye
+                                        }
+                                        ),
+                                      et &&
+                                      e
+                                      .jsx(
+                                        "span", {
+                                          className: `text-[10px] font-bold tabular-nums ${(ve??0)>=0?"text-emerald-400":"text-red-400"}`,
+                                          children: et
+                                        }
+                                        )
+                                    ]
+                                  }),
+                                Se && e
+                                .jsx(
+                                  "div", {
+                                    className: "text-[9px] text-muted-foreground tabular-nums whitespace-nowrap",
+                                    title: Se,
+                                    "data-testid": `current-signal-detail-${l.ticker}-${S}`,
+                                    children: Se
+                                  })
+                              ]
+                            }) : null
+                        }), e.jsx("td", {
+                          className: "text-center px-2 py-1",
+                          children: e.jsx(
+                            "span", {
+                              className: `inline-block px-1.5 py-0.5 rounded text-[9px] font-bold border ${n}`,
+                              children: v
+                            })
+                        }), e.jsx("td", {
+                          className: "text-center px-2 py-1 text-muted-foreground",
+                          children: f ? f.cfg
+                            .configLabel : "–"
+                        }), e.jsx("td", {
+                          className: "text-center px-2 py-1 text-foreground",
+                          children: f ? f.cat
+                            .label : "–"
+                        }), e.jsx("td", {
+                          className: "text-center px-2 py-1 text-muted-foreground tabular-nums",
+                          children: T ? T
+                            .count : "–"
+                        }), vt.filter((ie,
+                          $e) => $e >= 2).map(
+                          ie => {
+                            const $e = T ? b ===
+                              "band" ? T
+                              .bandHitRate?.[ie
+                                .label
+                              ] ?? T.hitRate[ie
+                                .label] : T
+                              .hitRate[ie
+                              .label] : 0;
+                            return e.jsx("td", {
+                              className: `text-center px-2 py-1 ${T?mt($e):""}`,
+                              children: T ?
+                                Ve($e) : "–"
+                            }, ie.label)
+                          }), vt.filter((ie,
+                          $e) => $e >= 2).map(
+                          ie => e.jsx("td", {
+                              className: `text-center px-2 py-1 ${T?T.avgReturn[ie.label]>=0?"text-green-400":"text-red-400":""}`,
+                              children: T ? kt(T
+                                  .avgReturn[ie
+                                    .label]) :
+                                "–"
+                            },
+                            `avg-${ie.label}`)),
+                        vt.filter((ie, $e) =>
+                          $e >= 2).map(ie => e
+                          .jsx("td", {
+                            className: `text-center px-2 py-1 ${T?lr(T.profitFactor[ie.label]):""}`,
+                            children: T ? T
+                              .profitFactor[ie
+                                .label] >=
+                              99 ? "∞" : T
+                              .profitFactor[ie
+                                .label]
+                              .toFixed(2) :
+                              "–"
+                          }, `pf-${ie.label}`)),
+                        e.jsx("td", {
+                          className: "text-center px-2 py-1",
+                          children: f ? e.jsx(
+                            "span", {
+                              className: "inline-block px-1.5 py-0.5 rounded font-bold",
+                              style: {
+                                backgroundColor: Mo(
+                                  Q),
+                                color: Bt(Q)
+                              },
+                              children: Q
+                                .toFixed(0)
+                            }) : e.jsx(
+                            "span", {
+                              className: "text-muted-foreground/40",
+                              children: "–"
+                            })
+                        })
+                      ]
+                    }, `${l.ticker}-${S}`)
+                  })
+                })
+              })]
+            })
+          }), Ht && (() => {
+            const t = Fr.find(s => s.ticker === Ht);
+            if (!t) return null;
+            const l = [...t.configs].sort((s, M) => M.bestScore - s
+              .bestScore);
+            return e.jsxs("div", {
+              className: "border border-border rounded p-3 bg-card/50 mb-4",
+              children: [e.jsxs("h4", {
+                className: "text-xs font-bold text-foreground mb-1",
+                children: [t.ticker, " — ", t.name]
+              }), e.jsxs("p", {
+                className: "text-[9px] text-muted-foreground mb-3",
+                children: [l.length,
+                  " configurations tested — showing top results"
+                ]
+              }), e.jsx("div", {
+                className: "grid grid-cols-1 lg:grid-cols-2 gap-3",
+                children: l.slice(0, 6).map((s, M) => {
+                  const w = s._bestCategoryResult ?? s
+                    .categories.reduce((d, S) => d
+                      .composite.score > S.composite
+                      .score ? d : S, s.categories[0]);
+                  return e.jsxs("div", {
+                    className: "border border-border/50 rounded p-2",
+                    children: [e.jsxs("div", {
+                      className: "flex items-center gap-2 mb-1",
+                      children: [e.jsx("span", {
+                        className: "text-[10px] font-mono font-bold text-foreground",
+                        children: s
+                          .configLabel
+                      }), e.jsxs("span", {
+                        className: "text-[9px] text-muted-foreground",
+                        children: ["→ ", w
+                          .label
+                        ]
+                      }), e.jsx("span", {
+                        className: "ml-auto inline-block px-1.5 py-0.5 rounded text-[9px] font-bold",
+                        style: {
+                          backgroundColor: Mo(
+                              s.bestScore
+                              ),
+                          color: Bt(s
+                            .bestScore)
+                        },
+                        children: s
+                          .bestScore
+                      })]
+                    }), s.categories.filter(d => d
+                      .summary.count > 0).map(
+                    d => {
+                      const S =
+                        `${t.ticker}::${s.configLabel}::${d.category}`,
+                        f = Oo.has(S),
+                        p = !!(d.profiles && d
+                          .profiles.length >=
+                          10 && t.priceContext),
+                        v = d.category ===
+                        "golden_cross" || d
+                        .category ===
+                        "price_above" || d
+                        .category ===
+                        "combo_bull" || d
+                        .category ===
+                        "slope_up" || d
+                        .category ===
+                        "accel_up" ? "buy" :
+                        "sell";
+                      return e.jsxs("div", {
+                        className: "mt-1",
+                        children: [e.jsxs(
+                            "div", {
+                              className: "flex items-center gap-1 mb-0.5",
+                              children: [e
+                                .jsx(
+                                  "span", {
+                                    className: `text-[9px] font-bold ${yo(d.label).split(" ").filter(n=>n.startsWith("text-")).join(" ")}`,
+                                    children: d
+                                      .label
+                                  }), e
+                                .jsxs(
+                                  "span", {
+                                    className: "text-[8px] text-muted-foreground",
+                                    children: [
+                                      d
+                                      .summary
+                                      .count,
+                                      " signals"
+                                    ]
+                                  }),
+                                p ? e
+                                .jsxs(
+                                  "button", {
+                                    type: "button",
+                                    onClick: () =>
+                                      Vo(
+                                        S
+                                        ),
+                                    className: `ml-auto px-1.5 py-0.5 rounded text-[8px] font-bold border ${f?"bg-violet-500/25 text-violet-200 border-violet-400/40":"bg-card/40 text-muted-foreground border-border/50 hover:bg-violet-500/15 hover:text-violet-300"}`,
+                                    title: "Profile what other indicators looked like at hit-bars vs miss-bars",
+                                    children: [
+                                      f ?
+                                      "▾" :
+                                      "▸",
+                                      " Hit Conditions"
+                                    ]
+                                  }) :
+                                null
+                              ]
+                            }), e.jsxs(
+                            "table", {
+                              className: "w-full text-[9px] font-mono",
+                              children: [e
+                                .jsx(
+                                  "thead", {
+                                    children: e
+                                      .jsxs(
+                                        "tr", {
+                                          className: "text-muted-foreground",
+                                          children: [
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-left px-1 py-0.5",
+                                                children: "Hz"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Hit"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Win"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Avg"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Med"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Peak"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "Trough"
+                                              }
+                                              ),
+                                            e
+                                            .jsx(
+                                              "th", {
+                                                className: "text-center px-1 py-0.5",
+                                                children: "PF"
+                                              }
+                                              )
+                                          ]
+                                        }
+                                        )
+                                  }), e
+                                .jsx(
+                                  "tbody", {
+                                    children: vt
+                                      .map(
+                                        n =>
+                                        e
+                                        .jsxs(
+                                          "tr", {
+                                            children: [
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: "px-1 py-0.5 text-foreground font-bold",
+                                                  children: n
+                                                    .label
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: `text-center px-1 py-0.5 ${mt(d.summary.hitRate[n.label])}`,
+                                                  children: Ve(
+                                                    d
+                                                    .summary
+                                                    .hitRate[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: `text-center px-1 py-0.5 ${mt(d.summary.winRate[n.label])}`,
+                                                  children: Ve(
+                                                    d
+                                                    .summary
+                                                    .winRate[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: `text-center px-1 py-0.5 ${d.summary.avgReturn[n.label]>=0?"text-green-400":"text-red-400"}`,
+                                                  children: kt(
+                                                    d
+                                                    .summary
+                                                    .avgReturn[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: `text-center px-1 py-0.5 ${d.summary.medianReturn[n.label]>=0?"text-green-400":"text-red-400"}`,
+                                                  children: kt(
+                                                    d
+                                                    .summary
+                                                    .medianReturn[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: "text-center px-1 py-0.5 text-green-400",
+                                                  children: kt(
+                                                    d
+                                                    .summary
+                                                    .avgPeak[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: "text-center px-1 py-0.5 text-red-400",
+                                                  children: kt(
+                                                    d
+                                                    .summary
+                                                    .avgTrough[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    )
+                                                }
+                                                ),
+                                              e
+                                              .jsx(
+                                                "td", {
+                                                  className: `text-center px-1 py-0.5 ${lr(d.summary.profitFactor[n.label])}`,
+                                                  children: d
+                                                    .summary
+                                                    .profitFactor[
+                                                      n
+                                                      .label
+                                                      ] >=
+                                                    99 ?
+                                                    "∞" :
+                                                    d
+                                                    .summary
+                                                    .profitFactor[
+                                                      n
+                                                      .label
+                                                      ]
+                                                    .toFixed(
+                                                      2
+                                                      )
+                                                }
+                                                )
+                                            ]
+                                          },
+                                          n
+                                          .label
+                                          )
+                                        )
+                                  })
+                              ]
+                            }), f && t
+                          .priceContext &&
+                          d.profiles ? e
+                          .jsx("div", {
+                            className: "mt-2",
+                            children: e
+                              .jsx(Co, {
+                                ticker: t
+                                  .priceContext
+                                  .mode ===
+                                  "pair" &&
+                                  t
+                                  .priceContext
+                                  .pairLegA ||
+                                  t
+                                  .ticker,
+                                priceContext: t
+                                  .priceContext,
+                                signals: d
+                                  .profiles,
+                                direction: v,
+                                title: `${s.configLabel} — ${d.label}`,
+                                useBand: b ===
+                                  "band"
+                              })
+                          }) : null
+                        ]
+                      }, d.category)
+                    })]
+                  }, M)
+                })
+              })]
+            })
+          })()]
+        })]
+      })]
+    })]
+  })
+}
+export {
+  xn as
+  default
+};
