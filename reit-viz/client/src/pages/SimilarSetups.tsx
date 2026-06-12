@@ -26,6 +26,8 @@ import {
 } from "@/lib/similarSetupsAlgorithms";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
+import { save as saveDrawing, defaultStyle } from "@/lib/savedDrawings";
+import { BookMarked } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -2477,6 +2479,7 @@ export default function SimilarSetups() {
                         >
                           fwd 1Y{matchSortSuffix("fwd1Y")}
                         </th>
+                        <th className="py-1 pl-2" title="Save match as a drawing" />
                       </tr>
                     </thead>
                     <tbody>
@@ -2547,6 +2550,45 @@ export default function SimilarSetups() {
                             }`}
                           >
                             {fmtReturn(match.fwd1Y)}
+                          </td>
+                          <td className="pl-2 py-0.5">
+                            <button
+                              title="Save as pattern drawing for this ticker"
+                              data-testid={`ss-save-pattern-${match.date}`}
+                              className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 whitespace-nowrap"
+                              onClick={() => {
+                                const ticker = singleTicker || pairA;
+                                if (!ticker) return;
+                                // Use match.date as start; approximate 30-day window as end
+                                const startDt = new Date(match.date);
+                                const endDt = new Date(startDt);
+                                endDt.setDate(endDt.getDate() + 30);
+                                const endDate = endDt.toISOString().slice(0, 10);
+                                const closePrices = priceSeries?.closes;
+                                const times = priceSeries?.times;
+                                const idx = times ? times.indexOf(match.date) : -1;
+                                const price = (closePrices && idx >= 0) ? closePrices[idx] : 0;
+                                saveDrawing(ticker, {
+                                  kind: "pattern",
+                                  label: `SimilarSetup ${match.date}`,
+                                  visible: true,
+                                  style: defaultStyle({ color: "#f97316" }),
+                                  start: { date: match.date, price },
+                                  end: { date: endDate, price: price * 1.05 },
+                                  patternName: "SimilarSetup",
+                                  sourceModule: "SimilarSetups",
+                                });
+                                // Toast
+                                const toast = document.createElement("div");
+                                toast.textContent = `Saved pattern ${match.date} for ${ticker}`;
+                                toast.className = "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-amber-500/20 text-amber-300 text-xs font-mono border border-amber-500/40 shadow-lg";
+                                document.body.appendChild(toast);
+                                setTimeout(() => toast.remove(), 2500);
+                              }}
+                            >
+                              <BookMarked className="w-3 h-3 inline mr-0.5" />
+                              Pin
+                            </button>
                           </td>
                         </tr>
                       ))}

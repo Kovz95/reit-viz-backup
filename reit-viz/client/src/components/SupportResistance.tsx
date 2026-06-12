@@ -17,6 +17,8 @@ import { isBasketTicker } from "@/lib/basketUtils";
 import { DATE_PRESETS, createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { navigateToChartsWithPair } from "@/lib/chartNavigation";
+import { save as saveDrawing, defaultStyle } from "@/lib/savedDrawings";
+import { BookMarked } from "lucide-react";
 import { useUniverse } from "@/lib/universeContext";
 
 // ── Default config ─────────────────────────────────────────────────────────────
@@ -1071,7 +1073,28 @@ export default function SupportResistance() {
                                   <td className="py-1 px-1 text-right">{(level.holdRate * 100).toFixed(1)}%</td>
                                   <td className="py-1 px-1 text-right text-muted-foreground">{level.daysSinceLastTouch !== null ? `${level.daysSinceLastTouch}d` : "—"}</td>
                                   <td className="py-1 px-1 text-right"><span className="px-1 py-0.5 rounded font-bold" style={{ backgroundColor: scoreBg(level.compositeScore) }}>{(level.compositeScore * 100).toFixed(1)}</span></td>
-                                  <td className="py-1 px-1 text-right"><button onClick={e => { e.stopPropagation(); sendToCharts(item.ticker, [level]); }} className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300" title="Send this level to the Charts tab as a drawing." data-testid={`sr-send-charts-${originalIdx}`}>→ Charts</button></td>
+                                  <td className="py-1 px-1 text-right flex items-center gap-1 justify-end">
+                                    <button onClick={e => { e.stopPropagation(); sendToCharts(item.ticker, [level]); }} className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300" title="Send this level to the Charts tab as a drawing." data-testid={`sr-send-charts-${originalIdx}`}>→ Charts</button>
+                                    <button onClick={e => {
+                                      e.stopPropagation();
+                                      const t = (item.pairA ? item.pairA : item.ticker).toUpperCase();
+                                      const today = new Date().toISOString().slice(0, 10);
+                                      saveDrawing(t, {
+                                        kind: "sr",
+                                        label: `${levelLabel(level)} $${level.price.toFixed(2)}`,
+                                        visible: true,
+                                        style: defaultStyle({ color: level.price > item.currentPrice ? "#ef4444" : "#22c55e", dashed: level.type === "fib" }),
+                                        price: level.price,
+                                        anchorDate: level.lastTouchDate || today,
+                                        srType: level.price > item.currentPrice ? "resistance" : "support",
+                                      });
+                                      const toast = document.createElement("div");
+                                      toast.textContent = `Saved S/R level $${level.price.toFixed(2)} for ${t}`;
+                                      toast.className = "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-green-500/20 text-green-300 text-xs font-mono border border-green-500/40 shadow-lg";
+                                      document.body.appendChild(toast);
+                                      setTimeout(() => toast.remove(), 2500);
+                                    }} className="px-1.5 py-0.5 rounded text-[9px] bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 hover:text-amber-300" title="Pin this level to Saved Drawings for this ticker." data-testid={`sr-pin-drawing-${originalIdx}`}><BookMarked className="w-3 h-3 inline" /></button>
+                                  </td>
                                 </tr>
                               );
                             });
