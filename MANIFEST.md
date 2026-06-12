@@ -20,10 +20,10 @@ This file tracks reconstruction status for every file recovered from the live Vu
 ### Tier 1 — Small leaves
 | File | Lines | Status | Notes |
 |---|---|---|---|
-| UnifiedTickerPicker-D927mSvl.js | 124 | RAW | New since stale-source |
-| BasketTickerPill-DA9Wjwwc.js | 128 | RAW | New since stale-source |
-| PresetBar-B4InBSQb.js | 187 | RAW | New; has defensive `presets ?? []` fix |
-| BasketPicker-DkcKAXfe.js | 303 | RAW | New since stale-source |
+| UnifiedTickerPicker-D927mSvl.js | 124 | RECONSTRUCTED | New since stale-source |
+| BasketTickerPill-DA9Wjwwc.js | 128 | RECONSTRUCTED | New since stale-source; imports @/lib/useBaskets, @/lib/basketUtils (isBasketTicker, extractBasketId) |
+| PresetBar-B4InBSQb.js | 187 | RECONSTRUCTED | New; has defensive `presets ?? []` fix; imports @/lib/optimizerPresets |
+| BasketPicker-DkcKAXfe.js | 303 | RECONSTRUCTED | New since stale-source; imports @/lib/useBaskets, @/lib/basketUtils (dedupeUpperTickers) |
 | ClassificationFiltersWithSource-D7v4WOtR.js | 77 | RAW | Newer than stale ClassificationFilters.tsx |
 | Baskets-CFu3VD0m.js | 88 | RAW | Basket page |
 | CartesianGrid-BQtjaw_K.js | 405 | RAW | Likely a recharts custom; could possibly skip |
