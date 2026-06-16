@@ -423,7 +423,7 @@ function getLookbackRange(
   }
 
   if (mode === "preset") {
-    const days = cond.lookbackPresetDays ?? 252;
+    const days = cond.lookbackPresetDays ?? 21;
     const startIdx = Math.max(0, series.length - days);
     return { startIdx, endIdx };
   }
@@ -501,7 +501,7 @@ async function evaluateCondition(
     } else if (cond.rightType === "percentile") {
       const pct = cond.rightPercentile ?? 50;
       const lookback = cond.lookbackDays ?? 252;
-      const window = leftRaw.slice(-lookback).map((d) => d.value);
+      const window = leftSeries.slice(-lookback).map((d) => d.value).filter((v) => Number.isFinite(v));
       if (window.length === 0) return { leftVal: leftLast, pass: false, matchDate: null };
       window.sort((a, b) => a - b);
       const idx = Math.max(0, Math.min(window.length - 1, Math.round((pct / 100) * (window.length - 1))));
@@ -537,7 +537,7 @@ async function evaluateCondition(
   if (cond.rightType === "percentile") {
     const pct = cond.rightPercentile ?? 50;
     const lookback = cond.lookbackDays ?? 252;
-    const window = leftRaw.slice(-lookback).map((d) => d.value);
+    const window = leftSeries.slice(-lookback).map((d) => d.value).filter((v) => Number.isFinite(v));
     if (window.length === 0) return { leftVal: latestLeft, pass: false, matchDate: null };
     window.sort((a, b) => a - b);
     const idx = Math.max(0, Math.min(window.length - 1, Math.round((pct / 100) * (window.length - 1))));
@@ -612,8 +612,8 @@ function conditionLabel(cond: ScreenerCondition): string {
   const lbMode = cond.lookbackMode ?? "now";
   let lbStr = "";
   if (lbMode === "preset") {
-    const preset = LOOKBACK_PRESETS.find((p) => p.days === (cond.lookbackPresetDays ?? 252));
-    lbStr = ` (any in ${preset?.label ?? "1Y"})`;
+    const preset = LOOKBACK_PRESETS.find((p) => p.days === (cond.lookbackPresetDays ?? 21));
+    lbStr = ` (any in ${preset?.label ?? "1M"})`;
   } else if (lbMode === "custom") {
     const s = cond.lookbackStartDate ?? "...";
     const e = cond.lookbackEndDate ?? "...";
@@ -1072,7 +1072,7 @@ function ConditionRow({
             Now
           </button>
           <button
-            onClick={() => patch({ lookbackMode: "preset", lookbackPresetDays: c.lookbackPresetDays ?? 252 })}
+            onClick={() => patch({ lookbackMode: "preset", lookbackPresetDays: c.lookbackPresetDays ?? 21 })}
             className={`px-1.5 text-[10px] font-medium transition-colors flex items-center gap-0.5 ${
               (c.lookbackMode ?? "now") === "preset"
                 ? "bg-primary text-primary-foreground"
@@ -1107,7 +1107,7 @@ function ConditionRow({
                 key={p.days}
                 onClick={() => patch({ lookbackPresetDays: p.days })}
                 className={`px-1.5 text-[10px] font-medium transition-colors ${
-                  (c.lookbackPresetDays ?? 252) === p.days
+                  (c.lookbackPresetDays ?? 21) === p.days
                     ? "bg-accent text-accent-foreground"
                     : "bg-muted/20 text-muted-foreground hover:bg-muted/40"
                 }`}
