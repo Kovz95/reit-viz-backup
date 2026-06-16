@@ -13,17 +13,19 @@ name: Deploy reit-viz to Vultr
 #   VULTR_PATH   – defaults to /opt/reit-viz/dist/public
 #   PM2_APP      – defaults to reit-viz
 #
-# Until VULTR_SSH_PASSWORD is set, the build runs but the deploy step fails safely
-# (no production change). Trigger manually from the Actions tab (workflow_dispatch)
-# or by pushing changes under reit-viz/ to main.
+# Manual only — never deploys automatically. Trigger from the Actions tab
+# (workflow_dispatch). By default it runs build-only (a dry run); tick the
+# "deploy" input to actually ship to Vultr.
+#
+# Until VULTR_SSH_PASSWORD is set, the deploy step fails safely (no prod change).
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "reit-viz/**"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to Vultr after building (unchecked = build-only dry run)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-reit-viz
@@ -60,6 +62,7 @@ jobs:
           ls -lh /tmp/reit-viz-deploy.tar.gz
 
       - name: Deploy to Vultr
+        if: ${{ inputs.deploy }}
         env:
           SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
           VULTR_HOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
