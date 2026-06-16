@@ -234,6 +234,8 @@ export default function Dashboard() {
   const [layoutMode, setLayoutMode] = useState<GridLayout>("1x1");
   // Per-pane indicator state (lifted here for workspace persistence)
   const [indicatorsMap, setIndicatorsMap] = useState<Record<number, any>>({});
+  // Per-pane color-by-metric state (lifted here for workspace persistence)
+  const [colorByMap, setColorByMap] = useState<Record<number, string>>({});
 
   // ── Custom Chart View Templates ──
   const qc = useQueryClient();
@@ -321,8 +323,9 @@ export default function Dashboard() {
       customChartViews: memChartViews,
       layoutMode,
       indicatorsMap,
+      colorByMap,
     };
-  }, [plottedSeries, panes, activeTicker, chartConfig, activeView, fundamentalSheets, memChartViews, layoutMode, indicatorsMap]);
+  }, [plottedSeries, panes, activeTicker, chartConfig, activeView, fundamentalSheets, memChartViews, layoutMode, indicatorsMap, colorByMap]);
 
   const refetchSeriesData = useCallback((stateSeries: PlottedSeries[]) => {
     // Synthetic tickers whose data is persisted inline — never try to re-fetch
@@ -387,6 +390,7 @@ export default function Dashboard() {
     if (state.customChartViews) setMemChartViews(state.customChartViews);
     if (state.layoutMode) setLayoutMode(state.layoutMode);
     if (state.indicatorsMap) setIndicatorsMap(state.indicatorsMap);
+    setColorByMap(state.colorByMap && typeof state.colorByMap === "object" ? state.colorByMap : {});
     if (state.plottedSeries) {
       setPlottedSeries(state.plottedSeries);
       refetchSeriesData(state.plottedSeries);
@@ -892,6 +896,11 @@ export default function Dashboard() {
           onSelectTicker={(ticker: string) => loadViewForTicker(ticker)}
           activeView={activeView}
           presetViews={Object.keys(PRESET_VIEWS)}
+          viewGroups={[
+            { label: "Preset Views", views: PRESET_VIEWS },
+            { label: "Fundamentals", views: FUNDAMENTAL_VIEWS },
+            { label: "Interview Prep", views: INTERVIEW_VIEWS },
+          ].map((g) => ({ label: g.label, items: Object.keys(g.views) }))}
           fundamentalViews={Object.keys(FUNDAMENTAL_VIEWS)}
           interviewViews={Object.keys(INTERVIEW_VIEWS)}
           customChartViews={customChartViews}
@@ -915,6 +924,8 @@ export default function Dashboard() {
           onLayoutModeChange={setLayoutMode}
           indicatorsMap={indicatorsMap}
           onIndicatorsMapChange={setIndicatorsMap}
+          colorByMap={colorByMap}
+          onColorByMapChange={setColorByMap}
           toolbarRight={
             <WorkspaceManager
               onSave={serializeState}

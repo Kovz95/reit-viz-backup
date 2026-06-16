@@ -87,6 +87,10 @@ interface ChartAreaProps {
   onSelectTicker: (ticker: string) => void;
   activeView: string;
   presetViews: string[];
+  /** Optional labeled view groups; when present, renders the preset-view
+   *  menu as labeled groups, falling back to the presetViews/fundamentalViews/
+   *  interviewViews trio when absent. */
+  viewGroups?: { label: string; items: string[] }[];
   fundamentalViews?: string[];
   interviewViews?: string[];
   customChartViews: CustomChartView[];
@@ -118,6 +122,10 @@ interface ChartAreaProps {
   indicatorsMap?: Record<number, ActiveIndicators>;
   /** Called when indicators change on any pane */
   onIndicatorsMapChange?: (map: Record<number, ActiveIndicators>) => void;
+  /** Per-pane color-by-metric state (lifted to parent for persistence) */
+  colorByMap?: Record<number, string>;
+  /** Called when color-by settings change on any pane */
+  onColorByMapChange?: (map: Record<number, string>) => void;
 }
 
 export default function ChartArea({
@@ -133,6 +141,7 @@ export default function ChartArea({
   onSelectTicker,
   activeView,
   presetViews,
+  viewGroups,
   fundamentalViews,
   interviewViews,
   customChartViews,
@@ -154,6 +163,8 @@ export default function ChartArea({
   onLayoutModeChange,
   indicatorsMap: indicatorsMapProp,
   onIndicatorsMapChange,
+  colorByMap: colorByMapProp,
+  onColorByMapChange,
 }: ChartAreaProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [maximizedPaneId, setMaximizedPaneId] = useState<number | null>(null);
@@ -291,7 +302,25 @@ export default function ChartArea({
 
   // ── Color-by-variable per pane ──
   // paneId → metric name
-  const [colorByMap, setColorByMap] = useState<Record<number, string>>({});
+  // Prefer prop from parent (persisted in workspace state), fall back to local.
+  const [localColorByMap, setLocalColorByMap] = useState<Record<number, string>>({});
+  const colorByMap = colorByMapProp ?? localColorByMap;
+  const setColorByMap = useCallback((valOrFn: Record<number, string> | ((prev: Record<number, string>) => Record<number, string>)) => {
+    if (onColorByMapChange) {
+      if (typeof valOrFn === "function") {
+        setLocalColorByMap(prev => {
+          const next = (valOrFn as (p: Record<number, string>) => Record<number, string>)(colorByMapProp ?? prev);
+          onColorByMapChange(next);
+          return next;
+        });
+      } else {
+        onColorByMapChange(valOrFn);
+        setLocalColorByMap(valOrFn);
+      }
+    } else {
+      setLocalColorByMap(valOrFn as any);
+    }
+  }, [onColorByMapChange, colorByMapProp]);
   // paneId → { data: Map<time, normalisedValue>, range: {min, max} }
   const [colorByDataMap, setColorByDataMap] = useState<Record<number, { data: Map<string, number>; range: { min: number; max: number } }>>({});
   // Popover open state per pane
@@ -717,51 +746,74 @@ export default function ChartArea({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72 max-h-[420px] overflow-y-auto">
-            <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {presetViews.map((v) => (
-              <DropdownMenuItem
-                key={v}
-                className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
-                onClick={() => onChangeView(v)}
-                data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
-              >
-                {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                <span className="truncate">{v}</span>
-              </DropdownMenuItem>
-            ))}
-            {fundamentalViews && fundamentalViews.length > 0 && (
+            {viewGroups && viewGroups.length > 0 ? (
+              viewGroups.map((group, gi) => (
+                <div key={`group-${group.label}`}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-[10px]">{group.label}</DropdownMenuLabel>
+                  {gi === 0 && <DropdownMenuSeparator />}
+                  {group.items.map((v) => (
+                    <DropdownMenuItem
+                      key={`g-${group.label}-${v}`}
+                      className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                      onClick={() => onChangeView(v)}
+                      data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                    >
+                      {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                      <span className="truncate" title={v}>{v}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </div>
+              ))
+            ) : (
               <>
+                <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px]">Fundamentals</DropdownMenuLabel>
-                {fundamentalViews.map((v) => (
+                {presetViews.map((v) => (
                   <DropdownMenuItem
-                    key={`fund-${v}`}
+                    key={v}
                     className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
                     onClick={() => onChangeView(v)}
-                    data-testid={`view-fund-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                    data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                   >
                     {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
                     <span className="truncate">{v}</span>
                   </DropdownMenuItem>
                 ))}
-              </>
-            )}
-            {interviewViews && interviewViews.length > 0 && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px]">Interview Prep</DropdownMenuLabel>
-                {interviewViews.map((v) => (
-                  <DropdownMenuItem
-                    key={`intv-${v}`}
-                    className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
-                    onClick={() => onChangeView(v)}
-                    data-testid={`view-intv-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
-                  >
-                    {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                    <span className="truncate">{v}</span>
-                  </DropdownMenuItem>
-                ))}
+                {fundamentalViews && fundamentalViews.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px]">Fundamentals</DropdownMenuLabel>
+                    {fundamentalViews.map((v) => (
+                      <DropdownMenuItem
+                        key={`fund-${v}`}
+                        className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                        onClick={() => onChangeView(v)}
+                        data-testid={`view-fund-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                      >
+                        {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                        <span className="truncate">{v}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+                {interviewViews && interviewViews.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px]">Interview Prep</DropdownMenuLabel>
+                    {interviewViews.map((v) => (
+                      <DropdownMenuItem
+                        key={`intv-${v}`}
+                        className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                        onClick={() => onChangeView(v)}
+                        data-testid={`view-intv-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                      >
+                        {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                        <span className="truncate">{v}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
               </>
             )}
             {customChartViews.length > 0 && (
