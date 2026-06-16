@@ -30,6 +30,10 @@ import {
   X,
   LayoutTemplate,
   Palette,
+  FolderOpen,
+  FilePlus,
+  Pencil,
+  ArrowLeft,
 } from "lucide-react";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
 import type { GridLayout } from "./GridLayoutPicker";
@@ -63,7 +67,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
-import type { CustomChartView, PairsPresetDef } from "@/pages/Dashboard";
+import type { CustomChartView, PairsPresetDef, RelativeValuePresetDef, SavedCustomChart } from "@/pages/Dashboard";
 import {
   Dialog,
   DialogContent,
@@ -114,6 +118,37 @@ interface ChartAreaProps {
   pairsPresets?: PairsPresetDef[];
   /** Called to load a pairs preset — returns indicators map for auto-apply */
   onLoadPairsPreset?: (preset: PairsPresetDef, tickerB: string) => Promise<Record<number, ActiveIndicators> | undefined>;
+  /** Relative-value preset definitions */
+  relativeValuePresets?: RelativeValuePresetDef[];
+  /** Called to load a relative-value preset — returns indicators map for auto-apply */
+  onLoadRelativeValuePreset?: (preset: RelativeValuePresetDef, tickerB: string) => Promise<Record<number, ActiveIndicators> | undefined>;
+  // ── Server-backed custom charts (persistent blank canvases) ──
+  /** Create a new blank server-backed chart and make it active */
+  onNewChart?: () => void;
+  /** Save the current view as a brand-new server-backed chart (name optional) */
+  onSaveCurrentAsNewChart?: (name?: string) => void;
+  /** Force-save the active custom chart immediately (bypasses autosave debounce) */
+  onManualSaveCustomChart?: () => void;
+  /** True while a custom-chart save mutation is in flight */
+  isSavingCustomChart?: boolean;
+  /** Timestamp (ms) of the last successful manual save, or null */
+  lastManualSaveAt?: number | null;
+  /** Whether autosave is enabled */
+  autoSaveEnabled?: boolean;
+  /** Called when autosave enabled toggle changes */
+  onAutoSaveEnabledChange?: (enabled: boolean) => void;
+  /** List of saved server-backed custom charts */
+  savedCustomCharts?: SavedCustomChart[];
+  /** The active custom chart id, or null when in carousel mode */
+  activeCustomChartId?: number | null;
+  /** Load a saved custom chart by id */
+  onLoadCustomChart?: (id: number) => void;
+  /** Rename a saved custom chart */
+  onRenameCustomChart?: (id: number, name: string) => void;
+  /** Delete a saved custom chart */
+  onDeleteCustomChart?: (id: number) => void;
+  /** Exit custom-chart mode, returning to the carousel */
+  onExitCustomChart?: () => void;
   /** Current grid layout mode (persisted by parent) */
   layoutMode?: GridLayout;
   /** Called when user changes grid layout */
@@ -159,6 +194,21 @@ export default function ChartArea({
   onCrosshairTimeChange,
   pairsPresets,
   onLoadPairsPreset,
+  relativeValuePresets,
+  onLoadRelativeValuePreset,
+  onNewChart,
+  onSaveCurrentAsNewChart,
+  onManualSaveCustomChart,
+  isSavingCustomChart,
+  lastManualSaveAt,
+  autoSaveEnabled = true,
+  onAutoSaveEnabledChange,
+  savedCustomCharts,
+  activeCustomChartId,
+  onLoadCustomChart,
+  onRenameCustomChart,
+  onDeleteCustomChart,
+  onExitCustomChart,
   layoutMode: layoutModeProp,
   onLayoutModeChange,
   indicatorsMap: indicatorsMapProp,
@@ -174,8 +224,15 @@ export default function ChartArea({
   // ── Pairs preset picker state ──
   const [pairsPickerOpen, setPairsPickerOpen] = useState(false);
   const [pendingPairsPreset, setPendingPairsPreset] = useState<PairsPresetDef | null>(null);
+  const [pendingRelValPreset, setPendingRelValPreset] = useState<RelativeValuePresetDef | null>(null);
   const [pairsTickerSearch, setPairsTickerSearch] = useState("");
   const [pairsTickerList, setPairsTickerList] = useState<TickerMeta[]>([]);
+
+  // ── Custom-chart toolbar state ──
+  const [saveAsNewChartOpen, setSaveAsNewChartOpen] = useState(false);
+  const [saveAsNewChartName, setSaveAsNewChartName] = useState("");
+  const [renameChartId, setRenameChartId] = useState<number | null>(null);
+  const [renameChartName, setRenameChartName] = useState("");
 
   // Fetch ticker list for pairs picker
   useEffect(() => {
@@ -186,19 +243,35 @@ export default function ChartArea({
 
   const handleSelectPairsPreset = useCallback((preset: PairsPresetDef) => {
     setPendingPairsPreset(preset);
+    setPendingRelValPreset(null);
+    setPairsPickerOpen(true);
+    setPairsTickerSearch("");
+  }, []);
+
+  const handleSelectRelValPreset = useCallback((preset: RelativeValuePresetDef) => {
+    setPendingRelValPreset(preset);
+    setPendingPairsPreset(null);
     setPairsPickerOpen(true);
     setPairsTickerSearch("");
   }, []);
 
   const handlePairsTickerSelect = useCallback(async (tickerB: string) => {
     setPairsPickerOpen(false);
+    if (pendingRelValPreset && onLoadRelativeValuePreset) {
+      const newIndicators = await onLoadRelativeValuePreset(pendingRelValPreset, tickerB);
+      if (newIndicators) {
+        setIndicatorsMap(prev => ({ ...prev, ...newIndicators }));
+      }
+      setPendingRelValPreset(null);
+      return;
+    }
     if (!pendingPairsPreset || !onLoadPairsPreset) return;
     const newIndicators = await onLoadPairsPreset(pendingPairsPreset, tickerB);
     if (newIndicators) {
       setIndicatorsMap(prev => ({ ...prev, ...newIndicators }));
     }
     setPendingPairsPreset(null);
-  }, [pendingPairsPreset, onLoadPairsPreset]);
+  }, [pendingPairsPreset, pendingRelValPreset, onLoadPairsPreset, onLoadRelativeValuePreset]);
 
   const handleSaveView = useCallback(() => {
     const name = newViewName.trim();
@@ -862,6 +935,23 @@ export default function ChartArea({
                 ))}
               </>
             )}
+            {relativeValuePresets && relativeValuePresets.length > 0 && onLoadRelativeValuePreset && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-[10px]">Relative Value</DropdownMenuLabel>
+                {relativeValuePresets.map((p) => (
+                  <DropdownMenuItem
+                    key={`relval-${p.label}`}
+                    className={`text-[11px] cursor-pointer ${p.label === activeView ? "bg-accent" : ""}`}
+                    onClick={() => handleSelectRelValPreset(p)}
+                    data-testid={`relval-preset-${p.label.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                  >
+                    {p.label === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                    <span className="truncate" title={p.label}>{p.label}</span>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
             <DropdownMenuSeparator />
             {showViewSaveInput ? (
               <div className="px-2 py-1.5 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -911,6 +1001,248 @@ export default function ChartArea({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Custom charts (server-backed persistent canvases) */}
+        {onNewChart && (
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant={activeCustomChartId ? "default" : "ghost"}
+                  size="sm"
+                  className="h-7 text-[11px] gap-1 px-2"
+                  data-testid="saved-charts-btn"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">
+                    {activeCustomChartId
+                      ? savedCustomCharts?.find((c) => c.id === activeCustomChartId)?.name || "Custom Chart"
+                      : "My Charts"}
+                  </span>
+                  <ChevronsUpDown className="w-3 h-3 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[320px]">
+                {activeCustomChartId && (
+                  <div className="px-2 py-1.5 text-[10px] text-muted-foreground border-b border-border/40 mb-1 space-y-1">
+                    <div>
+                      {isSavingCustomChart ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+                        </span>
+                      ) : lastManualSaveAt ? (
+                        <span>
+                          Last manual save:{" "}
+                          {new Date(lastManualSaveAt).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </span>
+                      ) : (
+                        <span>Not yet manually saved</span>
+                      )}
+                    </div>
+                    {onAutoSaveEnabledChange && (
+                      <label
+                        className="flex items-center gap-2 cursor-pointer select-none py-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid="autosave-toggle"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3 accent-primary cursor-pointer"
+                          checked={autoSaveEnabled}
+                          onChange={(e) => onAutoSaveEnabledChange(e.target.checked)}
+                        />
+                        <span>
+                          Autosave {autoSaveEnabled ? "on" : "off"}
+                          <span className="text-muted-foreground/70">
+                            {" · "}
+                            {autoSaveEnabled ? "writes 2s after edits" : "manual save only"}
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
+                {activeCustomChartId && onExitCustomChart && (
+                  <>
+                    <DropdownMenuItem onClick={onExitCustomChart} data-testid="back-to-carousel">
+                      <ArrowLeft className="w-3.5 h-3.5 mr-2" />
+                      Back to Carousel
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onClick={onNewChart} data-testid="new-chart-dropdown">
+                  <FilePlus className="w-3.5 h-3.5 mr-2" />
+                  New Blank Chart
+                </DropdownMenuItem>
+                {onSaveCurrentAsNewChart && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setSaveAsNewChartName(`Chart ${(savedCustomCharts?.length ?? 0) + 1}`);
+                      setSaveAsNewChartOpen(true);
+                    }}
+                    data-testid="save-current-as-new-chart"
+                  >
+                    <Save className="w-3.5 h-3.5 mr-2" />
+                    Save Current View as New Chart
+                  </DropdownMenuItem>
+                )}
+                {savedCustomCharts && savedCustomCharts.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground">
+                      Saved Charts
+                    </DropdownMenuLabel>
+                    {savedCustomCharts.map((c) => (
+                      <DropdownMenuItem
+                        key={c.id}
+                        className={`flex items-center justify-between group ${activeCustomChartId === c.id ? "bg-accent" : ""}`}
+                        onClick={(e) => {
+                          if (!(e.target as HTMLElement).closest("[data-action]")) {
+                            onLoadCustomChart?.(c.id);
+                          }
+                        }}
+                        data-testid={`saved-chart-${c.id}`}
+                      >
+                        <span className="flex items-center gap-2 flex-1 min-w-0">
+                          {activeCustomChartId === c.id && <Check className="w-3 h-3 shrink-0" />}
+                          <span className="truncate" title={c.name}>{c.name}</span>
+                        </span>
+                        <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
+                          <button
+                            data-action="rename"
+                            className="p-0.5 rounded hover:bg-muted"
+                            title="Rename"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenameChartId(c.id);
+                              setRenameChartName(c.name);
+                            }}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            data-action="delete"
+                            className="p-0.5 rounded hover:bg-destructive/20 text-destructive"
+                            title="Delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteCustomChart?.(c.id);
+                            }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {activeCustomChartId && onManualSaveCustomChart && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] gap-1 px-2"
+                onClick={() => onManualSaveCustomChart()}
+                disabled={isSavingCustomChart}
+                data-testid="manual-save-chart-btn"
+                title="Force-save now (bypasses 2s autosave debounce)"
+              >
+                {isSavingCustomChart ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">Save</span>
+              </Button>
+            )}
+
+            {/* Save current view as new chart dialog */}
+            <Dialog open={saveAsNewChartOpen} onOpenChange={(o) => { if (!o) setSaveAsNewChartOpen(false); }}>
+              <DialogContent className="sm:max-w-[380px]">
+                <DialogHeader>
+                  <DialogTitle className="text-sm">Save Current View as New Chart</DialogTitle>
+                </DialogHeader>
+                <div className="text-[11px] text-muted-foreground">
+                  Captures the current panes, series, indicators, and active ticker. The new chart becomes active and autosaves your subsequent edits.
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={saveAsNewChartName}
+                    onChange={(e) => setSaveAsNewChartName(e.target.value)}
+                    placeholder="Chart name"
+                    className="h-8 text-sm"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && saveAsNewChartName.trim()) {
+                        onSaveCurrentAsNewChart?.(saveAsNewChartName.trim());
+                        setSaveAsNewChartOpen(false);
+                      }
+                    }}
+                    data-testid="save-as-new-chart-input"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    disabled={!saveAsNewChartName.trim()}
+                    onClick={() => {
+                      onSaveCurrentAsNewChart?.(saveAsNewChartName.trim());
+                      setSaveAsNewChartOpen(false);
+                    }}
+                    data-testid="save-as-new-chart-confirm"
+                  >
+                    Save
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {/* Rename chart dialog */}
+            <Dialog open={renameChartId !== null} onOpenChange={(o) => { if (!o) setRenameChartId(null); }}>
+              <DialogContent className="sm:max-w-[340px]">
+                <DialogHeader>
+                  <DialogTitle className="text-sm">Rename Chart</DialogTitle>
+                </DialogHeader>
+                <div className="flex gap-2">
+                  <Input
+                    value={renameChartName}
+                    onChange={(e) => setRenameChartName(e.target.value)}
+                    placeholder="Chart name"
+                    className="h-8 text-sm"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && renameChartName.trim() && renameChartId !== null) {
+                        onRenameCustomChart?.(renameChartId, renameChartName.trim());
+                        setRenameChartId(null);
+                      }
+                    }}
+                    data-testid="rename-chart-input"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    disabled={!renameChartName.trim()}
+                    onClick={() => {
+                      if (renameChartName.trim() && renameChartId !== null) {
+                        onRenameCustomChart?.(renameChartId, renameChartName.trim());
+                        setRenameChartId(null);
+                      }
+                    }}
+                    data-testid="rename-chart-confirm"
+                  >
+                    Rename
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
 
         <div className="mx-1 w-px h-4 bg-border" />
 
@@ -1377,7 +1709,7 @@ export default function ChartArea({
         <DialogContent className="sm:max-w-[380px]">
           <DialogHeader>
             <DialogTitle className="text-sm">
-              {pendingPairsPreset?.label} — Pick Ticker B
+              {(pendingRelValPreset ?? pendingPairsPreset)?.label} — Pick Ticker B
             </DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">

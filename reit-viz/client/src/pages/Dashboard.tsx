@@ -196,6 +196,74 @@ const PAIRS_PRESETS: PairsPresetDef[] = [
 
 export { PAIRS_PRESETS };
 
+// ── Relative-Value Presets: per-metric A/B ratio series across panes ──
+export interface RelativeValuePresetDef {
+  label: string;
+  panes: {
+    metric: string;
+    label: (a: string, b: string) => string;
+    indicators?: ActiveIndicators;
+  }[];
+}
+
+const RELATIVE_VALUE_PRESETS: RelativeValuePresetDef[] = [
+  {
+    label: "Rel Val: P/FFO + FFO Growth",
+    panes: [
+      { metric: "P/FFO FY2", label: (a, b) => `P/FFO FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 FFO Growth", label: (a, b) => `FY2 FFO Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: P/E + EPS Growth",
+    panes: [
+      { metric: "P/E FY2", label: (a, b) => `P/E FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EPS Growth", label: (a, b) => `FY2 EPS Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: EV/EBITDA + EBITDA Growth",
+    panes: [
+      { metric: "EV/EBITDA FY2", label: (a, b) => `EV/EBITDA FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EBITDA Growth", label: (a, b) => `FY2 EBITDA Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Price + P/FFO + FFO Growth",
+    panes: [
+      { metric: "close", label: (a, b) => `Price: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "P/FFO FY2", label: (a, b) => `P/FFO FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 FFO Growth", label: (a, b) => `FY2 FFO Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Price + P/E + EPS Growth",
+    panes: [
+      { metric: "close", label: (a, b) => `Price: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "P/E FY2", label: (a, b) => `P/E FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EPS Growth", label: (a, b) => `FY2 EPS Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Dividend Yield + FFO Yield",
+    panes: [
+      { metric: "Dividend Yield", label: (a, b) => `Div Yield: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FFO Yield FY2", label: (a, b) => `FFO Yield FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+    ],
+  },
+];
+
+export { RELATIVE_VALUE_PRESETS };
+
+// ── Server-backed custom chart (persistent blank canvas) ──
+export interface SavedCustomChart {
+  id: number;
+  name: string;
+  state: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 const DEFAULT_VIEW = "Price vs P/FFO FY2";
 
 let nextPaneId = 1;
@@ -236,6 +304,18 @@ export default function Dashboard() {
   const [indicatorsMap, setIndicatorsMap] = useState<Record<number, any>>({});
   // Per-pane color-by-metric state (lifted here for workspace persistence)
   const [colorByMap, setColorByMap] = useState<Record<number, string>>({});
+
+  // Refs mirroring current state, for the custom-chart autosave snapshot
+  const panesRef = useRef<PaneInfo[]>([]);
+  panesRef.current = panes;
+  const activeTickerRef = useRef<string | null>(null);
+  activeTickerRef.current = activeTicker;
+  const chartConfigRef = useRef<ChartConfig>(chartConfig);
+  chartConfigRef.current = chartConfig;
+  const layoutModeRef = useRef<GridLayout>(layoutMode);
+  layoutModeRef.current = layoutMode;
+  const indicatorsMapRef = useRef<Record<number, any>>(indicatorsMap);
+  indicatorsMapRef.current = indicatorsMap;
 
   // ── Custom Chart View Templates ──
   const qc = useQueryClient();
@@ -303,7 +383,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK", "PAIRS",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
     ]);
     // Strip data from series that can be re-fetched to keep the blob small.
     // Keep data inline for uploaded series AND derived (synthetic) series.
@@ -332,7 +412,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK", "PAIRS",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
     ]);
     // Re-fetch OHLC for tickers (skip synthetic)
     const tks = new Set<string>();
@@ -616,6 +696,286 @@ export default function Dashboard() {
     },
     [activeTicker]
   );
+
+  // Load a relative-value preset: builds per-metric A/B ratio series across panes
+  const loadRelativeValuePreset = useCallback(
+    async (preset: RelativeValuePresetDef, tickerB: string) => {
+      if (!activeTicker) return;
+      const tickerA = activeTicker;
+      paneGeneration++;
+      const myGeneration = paneGeneration;
+      setIsLoadingView(true);
+      setActiveView(preset.label);
+
+      try {
+        // Compute element-wise A/B ratios for each preset metric (mirrors getRelativeValueData)
+        const metrics = preset.panes.map((p) => p.metric);
+        const ratioByMetric: Record<string, { time: string; value: number }[]> = {};
+        await Promise.all(
+          metrics.map(async (metric) => {
+            const [a, b] = await Promise.all([
+              getMetricSeries(tickerA, metric),
+              getMetricSeries(tickerB, metric),
+            ]);
+            const bMap = new Map<string, number>();
+            for (const d of b) bMap.set(d.time, d.value);
+            const out: { time: string; value: number }[] = [];
+            for (const d of a) {
+              const denom = bMap.get(d.time);
+              if (denom !== undefined && denom !== 0 && isFinite(d.value) && isFinite(denom)) {
+                out.push({ time: d.time, value: d.value / denom });
+              }
+            }
+            ratioByMetric[metric] = out;
+          })
+        );
+
+        // If a restore happened while we were fetching, abandon this load
+        if (paneGeneration !== myGeneration) {
+          setIsLoadingView(false);
+          return;
+        }
+        nextPaneId = 1;
+        const newPanes: PaneInfo[] = [];
+        const newSeries: PlottedSeries[] = [];
+        const newIndicatorsMap: Record<number, ActiveIndicators> = {};
+
+        for (const paneDef of preset.panes) {
+          const data = ratioByMetric[paneDef.metric];
+          if (!data || data.length === 0) continue;
+
+          const paneId = nextPaneId++;
+          const label = paneDef.label(tickerA, tickerB);
+          newPanes.push({ id: paneId, label, ticker: tickerA });
+
+          const seriesId = `relval:${paneDef.metric}:${tickerA}:${tickerB}:${nextSeriesSeq++}`;
+          newSeries.push({
+            id: seriesId,
+            ticker: "RELVAL",
+            metric: paneDef.metric,
+            color: getSeriesColor(newSeries.length),
+            paneIndex: paneId,
+            data,
+            visible: true,
+            label,
+          });
+
+          if (paneDef.indicators) {
+            newIndicatorsMap[paneId] = paneDef.indicators;
+          }
+        }
+
+        setPanes(newPanes);
+        setPlottedSeries(newSeries);
+        setIsLoadingView(false);
+        return newIndicatorsMap;
+      } catch (e) {
+        console.error("Failed to load relative value preset", e);
+      }
+      setIsLoadingView(false);
+      return undefined;
+    },
+    [activeTicker]
+  );
+
+  // ── Server-backed Custom Charts (persistent blank canvases) ──
+  const [activeCustomChartId, setActiveCustomChartId] = useState<number | null>(null);
+  const activeCustomChartIdRef = useRef<number | null>(null);
+  activeCustomChartIdRef.current = activeCustomChartId;
+  const [lastManualSaveAt, setLastManualSaveAt] = useState<number | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Suppress autosave until this timestamp (ms) — used right after a fresh load
+  const autosaveSuppressUntilRef = useRef<number>(0);
+
+  const AUTOSAVE_ENABLED_KEY = "reit-viz-custom-chart-autosave-enabled-v1";
+  const [autoSaveEnabled, setAutoSaveEnabledState] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(AUTOSAVE_ENABLED_KEY);
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const autoSaveEnabledRef = useRef(autoSaveEnabled);
+  autoSaveEnabledRef.current = autoSaveEnabled;
+
+  const { data: savedCustomCharts = [] } = useQuery<SavedCustomChart[]>({
+    queryKey: ["/api/custom-charts"],
+  });
+
+  const createCustomChartMut = useMutation({
+    mutationFn: async (vars: { name: string; state: any }) => {
+      const res = await apiRequest("POST", "/api/custom-charts", {
+        name: vars.name,
+        state: JSON.stringify(vars.state),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const updateCustomChartMut = useMutation({
+    mutationFn: async (vars: { id: number; state?: any; name?: string }) => {
+      const body: any = {};
+      if (vars.state !== undefined) body.state = JSON.stringify(vars.state);
+      if (vars.name !== undefined) body.name = vars.name;
+      const res = await apiRequest("POST", `/api/custom-charts/${vars.id}/update`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const renameCustomChartMut = useMutation({
+    mutationFn: async (vars: { id: number; name: string }) => {
+      const res = await apiRequest("POST", `/api/custom-charts/${vars.id}/rename`, { name: vars.name });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const deleteCustomChartMut = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("POST", `/api/custom-charts/${id}/delete`, {});
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const setAutoSaveEnabled = useCallback((enabled: boolean) => {
+    setAutoSaveEnabledState(enabled);
+    try {
+      localStorage.setItem(AUTOSAVE_ENABLED_KEY, enabled ? "1" : "0");
+    } catch {}
+    if (!enabled && autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+  }, []);
+
+  // Build the autosave snapshot from current refs
+  const buildCustomChartSnapshot = useCallback(() => ({
+    plottedSeries: plottedSeriesRef.current,
+    panes: panesRef.current,
+    activeTicker: activeTickerRef.current,
+    chartConfig: chartConfigRef.current,
+    layoutMode: layoutModeRef.current,
+    indicatorsMap: indicatorsMapRef.current,
+  }), []);
+
+  // Debounced autosave: writes 2s after edits while a custom chart is active
+  const scheduleCustomChartAutosave = useCallback(() => {
+    if (!activeCustomChartIdRef.current || !autoSaveEnabledRef.current) return;
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      const id = activeCustomChartIdRef.current;
+      if (!id || Date.now() < autosaveSuppressUntilRef.current) return;
+      updateCustomChartMut.mutate({ id, state: buildCustomChartSnapshot() });
+    }, 2000);
+  }, [updateCustomChartMut, buildCustomChartSnapshot]);
+
+  // Trigger autosave whenever the chart contents change (while a chart is active)
+  useEffect(() => {
+    if (!activeCustomChartId) return;
+    scheduleCustomChartAutosave();
+  }, [plottedSeries, panes, activeTicker, chartConfig, layoutMode, indicatorsMap, activeCustomChartId, scheduleCustomChartAutosave]);
+
+  // Create a new blank server-backed chart and make it active
+  const handleNewChart = useCallback(async () => {
+    paneGeneration++;
+    nextPaneId = 1;
+    setPanes([]);
+    setPlottedSeries([]);
+    setActiveTicker(null);
+    setIndicatorsMap({});
+    const name = `Chart ${savedCustomCharts.length + 1}`;
+    try {
+      const created = await createCustomChartMut.mutateAsync({
+        name,
+        state: { panes: [], plottedSeries: [], activeTicker: null, chartConfig, layoutMode, indicatorsMap: {} },
+      });
+      setActiveCustomChartId(created.id);
+      setActiveView(`📌 ${created.name}`);
+    } catch (e) {
+      console.error("Failed to create custom chart", e);
+      setActiveView("(Blank)");
+    }
+  }, [savedCustomCharts.length, chartConfig, layoutMode, createCustomChartMut]);
+
+  // Save the current view as a brand-new server-backed chart
+  const handleSaveCurrentAsNewChart = useCallback(async (name?: string) => {
+    const chartName = (name && name.trim()) || `Chart ${savedCustomCharts.length + 1}`;
+    try {
+      const created = await createCustomChartMut.mutateAsync({
+        name: chartName,
+        state: buildCustomChartSnapshot(),
+      });
+      autosaveSuppressUntilRef.current = Date.now() + 3000;
+      setActiveCustomChartId(created.id);
+      setActiveView(`📌 ${created.name}`);
+    } catch (e) {
+      console.error("Failed to save current view as new chart", e);
+    }
+  }, [savedCustomCharts.length, createCustomChartMut, buildCustomChartSnapshot]);
+
+  // Force-save the active custom chart immediately (bypasses autosave debounce)
+  const handleManualSaveCustomChart = useCallback(async () => {
+    const id = activeCustomChartIdRef.current;
+    if (!id) return;
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    try {
+      await updateCustomChartMut.mutateAsync({ id, state: buildCustomChartSnapshot() });
+      setLastManualSaveAt(Date.now());
+    } catch (e) {
+      console.error("Manual save failed", e);
+    }
+  }, [updateCustomChartMut, buildCustomChartSnapshot]);
+
+  // Load a saved custom chart by id and make it active
+  const handleLoadCustomChart = useCallback(async (id: number) => {
+    let chart: SavedCustomChart | undefined = savedCustomCharts.find((c) => c.id === id);
+    try {
+      const res = await apiRequest("GET", `/api/custom-charts/${id}`);
+      chart = await res.json();
+    } catch {}
+    if (!chart) return;
+    paneGeneration++;
+    autosaveSuppressUntilRef.current = Date.now() + 3500;
+    setActiveCustomChartId(id);
+    try {
+      const state = typeof chart.state === "string" ? JSON.parse(chart.state) : (chart.state as any);
+      if (state.panes) setPanes(state.panes);
+      if (state.activeTicker) setActiveTicker(state.activeTicker);
+      if (state.chartConfig) setChartConfig(state.chartConfig);
+      if (state.layoutMode) setLayoutMode(state.layoutMode);
+      if (state.indicatorsMap) setIndicatorsMap(state.indicatorsMap);
+      if (state.plottedSeries) {
+        setPlottedSeries(state.plottedSeries);
+        refetchSeriesData(state.plottedSeries);
+      }
+      setActiveView(`📌 ${chart.name}`);
+      const maxPaneId = (state.panes || []).reduce((m: number, p: any) => Math.max(m, p.id || 0), 0);
+      nextPaneId = Math.max(nextPaneId, maxPaneId + 1);
+    } catch (e) {
+      console.error("Failed to load custom chart", e);
+    }
+  }, [savedCustomCharts, refetchSeriesData]);
+
+  // Exit custom-chart mode, returning to the carousel default view
+  const handleExitCustomChart = useCallback(() => {
+    setActiveCustomChartId(null);
+    const ticker = activeTicker || (tickerList.length > 0 ? tickerList[0].ticker : null);
+    if (ticker) loadViewForTicker(ticker);
+  }, [activeTicker, tickerList, loadViewForTicker]);
 
   // Navigate to next/prev ticker
   const navigateTicker = useCallback(
@@ -920,6 +1280,24 @@ export default function Dashboard() {
           onCrosshairTimeChange={setCrosshairTime}
           pairsPresets={PAIRS_PRESETS}
           onLoadPairsPreset={loadPairsPreset}
+          relativeValuePresets={RELATIVE_VALUE_PRESETS}
+          onLoadRelativeValuePreset={loadRelativeValuePreset}
+          onNewChart={handleNewChart}
+          onSaveCurrentAsNewChart={handleSaveCurrentAsNewChart}
+          onManualSaveCustomChart={handleManualSaveCustomChart}
+          isSavingCustomChart={createCustomChartMut.isPending || updateCustomChartMut.isPending}
+          lastManualSaveAt={lastManualSaveAt}
+          autoSaveEnabled={autoSaveEnabled}
+          onAutoSaveEnabledChange={setAutoSaveEnabled}
+          savedCustomCharts={savedCustomCharts}
+          activeCustomChartId={activeCustomChartId}
+          onLoadCustomChart={handleLoadCustomChart}
+          onRenameCustomChart={(id, name) => renameCustomChartMut.mutate({ id, name })}
+          onDeleteCustomChart={(id) => {
+            deleteCustomChartMut.mutate(id);
+            if (activeCustomChartId === id) handleExitCustomChart();
+          }}
+          onExitCustomChart={handleExitCustomChart}
           layoutMode={layoutMode}
           onLayoutModeChange={setLayoutMode}
           indicatorsMap={indicatorsMap}

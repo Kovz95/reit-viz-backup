@@ -58,6 +58,23 @@ function gradientColorHsl(t: number): string {
   return `hsl(${v * 120}, 90%, 55%)`;
 }
 
+// ── Future trading-day generator (skips weekends) for projecting seed lines ──
+function generateFutureBars(lastDate: string, count: number): string[] {
+  const out: string[] = [];
+  const [y, m, d] = lastDate.split("-").map(Number);
+  const cur = new Date(Date.UTC(y, m - 1, d));
+  while (out.length < count) {
+    cur.setUTCDate(cur.getUTCDate() + 1);
+    const dow = cur.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const yy = cur.getUTCFullYear();
+    const mm = String(cur.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(cur.getUTCDate()).padStart(2, "0");
+    out.push(`${yy}-${mm}-${dd}`);
+  }
+  return out;
+}
+
 export interface ActiveIndicators {
   sma?: number;
   ema?: number;
@@ -602,6 +619,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Stores latest values from sub-indicator charts (RSI, MACD, etc.) for crosshair readout
   const subIndicatorValuesRef = useRef<Record<string, number>>({});
   const drawingsRef = useRef<Drawing[]>([]);
+  // Tracks signatures of seeds already applied to this chart so we don't
+  // re-draw the same support/resistance level or trendline twice.
+  const appliedSeedsRef = useRef<Set<string>>(new Set());
+  // Bump counter used to re-run seed-restore effects after a "seeds-restored" event.
+  const [seedRestoreNonce, setSeedRestoreNonce] = useState(0);
   const quarterShadingCleanupRef = useRef<(() => void) | null>(null);
   const markersPluginRef = useRef<any>(null);
   const haSignalsPluginRef = useRef<any>(null);
@@ -1629,6 +1651,437 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
   }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC]);
+
+  // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
+  // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else
+  // (user-drawn lines) is preserved.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (chart) {
+      const kept: Drawing[] = [];
+      for (const d of drawingsRef.current) {
+        const id = d.id || "";
+        if (id.startsWith("sr-seed-") || id.startsWith("tl-seed-")) {
+          if (d.seriesRef) {
+            try { chart.removeSeries(d.seriesRef); } catch {}
+          }
+        } else {
+          kept.push(d);
+        }
+      }
+      drawingsRef.current = kept;
+    }
+    appliedSeedsRef.current = new Set();
+  }, [activeTicker]);
+
+  // ── Seed persistence: when another tab/page writes seeds and dispatches
+  // "reit-viz-seeds-restored", drop already-applied seed series and re-run the
+  // restore effects (via the nonce) so the new seeds get drawn. ──
+  useEffect(() => {
+    const handleSeedsRestored = () => {
+      const chart = chartRef.current;
+      if (chart) {
+        const kept: Drawing[] = [];
+        for (const d of drawingsRef.current) {
+          const id = d.id || "";
+          if (id.startsWith("sr-seed-") || id.startsWith("tl-seed-")) {
+            if (d.seriesRef) {
+              try { chart.removeSeries(d.seriesRef); } catch {}
+            }
+          } else {
+            kept.push(d);
+          }
+        }
+        drawingsRef.current = kept;
+      }
+      appliedSeedsRef.current = new Set();
+      setSeedRestoreNonce((n) => n + 1);
+    };
+    window.addEventListener("reit-viz-seeds-restored", handleSeedsRestored);
+    return () => window.removeEventListener("reit-viz-seeds-restored", handleSeedsRestored);
+  }, []);
+
+  // ── Restore persisted trendline seeds for the active ticker ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady || !activeTicker) return;
+    // Collect the metrics rendered in this pane so each seed lands on a matching pane.
+    const paneMetrics = new Set<string>();
+    for (const s of paneSeries) {
+      if (s?.metric) paneMetrics.add(String(s.metric));
+    }
+    if (paneMetrics.size === 0) return;
+
+    const SEEDS_KEY = "reit-viz-trendline-seeds-v1";
+    const PERSIST_KEY = "reit-viz-trendline-persistent-v1";
+    const MAX_AGE_MS = 1440 * 60 * 1000;
+    const now = Date.now();
+    const isFresh = (x: any) => !x || typeof x.createdAt !== "number" || now - x.createdAt <= MAX_AGE_MS;
+
+    let seedsStore: Record<string, any[]> = {};
+    let persistStore: Record<string, any[]> = {};
+    try { seedsStore = JSON.parse(localStorage.getItem(SEEDS_KEY) || "{}"); } catch {}
+    try { persistStore = JSON.parse(localStorage.getItem(PERSIST_KEY) || "{}"); } catch {}
+
+    // Prune expired persistent entries.
+    let pruned = false;
+    for (const key of Object.keys(persistStore)) {
+      const arr = Array.isArray(persistStore[key]) ? persistStore[key] : [];
+      const fresh = arr.filter(isFresh);
+      if (fresh.length !== arr.length) { persistStore[key] = fresh; pruned = true; }
+      if (fresh.length === 0) delete persistStore[key];
+    }
+    if (pruned) { try { localStorage.setItem(PERSIST_KEY, JSON.stringify(persistStore)); } catch {} }
+
+    const upper = activeTicker.toUpperCase();
+    const seedList = Array.isArray(seedsStore[upper]) ? seedsStore[upper] : [];
+    const persistList = Array.isArray(persistStore[upper]) ? persistStore[upper] : [];
+    const visibleSeeds = seedList.filter((x: any) => !x?.hidden && isFresh(x));
+    const visiblePersist = persistList.filter((x: any) => !x?.hidden && isFresh(x));
+    const sig = (x: any) =>
+      `tl|${x.kind}|${x.date1}|${x.price1}|${x.date2}|${x.price2}|${x.broken ? 1 : 0}|${x.futureBars}|${x.metric || "close"}`;
+    const persistToApply = visiblePersist.filter((x: any) => !appliedSeedsRef.current.has(sig(x)));
+
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    for (const x of visibleSeeds) {
+      const s = sig(x);
+      if (!seen.has(s)) { seen.add(s); merged.push(x); }
+    }
+    for (const x of persistToApply) {
+      const s = sig(x);
+      if (!seen.has(s)) { seen.add(s); merged.push(x); }
+    }
+    if (merged.length === 0) return;
+
+    // Only apply seeds whose metric matches a series shown in this pane.
+    const matching: any[] = [];
+    const waiting: any[] = [];
+    for (const x of merged) {
+      const metric = String(x?.metric || "close");
+      if (paneMetrics.has(metric)) matching.push(x); else waiting.push(x);
+    }
+    if (matching.length === 0) {
+      if (waiting.length > 0) {
+        console.log(
+          `[ChartPane] ${waiting.length} trendline seed(s) waiting for a matching pane (metrics: ${[...new Set(waiting.map((x) => x?.metric || "close"))].join(", ")}).`
+        );
+      }
+      return;
+    }
+
+    // Build the sorted set of available bar times across ohlc + line series.
+    const times: string[] = [];
+    if (ohlcData && Array.isArray(ohlcData)) {
+      for (const bar of ohlcData) if (bar && typeof bar.time === "string") times.push(bar.time);
+    }
+    for (const s of paneSeries) {
+      if (s?.data) for (const pt of s.data) if (typeof pt.time === "string") times.push(pt.time);
+    }
+    const allTimes = [...new Set(times)].sort();
+    if (allTimes.length < 2) return;
+    const lastTime = allTimes[allTimes.length - 1];
+
+    let applied = 0;
+    for (const seed of matching) {
+      try {
+        const fb = Math.max(0, Math.min(500, parseInt(seed.futureBars) || 60));
+        const startDate = seed.date1;
+        const startPrice = Number(seed.price1);
+        const slope = Number(seed.slope);
+        if (!startDate || !Number.isFinite(startPrice) || !Number.isFinite(slope)) continue;
+
+        let startIdx = allTimes.indexOf(startDate);
+        if (startIdx < 0) {
+          for (let i = 0; i < allTimes.length; i++) {
+            if (allTimes[i] >= startDate) { startIdx = i; break; }
+          }
+        }
+        if (startIdx < 0) startIdx = 0;
+
+        const linePts: { time: string; value: number }[] = [];
+        for (let i = startIdx; i < allTimes.length; i++) {
+          const v = startPrice + slope * (i - startIdx);
+          if (Number.isFinite(v) && v > 0) linePts.push({ time: allTimes[i], value: v });
+        }
+
+        const futureTimes = fb > 0 ? generateFutureBars(lastTime, fb) : [];
+        const futurePts: { time: string; value: number }[] = [];
+        for (let i = 0; i < futureTimes.length; i++) {
+          const idxFromStart = allTimes.length - 1 + i + 1 - startIdx;
+          const v = startPrice + slope * idxFromStart;
+          if (Number.isFinite(v) && v > 0) futurePts.push({ time: futureTimes[i], value: v });
+        }
+
+        const isResistance = seed.kind === "resistance";
+        const mainColor = isResistance ? "#ef4444" : "#22c55e";
+        const futureColor = isResistance ? "#fca5a5" : "#86efac";
+        const mainStyle = seed.broken ? LineStyle.Dashed : LineStyle.Solid;
+
+        if (linePts.length >= 2) {
+          const ls = chart.addSeries(LineSeries, {
+            color: mainColor,
+            lineWidth: 2,
+            lineStyle: mainStyle,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: "",
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          ls.setData(linePts as any);
+          drawingsRef.current.push({
+            id: `tl-seed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "trendline",
+            color: mainColor,
+            points: [
+              { time: allTimes[startIdx], price: startPrice },
+              { time: allTimes[allTimes.length - 1], price: startPrice + slope * (allTimes.length - 1 - startIdx) },
+            ],
+            seriesRef: ls,
+          });
+        }
+
+        if (futurePts.length > 0) {
+          const segPts: { time: string; value: number }[] = [];
+          if (linePts.length > 0) segPts.push(linePts[linePts.length - 1]);
+          segPts.push(...futurePts);
+          const fs = chart.addSeries(LineSeries, {
+            color: futureColor,
+            lineWidth: 2,
+            lineStyle: LineStyle.Dotted,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: "",
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          fs.setData(segPts as any);
+          drawingsRef.current.push({
+            id: `tl-seed-fut-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "trendline",
+            color: futureColor,
+            points: segPts.map((p) => ({ time: String(p.time), price: p.value })),
+            seriesRef: fs,
+          });
+        }
+        applied++;
+      } catch (e) {
+        console.warn("[ChartPane] failed to apply trendline seed", e);
+      }
+    }
+
+    for (const seed of matching) appliedSeedsRef.current.add(sig(seed));
+
+    if (applied > 0) {
+      try {
+        // Consume one-shot seeds (the persistent copy is retained).
+        if (visibleSeeds.length > 0) {
+          const appliedSigs = new Set(matching.map(sig));
+          const remaining = seedList.filter((x: any) => !appliedSigs.has(sig(x)));
+          if (remaining.length === 0) delete seedsStore[upper]; else seedsStore[upper] = remaining;
+          localStorage.setItem(SEEDS_KEY, JSON.stringify(seedsStore));
+        }
+        console.log(`[ChartPane] Applied ${applied} trendline seed(s) for ${upper} (persistent retained).`);
+        onDrawingAdded?.();
+      } catch {}
+    }
+  }, [activeTicker, chartReady, ohlcData, paneSeries, seedRestoreNonce]);
+
+  // ── Restore persisted support/resistance level seeds for the active ticker ──
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady || !activeTicker) return;
+    // S/R levels only apply to close/ratio panes.
+    if (!paneSeries.some((s) => s?.metric === "close" || s?.metric === "ratio")) return;
+
+    const SEEDS_KEY = "reit-viz-srlevel-seeds-v1";
+    const PERSIST_KEY = "reit-viz-srlevel-persistent-v1";
+    const MAX_AGE_MS = 1440 * 60 * 1000;
+    const now = Date.now();
+    const isFresh = (x: any) => !x || typeof x.createdAt !== "number" || now - x.createdAt <= MAX_AGE_MS;
+
+    let seedsStore: Record<string, any[]> = {};
+    let persistStore: Record<string, any[]> = {};
+    try { seedsStore = JSON.parse(localStorage.getItem(SEEDS_KEY) || "{}"); } catch {}
+    try { persistStore = JSON.parse(localStorage.getItem(PERSIST_KEY) || "{}"); } catch {}
+
+    let pruned = false;
+    for (const key of Object.keys(persistStore)) {
+      const arr = Array.isArray(persistStore[key]) ? persistStore[key] : [];
+      const fresh = arr.filter(isFresh);
+      if (fresh.length !== arr.length) { persistStore[key] = fresh; pruned = true; }
+      if (fresh.length === 0) delete persistStore[key];
+    }
+    if (pruned) { try { localStorage.setItem(PERSIST_KEY, JSON.stringify(persistStore)); } catch {} }
+
+    const upper = activeTicker.toUpperCase();
+    const seedList = Array.isArray(seedsStore[upper]) ? seedsStore[upper] : [];
+    const persistList = Array.isArray(persistStore[upper]) ? persistStore[upper] : [];
+    const visibleSeeds = seedList.filter((x: any) => !x?.hidden && isFresh(x));
+    const visiblePersist = persistList.filter((x: any) => !x?.hidden && isFresh(x));
+    const sig = (x: any) =>
+      `sr|${x.type}|${x.price}|${x.maType ?? ""}|${x.maPeriod ?? ""}|${x.fibLevel ?? ""}|${x.futureBars}`;
+    const persistToApply = visiblePersist.filter((x: any) => !appliedSeedsRef.current.has(sig(x)));
+
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    for (const x of visibleSeeds) {
+      const s = sig(x);
+      if (!seen.has(s)) { seen.add(s); merged.push(x); }
+    }
+    for (const x of persistToApply) {
+      const s = sig(x);
+      if (!seen.has(s)) { seen.add(s); merged.push(x); }
+    }
+    if (merged.length === 0) return;
+
+    // Build aligned time/value arrays for the close (or ratio) series.
+    const seriesTimes: string[] = [];
+    const seriesValues: number[] = [];
+    if (ohlcData && Array.isArray(ohlcData)) {
+      for (const bar of ohlcData) {
+        if (bar && typeof bar.time === "string" && Number.isFinite(bar.close)) {
+          seriesTimes.push(bar.time); seriesValues.push(bar.close);
+        }
+      }
+    }
+    if (seriesTimes.length < 2) {
+      for (const s of paneSeries) {
+        if (s?.data) {
+          for (const pt of s.data) {
+            if (typeof pt.time === "string" && Number.isFinite(pt.value)) {
+              seriesTimes.push(pt.time); seriesValues.push(pt.value);
+            }
+          }
+          if (seriesTimes.length >= 2) break;
+        }
+      }
+    }
+    if (seriesTimes.length < 2) return;
+    const lastTime = seriesTimes[seriesTimes.length - 1];
+    const firstTime = seriesTimes[0];
+
+    let applied = 0;
+    for (const seed of merged) {
+      try {
+        const fb = Math.max(0, Math.min(500, parseInt(seed.futureBars) || 60));
+        const price = Number(seed.price);
+        if (!Number.isFinite(price)) continue;
+        const isAbove = price > (seriesValues[seriesValues.length - 1] ?? price);
+        const mainColor = isAbove ? "#ef4444" : "#22c55e";
+        const futureColor = isAbove ? "#fca5a5" : "#86efac";
+
+        if (seed.type === "horizontal" || seed.type === "fib") {
+          const linePts = [
+            { time: firstTime, value: price },
+            { time: lastTime, value: price },
+          ];
+          const style = seed.type === "fib" ? LineStyle.Dashed : LineStyle.Solid;
+          const ls = chart.addSeries(LineSeries, {
+            color: mainColor,
+            lineWidth: 2,
+            lineStyle: style,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            title: "",
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null,
+          });
+          ls.setData(linePts as any);
+          drawingsRef.current.push({
+            id: `sr-seed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "trendline",
+            color: mainColor,
+            points: [
+              { time: firstTime, price },
+              { time: lastTime, price },
+            ],
+            seriesRef: ls,
+          });
+
+          if (fb > 0) {
+            const futureTimes = generateFutureBars(lastTime, fb);
+            if (futureTimes.length > 0) {
+              const segPts = [
+                { time: lastTime, value: price },
+                ...futureTimes.map((t) => ({ time: t, value: price })),
+              ];
+              const fs = chart.addSeries(LineSeries, {
+                color: futureColor,
+                lineWidth: 2,
+                lineStyle: LineStyle.Dotted,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                title: "",
+                crosshairMarkerVisible: false,
+                autoscaleInfoProvider: () => null,
+              });
+              fs.setData(segPts as any);
+              drawingsRef.current.push({
+                id: `sr-seed-fut-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                type: "trendline",
+                color: futureColor,
+                points: segPts.map((p) => ({ time: String(p.time), price: p.value })),
+                seriesRef: fs,
+              });
+            }
+          }
+          applied++;
+        } else if (seed.type === "ma" && seed.maType && seed.maPeriod && seriesValues.length >= seed.maPeriod) {
+          // Build time-keyed data points and run the matching MA from the indicators lib.
+          const maInput: { time: string; value: number }[] = [];
+          for (let i = 0; i < seriesTimes.length; i++) {
+            maInput.push({ time: seriesTimes[i], value: seriesValues[i] });
+          }
+          const maType = String(seed.maType).toUpperCase();
+          const maData =
+            maType === "EMA" ? computeEMA(maInput, seed.maPeriod)
+            : maType === "HMA" ? computeHMA(maInput, seed.maPeriod)
+            : computeSMA(maInput, seed.maPeriod);
+          const maPts = maData.filter((p) => Number.isFinite(p.value));
+          if (maPts.length >= 2) {
+            const ls = chart.addSeries(LineSeries, {
+              color: mainColor,
+              lineWidth: 2,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              title: "",
+              crosshairMarkerVisible: false,
+              autoscaleInfoProvider: () => null,
+            });
+            ls.setData(maPts as any);
+            drawingsRef.current.push({
+              id: `sr-seed-ma-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              type: "trendline",
+              color: mainColor,
+              points: [
+                { time: maPts[0].time, price: maPts[0].value },
+                { time: maPts[maPts.length - 1].time, price: maPts[maPts.length - 1].value },
+              ],
+              seriesRef: ls,
+            });
+            applied++;
+          }
+        }
+      } catch (e) {
+        console.warn("[ChartPane] failed to apply S/R level seed", e);
+      }
+    }
+
+    for (const seed of merged) appliedSeedsRef.current.add(sig(seed));
+
+    if (applied > 0) {
+      try {
+        if (visibleSeeds.length > 0) {
+          delete seedsStore[upper];
+          localStorage.setItem(SEEDS_KEY, JSON.stringify(seedsStore));
+        }
+        console.log(`[ChartPane] Applied ${applied} S/R level seed(s) for ${upper} (persistent retained).`);
+        onDrawingAdded?.();
+      } catch {}
+    }
+  }, [activeTicker, chartReady, ohlcData, paneSeries, seedRestoreNonce]);
 
   // Time range
   useEffect(() => {
