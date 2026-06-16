@@ -12,7 +12,7 @@ import { defaultInputSelection } from "@/lib/optimizerInputSeries";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
@@ -632,7 +632,7 @@ export default function DualMAOptimizer() {
           series = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
         } else if (!isPair && frequency === "weekly_on_daily") {
           const fakeDates = prices.map((_, idx) => `d${idx}`);
-          series = (weeklyDownsample(prices as any) as any).prices ?? (weeklyDownsample(prices as any) as any);
+          series = weeklyDownsamplePrices(prices, fakeDates).prices;
         }
 
         if (series.length < 50) continue;
@@ -685,7 +685,7 @@ export default function DualMAOptimizer() {
         prices = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
       } else if (frequency === "weekly_on_daily") {
         const fakeDates = prices.map((_, i) => `d${i}`);
-        prices = (weeklyDownsample(prices as any) as any).prices ?? weeklyDownsample(prices as any) as any;
+        prices = weeklyDownsamplePrices(prices, fakeDates).prices;
       }
 
       if (prices.length < 50) { setEvaluating(false); return; }

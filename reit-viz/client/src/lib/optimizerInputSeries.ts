@@ -2,6 +2,7 @@
 
 import { isBasketTicker } from "@/lib/basketUtils";
 import type { OHLCVResult } from "@/lib/fetchTickerOHLCV";
+import { weeklyDownsample, weeklyDownsamplePrices, expandWeeklyToDaily } from "@/lib/weeklyDownsample";
 
 export { isBasketTicker };
 
@@ -114,7 +115,6 @@ export function resampleWeekly(
   bars: any,
   mode?: string
 ): any {
-  const { weeklyDownsample } = require("@/lib/weeklyDownsample");
   // Match the bundle's resampler (Ss/Uk): ONLY "weekly" downsamples; every other
   // mode ("daily", "weekly_on_daily", undefined) returns the input unchanged with
   // an identity dailyIndexMap. Previously this always downsampled, which corrupted
@@ -147,11 +147,8 @@ export function resampleWeekly(
 
 // Some optimizer pages access the weekly_on_daily expander as a property of
 // resampleWeekly (e.g. RSIRegimeOptimizer's `resampleWeekly.expandWeeklyToDaily`).
-{
-  const { expandWeeklyToDaily, weeklyDownsamplePrices } = require("@/lib/weeklyDownsample");
-  (resampleWeekly as any).expandWeeklyToDaily = expandWeeklyToDaily;
-  (resampleWeekly as any).aggregate = weeklyDownsamplePrices;
-}
+(resampleWeekly as any).expandWeeklyToDaily = expandWeeklyToDaily;
+(resampleWeekly as any).aggregate = weeklyDownsamplePrices;
 
 /**
  * Creates a date range object.
