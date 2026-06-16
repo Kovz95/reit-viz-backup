@@ -1,5 +1,5 @@
 // Reconstructed from recovered-bundle/Scanner-d2v1M_Z9.js on 2026-06-11
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useBaskets } from "@/lib/basketsContext";
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorkbookTickers } from "@/lib/queryClient";
@@ -215,7 +215,7 @@ function computeBuckets(signal: SignalType, signalValues: (number | null)[], clo
       }
       if (!rets.length) continue;
       const avg = rets.reduce((s, v) => s + v, 0) / rets.length;
-      const hitRate = rets.filter(v => (v < 0) === isLong ? false : true).length / rets.length * 100;
+      const hitRate = rets.filter(v => (v < 0) === isLong).length / rets.length * 100;
       (row as any)[`avg_${days}d`] = avg;
       (row as any)[`hit_${days}d`] = hitRate;
     }
@@ -371,7 +371,7 @@ function SingleSignalAnalyzer({ ticker, initialPrices, asFloating = false, onClo
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useState(() => {
+  useEffect(() => {
     let cancelled = false;
     if (initialPrices && initialPrices.length >= 250) { setPrices(initialPrices); return; }
     setLoading(true); setErr(null);
@@ -381,7 +381,7 @@ function SingleSignalAnalyzer({ ticker, initialPrices, asFloating = false, onClo
       setPrices(pts); setLoading(false);
     }).catch((e: Error) => { if (!cancelled) { setErr(String(e?.message ?? e)); setLoading(false); } });
     return () => { cancelled = true; };
-  });
+  }, [ticker, initialPrices]);
 
   const result = useMemo(() => {
     if (!prices || prices.length < 250) return null;

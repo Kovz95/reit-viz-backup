@@ -13,6 +13,7 @@ import { useBaskets } from "@/lib/basketContext";
 import { isBasketTicker } from "@/lib/basketUtils";
 import { getTickerRaw } from "@/lib/dataService";
 import { emitChartSignals } from "@/lib/chartBridge";
+import { navigateToTicker } from "@/lib/navigateToTicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +26,7 @@ import {
 import {
   Card, CardContent, CardHeader, CardTitle
 } from "@/components/ui/card";
-import { ChevronRight, ChevronDown, Play, Download, Plus, X, Minus } from "lucide-react";
+import { ChevronRight, ChevronDown, Play, Download, Plus, X, Minus, Activity } from "lucide-react";
 
 // Inline icon creation (from bundle)
 const UserIcon = createLucideIcon("User", [
@@ -381,10 +382,96 @@ function numFmt(v: number | null | undefined, decimals = 2): string {
 }
 
 function sigmaZClass(t: number): string {
-  if (t >= 3) return "bg-destructive/20 text-destructive border-destructive/40";
-  if (t >= 2) return "bg-chart-3/20 text-chart-3 border-chart-3/40";
-  if (t >= 1) return "bg-chart-1/20 text-chart-1 border-chart-1/40";
-  return "bg-muted text-muted-foreground border-border";
+  return Number.isFinite(t)
+    ? t >= 3 ? "bg-destructive/20 text-destructive border-destructive/40"
+    : t >= 2 ? "bg-chart-3/20 text-chart-3 border-chart-3/40"
+    : t >= 1 ? "bg-chart-1/20 text-chart-1 border-chart-1/40"
+    : "bg-muted text-muted-foreground border-border"
+    : "bg-muted text-muted-foreground";
+}
+
+interface SigmaInspect {
+  pct: number;
+  window: number;
+  mu: number;
+  sigma: number;
+  z: number;
+  absZ: number;
+  percentileAbs: number;
+  percentileSigned: number;
+  countAtLeastAbs: number;
+  totalDays: number;
+  oneInNDays: number;
+}
+
+function windowStats(rets: (number | null)[], n: number, window: number): { mu: number; sigma: number; n: number } {
+  const arr: number[] = [];
+  for (let i = n - window; i < n; i++) {
+    if (i < 0) continue;
+    const v = rets[i];
+    if (v != null && Number.isFinite(v)) arr.push(v);
+  }
+  if (arr.length < Math.max(10, Math.floor(window * 0.6))) return { mu: NaN, sigma: NaN, n: arr.length };
+  const mu = mean(arr), sigma = stdDev(arr, mu);
+  return { mu, sigma, n: arr.length };
+}
+
+function computeSigmaInspect(
+  closes: (number | null)[],
+  idx: number,
+  pct: number,
+  window: number,
+  basis: SigmaBasis = "rolling"
+): SigmaInspect | null {
+  const n = closes.length;
+  if (idx < 1 || idx >= n) return null;
+  const dailyRets: (number | null)[] = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    const p = closes[i - 1], c = closes[i];
+    if (p != null && c != null && p > 0) dailyRets[i] = (c / p - 1) * 100;
+  }
+  let mu: number, sigma: number;
+  if (basis === "full") {
+    const finite = dailyRets.filter((v): v is number => v != null && Number.isFinite(v));
+    if (finite.length < 30) return null;
+    mu = mean(finite); sigma = stdDev(finite, mu);
+  } else {
+    const ws = windowStats(dailyRets, idx, window);
+    mu = ws.mu; sigma = ws.sigma;
+  }
+  if (!Number.isFinite(sigma) || sigma <= 0) return null;
+  const z = (pct - mu) / sigma;
+  const absPct = Math.abs(pct);
+  const finite = dailyRets.filter((v): v is number => v != null && Number.isFinite(v));
+  if (finite.length < 30) return null;
+  const total = finite.length;
+  let atLeast = 0, atMost = 0;
+  for (const v of finite) {
+    if (Math.abs(v) >= absPct) atLeast++;
+    if (v <= pct) atMost++;
+  }
+  const percentileAbs = 1 - atLeast / total;
+  const percentileSigned = atMost / total;
+  const oneInN = atLeast > 0 ? total / atLeast : total;
+  return {
+    pct, window, mu, sigma, z, absZ: Math.abs(z),
+    percentileAbs, percentileSigned, countAtLeastAbs: atLeast,
+    totalDays: total, oneInNDays: oneInN,
+  };
+}
+
+function resolveBasketName(ticker: string, baskets: any[], fallback = ""): string {
+  if (!ticker) return fallback;
+  if (!isBasketTicker(ticker)) return ticker;
+  const id = ticker.replace("BASKET:", "");
+  if (!id) return ticker;
+  const b = baskets.find((x: any) => x.id === id);
+  return b && b.name ? b.name : "Basket";
+}
+
+function useBasketName(): (ticker: string, fallback?: string) => string {
+  const { baskets } = useBaskets();
+  return (ticker: string, fallback = "") => resolveBasketName(ticker, baskets, fallback);
 }
 
 function chatListen(event: string, cb: (detail: any) => void): () => void {
@@ -483,10 +570,11 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
   pairsTickerA?: string; pairsTickerB?: string;
 }) {
   const isPairs = !!pairsTickerA && !!pairsTickerB;
+  const displayName = useBasketName();
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge variant="secondary" data-testid="badge-symbol">{run.symbol}</Badge>
+        <Badge variant="secondary" data-testid="badge-symbol">{displayName(run.symbol)}</Badge>
         <Badge variant="outline">{triggerSummary}</Badge>
         <Badge variant="outline" data-testid="badge-event-count">{result.events.length} events</Badge>
         {result.events.length === 0 && (
@@ -1103,6 +1191,26 @@ export default function PriceAction() {
         </CardContent>
       </Card>
 
+      {mode === "single" && ticker && (
+        <MoveInspector
+          symbol={ticker}
+          displaySymbol={getBasketName(ticker)}
+          tickerName={isBasketTicker(ticker)
+            ? `${baskets.find((b: any) => `BASKET:${b.id}` === ticker)?.tickers.length ?? 0} tickers`
+            : filteredTickers.find((t: any) => t.ticker === ticker)?.name ?? allTickers.find((t: any) => t.ticker === ticker)?.name ?? ""}
+          sigmaWindow={conditions.find(c => c.type === "sigma")?.sigmaWindow ?? 60}
+          sigmaBasis={conditions.find(c => c.type === "sigma")?.sigmaBasis ?? "rolling"}
+          dates={dates} />
+      )}
+
+      {mode === "cross" && (
+        <BiggestMoves
+          tickers={filteredTickers}
+          sigmaWindow={conditions.find(c => c.type === "sigma")?.sigmaWindow ?? 60}
+          sigmaBasis={conditions.find(c => c.type === "sigma")?.sigmaBasis ?? "rolling"}
+          dates={dates} />
+      )}
+
       {/* Results area */}
       {!runConfig && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
@@ -1251,7 +1359,7 @@ export default function PriceAction() {
                               ) : null}
                             </td>
                             <td className="py-1 pr-3 font-semibold cursor-pointer hover:underline"
-                              onClick={() => (emitChartSignals as any)?.({ ticker: row.ticker })}
+                              onClick={() => navigateToTicker(row.ticker)}
                               title="Open in Charts tab">{row.ticker}</td>
                             <td className="py-1 pr-3 text-muted-foreground truncate max-w-[220px]">{row.name}</td>
                             <td className="py-1 pr-3">{row.events}</td>
@@ -1327,6 +1435,349 @@ export default function PriceAction() {
         </>
       )}
     </div>
+  );
+}
+
+// ── Move Inspector (single mode) ─────────────────────────────────────────────────
+function MoveInspector({ symbol, displaySymbol, tickerName, sigmaWindow, sigmaBasis, dates }: {
+  symbol: string; displaySymbol: string; tickerName: string;
+  sigmaWindow: number; sigmaBasis: SigmaBasis; dates: string[];
+}) {
+  const disp = displaySymbol || symbol;
+  const { data: raw } = useQuery({
+    queryKey: ["ticker-raw-inspect", symbol],
+    queryFn: async () => symbol ? getTickerRaw(symbol) : null,
+    enabled: !!symbol,
+  });
+  const [customMove, setCustomMove] = useState("");
+  const [customSigma, setCustomSigma] = useState("");
+
+  const info = useMemo(() => {
+    if (!raw || !dates.length) return null;
+    const close = extractColumn(raw, "close", dates.length);
+    const open = extractColumn(raw, "open", dates.length);
+    if (!close.length) return null;
+    let lastIdx = -1;
+    for (let i = close.length - 1; i >= 1; i--) {
+      if (close[i] != null && close[i - 1] != null && (close[i - 1] as number) > 0) { lastIdx = i; break; }
+    }
+    if (lastIdx < 1) return null;
+    const lastDate = dates[lastIdx] ?? "";
+    const prevClose = close[lastIdx - 1] as number;
+    const lastClose = close[lastIdx] as number;
+    const lastOpen = open[lastIdx];
+    const lastMovePct = prevClose > 0 ? (lastClose / prevClose - 1) * 100 : NaN;
+    const gapPct = prevClose > 0 && lastOpen != null && Number.isFinite(lastOpen) ? ((lastOpen as number) / prevClose - 1) * 100 : NaN;
+    const window = Math.max(20, Math.floor(sigmaWindow || 60));
+    const lastInspect = Number.isFinite(lastMovePct) ? computeSigmaInspect(close, lastIdx, lastMovePct, window, sigmaBasis) : null;
+    const gapInspect = Number.isFinite(gapPct) ? computeSigmaInspect(close, lastIdx, gapPct, window, sigmaBasis) : null;
+    const custom = parseFloat(customMove);
+    const customInspect = Number.isFinite(custom) && custom !== 0 ? computeSigmaInspect(close, lastIdx, custom, window, sigmaBasis) : null;
+    return {
+      lastDate, lastClose, prevClose, lastOpen, lastMovePct, gapPct,
+      lastInspect, gapInspect, customInspect,
+      refCtx: lastInspect ?? gapInspect ?? customInspect ?? null,
+      window,
+    };
+  }, [raw, dates, sigmaWindow, sigmaBasis, customMove]);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Activity className="w-4 h-4 text-primary" /> Move Inspector
+          <span className="text-[11px] font-normal text-muted-foreground">
+            What sigma is this move? (μ/σ basis: {sigmaBasis === "full" ? "full history" : `rolling ${info?.window ?? sigmaWindow}d`})
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {info ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <MoveCard label={`Latest close (${info.lastDate})`} sub={`${disp} — ${tickerName}`} pct={info.lastMovePct} ctx={info.lastInspect} basis={sigmaBasis} />
+            <MoveCard label="Latest overnight gap" sub="Prev close → today's open" pct={info.gapPct} ctx={info.gapInspect} basis={sigmaBasis} />
+            <div className="rounded-md border border-border p-2 space-y-1.5">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">Custom move — enter %</div>
+              <Input value={customMove} onChange={e => setCustomMove(e.target.value)} placeholder="e.g. 2 or -3.5" className="h-7 text-xs" data-testid="input-custom-move" />
+              {info.customInspect ? (
+                <SigmaContext ctx={info.customInspect} compact basis={sigmaBasis} />
+              ) : (
+                <div className="text-[10px] text-muted-foreground">Type a % move (positive or negative) to see what sigma it represents for {disp} today.</div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground py-2">Loading {disp}…</div>
+        )}
+        {info?.refCtx && (
+          <SigmaTable mu={info.refCtx.mu} sigma={info.refCtx.sigma} basis={sigmaBasis} window={info.window}
+            totalDays={info.refCtx.totalDays} customSigma={customSigma} setCustomSigma={setCustomSigma} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SigmaTable({ mu, sigma, basis, window, totalDays, customSigma, setCustomSigma }: {
+  mu: number; sigma: number; basis: SigmaBasis; window: number; totalDays: number;
+  customSigma: string; setCustomSigma: (v: string) => void;
+}) {
+  const ks = [1, 1.5, 2, 2.5, 3];
+  const cs = parseFloat(customSigma);
+  const hasCustom = Number.isFinite(cs) && cs !== 0;
+  const up = hasCustom ? mu + cs * sigma : NaN;
+  const down = hasCustom ? mu - cs * sigma : NaN;
+  const fmt = (v: number) => Number.isFinite(v) ? `${v > 0 ? "+" : ""}${v.toFixed(2)}%` : "—";
+  return (
+    <div className="mt-3 rounded-md border border-border p-2 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">σ → % move</div>
+        <span className="text-[10px] text-muted-foreground">
+          {basis === "full"
+            ? `full-history μ=${mu.toFixed(2)}%, σ=${sigma.toFixed(2)}% over ${totalDays} days`
+            : `rolling μ=${mu.toFixed(2)}%, σ=${sigma.toFixed(2)}% over last ${window}d`}
+        </span>
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-[11px] border-collapse">
+          <thead>
+            <tr className="text-left text-muted-foreground border-b border-border">
+              <th className="py-1 pr-3 font-medium">Threshold</th>
+              {ks.map(k => <th key={k} className="py-1 pr-3 font-medium tabular-nums">{k}σ</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-b border-border/50">
+              <td className="py-1 pr-3 text-chart-2 font-medium">Up (μ + k·σ)</td>
+              {ks.map(k => <td key={k} className="py-1 pr-3 tabular-nums text-chart-2 font-semibold" data-testid={`sigma-up-${k}`}>{fmt(mu + k * sigma)}</td>)}
+            </tr>
+            <tr>
+              <td className="py-1 pr-3 text-destructive font-medium">Down (μ − k·σ)</td>
+              {ks.map(k => <td key={k} className="py-1 pr-3 tabular-nums text-destructive font-semibold" data-testid={`sigma-down-${k}`}>{fmt(mu - k * sigma)}</td>)}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">Custom σ → %</div>
+        <Input value={customSigma} onChange={e => setCustomSigma(e.target.value)} placeholder="e.g. 2.5 or -1.8" className="h-7 text-xs w-32" data-testid="input-custom-sigma" />
+        {hasCustom ? (
+          <div className="flex items-center gap-3 text-[11px] tabular-nums">
+            <span>
+              <span className="text-muted-foreground">Up ({cs >= 0 ? "+" : ""}{cs}σ): </span>
+              <span className="text-chart-2 font-semibold" data-testid="sigma-custom-up">{fmt(up)}</span>
+            </span>
+            <span>
+              <span className="text-muted-foreground">Down ({cs >= 0 ? "-" : "+"}{Math.abs(cs)}σ): </span>
+              <span className="text-destructive font-semibold" data-testid="sigma-custom-down">{fmt(down)}</span>
+            </span>
+          </div>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">Enter a sigma multiple to see the corresponding ±% threshold.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MoveCard({ label, sub, pct, ctx, basis }: {
+  label: string; sub?: string; pct: number; ctx: SigmaInspect | null; basis: SigmaBasis;
+}) {
+  const cls = !Number.isFinite(pct) || pct === 0 ? "" : pct > 0 ? "text-chart-2" : "text-destructive";
+  return (
+    <div className="rounded-md border border-border p-2 space-y-1.5">
+      <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">{label}</div>
+      {sub && <div className="text-[10px] text-muted-foreground truncate">{sub}</div>}
+      <div className={`text-xl font-semibold tabular-nums ${cls}`}>{Number.isFinite(pct) ? `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%` : "—"}</div>
+      {ctx ? (
+        <SigmaContext ctx={ctx} basis={basis} />
+      ) : (
+        <div className="text-[10px] text-muted-foreground">Not enough history for sigma calc.</div>
+      )}
+    </div>
+  );
+}
+
+function SigmaContext({ ctx, compact = false, basis }: {
+  ctx: SigmaInspect; compact?: boolean; basis: SigmaBasis;
+}) {
+  const zLabel = `${ctx.z >= 0 ? "+" : ""}${ctx.z.toFixed(2)}σ`;
+  const pctile = (ctx.percentileAbs * 100).toFixed(1);
+  const freq = ctx.oneInNDays >= 252
+    ? `1 in ~${(ctx.oneInNDays / 252).toFixed(1)} years`
+    : ctx.oneInNDays >= 21
+    ? `1 in ~${(ctx.oneInNDays / 21).toFixed(1)} months`
+    : `1 in ~${Math.round(ctx.oneInNDays)} days`;
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1.5">
+        <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-semibold tabular-nums ${sigmaZClass(ctx.absZ)}`} data-testid="badge-sigma">{zLabel}</span>
+        <span className="text-[10px] text-muted-foreground">|z|={ctx.absZ.toFixed(2)}</span>
+      </div>
+      {!compact && (
+        <div className="text-[10px] text-muted-foreground">
+          {basis === "full" ? "Full-history" : "Rolling"} μ={ctx.mu.toFixed(2)}%, σ={ctx.sigma.toFixed(2)}%
+          {basis === "full" ? ` over ${ctx.totalDays} days` : ` over last ${ctx.window}d`}
+        </div>
+      )}
+      <div className="text-[10px] text-muted-foreground">
+        |move| percentile: <span className="font-semibold">{pctile}%</span> · {ctx.countAtLeastAbs} of {ctx.totalDays} days
+      </div>
+      <div className="text-[10px] text-muted-foreground">
+        Historical frequency: <span className="font-semibold">{freq}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Biggest moves today (cross mode) ─────────────────────────────────────────────
+function BiggestMoves({ tickers, sigmaWindow, sigmaBasis, dates }: {
+  tickers: Array<{ ticker: string; name: string }>; sigmaWindow: number; sigmaBasis: SigmaBasis; dates: string[];
+}) {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sortMode, setSortMode] = useState("absSigma");
+
+  const load = useCallback(async () => {
+    if (!tickers.length || !dates.length) return;
+    setLoading(true); setRows(null);
+    const window = Math.max(20, Math.floor(sigmaWindow || 60));
+    const out: any[] = [];
+    const batchSize = 8;
+    let i = 0;
+    async function worker() {
+      while (i < tickers.length) {
+        const idx = i++;
+        const t = tickers[idx];
+        try {
+          const raw = await getTickerRaw(t.ticker);
+          const close = extractColumn(raw, "close", dates.length);
+          const open = extractColumn(raw, "open", dates.length);
+          if (!close.length) continue;
+          let lastIdx = -1;
+          for (let k = close.length - 1; k >= 1; k--) {
+            if (close[k] != null && close[k - 1] != null && (close[k - 1] as number) > 0) { lastIdx = k; break; }
+          }
+          if (lastIdx < 1) continue;
+          const prevClose = close[lastIdx - 1] as number;
+          const pct = ((close[lastIdx] as number) / prevClose - 1) * 100;
+          const openVal = open[lastIdx];
+          const gap = openVal != null && Number.isFinite(openVal) && prevClose > 0 ? ((openVal as number) / prevClose - 1) * 100 : NaN;
+          const sigma = Number.isFinite(pct) ? computeSigmaInspect(close, lastIdx, pct, window, sigmaBasis) : null;
+          const gapSigma = Number.isFinite(gap) ? computeSigmaInspect(close, lastIdx, gap, window, sigmaBasis) : null;
+          out.push({ ticker: t.ticker, name: t.name, date: dates[lastIdx] ?? "", pct, gap, sigma, gapSigma });
+        } catch {}
+      }
+    }
+    await Promise.all(Array.from({ length: batchSize }, () => worker()));
+    setRows(out); setLoading(false);
+  }, [tickers, dates, sigmaWindow, sigmaBasis]);
+
+  const sorted = useMemo(() => {
+    if (!rows) return null;
+    const arr = rows.slice();
+    const key = (r: any) => sortMode === "absSigma" ? (r.sigma?.absZ ?? -Infinity)
+      : sortMode === "sigma" ? (r.sigma?.z ?? -Infinity)
+      : sortMode === "absPct" ? Math.abs(r.pct) : r.pct;
+    arr.sort((a, b) => key(b) - key(a));
+    return arr;
+  }, [rows, sortMode]);
+
+  const latestDate = sorted && sorted.length > 0 ? sorted[0].date : "";
+
+  return (
+    <Card>
+      <CardHeader className="pb-2 flex flex-row items-center justify-between flex-wrap gap-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Activity className="w-4 h-4 text-primary" /> Biggest moves today
+          <span className="text-[11px] font-normal text-muted-foreground">
+            Ranks {tickers.length} tickers by the sigma of their latest move (μ/σ basis: {sigmaBasis === "full" ? "full history" : `rolling ${sigmaWindow}d`})
+          </span>
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          {sorted && latestDate && <span className="text-[10px] text-muted-foreground">Latest close date: {latestDate}</span>}
+          <Select value={sortMode} onValueChange={v => setSortMode(v)}>
+            <SelectTrigger className="h-7 w-[130px]" data-testid="select-sort-mode"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="absSigma">|sigma| desc</SelectItem>
+              <SelectItem value="sigma">sigma desc</SelectItem>
+              <SelectItem value="absPct">|% move| desc</SelectItem>
+              <SelectItem value="pct">% move desc</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={load} disabled={loading} size="sm" className="h-7" data-testid="button-run-inspector">
+            {loading ? "Loading…" : "Load moves"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        {sorted ? (
+          sorted.length === 0 ? (
+            <div className="text-xs text-muted-foreground py-2">No tickers returned data.</div>
+          ) : (
+            <div className="max-h-[400px] overflow-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 bg-card z-10">
+                  <tr className="text-left text-muted-foreground border-b border-border">
+                    <th className="py-1.5 pr-3 font-medium">Ticker</th>
+                    <th className="py-1.5 pr-3 font-medium">Name</th>
+                    <th className="py-1.5 pr-3 font-medium">Date</th>
+                    <th className="py-1.5 pr-3 font-medium">Move %</th>
+                    <th className="py-1.5 pr-3 font-medium">Sigma</th>
+                    <th className="py-1.5 pr-3 font-medium">|Move| pctile</th>
+                    <th className="py-1.5 pr-3 font-medium">Freq</th>
+                    <th className="py-1.5 pr-3 font-medium">Gap %</th>
+                    <th className="py-1.5 pr-3 font-medium">Gap σ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map(r => {
+                    const pctCls = !Number.isFinite(r.pct) || r.pct === 0 ? "" : r.pct > 0 ? "text-chart-2" : "text-destructive";
+                    const gapCls = !Number.isFinite(r.gap) || r.gap === 0 ? "" : r.gap > 0 ? "text-chart-2" : "text-destructive";
+                    const pctile = r.sigma ? `${(r.sigma.percentileAbs * 100).toFixed(1)}%` : "—";
+                    const freq = r.sigma
+                      ? r.sigma.oneInNDays >= 252 ? `1/${(r.sigma.oneInNDays / 252).toFixed(1)}y`
+                      : r.sigma.oneInNDays >= 21 ? `1/${(r.sigma.oneInNDays / 21).toFixed(1)}mo`
+                      : `1/${Math.round(r.sigma.oneInNDays)}d`
+                      : "—";
+                    return (
+                      <tr key={r.ticker} className="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
+                        onClick={() => navigateToTicker(r.ticker)} data-testid={`row-move-${r.ticker}`}>
+                        <td className="py-1 pr-3 font-semibold">{r.ticker}</td>
+                        <td className="py-1 pr-3 text-muted-foreground truncate max-w-[200px]">{r.name}</td>
+                        <td className="py-1 pr-3 text-muted-foreground font-mono text-[10px]">{r.date}</td>
+                        <td className={`py-1 pr-3 font-semibold ${pctCls}`}>{Number.isFinite(r.pct) ? `${r.pct > 0 ? "+" : ""}${r.pct.toFixed(2)}%` : "—"}</td>
+                        <td className="py-1 pr-3">
+                          {r.sigma ? (
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-semibold tabular-nums ${sigmaZClass(r.sigma.absZ)}`}>
+                              {r.sigma.z >= 0 ? "+" : ""}{r.sigma.z.toFixed(2)}σ
+                            </span>
+                          ) : "—"}
+                        </td>
+                        <td className="py-1 pr-3 text-muted-foreground">{pctile}</td>
+                        <td className="py-1 pr-3 text-muted-foreground">{freq}</td>
+                        <td className={`py-1 pr-3 ${gapCls}`}>{Number.isFinite(r.gap) ? `${r.gap > 0 ? "+" : ""}${r.gap.toFixed(2)}%` : "—"}</td>
+                        <td className="py-1 pr-3">
+                          {r.gapSigma ? (
+                            <span className={`inline-flex items-center px-1 py-0.5 rounded border text-[10px] font-semibold tabular-nums ${sigmaZClass(r.gapSigma.absZ)}`}>
+                              {r.gapSigma.z >= 0 ? "+" : ""}{r.gapSigma.z.toFixed(2)}σ
+                            </span>
+                          ) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : (
+          <div className="text-xs text-muted-foreground py-2">
+            Click <span className="font-semibold">Load moves</span> to compute the latest daily move and sigma across {tickers.length} tickers.
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
