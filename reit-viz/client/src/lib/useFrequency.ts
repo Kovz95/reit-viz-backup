@@ -18,9 +18,9 @@ export interface UseFrequencyResult {
 }
 
 const FREQ_OPTIONS: Array<{ value: Frequency; label: string }> = [
-  { value: "daily",   label: "D" },
-  { value: "weekly",  label: "W" },
-  { value: "monthly", label: "M" },
+  { value: "daily",            label: "D" },
+  { value: "weekly",           label: "W" },
+  { value: "weekly_on_daily",  label: "W/D" },
 ];
 
 /**
@@ -54,6 +54,7 @@ export function useFrequency(
               {
                 key: opt.value,
                 disabled,
+                "data-testid": `${namespace}-freq-${opt.value}`,
                 onClick: () => setFrequency(opt.value),
                 className: [
                   "text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors",

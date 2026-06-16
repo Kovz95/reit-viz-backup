@@ -1536,6 +1536,62 @@ export default function ChartArea({
           </Button>
         )}
 
+        {/* Clear seeded S/R levels & trendlines for the active ticker */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-[11px] text-muted-foreground hover:text-foreground px-2"
+          onClick={() => {
+            const tkr = (activeTicker || "").toUpperCase();
+            if (tkr) {
+              try {
+                for (const key of [
+                  "reit-viz-srlevel-seeds-v1",
+                  "reit-viz-srlevel-persistent-v1",
+                  "reit-viz-trendline-seeds-v1",
+                  "reit-viz-trendline-persistent-v1",
+                ]) {
+                  const raw = localStorage.getItem(key);
+                  if (!raw) continue;
+                  const parsed = JSON.parse(raw);
+                  if (parsed && parsed[tkr]) {
+                    delete parsed[tkr];
+                    localStorage.setItem(key, JSON.stringify(parsed));
+                  }
+                }
+                paneRefs.current.forEach(r => r?.clearDrawings?.());
+                setDrawingCount(0);
+                const toast = document.createElement("div");
+                toast.textContent = `Cleared seeded levels & trendlines for ${tkr}`;
+                toast.className =
+                  "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-cyan-500/20 text-cyan-300 text-xs font-mono border border-cyan-500/40 shadow-lg";
+                document.body.appendChild(toast);
+                setTimeout(() => { toast.remove(); }, 2500);
+              } catch {}
+            }
+          }}
+          title={`Clear seeded S/R levels and trendlines for ${activeTicker ?? "current ticker"}`}
+          data-testid="clear-seeded-overlays"
+        >
+          <Trash2 className="w-3 h-3 mr-1" />
+          Clear Seeds
+        </Button>
+
+        {/* Auto-size: reset all pane sizes (fit content) to defaults */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[10px] font-mono font-semibold"
+          onClick={() => {
+            paneRefs.current.forEach(r => r?.fitContent?.());
+          }}
+          title="Reset all pane sizes (grid panes + sub-indicators) to defaults"
+          data-testid="autosize-all"
+        >
+          <Maximize2 className="w-3 h-3 mr-1" />
+          Auto-size
+        </Button>
+
         <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setIsMaximized(!isMaximized)} data-testid="maximize">
           {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
         </Button>
