@@ -663,6 +663,38 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Cross-page "go to symbol" navigation:
+  //  - listen for the "reit-viz:goto-symbol" CustomEvent (detail.symbol)
+  //  - drain a localStorage pending-symbol on mount (set before this page loaded)
+  // Routes through the existing pending-ticker + loadViewForTicker flow so the
+  // active view is actually loaded (the pending-ref effects below handle the
+  // case where the ticker list has not loaded yet).
+  useEffect(() => {
+    const gotoSymbol = (sym: string) => {
+      const t = sym.trim().toUpperCase();
+      if (!t) return;
+      if (tickerList.length > 0 && tickerList.some((tk) => tk.ticker === t)) {
+        pendingTickerRef.current = null;
+        loadViewForTicker(t);
+      } else {
+        pendingTickerRef.current = t;
+      }
+    };
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      gotoSymbol(((detail.symbol || "") as string).toString());
+    };
+    window.addEventListener("reit-viz:goto-symbol", handler);
+    try {
+      const stored = localStorage.getItem("reit-viz.dashboard.pending-symbol");
+      if (stored) {
+        localStorage.removeItem("reit-viz.dashboard.pending-symbol");
+        gotoSymbol(stored);
+      }
+    } catch {}
+    return () => window.removeEventListener("reit-viz:goto-symbol", handler);
+  }, [tickerList, loadViewForTicker]);
+
   // Auto-load first ticker (or URL-specified ticker) with default view
   useEffect(() => {
     if (tickerList.length > 0 && !activeTicker && !isLoadingView) {
