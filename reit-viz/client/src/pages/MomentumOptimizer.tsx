@@ -33,7 +33,7 @@ import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { weeklyDownsample, expandWeeklyToDaily } from "@/lib/weeklyDownsample";
 import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
 import { fetchWorkbookSeriesForTicker } from "@/lib/fetchWorkbookSeriesForTicker";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
@@ -609,8 +609,11 @@ export default function MomentumOptimizer() {
             const weeklyHorizon = Math.max(1, Math.round(horizonCfg.days / 5));
             const weeklyMom = computeMomentumReturn(weeklyAgg.prices, weeklyHorizon);
             // Expand back to daily using weekIndex
-            momSeries = weeklyMom.map(v => v === null ? NaN : v) as any;
-            momSeries = closes.map(() => null); // placeholder
+            momSeries = (expandWeeklyToDaily as any)(
+              weeklyMom.map(v => v === null ? NaN : v),
+              weeklyAgg.weekIndex,
+              closes.length
+            ).map((v: number) => Number.isNaN(v) ? null : v);
           } else {
             momSeries = computeMomentumReturn(effectivePrices, horizonDays);
           }
@@ -642,7 +645,7 @@ export default function MomentumOptimizer() {
               const pctile = computePercentileRank(momSeries, i, pctileWindow);
               if (pctile === null) continue;
 
-              const dailyIdx = isWeeklyOnDaily ? i : (resampledData.dailyIndexMap?.[i] ?? i);
+              const dailyIdx = isWeeklyOnDaily ? i : resampledData.dailyIndexMap?.[i];
               let revTrend: "positive" | "negative" | "neutral" = "neutral";
               if (revMom && dailyIdx !== undefined && revMom[dailyIdx] !== null) {
                 if (revMom[dailyIdx]! > revThreshold) revTrend = "positive";
@@ -667,7 +670,7 @@ export default function MomentumOptimizer() {
                   const dir = isBuy ? "buy" : "sell";
                   const bandOpts = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
                   const entryIdx = fKey === "weekly" && !isWeeklyOnDaily
-                    ? (getDailyIndexFromWeekly as any)(i, resampledData, { closes })
+                    ? (getDailyIndexFromWeekly as any)(i, resampledData)
                     : i;
                   if (entryIdx < 0) { prevCategory = category; continue; }
                   catAccumulator[category].push(
@@ -723,12 +726,25 @@ export default function MomentumOptimizer() {
           const hDays = bestConfig.config.lookback;
           const hDaysEff = fKey === "weekly" ? Math.max(1, Math.round(hDays / 5)) : hDays;
           const isWeeklyOnDailyNow = actualFreq === "weekly_on_daily";
-          const momNow = computeMomentumReturn(effectivePrices, hDaysEff);
+          let momNow: (number | null)[];
+          if (isWeeklyOnDailyNow && weeklyAgg) {
+            const weeklyHorizonNow = Math.max(1, Math.round(hDays / 5));
+            const weeklyMomNow = computeMomentumReturn(weeklyAgg.prices, weeklyHorizonNow);
+            momNow = (expandWeeklyToDaily as any)(
+              weeklyMomNow.map(v => v === null ? NaN : v),
+              weeklyAgg.weekIndex,
+              closes.length
+            ).map((v: number) => Number.isNaN(v) ? null : v);
+          } else {
+            momNow = computeMomentumReturn(effectivePrices, hDaysEff);
+          }
           const pctileWindow2 = fKey === "weekly" || isWeeklyOnDailyNow ? 52 : 252;
-          const lastIdx = isWeeklyOnDailyNow ? closes.length - 1 : effectivePrices.length - 1;
-          const lastPctile = computePercentileRank(momNow, lastIdx, pctileWindow2);
+          const lastPctile = computePercentileRank(momNow, momNow.length - 1, pctileWindow2);
           const revNow = hasRevisions ? computeRevisionMomentum(revValues, bestConfig.config.revisionLookback) : null;
-          const lastRevVal = revNow && lastIdx >= 0 ? revNow[lastIdx] : null;
+          const revIdx = isWeeklyOnDailyNow
+            ? closes.length - 1
+            : (resampledData.dailyIndexMap?.[resampledData.dailyIndexMap.length - 1]);
+          const lastRevVal = revNow && revIdx !== undefined ? revNow[revIdx] : null;
 
           if (lastPctile !== null) {
             const isTopQ = lastPctile >= 1 - momThreshold;

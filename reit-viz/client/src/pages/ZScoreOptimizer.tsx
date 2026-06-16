@@ -98,8 +98,8 @@ function computeRollingZScores(
 ): (number | null)[] {
   const result: (number | null)[] = new Array(values.length).fill(null);
   for (let i = 1; i < values.length; i++) {
-    const start = Math.max(0, i - window + 1);
-    const slice = values.slice(start, i + 1);
+    const start = Math.max(0, i - window);
+    const slice = values.slice(start, i);
     const n = slice.length;
     if (n < 2) continue;
     let sum = 0;

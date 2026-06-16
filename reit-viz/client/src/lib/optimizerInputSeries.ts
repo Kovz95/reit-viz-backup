@@ -145,6 +145,14 @@ export function resampleWeekly(
   return { dates, closes, adjCloses, highs, lows, opens, volumes, dailyIndexMap: dates.map((_, i) => i) };
 }
 
+// Some optimizer pages access the weekly_on_daily expander as a property of
+// resampleWeekly (e.g. RSIRegimeOptimizer's `resampleWeekly.expandWeeklyToDaily`).
+{
+  const { expandWeeklyToDaily, weeklyDownsamplePrices } = require("@/lib/weeklyDownsample");
+  (resampleWeekly as any).expandWeeklyToDaily = expandWeeklyToDaily;
+  (resampleWeekly as any).aggregate = weeklyDownsamplePrices;
+}
+
 /**
  * Creates a date range object.
  * With no args returns a default (all-time) range.

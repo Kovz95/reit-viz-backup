@@ -145,8 +145,67 @@ export function mapWeeklyIndexToDaily(
   return weeklyResult.dailyIndexMap[weeklyIdx] ?? weeklyIdx;
 }
 
-/** Stub: downsamples a prices array to weekly. */
-export function weeklyDownsamplePrices(...args: any[]): any { return null; }
+// ── weekly_on_daily helpers (recovered verbatim from weeklyDownsample-BzVm8wGH.js) ──
 
-/** Stub: expands weekly data back to daily. */
-export function expandWeeklyToDaily(...args: any[]): any { return null; }
+/** ISO week key like "2024-W05" for grouping daily bars into weeks (bundle `u`). */
+function isoWeekKey(dateStr: string): string {
+  const a = new Date(dateStr + "T00:00:00Z");
+  if (isNaN(a.getTime())) return dateStr;
+  const t = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const r = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const e = Math.ceil(((t.getTime() - r.getTime()) / 864e5 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(e).padStart(2, "0")}`;
+}
+
+/**
+ * weekly_on_daily aggregate (bundle export `d`/`T`): collapse a daily price series into
+ * one value per ISO week (the last bar of each week), returning the weekly prices and,
+ * for each weekly bar, the DAILY index of that week's last bar.
+ */
+export function weeklyDownsamplePrices(
+  prices: number[],
+  dates: string[]
+): { prices: number[]; weekIndex: number[] } {
+  const outPrices: number[] = [];
+  const weekIndex: number[] = [];
+  let curWeek = "";
+  let lastPrice = NaN;
+  let lastIdx = -1;
+  for (let o = 0; o < prices.length; o++) {
+    const wk = isoWeekKey(dates[o]);
+    if (wk !== curWeek) {
+      if (lastIdx >= 0) { outPrices.push(lastPrice); weekIndex.push(lastIdx); }
+      curWeek = wk;
+    }
+    lastPrice = prices[o];
+    lastIdx = o;
+  }
+  if (lastIdx >= 0) { outPrices.push(lastPrice); weekIndex.push(lastIdx); }
+  return { prices: outPrices, weekIndex };
+}
+
+/**
+ * Expand weekly values back to a daily-length array (bundle export `e`/`g`): forward-fill,
+ * so each daily bar carries the value of the most recent completed week.
+ * `weekIndex` is the per-week daily end-index array from weeklyDownsamplePrices.
+ */
+export function expandWeeklyToDaily(
+  values: number[],
+  weekIndex: number[],
+  dailyLength: number
+): number[] {
+  const out = new Array(dailyLength).fill(NaN);
+  if (values.length === 0) return out;
+  let e = -1;
+  for (let i = 0; i < dailyLength; i++) {
+    while (e + 1 < weekIndex.length && weekIndex[e + 1] <= i) e++;
+    if (e >= 0 && Number.isFinite(values[e])) out[i] = values[e];
+  }
+  return out;
+}
+
+// Some pages call these as properties of the weeklyDownsample function
+// (e.g. `(weeklyDownsample as any).aggregate`, `resampleWeekly.expandWeeklyToDaily`).
+(weeklyDownsample as any).aggregate = weeklyDownsamplePrices;
+(weeklyDownsample as any).expandWeeklyToDaily = expandWeeklyToDaily;
