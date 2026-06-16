@@ -33,6 +33,7 @@ import {
   Calculator,
   ChevronsUpDown,
   Check,
+  ChevronsDownUp,
   Globe,
   Upload,
   FileSpreadsheet,
@@ -125,6 +126,7 @@ function groupByClassification(tickers: TickerMeta[], field: ClassificationKey) 
 
 const METRIC_CATEGORIES: Record<string, string[]> = {
   Price: ["close", "open", "high", "low"],
+  Volume: ["Volume"],
   Valuation: [
     "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
     "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
@@ -144,6 +146,7 @@ const METRIC_CATEGORIES: Record<string, string[]> = {
     "FY1 EPS Growth", "FY2 EPS Growth",
     "FY1 FFO Growth", "FY2 FFO Growth",
     "FY1 AFFO Growth", "FY2 AFFO Growth",
+    "FY2 EBITDA Growth",
   ],
   Performance: [
     "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
@@ -151,6 +154,10 @@ const METRIC_CATEGORIES: Record<string, string[]> = {
   ],
   "Short Interest": [
     "Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
+  ],
+  Volatility: [
+    "HV 30D", "HV 60D", "HV 90D", "HV 180D",
+    "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
   ],
   Other: [
     "Enterprise Value", "52wk High", "52wk Low", "Dividend",
@@ -612,15 +619,45 @@ export default function Sidebar({
           <BarChart3 className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold tracking-tight">REIT Viz</span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="h-7 w-7 p-0"
-          data-testid="close-sidebar"
-        >
-          <PanelLeftClose className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              const all = [
+                "charttype", "tickers", "series", "fundamental",
+                "layout", "macro", "baskets", "compare", "pairs", "formula",
+              ];
+              setOpenSections(prev =>
+                all.every(s => prev.has(s)) ? new Set() : new Set(all)
+              );
+            }}
+            className="h-7 w-7 p-0"
+            data-testid="toggle-all-sections"
+            title={
+              ["charttype", "tickers", "series", "fundamental", "layout",
+               "macro", "baskets", "compare", "pairs", "formula"]
+                .every(s => openSections.has(s))
+                ? "Collapse all sections"
+                : "Expand all sections"
+            }
+          >
+            {["charttype", "tickers", "series", "fundamental", "layout",
+              "macro", "baskets", "compare", "pairs", "formula"]
+              .every(s => openSections.has(s))
+              ? <ChevronsDownUp className="w-4 h-4" />
+              : <ChevronsUpDown className="w-4 h-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-7 w-7 p-0"
+            data-testid="close-sidebar"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
@@ -1490,6 +1527,54 @@ export default function Sidebar({
               }}
               onAddFormulaSeries={onAddFormulaSeries}
             />
+          )}
+
+          {/* Baskets */}
+          <SectionHeader
+            title="Baskets"
+            icon={<Layers className="w-3.5 h-3.5" />}
+            section="baskets"
+            isOpen={openSections.has("baskets")}
+            onToggle={() => toggleSection("baskets")}
+          />
+          {openSections.has("baskets") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Saved baskets appear here.
+              </div>
+            </div>
+          )}
+
+          {/* Compare */}
+          <SectionHeader
+            title="Compare"
+            icon={<BarChart3 className="w-3.5 h-3.5" />}
+            section="compare"
+            isOpen={openSections.has("compare")}
+            onToggle={() => toggleSection("compare")}
+          />
+          {openSections.has("compare") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Compare tickers across metrics.
+              </div>
+            </div>
+          )}
+
+          {/* Pairs */}
+          <SectionHeader
+            title="Pairs"
+            icon={<TrendingUp className="w-3.5 h-3.5" />}
+            section="pairs"
+            isOpen={openSections.has("pairs")}
+            onToggle={() => toggleSection("pairs")}
+          />
+          {openSections.has("pairs") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Pair-trade presets and ratios.
+              </div>
+            </div>
           )}
 
           {/* Pairs & Formula / Series Builder */}

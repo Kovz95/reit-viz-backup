@@ -2,6 +2,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
+import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -270,6 +272,15 @@ export default function PatternScreener() {
   const classFilterHook = useOptimizerClassFilter(allTickers as any[], scope === "universe", "ps-clf");
   const pairComboHook = usePairComboPicker(allTickers.map((t: { ticker: string }) => t.ticker), scope === "pairCombo", "ps-pc");
 
+  // Classification-filter + manual-ticker state for the universe scope
+  const [clfFilters, setClfFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [clfSearch, setClfSearch] = useState("");
+  const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
+  const universeFilteredTickers = useMemo(
+    () => applyClassFilters(allTickers as any[], clfFilters, clfSearch, clfManualTickers),
+    [allTickers, clfFilters, clfSearch, clfManualTickers]
+  );
+
   const [rows, setRows] = useState<ScreenerRow[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -317,8 +328,8 @@ export default function PatternScreener() {
     }
     if (scope === "universe") {
       const tickers =
-        classFilterHook.filteredTickers.length > 0
-          ? classFilterHook.filteredTickers
+        universeFilteredTickers.length > 0
+          ? universeFilteredTickers
           : allTickers;
       return tickers.map((t: { ticker: string }) => ({
         key: t.ticker,
@@ -380,7 +391,7 @@ export default function PatternScreener() {
       ];
     }
     return [];
-  }, [scope, singleTicker, classFilterHook.filteredTickers, allTickers, pairTickerA, pairTickerB, pairComboHook.pairs, baskets, selectedBasketId]);
+  }, [scope, singleTicker, universeFilteredTickers, allTickers, pairTickerA, pairTickerB, pairComboHook.pairs, baskets, selectedBasketId]);
 
   const handleRun = useCallback(async () => {
     if (workItems.length === 0) {
@@ -652,10 +663,20 @@ export default function PatternScreener() {
             {scope === "universe" && (
               <div className="space-y-2">
                 <Label className="text-xs">Universe filter</Label>
-                {classFilterHook.universeSourceUI}
-                {classFilterHook.classFilterUI}
+                <ClassificationFiltersWithSource
+                  workbookTickers={allTickers}
+                  filters={clfFilters}
+                  onFiltersChange={setClfFilters}
+                  search={clfSearch}
+                  onSearchChange={setClfSearch}
+                  manualTickers={clfManualTickers}
+                  onManualTickersChange={setClfManualTickers}
+                  filteredCount={universeFilteredTickers.length}
+                  totalCount={allTickers.length}
+                  testIdPrefix="ps-clf"
+                />
                 <div className="text-[11px] text-muted-foreground">
-                  {classFilterHook.filteredTickers.length} tickers selected
+                  {universeFilteredTickers.length} tickers selected
                 </div>
               </div>
             )}

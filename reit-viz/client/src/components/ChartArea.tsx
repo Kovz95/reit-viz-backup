@@ -34,6 +34,10 @@ import {
   FilePlus,
   Pencil,
   ArrowLeft,
+  Eye,
+  Sparkles,
+  StickyNote,
+  Layers3,
 } from "lucide-react";
 import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
@@ -368,6 +372,14 @@ export default function ChartArea({
   const [showQuarterShading, setShowQuarterShading] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
   const [showExDiv, setShowExDiv] = useState(false);
+  // ── Chart-feature toggles (local UI state; deeper wiring tracked in needsMore) ──
+  const [showHoverReadout, setShowHoverReadout] = useState(false);
+  const [showSignalAnalyzer, setShowSignalAnalyzer] = useState(false);
+  const [showQuickAnalyze, setShowQuickAnalyze] = useState(false);
+  const [showSimilarSetups, setShowSimilarSetups] = useState(false);
+  const [showPDRatio, setShowPDRatio] = useState(false);
+  const [showPremCorr, setShowPremCorr] = useState(false);
+  const [showAnnotations, setShowAnnotations] = useState(false);
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
   const [exDivDates, setExDivDates] = useState<string[]>([]);
   // Macro event vertical line toggles
@@ -735,6 +747,7 @@ export default function ChartArea({
           </Button>
         )}
         {/* Carousel nav: arrows + searchable dropdown */}
+        <div className="flex items-center gap-0" data-testid="single-ticker-cluster">
         <Button
           variant="ghost" size="sm" className="h-7 w-7 p-0"
           onClick={() => onNavigateTicker("prev")}
@@ -808,6 +821,7 @@ export default function ChartArea({
         >
           <ChevronRight className="w-4 h-4" />
         </Button>
+        </div>
 
         {/* Basket selector — plot a saved basket as a chart series */}
         <BasketTickerPill
@@ -1357,6 +1371,18 @@ export default function ChartArea({
           </>
         )}
 
+        {/* Hover readout toggle */}
+        <Button
+          variant={showHoverReadout ? "default" : "ghost"}
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={() => setShowHoverReadout(!showHoverReadout)}
+          data-testid="toggle-hover-readout"
+          title="Toggle hover values above plots"
+        >
+          <Eye className="w-3.5 h-3.5" />
+        </Button>
+
         {/* Quarter shading toggle */}
         <Button
           variant={showQuarterShading ? "default" : "ghost"}
@@ -1457,6 +1483,18 @@ export default function ChartArea({
           </PopoverContent>
         </Popover>
 
+        {/* Annotations / notes toggle */}
+        <Button
+          variant={showAnnotations ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-1.5 text-[10px] gap-0.5"
+          onClick={() => setShowAnnotations(!showAnnotations)}
+          data-testid="annotations-toggle"
+          title="Chart annotations / notes"
+        >
+          <StickyNote className="w-3 h-3" />
+        </Button>
+
         {/* Indicators */}
         <Button
           variant={showIndicators ? "default" : "ghost"}
@@ -1488,6 +1526,17 @@ export default function ChartArea({
           data-testid="toggle-pairs"
         >
           Pairs
+        </Button>
+
+        {/* Quick Analyze */}
+        <Button
+          variant={showQuickAnalyze ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => { setShowQuickAnalyze(!showQuickAnalyze); setShowIndicators(false); setShowCorrelation(false); }}
+          data-testid="toggle-quick-analyze"
+        >
+          Quick Analyze
         </Button>
 
         {/* Draw tools */}
@@ -1576,6 +1625,58 @@ export default function ChartArea({
           <Trash2 className="w-3 h-3 mr-1" />
           Clear Seeds
         </Button>
+
+        {/* Seeded overlays manager (S/R levels & auto-trendlines) */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-[11px] text-muted-foreground hover:text-foreground px-2"
+          title={`Manage seeded overlays for ${activeTicker ?? "current ticker"}`}
+          data-testid="seeded-overlays-manager"
+        >
+          <Layers3 className="w-3 h-3 mr-1" />
+          Seeds
+        </Button>
+
+        {/* Predictive-signal analyzer toggle */}
+        <Button
+          variant={showSignalAnalyzer ? "default" : "ghost"}
+          size="sm"
+          className="h-7 px-2 text-[10px] font-semibold"
+          onClick={() => setShowSignalAnalyzer(v => !v)}
+          disabled={!activeTicker}
+          title={activeTicker ? `Show predictive-signal analyzer for ${activeTicker}` : "Select a ticker first"}
+          data-testid="toggle-signal-analyzer"
+        >
+          <Sparkles className="w-3 h-3 mr-1" />
+          Signals
+        </Button>
+
+        {/* Quant subplot toggles: PD Ratio, Prem↔Growth Corr, Similar Setups */}
+        <button
+          onClick={() => setShowPDRatio(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPDRatio ? "border-violet-500 bg-violet-500/15 text-violet-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-pd-ratio"
+          title="Show/hide PD Ratio subplot"
+        >
+          PD Ratio
+        </button>
+        <button
+          onClick={() => setShowPremCorr(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPremCorr ? "border-teal-500 bg-teal-500/15 text-teal-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-prem-corr"
+          title="Show/hide Prem↔Growth Corr subplot"
+        >
+          Prem↔Growth Corr
+        </button>
+        <button
+          onClick={() => setShowSimilarSetups(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showSimilarSetups ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-similar-setups"
+          title="Show/hide Similar Setups panel"
+        >
+          Similar Setups
+        </button>
 
         {/* Auto-size: reset all pane sizes (fit content) to defaults */}
         <Button

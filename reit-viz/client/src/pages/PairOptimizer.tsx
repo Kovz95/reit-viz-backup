@@ -20,6 +20,8 @@ import { Download } from "lucide-react";
 import { hitRateClass, formatPct, pfClass, pfTextColor, scoreTextColor, scoreBackgroundColor } from "@/lib/formattingHelpers";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { useFrequency, isValidFrequency } from "@/lib/useFrequency";
+import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -182,7 +184,17 @@ export default function PairOptimizer() {
     [allTickers, universeTickers]
   );
   const classFilter = useOptimizerClassFilter(filteredTickers, mode === "scan", "pair-opt-clf");
-  const effectiveTickers = mode === "scan" ? classFilter.filteredTickers : filteredTickers;
+
+  // Classification-filter + manual-ticker state for scan mode
+  const [clfFilters, setClfFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [clfSearch, setClfSearch] = useState("");
+  const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
+  const scanFilteredTickers = useMemo(
+    () => applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers),
+    [filteredTickers, clfFilters, clfSearch, clfManualTickers]
+  );
+
+  const effectiveTickers = mode === "scan" ? scanFilteredTickers : filteredTickers;
   const [availableMetrics, setAvailableMetrics] = useState<string[]>(DEFAULT_METRICS);
 
   useEffect(() => {
@@ -560,17 +572,22 @@ export default function PairOptimizer() {
             </div>
           </div>
 
-          {/* Universe source (scan mode) */}
-          {mode === "scan" && classFilter.universeSourceUI && (
-            <div className="flex flex-col gap-0.5">
-              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Universe Source</label>
-              {classFilter.universeSourceUI}
-            </div>
-          )}
-          {mode === "scan" && classFilter.classFilterUI && (
+          {/* Universe source + classification filter (scan mode) */}
+          {mode === "scan" && (
             <div className="flex flex-col gap-0.5 w-full mt-1">
               <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Classification Filter</label>
-              {classFilter.classFilterUI}
+              <ClassificationFiltersWithSource
+                workbookTickers={filteredTickers}
+                filters={clfFilters}
+                onFiltersChange={setClfFilters}
+                search={clfSearch}
+                onSearchChange={setClfSearch}
+                manualTickers={clfManualTickers}
+                onManualTickersChange={setClfManualTickers}
+                filteredCount={scanFilteredTickers.length}
+                totalCount={filteredTickers.length}
+                testIdPrefix="pair-opt-clf"
+              />
             </div>
           )}
 

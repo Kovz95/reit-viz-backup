@@ -1848,6 +1848,10 @@ export default function Pairs() {
   const [betaLookback, setBetaLookback] = useState(52);
   const [spreadZWindow, setSpreadZWindow] = useState(8);
   const [olsResidWindow, setOlsResidWindow] = useState(52);
+  // Bands mode (static vs expanding) for mean/std bands rendering
+  const [bandsMode, setBandsMode] = useState<"static" | "expanding">("static");
+  // EG-spread β mode (rolling/OOS-clean vs full-sample in-sample) for Beta-Adjusted Spread chart
+  const [egBetaMode, setEgBetaMode] = useState<"rolling" | "insample">("rolling");
 
   const [search, setSearch] = useState("");
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
@@ -2352,6 +2356,56 @@ export default function Pairs() {
             className="h-6 w-[52px] text-[10px] font-mono px-1.5 text-center"
             data-testid="pairs-z-custom"
           />
+        </div>
+
+        <div className="h-5 w-px bg-border mx-1" />
+
+        <span className="text-xs font-semibold text-muted-foreground">Bands</span>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant={bandsMode === "static" ? "default" : "ghost"}
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={() => setBandsMode("static")}
+            data-testid="pairs-bands-static"
+          >
+            Static
+          </Button>
+          <Button
+            variant={bandsMode === "expanding" ? "default" : "ghost"}
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={() => setBandsMode("expanding")}
+            data-testid="pairs-bands-expanding"
+          >
+            Expanding
+          </Button>
+        </div>
+
+        <div className="h-5 w-px bg-border mx-1" />
+
+        <span className="text-xs font-semibold text-muted-foreground" title="Beta-Adjusted Spread chart β mode">EG-Spread β</span>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant={egBetaMode === "rolling" ? "default" : "ghost"}
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={() => setEgBetaMode("rolling")}
+            data-testid="pairs-eg-rolling"
+            title="Rolling-window β (OOS-clean): β estimated using only past data at each bar. Eliminates look-ahead bias in the visualized spread."
+          >
+            Rolling
+          </Button>
+          <Button
+            variant={egBetaMode === "insample" ? "default" : "ghost"}
+            size="sm"
+            className="h-6 px-2 text-[10px]"
+            onClick={() => setEgBetaMode("insample")}
+            data-testid="pairs-eg-insample"
+            title="Full-sample β (in-sample): matches the ADF cointegration test exactly, but the chart shows residuals computed from β that uses future data."
+          >
+            In-sample
+          </Button>
         </div>
 
         <div className="h-5 w-px bg-border mx-1" />
