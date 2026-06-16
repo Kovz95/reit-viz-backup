@@ -28,15 +28,19 @@ Fixed 4 ErrorBoundary crashes + 1 server 500, all verified against the bundle:
 - levels (restored real `D`/`d`/`S` exports in SupportResistance.tsx; `isBasketTicker` guard)
 - ranking (`ranking_templates` missing columns + migration)
 
-## The gap (as of this plan)
-- **MANIFEST: 19 entries still `RAW`** — but several are already reconstructed. Reconcile first.
-- **29 chunks exist only in `recovered-bundle-min/` (no beautified version).** ~12 are trivial
-  lucide/shadcn primitives already present (`badge card tabs calendar arrow-up-down external-link
-  minus pin play square trending-down undo-2`). The ~17 real logic libs to confirm/reconstruct:
-  `basketOhlc driverScan globalUniverse harsi oscillatorMath pairSignalAnalyzer rocSignalDetect
-  similarSetupsAlgorithms tva universeDefaults universeSignature useFrequency useOptimizerClassFilter
-  usePairComboPicker weeklyDownsample workerPool yahooPairsRatio` — most are likely already in
-  `reit-viz/client/src/lib/`; only reconstruct the genuinely missing ones.
+## The gap (RECONCILED — structural gap is ZERO)
+Reconciliation done: all **89 bundle chunks** cross-checked against `reit-viz/client/src/**`.
+**80/89 map directly to a source file; the other 9 are false positives** (4 lucide icons that are
+npm imports: `external-link minus pin undo-2`; `index` = `App.tsx`/`main.tsx`; and 4 hash-stripping
+artifacts that DO exist: `PatternScreener PremiumDiscountScreener similarSetupsAlgorithms yahooPairsRatio`).
+
+**Conclusion: the reconstruction is structurally complete — no missing pages/components/libs.**
+The MANIFEST's "19 RAW / 29 min-only" labels are stale; those files all exist.
+
+Therefore the remaining work is **NOT** reconstructing missing files. It is **behavioral fidelity
+auditing** of existing files vs their bundle chunks — catching subtle wrong/incomplete logic, the
+same class as this session's 5 fixes (scatter params, momentum preset, levels stubs, ranking columns).
+This can be done **incrementally by page importance**, not all-or-nothing.
 
 ## Method (per work item)
 1. **Reconcile** MANIFEST vs actual `reit-viz/client/src/**` — mark already-present files, list true gaps.
