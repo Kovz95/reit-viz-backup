@@ -473,19 +473,38 @@ export const RANK_BY_OPTIONS = [
   { value: "profitFactor", label: "Profit Factor" },
 ] as const;
 
+// Matches the production bundle's optimizer date-preset set (value drives the
+// `${ns}-date-preset-${value}` test ids the optimizer pages render).
 export const DATE_PRESETS = [
-  { label: "1Y", days: 252 },
-  { label: "2Y", days: 504 },
-  { label: "3Y", days: 756 },
-  { label: "5Y", days: 1260 },
-  { label: "All", days: 0 },
+  { value: "1y",  label: "1Y",  days: 252 },
+  { value: "3y",  label: "3Y",  days: 756 },
+  { value: "5y",  label: "5Y",  days: 1260 },
+  { value: "10y", label: "10Y", days: 2520 },
+  { value: "20y", label: "20Y", days: 5040 },
+  { value: "all", label: "All", days: 0 },
+  { value: "ytd", label: "YTD", days: -1 },
 ] as const;
 
-export function createDateRangeFromPreset(preset?: { days: number } | null): { start: string | null; end: string | null } {
-  if (!preset || !preset.days) return { start: null, end: null };
+const PRESET_DAYS: Record<string, number> = {
+  "1y": 252, "3y": 756, "5y": 1260, "10y": 2520, "20y": 5040, "all": 0, "ytd": -1,
+};
+
+export function createDateRangeFromPreset(
+  preset?: { days: number } | string | null
+): { start: string | null; end: string | null } {
+  // Accept either a preset value string ("10y", "ytd", …) or a { days } object.
+  let days: number | undefined;
+  if (typeof preset === "string") days = PRESET_DAYS[preset];
+  else if (preset && typeof preset === "object") days = preset.days;
+  if (days === undefined || days === 0) return { start: null, end: null };
   const end = new Date();
-  const start = new Date();
-  start.setDate(end.getDate() - preset.days);
+  let start = new Date();
+  if (days === -1) {
+    // YTD — Jan 1 of the current year.
+    start = new Date(end.getFullYear(), 0, 1);
+  } else {
+    start.setDate(end.getDate() - days);
+  }
   return {
     start: start.toISOString().slice(0, 10),
     end: end.toISOString().slice(0, 10),
