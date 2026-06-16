@@ -1,0 +1,8 @@
+node_modules
+dist
+.cache
+*.log
+.git
+.env
+.env.local
+data/yahoo-cache

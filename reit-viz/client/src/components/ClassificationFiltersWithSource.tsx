@@ -58,7 +58,7 @@ export function ClassificationFiltersWithSource({
     if (effectiveSource === "global") return loading || error ? [] : metas;
   }, [effectiveSource, loading, error, metas]);
 
-  const workbookCount = workbookTickers.length;
+  const workbookCount = workbookTickers?.length ?? 0;
 
   return (
     <div className="flex flex-col gap-2 w-full">

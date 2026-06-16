@@ -1130,7 +1130,8 @@ export default function SupportResistance() {
   );
 }
 
-// Stubs for minified re-exports expected by LevelsAndTrendlines page
-export function D(...args: any[]): any { return null; }
-export function d(...args: any[]): any { return null; }
-export const S: any = null;
+// Minified re-exports expected by LevelsAndTrendlines page.
+// Bundle mapping (SupportResistance-Cqj5ktkD.js): D=_e (config), d=Qt (detectSRLevels),
+// S=sr (the default panel component). These were previously stubbed to null/no-op,
+// which crashed Levels with React #130 and emptied its SR table.
+export { DEFAULT_SR_CONFIG as D, detectSRLevels as d, SupportResistance as S };

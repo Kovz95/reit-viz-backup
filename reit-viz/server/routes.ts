@@ -4963,4 +4963,120 @@ export async function registerRoutes(server: Server, app: Express) {
 
     res.json({ ok, failed, errors });
   });
+
+  // ── Yahoo Finance symbol search ─────────────────────────────────────────
+  // GET /api/yahoo-search?q=...  → { results: [{ symbol, name, exchange }] }
+  // Proxies Yahoo's public v1 search/autocomplete endpoint.
+  app.get("/api/yahoo-search", async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
+    if (!q) return res.json({ results: [] });
+    try {
+      const url =
+        `https://query1.finance.yahoo.com/v1/finance/search` +
+        `?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&listsCount=0`;
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Accept: "application/json",
+        },
+      });
+      if (!resp.ok) throw new Error(`Yahoo search HTTP ${resp.status}`);
+      const json: any = await resp.json();
+      const results = (json?.quotes ?? [])
+        .filter((it: any) => it && it.symbol)
+        .map((it: any) => ({
+          symbol: String(it.symbol),
+          name: String(it.shortname ?? it.longname ?? it.shortName ?? ""),
+          exchange: String(it.exchDisp ?? it.exchange ?? ""),
+        }));
+      res.json({ results });
+    } catch (e: any) {
+      res.status(502).json({ results: [], error: e?.message ?? String(e) });
+    }
+  });
+
+  // ── Classification overrides (per-ticker industry/sector reassignment) ───
+  // Persisted as a flat { TICKER: { sector?, subsector?, ... } } map on disk.
+  const CLASSIFICATION_FIELDS = [
+    "economy",
+    "sector",
+    "subsector",
+    "industryGroup",
+    "industry",
+    "subindustry",
+  ] as const;
+  const overridesFile = path.join(DATA_DIR, "classification-overrides.json");
+
+  function loadOverrides(): Record<string, Record<string, string>> {
+    try {
+      if (!fs.existsSync(overridesFile)) return {};
+      return readJSON(overridesFile);
+    } catch {
+      return {};
+    }
+  }
+  function saveOverrides(map: Record<string, Record<string, string>>): void {
+    fs.writeFileSync(overridesFile, JSON.stringify(map, null, 2));
+  }
+  // Keep only known fields with non-empty string values.
+  function sanitizeOverride(input: any): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (input && typeof input === "object") {
+      for (const f of CLASSIFICATION_FIELDS) {
+        const v = input[f];
+        if (typeof v === "string" && v.trim() !== "") out[f] = v;
+      }
+    }
+    return out;
+  }
+
+  app.get("/api/classification-overrides", (_req, res) => {
+    res.json({ overrides: loadOverrides() });
+  });
+
+  // Batch import — body: { overrides: {TICKER: {...}}, mode: "merge" | "replace" }
+  app.post("/api/classification-overrides/_bulk", (req, res) => {
+    const { overrides, mode } = req.body as {
+      overrides?: Record<string, any>;
+      mode?: string;
+    };
+    const incoming: Record<string, Record<string, string>> = {};
+    for (const [t, ov] of Object.entries(overrides ?? {})) {
+      const clean = sanitizeOverride(ov);
+      if (Object.keys(clean).length > 0) incoming[t.toUpperCase()] = clean;
+    }
+    const next = mode === "replace" ? incoming : { ...loadOverrides(), ...incoming };
+    saveOverrides(next);
+    res.json({});
+  });
+
+  // Reset all overrides.
+  app.post("/api/classification-overrides/_reset", (_req, res) => {
+    saveOverrides({});
+    res.json({});
+  });
+
+  // Delete one ticker's overrides.
+  app.post("/api/classification-overrides/:ticker/delete", (req, res) => {
+    const ticker = String(req.params.ticker).toUpperCase();
+    const map = loadOverrides();
+    delete map[ticker];
+    saveOverrides(map);
+    res.json({});
+  });
+
+  // Upsert one ticker's overrides — body: { overrides: {...} }. Empty → delete.
+  app.post("/api/classification-overrides/:ticker", (req, res) => {
+    const ticker = String(req.params.ticker).toUpperCase();
+    const clean = sanitizeOverride((req.body as any)?.overrides);
+    const map = loadOverrides();
+    if (Object.keys(clean).length === 0) {
+      delete map[ticker];
+    } else {
+      map[ticker] = clean;
+    }
+    saveOverrides(map);
+    res.json({});
+  });
 }

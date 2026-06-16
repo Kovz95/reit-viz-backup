@@ -78,9 +78,11 @@ export async function fetchScatterData(
   extra?: Record<string, string>,
   colorMetric?: string
 ): Promise<ScatterQueryResult> {
-  const params = new URLSearchParams({ metricX, metricY });
-  if (metricZ) params.set("metricZ", metricZ);
-  if (asOf) params.set("asOf", asOf);
+  // Param names must match the server route (GET /api/scatter reads x/y/z/date).
+  // Previously sent metricX/metricY/metricZ/asOf, which the server ignored → 400.
+  const params = new URLSearchParams({ x: metricX, y: metricY });
+  if (metricZ) params.set("z", metricZ);
+  if (asOf) params.set("date", asOf);
   if (colorMetric) params.set("colorMetric", colorMetric);
   if (extra) {
     for (const [k, v] of Object.entries(extra)) params.set(k, v);

@@ -2,10 +2,10 @@
 // Cross kinds are the trendline cross events emitted by computeAutoTrendlines.
 
 export const CROSS_KIND_LABELS: Record<string, string> = {
-  cross_above_upper: "Cross Above Upper",
-  cross_above_lower: "Cross Above Lower",
-  cross_below_upper: "Cross Below Upper",
-  cross_below_lower: "Cross Below Lower",
+  cross_above_upper: "Cross ↑ Upper (Breakout)",
+  cross_below_upper: "Cross ↓ Upper (Rejection)",
+  cross_above_lower: "Cross ↑ Lower (Bounce)",
+  cross_below_lower: "Cross ↓ Lower (Breakdown)",
   golden:            "Golden Cross",
   death:             "Death Cross",
   bull:              "Bull Cross",

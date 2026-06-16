@@ -6,8 +6,10 @@ const BASKET_PREFIX = "BASKET:";
 /**
  * Returns true if the given ticker string is a basket reference (starts with "BASKET:").
  */
-export function isBasketTicker(ticker: string): boolean {
-  return ticker.startsWith(BASKET_PREFIX);
+export function isBasketTicker(ticker: string | null | undefined): boolean {
+  // Matches the bundle's guarded, case-insensitive check
+  // (index-CsG73Aq_.js: `t && t.toUpperCase().startsWith("BASKET:")`).
+  return !!ticker && ticker.toUpperCase().startsWith(BASKET_PREFIX);
 }
 
 /**

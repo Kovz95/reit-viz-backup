@@ -481,8 +481,8 @@ export const DATE_PRESETS = [
   { label: "All", days: 0 },
 ] as const;
 
-export function createDateRangeFromPreset(preset: { days: number }): { start: string | null; end: string | null } {
-  if (!preset.days) return { start: null, end: null };
+export function createDateRangeFromPreset(preset?: { days: number } | null): { start: string | null; end: string | null } {
+  if (!preset || !preset.days) return { start: null, end: null };
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - preset.days);
