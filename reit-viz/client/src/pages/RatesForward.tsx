@@ -10,7 +10,7 @@ import {
 } from "lightweight-charts";
 import type { IChartApi } from "lightweight-charts";
 import { fetchFredSeries } from "@/lib/macroStatic";
-import { TrendingDown } from "lucide-react";
+import { TrendingDown, TrendingUp, Activity } from "lucide-react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -170,8 +170,8 @@ function computeConvexityScore(opts: {
   const { fwdCurve, spot3m, twoYearChange30d, termPremium, termPremiumChange30d, twoTenSpread, twoTenChange30d } = opts;
   let forwardScore = 0, forwardReason = "—";
   if (spot3m != null && fwdCurve.length) {
-    const fwd24 = fwdCurve.find(p => Math.abs(p.years - 2) < 0.05)?.forward;
-    const fwd12 = fwdCurve.find(p => Math.abs(p.years - 1) < 0.05)?.forward ?? fwd24 ?? null;
+    const fwd12 = fwdCurve.find(p => Math.abs(p.years - 1) < 0.05)?.forward;
+    const fwd24 = fwdCurve.find(p => Math.abs(p.years - 2) < 0.05)?.forward ?? fwd12 ?? null;
     if (fwd24 != null) {
       const cutsImplied = (spot3m - fwd24) * 100;
       forwardScore = Math.max(-100, Math.min(100, cutsImplied * 0.75));
@@ -616,7 +616,7 @@ export default function RatesForward() {
             <p className="text-xs text-muted-foreground mt-0.5">Forward-expectations dashboard for REIT convexity activation. Latest data: {latestDate ?? "—"}</p>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <TrendingDown className="w-3.5 h-3.5" />FRED daily series + NY Fed ACM term-premium decomposition
+            <Activity className="w-3.5 h-3.5" />FRED daily series + NY Fed ACM term-premium decomposition
           </div>
         </div>
 
@@ -766,8 +766,8 @@ export default function RatesForward() {
             <StatCard label="Regime" value={
               <div className="font-semibold text-foreground flex items-center gap-1.5" data-testid="two-ten-regime">
                 {twoTenInfo && twoTenInfo.latest < 0 ? <><TrendingDown className="w-3.5 h-3.5 text-rose-400" /> Inverted</>
-                  : twoTenInfo && twoTenInfo.latest < 0.25 ? <><TrendingDown className="w-3.5 h-3.5 text-amber-400" /> Flat</>
-                  : <><span className="text-emerald-400">↗</span> Steepening</>}
+                  : twoTenInfo && twoTenInfo.latest < 0.25 ? <><Activity className="w-3.5 h-3.5 text-amber-400" /> Flat</>
+                  : <><TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> Steepening</>}
               </div>
             } />
             <StatCard label="30d slope change" value={<span className={twoTenInfo?.d30 != null && twoTenInfo.d30 > 0 ? "text-emerald-400" : twoTenInfo?.d30 != null && twoTenInfo.d30 < 0 ? "text-rose-400" : "text-foreground"}>{twoTenInfo?.d30 != null ? `${twoTenInfo.d30 >= 0 ? "+" : ""}${(twoTenInfo.d30 * 100).toFixed(0)}bp` : "—"}</span>} />

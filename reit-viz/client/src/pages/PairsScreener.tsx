@@ -140,13 +140,41 @@ function computeRatioResiduals(
   lookback: number
 ): number[] | null {
   const n = Math.min(priceA.length, priceB.length);
-  if (n < lookback) return null;
+  if (n < MIN_HISTORY) return null;
+  const start = Math.max(0, n - lookback);
+  if (n - start < MIN_HISTORY) return null;
   const result: number[] = [];
-  for (let i = Math.max(0, n - lookback); i < n; i++) {
+  for (let i = start; i < n; i++) {
     if (!(priceA[i].value > 0) || !(priceB[i].value > 0)) return null;
     result.push(Math.log(priceA[i].value) - Math.log(priceB[i].value));
   }
   return result;
+}
+
+// Single-window OLS residuals over the most-recent `lookback` window (bundle `lt`).
+function computeOlsResidualsSingle(
+  priceA: Array<{ value: number }>,
+  priceB: Array<{ value: number }>,
+  lookback: number
+): number[] | null {
+  const a = Math.min(priceA.length, priceB.length);
+  if (a < MIN_HISTORY) return null;
+  const start = Math.max(0, a - lookback);
+  const len = a - start;
+  if (len < MIN_HISTORY) return null;
+  let sumB = 0, sumA = 0, sumAB = 0, sumBB = 0;
+  for (let i = start; i < a; i++) {
+    const lb = Math.log(priceB[i].value), la = Math.log(priceA[i].value);
+    sumB += lb; sumA += la; sumAB += lb * la; sumBB += lb * lb;
+  }
+  const bMean = sumB / len, aMean = sumA / len;
+  const sbb = sumBB - len * bMean * bMean;
+  const sab = sumAB - len * bMean * aMean;
+  if (sbb === 0) return null;
+  const beta = sab / sbb, alpha = aMean - beta * bMean;
+  const out: number[] = [];
+  for (let i = start; i < a; i++) out.push(Math.log(priceA[i].value) - (alpha + beta * Math.log(priceB[i].value)));
+  return out;
 }
 
 function computeZScore(series: number[], window: number): number {
@@ -229,7 +257,7 @@ export default function PairsScreener() {
   const [source, setSource] = useState<"workbook" | "global">("workbook");
   const { metas: globalMetas } = useGlobalUniverse();
 
-  const [olsResidWindow, setOlsResidWindow] = useState(252);
+  const [olsResidWindow, setOlsResidWindow] = useState(52);
   const [betaLookback, setBetaLookback] = useState(52);
   const [verifyDays, setVerifyDays] = useState(1500);
   const [pMax, setPMax] = useState(0.1);
@@ -329,11 +357,10 @@ export default function PairsScreener() {
     cancelRef.current = false;
 
     const pairs: [string, string][] = [];
-    for (let i = 0; i < tickerList.length; i++)
+    outer: for (let i = 0; i < tickerList.length; i++)
       for (let j = i + 1; j < tickerList.length; j++) {
         pairs.push([tickerList[i], tickerList[j]]);
-        if (scope === "pairCombo" && pairs.length >= MAX_PAIR_COMBO) break;
-        if (scope === "pairCombo" && pairs.length >= MAX_PAIR_COMBO) break;
+        if (scope === "pairCombo" && pairs.length >= MAX_PAIR_COMBO) break outer;
       }
 
     setProgress({ current: 0, total: pairs.length });
@@ -350,18 +377,13 @@ export default function PairsScreener() {
           if (model === "ols") {
             if (!data.cointStats) return null;
             const currentZ = data.olsResidZ.length ? data.olsResidZ[data.olsResidZ.length - 1].value : NaN;
-            const recentAdf = (() => {
-              const res = computeOlsResiduals(data.priceA, data.priceB, verifyDays);
-              const recent = res?.filter(Number.isFinite);
-              if (!recent || recent.length < MIN_HISTORY) return null;
-              return adfTest(recent);
-            })();
+            const recentResid = computeOlsResidualsSingle(data.priceA, data.priceB, verifyDays);
+            const recentAdf = recentResid ? adfTest(recentResid) : null;
             const residSeries = btResidMode === "rolling"
               ? computeOlsResiduals(data.priceA, data.priceB, btRollingWindow)
               : (() => {
-                const residuals: number[] = [];
-                for (const pt of data.priceA) residuals.push(pt.value);
-                return null; // fallback
+                const len = Math.min(data.priceA.length, data.priceB.length);
+                return len < MIN_HISTORY ? null : computeOlsResidualsSingle(data.priceA, data.priceB, len);
               })();
             const hl = data.cointStats.halfLife;
             const maxHold = Math.max(10, Math.min(60, Number.isFinite(hl) && hl > 0 ? Math.round(hl * 4) : 60));
@@ -369,7 +391,7 @@ export default function PairsScreener() {
             return {
               tickerA: A, tickerB: B,
               pValue: data.cointStats.pValue, adfStat: data.cointStats.adfStat,
-              halfLife: data.cointStats.halfLife, hedgeRatio: data.cointStats.hedgeRatio ?? 1,
+              halfLife: data.cointStats.halfLife, hedgeRatio: data.cointStats.hedgeRatio,
               currentZ: Number.isFinite(currentZ) ? currentZ : NaN,
               pValueRecent: recentAdf ? recentAdf.pValue : 0.5,
               adfStatRecent: recentAdf ? recentAdf.adfStat : NaN,
