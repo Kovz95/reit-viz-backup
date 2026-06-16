@@ -42,6 +42,28 @@ auditing** of existing files vs their bundle chunks — catching subtle wrong/in
 same class as this session's 5 fixes (scatter params, momentum preset, levels stubs, ranking columns).
 This can be done **incrementally by page importance**, not all-or-nothing.
 
+## AUDIT COMPLETE (2026-06-16): all 51 pages with standalone chunks audited
+
+Per-page behavioral audit run in 9 waves (subagent per page, diffed against the
+beautified chunk, fixed divergences, verified via build + headless harness).
+Result: **0 ErrorBoundary crashes across all 53 routes**; ~70 behavioral
+divergences fixed. Notable bugs caught: FactorBacktest per-date long/short spread,
+TVAOptimizer permanently-empty compute stub, MomentumOptimizer null weekly series,
+SimilarSetups time-feature keys, and a self-inflicted `require()` regression in
+optimizerInputSeries (caught by the harness) that had crashed 9 optimizer pages.
+
+### Remaining deeper work (NOT plain audit fixes)
+- **Stale/simplified pages needing FULL rebuilds** (work but lack bundle features):
+  `MACrossoverOptimizer` (737 vs 5455 lines), `ZScoreOptimizer` (no pair/basket/
+  evaluate modes), `Scanner` (simplified UI).
+- **Dashboard (main Charts page) and Heatmap**: no standalone beautified chunk —
+  logic lives in `index-CsG73Aq_.js`; not deeply audited. Dashboard is the most
+  complex page (drawings/channels/fibs/S-R/patterns) and is the top follow-up.
+- **Shared-lib gaps**: driverScan engine (stub, Correlation Drivers tab);
+  LSMA/SLSMA indicators (Macro/Screener); `getDailyIndexFromWeekly` signature;
+  `useWorkspaceTab` ignores 4th opts arg (universeSig/resultFields);
+  pairSignalAnalyzer direction literals; Screener pairCombo/RV-verdict features.
+
 ## Method (per work item)
 1. **Reconcile** MANIFEST vs actual `reit-viz/client/src/**` — mark already-present files, list true gaps.
 2. **Beautify** any min-only chunk you actually need (the readable version may be absent): pretty-print
