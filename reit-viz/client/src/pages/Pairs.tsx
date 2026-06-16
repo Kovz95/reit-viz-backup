@@ -22,7 +22,8 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, ListFilter } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, ListFilter, AlertTriangle, Info } from "lucide-react";
+import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
 import { Switch } from "@/components/ui/switch";
@@ -77,7 +78,7 @@ const LOOKBACK_OPTIONS = [
 const EMPTY_INDICATORS: ActiveIndicators = {};
 
 // Default visible chart IDs (core 6)
-const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter"]);
+const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter", "signalAnalyzer"]);
 
 // All chart definitions with labels for the picker
 const CHART_DEFS: { id: string; label: string; group: string }[] = [
@@ -94,10 +95,12 @@ const CHART_DEFS: { id: string; label: string; group: string }[] = [
   { id: "betaAdjSpread", label: "Beta-Adj Spread", group: "Stats" },
   { id: "rollingR2", label: "Rolling R²", group: "Stats" },
   { id: "olsScatter", label: "OLS Scatter", group: "Stats" },
+  { id: "signalAnalyzer", label: "Predictive Signals", group: "Stats" },
 ];
 
 const METRIC_OPTIONS: Record<string, string[]> = {
   Price: ["close"],
+  Volume: ["Volume"],
   Valuation: [
     "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
     "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
@@ -157,6 +160,303 @@ const CHART_OPTIONS = {
 interface DataPoint {
   time: string;
   value: number;
+}
+
+// ── Predictive Signals (pair signal analyzer) ──
+const SIGNAL_TYPES = ["raw_z", "ols_z", "spread_z", "pct"];
+const SIGNAL_HORIZONS = [
+  { key: "5d", label: "5d" },
+  { key: "10d", label: "10d" },
+  { key: "20d", label: "20d" },
+  { key: "60d", label: "60d" },
+];
+
+function fmtSignalPct(v: number | null | undefined): string {
+  return v == null || !isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+function fmtSignalHit(v: number | null | undefined): string {
+  return v == null || !isFinite(v) ? "—" : `${v.toFixed(0)}%`;
+}
+function fmtRatioLevel(v: number | null | undefined): string {
+  return v == null || !isFinite(v) ? "—" : v >= 100 ? v.toFixed(2) : v >= 1 ? v.toFixed(4) : v.toFixed(5);
+}
+function avgColorClass(v: number | null | undefined): string {
+  return v == null ? "text-muted-foreground" : v > 0.5 ? "text-emerald-400" : v < -0.5 ? "text-rose-400" : "text-muted-foreground";
+}
+function hitColorClass(v: number | null | undefined): string {
+  return v == null
+    ? "text-muted-foreground"
+    : v >= 65
+    ? "text-emerald-400 font-semibold"
+    : v >= 55
+    ? "text-emerald-400/70"
+    : v <= 35
+    ? "text-rose-400 font-semibold"
+    : v <= 45
+    ? "text-rose-400/70"
+    : "text-muted-foreground";
+}
+
+function SignalAnalyzerHeader({
+  tickerA,
+  tickerB,
+  isMaximized,
+  onMaximize,
+}: {
+  tickerA: string;
+  tickerB: string;
+  isMaximized: boolean;
+  onMaximize: (id: string | null) => void;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0"
+      onDoubleClick={() => onMaximize(isMaximized ? null : "signalAnalyzer")}
+    >
+      <AlertTriangle className="w-3 h-3 text-amber-400" />
+      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+        Predictive Signals — {tickerA}/{tickerB}
+      </span>
+      <div className="flex-1" />
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-5 w-5 p-0"
+        onClick={(e) => { e.stopPropagation(); onMaximize(isMaximized ? null : "signalAnalyzer"); }}
+        title={isMaximized ? "Restore" : "Maximize"}
+      >
+        {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+      </Button>
+    </div>
+  );
+}
+
+function SignalStat({ label, value, valueClass }: { label: string; value: any; valueClass?: string }) {
+  return (
+    <div className="bg-card/30 border border-border/30 rounded px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={`text-[12px] font-mono font-semibold ${valueClass || "text-foreground"}`}>{value}</div>
+    </div>
+  );
+}
+
+function SignalHorizonCells({ avg, hit }: { avg: number | null; hit: number | null }) {
+  return (
+    <>
+      <td className={`px-2 py-1 text-right ${avgColorClass(avg)}`}>{fmtSignalPct(avg)}</td>
+      <td className={`px-2 py-1 text-right ${hitColorClass(hit)}`}>{fmtSignalHit(hit)}</td>
+    </>
+  );
+}
+
+function SignalAnalyzerChart({
+  priceA,
+  priceB,
+  tickerA,
+  tickerB,
+  isMaximized,
+  onMaximize,
+}: {
+  priceA: DataPoint[];
+  priceB: DataPoint[];
+  tickerA: string;
+  tickerB: string;
+  isMaximized: boolean;
+  onMaximize: (id: string | null) => void;
+}) {
+  const [activeSignal, setActiveSignal] = useState("raw_z");
+  const analysis = useMemo(() => {
+    if (!priceA || !priceB || priceA.length < 200 || priceB.length < 200) return null;
+    try {
+      return analyzePairSignals(priceA, priceB, tickerA, tickerB);
+    } catch (err) {
+      console.warn("[PairSignalAnalyzer]", err);
+      return null;
+    }
+  }, [priceA, priceB, tickerA, tickerB]);
+
+  if (!analysis) {
+    return (
+      <div
+        className={`flex flex-col ${
+          isMaximized ? "fixed inset-0 z-50 bg-background" : "w-full h-full border border-border/30 min-h-0 overflow-hidden"
+        }`}
+      >
+        <SignalAnalyzerHeader tickerA={tickerA} tickerB={tickerB} isMaximized={isMaximized} onMaximize={onMaximize} />
+        <div className="flex items-center justify-center h-full text-muted-foreground text-xs px-3">
+          Need at least 200 overlapping trading days to run signal analysis.
+        </div>
+      </div>
+    );
+  }
+
+  const best = analysis.bestNow;
+  const buckets = (analysis.buckets as any)[activeSignal];
+  const currentValue = analysis.currentSignals.find((s: any) => s.signal === activeSignal)?.value;
+  const activeBucketIdx = buckets.findIndex(
+    (b: any) => currentValue != null && currentValue >= b.low && currentValue < b.high
+  );
+
+  return (
+    <div
+      className={`flex flex-col ${
+        isMaximized ? "fixed inset-0 z-50 bg-background" : "w-full h-full border border-border/30 min-h-0 overflow-hidden"
+      }`}
+    >
+      <SignalAnalyzerHeader tickerA={tickerA} tickerB={tickerB} isMaximized={isMaximized} onMaximize={onMaximize} />
+      <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+          <SignalStat label="Pair" value={`${tickerA}/${tickerB}`} />
+          <SignalStat label={`${tickerA}`} value={`$${analysis.currentA.toFixed(2)}`} />
+          <SignalStat label={`${tickerB}`} value={`$${analysis.currentB.toFixed(2)}`} />
+          <SignalStat label="Ratio" value={analysis.currentRatio.toFixed(4)} />
+          <SignalStat label="Half-life" value={analysis.halfLifeDays ? `${analysis.halfLifeDays.toFixed(1)}d` : "—"} />
+        </div>
+        {best ? (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-amber-300">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-semibold uppercase tracking-wider">Best signal right now</span>
+              <span className="text-[10px] text-muted-foreground ml-auto">
+                quality {best.bucket.quality.toFixed(2)} · n={best.bucket.n}
+              </span>
+            </div>
+            <div className="text-[12px] text-foreground/90 leading-snug">
+              {best.bucket.label} on <span className="font-semibold">{signalLabel(best.signal)}</span> (
+              {signalValueFormat(best.signal, best.currentSignalValue)})
+            </div>
+            <div className="text-[11px] text-muted-foreground leading-snug">{best.rationale}</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-1 pt-2 border-t border-amber-500/20">
+              <SignalStat
+                label="20d expected"
+                value={`${best.expectedMove20dPct >= 0 ? "+" : ""}${best.expectedMove20dPct.toFixed(2)}%`}
+                valueClass={best.expectedMove20dPct < 0 ? "text-rose-400" : "text-emerald-400"}
+              />
+              <SignalStat label="Ratio target" value={best.expectedRatio20d.toFixed(4)} />
+              <SignalStat label={`${tickerA} target (${tickerB} flat)`} value={`$${best.expectedAPrice20dIfBHolds.toFixed(2)}`} />
+              <SignalStat label={`${tickerB} target (${tickerA} flat)`} value={`$${best.expectedBPrice20dIfAHolds.toFixed(2)}`} />
+            </div>
+            <div className="text-[10px] text-muted-foreground/80 pt-1 border-t border-amber-500/10">
+              {best.direction === "short_ratio"
+                ? `Setup: short ${tickerA} / long ${tickerB} (sell the ratio)`
+                : best.direction === "long_ratio"
+                ? `Setup: long ${tickerA} / short ${tickerB} (buy the ratio)`
+                : "No actionable bias — the bucket is statistically flat."}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md border border-border/40 bg-card/30 p-3 text-[11px] text-muted-foreground">
+            <Info className="inline w-3 h-3 mr-1.5 -mt-0.5" />
+            All four current signals sit in low-edge / neutral buckets (n &lt; 20 or |hit−50%| small). Wait for a stronger setup.
+          </div>
+        )}
+        <div className="flex items-center gap-1 flex-wrap pt-1">
+          {SIGNAL_TYPES.map((sig) => {
+            const v = analysis.currentSignals.find((s: any) => s.signal === sig)?.value;
+            return (
+              <button
+                key={sig}
+                onClick={() => setActiveSignal(sig)}
+                data-testid={`btn-signal-${sig}`}
+                className={`px-2 py-1 rounded text-[10px] font-medium border transition-colors ${
+                  activeSignal === sig
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card/30 text-muted-foreground border-border/40 hover:border-border"
+                }`}
+              >
+                {signalLabel(sig)}
+                {v != null && <span className="ml-1.5 opacity-80">({signalValueFormat(sig, v)})</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="overflow-x-auto border border-border/30 rounded">
+          <table className="w-full text-[10px] font-mono">
+            <thead className="bg-card/40 text-muted-foreground">
+              <tr>
+                <th className="text-left px-2 py-1.5">Bucket</th>
+                <th className="text-right px-2 py-1.5">n</th>
+                {SIGNAL_HORIZONS.map((hz) => (
+                  <th key={hz.key} className="text-right px-2 py-1.5" colSpan={2}>
+                    {hz.label} avg / hit
+                  </th>
+                ))}
+                <th className="text-right px-2 py-1.5">Ratio range</th>
+                <th className="text-right px-2 py-1.5" title={`${tickerA} price if ${tickerB} stays flat at current`}>
+                  {tickerA} $ tgt
+                </th>
+                <th className="text-right px-2 py-1.5" title={`${tickerB} price if ${tickerA} stays flat at current`}>
+                  {tickerB} $ tgt
+                </th>
+                <th
+                  className="text-right px-2 py-1.5"
+                  title="Quality = |20d avg| × (20d hit% − 50) × log10(n+1)/100"
+                >
+                  Q
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {buckets.map((b: any, idx: number) => {
+                const isActive = idx === activeBucketIdx;
+                return (
+                  <tr
+                    key={b.label}
+                    className={`border-t border-border/20 ${isActive ? "bg-amber-500/10" : ""}`}
+                    data-testid={`signal-bucket-${activeSignal}-${idx}`}
+                  >
+                    <td className="px-2 py-1 text-foreground/90">
+                      {isActive && <span className="text-amber-400 mr-1">▶</span>}
+                      {b.label}
+                    </td>
+                    <td className={`px-2 py-1 text-right ${b.n < 20 ? "text-muted-foreground/50" : "text-foreground/80"}`}>
+                      {b.n}
+                    </td>
+                    {SIGNAL_HORIZONS.map((hz) => (
+                      <SignalHorizonCells key={hz.key} avg={b[`avg_${hz.key}`]} hit={b[`hit_${hz.key}`]} />
+                    ))}
+                    <td className="px-2 py-1 text-right text-foreground/70">
+                      {fmtRatioLevel(b.ratioLevelLow)} – {fmtRatioLevel(b.ratioLevelHigh)}
+                    </td>
+                    <td className="px-2 py-1 text-right text-foreground/85">
+                      {b.ratioLevelLow != null && b.ratioLevelHigh != null && analysis.currentB > 0
+                        ? `$${(((b.ratioLevelLow + b.ratioLevelHigh) / 2) * analysis.currentB).toFixed(2)}`
+                        : "—"}
+                    </td>
+                    <td className="px-2 py-1 text-right text-foreground/85">
+                      {b.ratioLevelLow != null && b.ratioLevelHigh != null && analysis.currentA > 0
+                        ? `$${(analysis.currentA / ((b.ratioLevelLow + b.ratioLevelHigh) / 2)).toFixed(2)}`
+                        : "—"}
+                    </td>
+                    <td
+                      className={`px-2 py-1 text-right ${
+                        b.quality >= 1.5
+                          ? "text-emerald-400 font-semibold"
+                          : b.quality >= 0.5
+                          ? "text-emerald-400/70"
+                          : b.quality <= -0.5
+                          ? "text-rose-400/70"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {b.quality.toFixed(2)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="text-[9.5px] text-muted-foreground/70 leading-snug px-1">
+          <span className="font-semibold">avg</span> = mean forward % change in {tickerA}/{tickerB} ratio.{" "}
+          <span className="font-semibold">hit</span> = % of observations that reverted in the expected direction (
+          {reversionDir(activeSignal).trim()}). <span className="font-semibold">Q</span> = quality score on the 20-day
+          horizon (size × edge × sample reliability).  Highlighted row = bucket the pair is currently sitting in.  Sample:{" "}
+          {analysis.firstDate} → {analysis.lastDate} ({analysis.n.toLocaleString()} days).
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface PairsData {
@@ -2288,7 +2588,8 @@ export default function Pairs() {
             : enabledCharts;
           const isMaxMode = maximizedChart !== null;
           const showOlsScatter = visibleChartIds.has("olsScatter") && (maximizedChart === null || maximizedChart === "olsScatter");
-          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0);
+          const showSignalAnalyzer = visibleChartIds.has("signalAnalyzer") && (maximizedChart === null || maximizedChart === "signalAnalyzer");
+          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0) + (showSignalAnalyzer ? 1 : 0);
           // In maximized mode, fill the entire container
           // Otherwise use a scrollable grid with minimum chart heights
           const containerStyle: React.CSSProperties = isMaxMode
@@ -2350,6 +2651,17 @@ export default function Pairs() {
                       tickerA={tickerA}
                       tickerB={tickerB}
                       isMaximized={maximizedChart === "olsScatter"}
+                      onMaximize={setMaximizedChart}
+                    />
+                  )}
+                  {/* Predictive Signals chart */}
+                  {pairsData && showSignalAnalyzer && (
+                    <SignalAnalyzerChart
+                      priceA={pairsData.priceA}
+                      priceB={pairsData.priceB}
+                      tickerA={tickerA}
+                      tickerB={tickerB}
+                      isMaximized={maximizedChart === "signalAnalyzer"}
                       onMaximize={setMaximizedChart}
                     />
                   )}

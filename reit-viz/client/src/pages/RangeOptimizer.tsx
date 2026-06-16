@@ -1338,7 +1338,7 @@ function LiveSignalsPanel({
             <span
               key={`L-${ticker}`}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-500/10 text-[10px] font-mono"
-              title={`${counts.longs} long bands · ${counts.shorts} short bands`}
+              title={`${counts.longs} long bands· ${counts.shorts} short bands`}
             >
               <span className="text-foreground font-bold">{ticker}</span>
               <span className="text-emerald-400">·{counts.longs}L</span>

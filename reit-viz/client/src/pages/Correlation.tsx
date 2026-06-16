@@ -6,6 +6,8 @@ import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
 import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlationEngine";
 import { useUniverse } from "@/lib/universeContext";
+import { useUniverseSignature } from "@/lib/universeSignature";
+import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
 import {
   createChart,
   ColorType,
@@ -54,6 +56,11 @@ import {
   Minimize2,
   Globe,
   Loader2,
+  Play,
+  Pin,
+  X,
+  Eye,
+  Zap,
 } from "lucide-react";
 import ExportMenu from "@/components/ExportMenu";
 
@@ -183,6 +190,16 @@ const MULTI_WINDOW_COLORS: Record<number, string> = {
   252: "#f59e0b",
 };
 
+const CHART_KEYS = ["levels", "rolling", "rollingBeta", "scatter", "crossCorr", "acf"] as const;
+const CHART_LABELS: Record<string, string> = {
+  levels: "Levels",
+  rolling: "Rolling Corr",
+  rollingBeta: "Rolling Beta",
+  scatter: "Scatter",
+  crossCorr: "Cross-Corr",
+  acf: "ACF",
+};
+
 // ── Helpers ──
 
 function corrColor(val: number): string {
@@ -198,6 +215,400 @@ function corrBgColor(val: number): string {
   if (val > 0) return `rgba(34, 197, 94, ${absVal * 0.4})`;
   if (val < 0) return `rgba(239, 68, 68, ${absVal * 0.4})`;
   return "transparent";
+}
+
+// ── Driver scan helpers ──
+function driverCorrColor(v: number): string {
+  if (v >= 0.7) return "#22c55e";
+  if (v >= 0.5) return "#86efac";
+  if (v >= 0.3) return "#f59e0b";
+  if (v >= 0.15) return "#94a3b8";
+  return "#475569";
+}
+
+function pValColor(p: number): string {
+  if (p < 0.01) return "#22c55e";
+  if (p < 0.05) return "#86efac";
+  if (p < 0.1) return "#f59e0b";
+  return "#ef4444";
+}
+
+function fmtSigned(v: number): string {
+  return (v >= 0 ? "+" : "") + v.toFixed(3);
+}
+
+function fmtPval(p: number): string {
+  return p < 0.001 ? "<0.001" : p.toFixed(3);
+}
+
+// ── Driver scan sparkline ──
+function Sparkline({ values }: { values: number[] }) {
+  if (!values || values.length === 0) {
+    return <span className="text-muted-foreground/30">—</span>;
+  }
+  const max = Math.max(...values, 0.01);
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1 || 1)) * 56 + 2;
+    const y = 18 - (v / max) * 16;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  return (
+    <svg width={60} height={20} className="inline-block align-middle">
+      <polyline points={points.join(" ")} fill="none" stroke="#0ea5e9" strokeWidth="1.2" />
+      {values.map((v, i) => {
+        const x = (i / (values.length - 1 || 1)) * 56 + 2;
+        const y = 18 - (v / max) * 16;
+        return <circle key={i} cx={x} cy={y} r="1.5" fill={driverCorrColor(v)} />;
+      })}
+    </svg>
+  );
+}
+
+// ── Driver scan progress bar ──
+function ScanProgress({ done, total, phase }: { done: number; total: number; phase: string }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
+        <span>{phase === "load" ? "Loading factor data" : "Scanning factors"}: {done} / {total}</span>
+        <span>{pct}%</span>
+      </div>
+      <div className="h-1.5 bg-border/40 rounded-full overflow-hidden">
+        <div className="h-full bg-primary transition-all duration-200 rounded-full" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+// ── Driver scan results table ──
+function DriverScanResults({
+  rows,
+  ticker,
+  showAll,
+  onShowAll,
+  onPin,
+}: {
+  rows: any[];
+  ticker: string;
+  showAll: boolean;
+  onShowAll: () => void;
+  onPin?: (row: any) => void;
+}) {
+  const display = showAll ? rows : rows.slice(0, 30);
+  return (
+    <div data-testid="driver-scan-results" className="overflow-auto">
+      <table className="text-[11px] font-mono w-full border-collapse">
+        <thead>
+          <tr className="border-b border-border/40">
+            {["#", "Factor", "Category", "Best |ρ|", "Spearman", "Window", "Lag", "Stability", "p-val", "Sparkline", "Action"].map(h => (
+              <th key={h} className="px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap bg-card/50">{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {display.map((r, i) => (
+            <tr key={r.spec} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`driver-row-${i}`}>
+              <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
+              <td className="px-2 py-1 max-w-[200px]">
+                <span className="truncate block" title={r.label}>{r.label}</span>
+                <span className="text-[9px] text-muted-foreground/50 block truncate" title={r.spec}>{r.spec}</span>
+              </td>
+              <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">
+                <span className="text-[9px]">{r.category}</span>
+              </td>
+              <td className="px-2 py-1 font-bold whitespace-nowrap" style={{ color: driverCorrColor(r.bestAbsCorr) }}>
+                {r.bestAbsCorr.toFixed(3)}
+                <span className="text-[9px] text-muted-foreground/60 ml-0.5">({fmtSigned(r.bestCorr)})</span>
+              </td>
+              <td className="px-2 py-1 whitespace-nowrap" style={{ color: driverCorrColor(Math.abs(r.spearman)) }}>
+                {fmtSigned(r.spearman)}
+              </td>
+              <td className="px-2 py-1 whitespace-nowrap text-muted-foreground">{r.bestWindow}d</td>
+              <td className="px-2 py-1 whitespace-nowrap text-muted-foreground">
+                {r.bestLag === 0 ? "0" : r.bestLag > 0 ? `+${r.bestLag}d` : `${r.bestLag}d`}
+              </td>
+              <td className="px-2 py-1 whitespace-nowrap" style={{ color: driverCorrColor(r.stability) }}>{r.stability.toFixed(3)}</td>
+              <td className="px-2 py-1 whitespace-nowrap" style={{ color: pValColor(r.pVal) }}>{fmtPval(r.pVal)}</td>
+              <td className="px-2 py-1"><Sparkline values={r.windowCorrs} /></td>
+              <td className="px-2 py-1">
+                <button
+                  data-testid={`driver-pin-${i}`}
+                  className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] border border-border/40 rounded hover:bg-primary/20 hover:border-primary/50 transition-colors text-muted-foreground hover:text-primary"
+                  title="Pin to Pairwise tab"
+                  onClick={() => onPin?.(r)}
+                >
+                  <Pin className="w-2.5 h-2.5" />Pin
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!showAll && rows.length > 30 && (
+        <div className="py-2 text-center">
+          <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={onShowAll}>
+            Show all {rows.length} factors
+          </button>
+        </div>
+      )}
+      {showAll && rows.length > 30 && (
+        <div className="py-2 text-center">
+          <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={onShowAll}>
+            Show top 30 only
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Driver scan panel (main area) ──
+function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (specA: string, specB: string, window: number) => void }) {
+  const [ticker, setTicker] = useState("SPG");
+  const [tickerOpen, setTickerOpen] = useState(false);
+  const [targetMode, setTargetMode] = useState("1d");
+  const [includeMacro, setIncludeMacro] = useState(true);
+  const [includeFund, setIncludeFund] = useState(true);
+  const [minObs, setMinObs] = useState(60);
+  const [scanning, setScanning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; phase: string } | null>(null);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const hasFund = getCustomFundamentalMetrics().length > 0;
+
+  const runScan = useCallback(async () => {
+    if (scanning) {
+      abortRef.current?.abort();
+      setScanning(false);
+      return;
+    }
+    if (!ticker) return;
+    setScanning(true);
+    setError(null);
+    setResult(null);
+    setProgress(null);
+    setShowAll(false);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const res = await runDriverScan({
+        ticker,
+        targetMode,
+        includeMacro,
+        includeFund: includeFund && hasFund,
+        minObs,
+        signal: controller.signal,
+        onProgress: (done: number, total: number, phase: string) => {
+          setProgress({ done, total, phase });
+        },
+      });
+      setResult(res);
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setError(e?.message || "Scan failed");
+    } finally {
+      setScanning(false);
+      setProgress(null);
+      abortRef.current = null;
+    }
+  }, [ticker, targetMode, includeMacro, includeFund, hasFund, minObs, scanning]);
+
+  const exportCSV = useCallback(() => {
+    if (!result) return;
+    const csv = driverScanToCsv(result);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `driver_scan_${result.ticker}_${result.targetMode}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [result]);
+
+  const handlePin = useCallback((row: any) => {
+    let spec: string;
+    if (row.spec.startsWith("MACRO:")) {
+      spec = row.spec;
+    } else if (row.spec.startsWith("FUND:")) {
+      const m = row.spec.replace("FUND:", "");
+      spec = `${ticker}:${m}`;
+    } else {
+      spec = row.spec;
+    }
+    onPin?.(`${ticker}:close`, spec, row.bestWindow);
+  }, [ticker, onPin]);
+
+  const targetModes = [
+    { value: "price", label: "Price", testId: "driver-target-mode-price" },
+    { value: "1d", label: "1d Ret", testId: "driver-target-mode-1d" },
+    { value: "5d", label: "5d Ret", testId: "driver-target-mode-5d" },
+    { value: "21d", label: "21d Ret", testId: "driver-target-mode-21d" },
+    { value: "63d", label: "63d Ret", testId: "driver-target-mode-63d" },
+  ];
+
+  useMemo(() => tickers.find(t => t.ticker === ticker), [tickers, ticker]);
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Ticker</div>
+          <Popover open={tickerOpen} onOpenChange={setTickerOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 w-[100px] justify-between px-2 text-[11px] font-mono" data-testid="driver-ticker-selector">
+                <span>{ticker || "Pick…"}</span>
+                <ChevronsUpDown className="w-3 h-3 opacity-50 flex-shrink-0 ml-1" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[420px] p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search ticker…" className="h-7 text-[11px]" />
+                <CommandList className="max-h-[200px]">
+                  <CommandEmpty>No ticker found.</CommandEmpty>
+                  <CommandGroup>
+                    {tickers.map(t => (
+                      <CommandItem key={t.ticker} value={`${t.ticker} ${t.name}`} onSelect={() => { setTicker(t.ticker); setTickerOpen(false); }} className="text-[11px]">
+                        <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${ticker === t.ticker ? "opacity-100" : "opacity-0"}`} />
+                        <span className="font-mono font-bold mr-1 whitespace-nowrap">{t.ticker}</span>
+                        <span className="text-muted-foreground flex-1 min-w-0 truncate text-[10px]" title={t.name}>{t.name}</span>
+                      </CommandItem>
+                    ))}
+                    {ticker && !tickers.find(t => t.ticker === ticker) && (
+                      <CommandItem value={ticker} onSelect={() => setTickerOpen(false)} className="text-[11px]">
+                        <span className="font-mono font-bold text-amber-400">{ticker}</span>
+                        <span className="text-muted-foreground ml-1 text-[10px]">(custom)</span>
+                      </CommandItem>
+                    )}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+              <div className="border-t border-border/30 p-1.5">
+                <Input
+                  className="h-6 text-[11px] font-mono"
+                  placeholder="Type ticker (e.g. LMT)…"
+                  value={ticker}
+                  onChange={e => setTicker(e.target.value.toUpperCase().trim())}
+                  onKeyDown={e => { if (e.key === "Enter") setTickerOpen(false); }}
+                />
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Target</div>
+          <div className="flex gap-0.5">
+            {targetModes.map(t => (
+              <button
+                key={t.value}
+                data-testid={t.testId}
+                onClick={() => setTargetMode(t.value)}
+                className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${targetMode === t.value ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Include</div>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setIncludeMacro(v => !v)}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${includeMacro ? "bg-sky-500/20 border-sky-500/50 text-sky-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+            >
+              Macro
+            </button>
+            <button
+              onClick={() => setIncludeFund(v => !v)}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${includeFund ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+            >
+              Fundamentals
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Min Obs</div>
+          <Input
+            type="number"
+            min={10}
+            max={500}
+            value={minObs}
+            onChange={e => setMinObs(Math.max(10, parseInt(e.target.value) || 60))}
+            className="h-7 w-[70px] text-[11px] font-mono px-2"
+          />
+        </div>
+
+        <div className="flex gap-2 items-end">
+          <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={runScan} data-testid="run-driver-scan" disabled={!ticker}>
+            {scanning ? (
+              <><X className="w-3 h-3" /> Cancel</>
+            ) : (
+              <><Play className="w-3 h-3" /> Run Driver Scan</>
+            )}
+          </Button>
+          {result && (
+            <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1.5" onClick={exportCSV}>
+              <Download className="w-3 h-3" /> Export CSV
+            </Button>
+          )}
+        </div>
+
+        {result && !scanning && (
+          <div className="text-[10px] text-muted-foreground font-mono ml-auto">
+            {result.rows.length} factors found · {result.totalFactors} scanned · {result.durationMs}ms
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-auto p-3 space-y-3 min-h-0">
+        {!hasFund && (
+          <div className="border border-sky-500/30 bg-sky-500/5 rounded px-3 py-2 text-[11px] text-sky-400">
+            Upload a fundamental workbook in the Sidebar to include fundamental/consensus factors in the scan.
+          </div>
+        )}
+        {scanning && progress && <ScanProgress done={progress.done} total={progress.total} phase={progress.phase} />}
+        {scanning && !progress && (
+          <div className="text-[11px] text-muted-foreground font-mono animate-pulse">Initializing scan for {ticker}…</div>
+        )}
+        {error && (
+          <div className="border border-red-500/40 bg-red-500/10 rounded px-3 py-2 text-[11px] text-red-400">{error}</div>
+        )}
+        {!scanning && !result && !error && (
+          <div className="flex flex-col items-center justify-center h-48 gap-2 text-center text-muted-foreground">
+            <div className="text-[13px] font-semibold">Auto Driver Scan</div>
+            <div className="text-[11px] max-w-xs">
+              Pick a ticker, select a target (price level or N-day return), and click "Run Driver Scan" to discover which macro series and fundamental factors are most correlated with the stock — optimized over lookback window and lead/lag.
+            </div>
+          </div>
+        )}
+        {result && !scanning && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-3 text-[9px] text-muted-foreground font-mono">
+              <span className="font-semibold">Sparkline windows:</span>
+              {SCAN_WINDOWS.map((wd: number, i: number) => (
+                <span key={wd}>
+                  <span className="inline-block w-2 h-2 rounded-full mr-0.5 bg-sky-400/60" />
+                  {wd}d {i < SCAN_WINDOWS.length - 1 ? "·" : ""}
+                </span>
+              ))}
+              <span className="ml-auto">Lag: positive = factor leads stock; negative = stock leads factor</span>
+            </div>
+            <DriverScanResults
+              rows={result.rows}
+              ticker={result.ticker}
+              showAll={showAll}
+              onShowAll={() => setShowAll(v => !v)}
+              onPin={handlePin}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ── Simple LWC chart wrapper ──
@@ -1028,7 +1439,7 @@ const ROLLING_WINDOW_LABELS: Record<number, string> = {
 };
 
 export default function Correlation() {
-  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe">("pairwise");
+  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "drivers">("pairwise");
 
   // Pairwise state
   const [specA, setSpecA] = useState("SPG:close");
@@ -1037,6 +1448,8 @@ export default function Correlation() {
   const [corrWindow, setCorrWindow] = useState("60");
   // Which rolling windows are visible (user can toggle)
   const [visibleWindows, setVisibleWindows] = useState<Set<number>>(new Set([60, 252]));
+  // Which pairwise charts are visible (user can toggle)
+  const [visibleCorrCharts, setVisibleCorrCharts] = useState<Set<string>>(() => new Set(CHART_KEYS));
 
   // Matrix state
   const [matrixSpecs, setMatrixSpecs] = useState<string[]>([
@@ -1071,10 +1484,18 @@ export default function Correlation() {
     matrixMode,
     matrixWindow,
     visibleWindows: Array.from(visibleWindows),
+    visibleCorrCharts: Array.from(visibleCorrCharts),
     uniMode,
     uniWindow,
     uniMetric,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, uniMode, uniWindow, uniMetric]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, uniMode, uniWindow, uniMetric]);
+
+  const pinFromDriver = useCallback((a: string, b: string, window: number) => {
+    setSpecA(a);
+    setSpecB(b);
+    setCorrWindow(String(window));
+    setActiveTab("pairwise");
+  }, []);
 
   const restoreCorrelation = useCallback((state: any) => {
     if (state.activeTab !== undefined) setActiveTab(state.activeTab);
@@ -1086,12 +1507,20 @@ export default function Correlation() {
     if (state.matrixMode !== undefined) setMatrixMode(state.matrixMode);
     if (state.matrixWindow !== undefined) setMatrixWindow(state.matrixWindow);
     if (state.visibleWindows !== undefined) setVisibleWindows(new Set(state.visibleWindows));
+    if (Array.isArray(state.visibleCorrCharts)) {
+      const valid = state.visibleCorrCharts.filter((c: any) => typeof c === "string" && (CHART_KEYS as readonly string[]).includes(c));
+      setVisibleCorrCharts(new Set(valid));
+    }
     if (state.uniMode !== undefined) setUniMode(state.uniMode);
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
     if (state.uniMetric !== undefined) setUniMetric(state.uniMetric);
   }, []);
 
-  useWorkspaceTab("correlation", serializeCorrelation, restoreCorrelation);
+  const universeSig = useUniverseSignature();
+  useWorkspaceTab("correlation", serializeCorrelation, restoreCorrelation, {
+    universeSig,
+    resultFields: ["specA", "specB", "matrixSpecs"],
+  });
 
   // Fetch tickers + macro catalog
   const { data: tickers = [] } = useQuery<TickerMeta[]>({ queryKey: ["tickers-list"], queryFn: async () => {
@@ -1190,11 +1619,11 @@ export default function Correlation() {
       <div className="w-[250px] border-r border-border bg-card flex flex-col flex-shrink-0 overflow-y-auto">
         {/* Tab toggle */}
         <div className="px-2 py-2 border-b border-border">
-          <div className="flex gap-0.5">
+          <div className="grid grid-cols-2 gap-0.5">
             <Button
               variant={activeTab === "pairwise" ? "default" : "secondary"}
               size="sm"
-              className="flex-1 h-7 text-[10px] px-1.5"
+              className="h-7 text-[10px] px-1.5 w-full"
               onClick={() => setActiveTab("pairwise")}
               data-testid="tab-pairwise"
             >
@@ -1203,7 +1632,7 @@ export default function Correlation() {
             <Button
               variant={activeTab === "matrix" ? "default" : "secondary"}
               size="sm"
-              className="flex-1 h-7 text-[10px] px-1.5"
+              className="h-7 text-[10px] px-1.5 w-full"
               onClick={() => setActiveTab("matrix")}
               data-testid="tab-matrix"
             >
@@ -1212,16 +1641,38 @@ export default function Correlation() {
             <Button
               variant={activeTab === "universe" ? "default" : "secondary"}
               size="sm"
-              className="flex-1 h-7 text-[10px] px-1.5"
+              className="h-7 text-[10px] px-1.5 w-full"
               onClick={() => setActiveTab("universe")}
               data-testid="tab-universe-corr"
             >
               <Globe className="w-3 h-3 mr-0.5" /> Univ
             </Button>
+            <Button
+              variant={activeTab === "drivers" ? "default" : "secondary"}
+              size="sm"
+              className="h-7 text-[10px] px-1.5 w-full"
+              onClick={() => setActiveTab("drivers")}
+              data-testid="tab-drivers"
+            >
+              <Zap className="w-3 h-3 mr-0.5" /> Drivers
+            </Button>
           </div>
         </div>
 
-        {activeTab === "pairwise" ? (
+        {activeTab === "drivers" ? (
+          <div className="p-3 flex-1 overflow-y-auto space-y-3">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Auto Driver Scan</div>
+            <div className="text-[11px] text-muted-foreground leading-relaxed">
+              Pick a ticker, select a target, and click Run Driver Scan in the main panel.
+            </div>
+            <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
+              <div className="font-semibold text-foreground/70">Scan details</div>
+              <div>Windows: 30 / 60 / 120 / 252 / 504 / 756d</div>
+              <div>Lags: ±1, ±5, ±10, ±30, ±60d</div>
+              <div>~200 factors × 6 windows × 11 lags</div>
+            </div>
+          </div>
+        ) : activeTab === "pairwise" ? (
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
             <SeriesPicker
               label="Series A"
@@ -1470,7 +1921,9 @@ export default function Correlation() {
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        {activeTab === "pairwise" ? (
+        {activeTab === "drivers" ? (
+          <DriverScanPanel tickers={tickers} onPin={pinFromDriver} />
+        ) : activeTab === "pairwise" ? (
           <PairwiseView
             data={pairwise}
             loading={pairLoading}
@@ -1478,6 +1931,8 @@ export default function Correlation() {
             specB={specB}
             mode={corrMode}
             visibleWindows={visibleWindows}
+            visibleCharts={visibleCorrCharts}
+            setVisibleCharts={setVisibleCorrCharts}
           />
         ) : activeTab === "matrix" ? (
           <MatrixView
@@ -1564,6 +2019,8 @@ function PairwiseView({
   specB,
   mode,
   visibleWindows,
+  visibleCharts,
+  setVisibleCharts,
 }: {
   data: PairwiseResult | undefined;
   loading: boolean;
@@ -1571,7 +2028,11 @@ function PairwiseView({
   specB: string;
   mode: string;
   visibleWindows: Set<number>;
+  visibleCharts: Set<string>;
+  setVisibleCharts: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
+  const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -1591,7 +2052,6 @@ function PairwiseView({
   const s = data.summary;
   const labelA = formatSpec(specA);
   const labelB = formatSpec(specB);
-  const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -1656,10 +2116,40 @@ function PairwiseView({
       {/* Methodology & Guidance Panel */}
       <MethodologyPanel mode={mode} />
 
+      {/* Chart visibility toggles */}
+      {!maximizedChart && (
+        <div className="flex items-center gap-1.5 flex-wrap" data-testid="corr-chart-toggles">
+          <span className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">
+            <Eye className="w-3 h-3" /> Charts
+          </span>
+          {CHART_KEYS.map(key => {
+            const on = visibleCharts.has(key);
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  setVisibleCharts(prev => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  });
+                }}
+                className={`text-[10px] font-mono px-2 py-1 border rounded transition-colors ${on ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+                data-testid={`toggle-corr-chart-${key}`}
+                title={`Show/hide ${CHART_LABELS[key]} chart`}
+              >
+                {CHART_LABELS[key]}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Charts grid — show only maximized chart if one is expanded */}
       <div className={`grid gap-3 ${maximizedChart ? "" : "grid-cols-1 lg:grid-cols-2"}`}>
         {/* Dual-axis level series */}
-        {(!maximizedChart || maximizedChart === "levels") && (
+        {visibleCharts.has("levels") && (!maximizedChart || maximizedChart === "levels") && (
           <MiniChart
             data={data.levelsA}
             color={COLORS.primary}
@@ -1674,7 +2164,7 @@ function PairwiseView({
         )}
 
         {/* Rolling correlation — multi-window with user-selected windows + CI bands */}
-        {data.multiWindowRolling && visibleWindows.size > 0 && (!maximizedChart || maximizedChart === "rolling") && (() => {
+        {visibleCharts.has("rolling") && data.multiWindowRolling && visibleWindows.size > 0 && (!maximizedChart || maximizedChart === "rolling") && (() => {
           const windows = Array.from(visibleWindows).sort((a, b) => a - b);
           const [first, second, third, fourth] = windows;
           const legendParts = windows.map(w => `${w}d`).join(" / ");
@@ -1705,7 +2195,7 @@ function PairwiseView({
         })()}
 
         {/* Rolling beta */}
-        {data.rollingBeta && data.rollingBeta.length > 0 && (!maximizedChart || maximizedChart === "rollingBeta") && (
+        {visibleCharts.has("rollingBeta") && data.rollingBeta && data.rollingBeta.length > 0 && (!maximizedChart || maximizedChart === "rollingBeta") && (
           <MiniChart
             data={data.rollingBeta}
             color="#ec4899"
@@ -1719,7 +2209,7 @@ function PairwiseView({
         )}
 
         {/* Scatter plot */}
-        {(!maximizedChart || maximizedChart === "scatter") && (
+        {visibleCharts.has("scatter") && (!maximizedChart || maximizedChart === "scatter") && (
           <CanvasChartWrapper
             title={`Scatter: ${labelA} vs ${labelB}`}
             chartId="scatter"
@@ -1742,7 +2232,7 @@ function PairwiseView({
         )}
 
         {/* Cross-correlation lag chart */}
-        {(!maximizedChart || maximizedChart === "crossCorr") && (
+        {visibleCharts.has("crossCorr") && (!maximizedChart || maximizedChart === "crossCorr") && (
           <CanvasChartWrapper
             title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
             chartId="crossCorr"
@@ -1763,7 +2253,7 @@ function PairwiseView({
         )}
 
         {/* ACF panels */}
-        {!maximizedChart && (
+        {visibleCharts.has("acf") && !maximizedChart && (
           <div className="grid grid-cols-2 gap-3">
             <ACFChart
               data={data.acfA}

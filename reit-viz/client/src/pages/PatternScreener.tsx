@@ -24,6 +24,7 @@ import { AlertTriangle, ArrowUpDown, ChevronUp, ChevronDown, Loader2, ExternalLi
 import { S as SquareIcon } from "@/lib/square";
 import { P as PlayIcon } from "@/lib/play";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { isBasketSymbol } from "@/lib/basketSymbol";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useBaskets } from "@/lib/baskets";
@@ -418,7 +419,7 @@ export default function PatternScreener() {
 
         try {
           const { series, bars } = await item.loader();
-          const minBars = Math.max(patternOpts.minBars, channelOpts.minBars ?? 0);
+          const minBars = Math.max(patternOpts.minBars, channelOpts.minBars);
           if (series.length < minBars) {
             setRows((prev) => {
               const next = prev.slice();
@@ -638,10 +639,10 @@ export default function PatternScreener() {
           <CardContent className="px-3 pb-3 space-y-3">
             {/* Scope-specific inputs */}
             {scope === "single" && (
-              <div className={fetchWorkbookTickers ? "" : "opacity-40 pointer-events-none"}>
+              <div className={isBasketSymbol(singleTicker) ? "opacity-40 pointer-events-none" : ""}>
                 <UnifiedTickerPicker
                   tickers={allTickers}
-                  value={singleTicker}
+                  value={isBasketSymbol(singleTicker) ? "" : singleTicker}
                   onChange={setSingleTicker}
                   disabled={isRunning}
                   label="Ticker"

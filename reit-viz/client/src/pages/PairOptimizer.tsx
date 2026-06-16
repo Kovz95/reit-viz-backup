@@ -28,6 +28,13 @@ const FWD_HORIZONS = FORWARD_HORIZONS as HorizonDef[];
 
 const Z_SCORE_WINDOWS = [21, 42, 63, 126, 189, 252, 504];
 
+const DEFAULT_METRICS = [
+  "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
+  "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2",
+  "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
+  "Dividend Yield", "Implied Cap Rate",
+];
+
 const GROUP_BY_OPTIONS = [
   { key: "economy", label: "Economy" },
   { key: "sector", label: "Sector" },
@@ -176,7 +183,7 @@ export default function PairOptimizer() {
   );
   const classFilter = useOptimizerClassFilter(filteredTickers, mode === "scan", "pair-opt-clf");
   const effectiveTickers = mode === "scan" ? classFilter.filteredTickers : filteredTickers;
-  const [availableMetrics, setAvailableMetrics] = useState<string[]>([]);
+  const [availableMetrics, setAvailableMetrics] = useState<string[]>(DEFAULT_METRICS);
 
   useEffect(() => {
     fetchWorkbookTickers().then((tickers: any[]) => {
@@ -187,7 +194,7 @@ export default function PairOptimizer() {
       }
       if (tickers.length > 0 && tickers[0].metrics) {
         const metricNames = tickers[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
-        const filtered = availableMetrics.filter((m) => metricNames.includes(m));
+        const filtered = DEFAULT_METRICS.filter((m) => metricNames.includes(m));
         if (filtered.length > 0) setAvailableMetrics(filtered);
       }
     });

@@ -112,10 +112,37 @@ export function filterByDateRange(
  */
 export function resampleWeekly(
   bars: any,
-  _mode?: string
-): FilteredResult {
+  mode?: string
+): any {
   const { weeklyDownsample } = require("@/lib/weeklyDownsample");
-  return weeklyDownsample(bars, _mode);
+  // Match the bundle's resampler (Ss/Uk): ONLY "weekly" downsamples; every other
+  // mode ("daily", "weekly_on_daily", undefined) returns the input unchanged with
+  // an identity dailyIndexMap. Previously this always downsampled, which corrupted
+  // daily-mode optimizer runs.
+  if (mode === "weekly") {
+    return weeklyDownsample(bars, mode);
+  }
+  // Identity (daily) — normalise to parallel arrays with a 1:1 dailyIndexMap.
+  let dates: string[], closes: number[], adjCloses: number[], highs: number[], lows: number[], opens: number[], volumes: number[];
+  if (Array.isArray(bars)) {
+    dates = bars.map((b: any) => b.date ?? "");
+    closes = bars.map((b: any) => b.close ?? 0);
+    adjCloses = bars.map((b: any) => b.adjClose ?? b.close ?? 0);
+    highs = bars.map((b: any) => b.high ?? 0);
+    lows = bars.map((b: any) => b.low ?? 0);
+    opens = bars.map((b: any) => b.open ?? 0);
+    volumes = bars.map((b: any) => b.volume ?? 0);
+  } else {
+    const o = bars ?? {};
+    dates = o.dates ?? [];
+    closes = o.closes ?? [];
+    adjCloses = o.adjCloses ?? closes;
+    highs = o.highs ?? closes;
+    lows = o.lows ?? closes;
+    opens = o.opens ?? closes;
+    volumes = o.volumes ?? new Array(closes.length).fill(0);
+  }
+  return { dates, closes, adjCloses, highs, lows, opens, volumes, dailyIndexMap: dates.map((_, i) => i) };
 }
 
 /**
