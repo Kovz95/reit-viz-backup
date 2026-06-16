@@ -301,7 +301,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK",
+      "SPREAD", "BETASPRD", "PCTRANK", "PAIRS",
     ]);
     // Strip data from series that can be re-fetched to keep the blob small.
     // Keep data inline for uploaded series AND derived (synthetic) series.
@@ -329,7 +329,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK",
+      "SPREAD", "BETASPRD", "PCTRANK", "PAIRS",
     ]);
     // Re-fetch OHLC for tickers (skip synthetic)
     const tks = new Set<string>();
@@ -480,9 +480,14 @@ export default function Dashboard() {
   // Load a preset view for a given ticker
   const loadViewForTicker = useCallback(
     async (ticker: string, viewName?: string) => {
-      const view = viewName || activeView;
-      const metrics = allViews[view];
-      if (!metrics) return;
+      let view = viewName || activeView;
+      let metrics = allViews[view];
+      if (!metrics) {
+        view = DEFAULT_VIEW;
+        metrics = allViews[view];
+        if (!metrics) return;
+        setActiveView(view);
+      }
 
       paneGeneration++;
       const myGeneration = paneGeneration;
@@ -611,7 +616,11 @@ export default function Dashboard() {
   // Navigate to next/prev ticker
   const navigateTicker = useCallback(
     (direction: "next" | "prev") => {
-      if (!tickerList.length || currentTickerIndex < 0) return;
+      if (!tickerList.length) return;
+      if (currentTickerIndex < 0) {
+        loadViewForTicker(tickerList[0].ticker);
+        return;
+      }
       const newIndex =
         direction === "next"
           ? (currentTickerIndex + 1) % tickerList.length
@@ -678,11 +687,12 @@ export default function Dashboard() {
   const changeView = useCallback(
     (viewName: string) => {
       setActiveView(viewName);
-      if (activeTicker) {
-        loadViewForTicker(activeTicker, viewName);
+      const ticker = activeTicker || (tickerList.length > 0 ? tickerList[0].ticker : null);
+      if (ticker) {
+        loadViewForTicker(ticker, viewName);
       }
     },
-    [activeTicker, loadViewForTicker]
+    [activeTicker, tickerList, loadViewForTicker]
   );
 
   // Add series with specific add mode
