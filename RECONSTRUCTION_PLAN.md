@@ -52,17 +52,30 @@ TVAOptimizer permanently-empty compute stub, MomentumOptimizer null weekly serie
 SimilarSetups time-feature keys, and a self-inflicted `require()` regression in
 optimizerInputSeries (caught by the harness) that had crashed 9 optimizer pages.
 
-### Remaining deeper work (NOT plain audit fixes)
-- **Stale/simplified pages needing FULL rebuilds** (work but lack bundle features):
-  `MACrossoverOptimizer` (737 vs 5455 lines), `ZScoreOptimizer` (no pair/basket/
-  evaluate modes), `Scanner` (simplified UI).
-- **Dashboard (main Charts page) and Heatmap**: no standalone beautified chunk —
-  logic lives in `index-CsG73Aq_.js`; not deeply audited. Dashboard is the most
-  complex page (drawings/channels/fibs/S-R/patterns) and is the top follow-up.
-- **Shared-lib gaps**: driverScan engine (stub, Correlation Drivers tab);
-  LSMA/SLSMA indicators (Macro/Screener); `getDailyIndexFromWeekly` signature;
-  `useWorkspaceTab` ignores 4th opts arg (universeSig/resultFields);
-  pairSignalAnalyzer direction literals; Screener pairCombo/RV-verdict features.
+### Production-parity push (2026-06-16) — DONE
+- **Stale pages fully rebuilt**: MACrossoverOptimizer (737→3949 lines, all MA
+  types/signal families/modes/frequencies), ZScoreOptimizer (all modes + evaluate),
+  Scanner (full bundle view layer).
+- **Dashboard (Charts)**: view-fallbacks, goto-symbol/pending-symbol, viewGroups,
+  colorByMap persistence, custom-chart save/load/autosave, RELVAL presets,
+  persistent SR/trendline seed restore (ChartPane), BASKET: ticker plotting.
+- **Heatmap**: confirmed production `/heatmap` is a redirect to `/ranking`; the
+  reconstruction keeps a bonus full Heatmap page (extra, not a divergence).
+- **Shared libs**: driverScan engine reconstructed (real factor scan); LSMA/SLSMA
+  added to indicators.ts; getDailyIndexFromWeekly fixed (dailyIndexMap form);
+  pairSignalAnalyzer emits long_ratio/short_ratio; weeklyDownsample weekly_on_daily
+  helpers; getGroupMedianByIndex/getGroupMedianSeries real client aggregation;
+  getTradingDates alias (unblocked premiumDiscount).
+- **Server**: reconstructed 11 missing endpoints (workbook/series, workbook/data,
+  ohlcv, peer-relative, global-universe, performance + 3 sub-routes, basket/ohlc,
+  basket/series) in reit-viz/server/routes.ts.
+
+### Known remaining tail (minor / data-dependent)
+- viewGroups uses the trio catalog, not the bundle's fuller 9-group set.
+- Local server has no per-ticker data until a workbook is uploaded (endpoints
+  return valid-empty until then); peer/basket features need that data.
+- `useWorkspaceTab` 4th opts arg (universeSig/resultFields) still ignored.
+- SR-seed `ma` type supports SMA/EMA/HMA (others fall back to SMA).
 
 ## Method (per work item)
 1. **Reconcile** MANIFEST vs actual `reit-viz/client/src/**` — mark already-present files, list true gaps.
