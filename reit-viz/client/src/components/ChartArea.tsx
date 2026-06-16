@@ -35,6 +35,7 @@ import {
   Pencil,
   ArrowLeft,
 } from "lucide-react";
+import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
 import type { GridLayout } from "./GridLayoutPicker";
 import {
@@ -807,6 +808,14 @@ export default function ChartArea({
         >
           <ChevronRight className="w-4 h-4" />
         </Button>
+
+        {/* Basket selector — plot a saved basket as a chart series */}
+        <BasketTickerPill
+          activeTicker={activeTicker}
+          onSelectTicker={onSelectTicker}
+          fallbackTicker={currentTicker?.ticker ?? tickerList[0]?.ticker ?? null}
+          size="sm"
+        />
 
         <div className="mx-1 w-px h-4 bg-border" />
 

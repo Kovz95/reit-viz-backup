@@ -13,6 +13,11 @@ import { getSeriesColor } from "@/lib/chartColors";
 import { useUniverse } from "@/lib/universeContext";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
 import { useWorkspaceContext, useWorkspaceTab } from "@/lib/workspaceContext";
+import { useBaskets } from "@/lib/useBaskets";
+import type { Basket } from "@/lib/useBaskets";
+import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
+import { getBasketOhlc, buildBasketOhlc } from "@/lib/basketOhlc";
+import type { BasketOhlcResult } from "@/lib/basketOhlc";
 
 export interface CustomChartView {
   id: number;
@@ -274,6 +279,102 @@ let paneGeneration = 0;
 // Keys are series IDs, values are { color, lineWidth, lineStyle }
 const seriesStyleOverrides = new Map<string, { color?: string; lineWidth?: number; lineStyle?: number }>();
 
+// ── Basket series resolution ──────────────────────────────────────────────
+// Resolve a BASKET:<id> ticker's OHLCV via the basket infrastructure
+// (buildBasketOhlc + getBasketOhlc → /api/basket/ohlc) instead of the normal
+// per-ticker getTickerRaw path. Mirrors the bundle, where getOhlcData /
+// getMetricSeries dispatch on the "BASKET:" prefix and delegate to the
+// basket OHLC helpers (index-CsG73Aq_.js ~15077, 15168, 15262).
+
+/** Fetch and cache the BasketOhlcResult for a BASKET:<id> ticker. */
+async function fetchBasketOhlc(
+  basketTicker: string,
+  resolve: (id: string) => Basket | undefined
+): Promise<BasketOhlcResult | null> {
+  const id = extractBasketId(basketTicker);
+  if (!id) return null;
+  const basket = resolve(id);
+  if (!basket) return null;
+  const def = buildBasketOhlc(basket.tickers, basket, {
+    weighting: basket.weighting,
+    rebalance: basket.rebalance,
+    customWeights: basket.customWeights,
+    volLookback: basket.volLookback,
+  });
+  // Preserve the basket's display name for any downstream labelling.
+  (def as any).name = basket.name ?? def.name;
+  return getBasketOhlc(def);
+}
+
+/** Convert a BasketOhlcResult into lightweight-charts OHLC candle points. */
+function basketOhlcToCandles(res: BasketOhlcResult): { time: string; open: number; high: number; low: number; close: number }[] {
+  const out: { time: string; open: number; high: number; low: number; close: number }[] = [];
+  const n = Math.min(
+    res.priceDates.length,
+    res.closes.length
+  );
+  for (let i = 0; i < n; i++) {
+    const close = res.closes[i];
+    if (close == null || !Number.isFinite(close)) continue;
+    const open = res.opens?.[i];
+    const high = res.highs?.[i];
+    const low = res.lows?.[i];
+    out.push({
+      time: res.priceDates[i],
+      open: Number.isFinite(open) ? open : close,
+      high: Number.isFinite(high) ? high : close,
+      low: Number.isFinite(low) ? low : close,
+      close,
+    });
+  }
+  out.sort((a, b) => a.time.localeCompare(b.time));
+  return out;
+}
+
+/** Extract a single metric (close/open/high/low/volume) as {time,value}[] from a BasketOhlcResult. */
+function basketMetricSeries(res: BasketOhlcResult, metric: string): { time: string; value: number }[] {
+  let arr: number[] | undefined;
+  switch (metric) {
+    case "close": arr = res.closes; break;
+    case "open": arr = res.opens; break;
+    case "high": arr = res.highs; break;
+    case "low": arr = res.lows; break;
+    case "Volume": arr = res.volumes; break;
+    default: arr = undefined;
+  }
+  if (!arr) return [];
+  const out: { time: string; value: number }[] = [];
+  const n = Math.min(res.priceDates.length, arr.length);
+  for (let i = 0; i < n; i++) {
+    const v = arr[i];
+    if (v != null && Number.isFinite(v)) out.push({ time: res.priceDates[i], value: v });
+  }
+  return out;
+}
+
+/**
+ * Basket-aware replacement for getMetricSeries: routes BASKET: tickers through
+ * the basket OHLC pipeline, everything else through the normal path.
+ */
+async function getMetricSeriesResolved(
+  ticker: string,
+  metric: string,
+  resolve: (id: string) => Basket | undefined,
+  basketCache?: Map<string, BasketOhlcResult | null>
+): Promise<{ time: string; value: number }[]> {
+  if (isBasketTicker(ticker)) {
+    let res = basketCache?.get(ticker);
+    if (res === undefined) {
+      res = await fetchBasketOhlc(ticker, resolve);
+      basketCache?.set(ticker, res);
+    }
+    if (!res) return [];
+    // Only price-source metrics are defined for a synthetic basket series.
+    return basketMetricSeries(res, metric);
+  }
+  return getMetricSeries(ticker, metric);
+}
+
 export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [plottedSeries, setPlottedSeries] = useState<PlottedSeries[]>([]);
@@ -296,6 +397,17 @@ export default function Dashboard() {
   const [forceOpenSection, setForceOpenSection] = useState<string | null>(null);
   // Universe context (for workspace save/load)
   const universe = useUniverse();
+
+  // Basket store (for resolving BASKET: chart series).
+  // Mirrored to a ref so async callbacks (loadViewForTicker / refetchSeriesData)
+  // can resolve a basket by id without being re-created on every basket change.
+  const { baskets, getBasket } = useBaskets();
+  const basketsRef = useRef<Basket[]>([]);
+  basketsRef.current = baskets;
+  const resolveBasket = useCallback(
+    (id: string): Basket | undefined => basketsRef.current.find((b) => b.id === id),
+    []
+  );
 
   // Workspace tracking (manual save/load only — autosave handled by AutoSaveManager)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null);
@@ -387,9 +499,12 @@ export default function Dashboard() {
     ]);
     // Strip data from series that can be re-fetched to keep the blob small.
     // Keep data inline for uploaded series AND derived (synthetic) series.
+    // BASKET: series are kept inline too — they are synthetic (computed from a
+    // basket definition that lives in localStorage and may differ on reload),
+    // mirroring how the bundle groups "BASKET:" with the synthetic-ticker set.
     const lightSeries = plottedSeries.map(s => {
       const isUploaded = s.id.startsWith("uploaded:") || s.metric.startsWith("xl:");
-      const isDerived = SYNTHETIC_TICKERS.has(s.ticker);
+      const isDerived = SYNTHETIC_TICKERS.has(s.ticker) || isBasketTicker(s.ticker);
       return (isUploaded || isDerived) ? s : { ...s, data: [] };
     });
     return {
@@ -414,17 +529,31 @@ export default function Dashboard() {
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
       "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
     ]);
-    // Re-fetch OHLC for tickers (skip synthetic)
+    // Per-call cache so a basket's OHLC is fetched once even if it backs both
+    // an OHLC pane and multiple metric series.
+    const basketCache = new Map<string, BasketOhlcResult | null>();
+
+    // Re-fetch OHLC for tickers (skip synthetic). BASKET: tickers resolve their
+    // OHLC via the basket pipeline (getBasketOhlc) rather than getOhlcData.
     const tks = new Set<string>();
     for (const s of stateSeries) {
       if (s.ticker && s.ticker !== "MACRO" && !SYNTHETIC_TICKERS.has(s.ticker) && s.metric === "close") tks.add(s.ticker);
     }
     for (const tk of tks) {
+      if (isBasketTicker(tk)) {
+        fetchBasketOhlc(tk, resolveBasket).then(res => {
+          basketCache.set(tk, res ?? null);
+          if (res) setOhlcCache(prev => ({ ...prev, [tk]: basketOhlcToCandles(res) }));
+        }).catch(() => {});
+        continue;
+      }
       getOhlcData(tk).then(data => {
         setOhlcCache(prev => ({ ...prev, [tk]: data }));
       }).catch(() => {});
     }
-    // Re-fetch data for all non-uploaded, non-derived series with empty data
+    // Re-fetch data for all non-uploaded, non-derived series with empty data.
+    // (BASKET: series persist their data inline, so they normally skip this;
+    //  the basket-aware getMetricSeriesResolved handles any that are empty.)
     const seriesToFetch = stateSeries.filter(
       (s: any) => !s.id.startsWith("uploaded:") && !s.metric.startsWith("xl:") && !SYNTHETIC_TICKERS.has(s.ticker) && (!s.data || s.data.length === 0)
     );
@@ -446,7 +575,7 @@ export default function Dashboard() {
           .catch(() => {});
         continue;
       }
-      getMetricSeries(s.ticker, s.metric)
+      getMetricSeriesResolved(s.ticker, s.metric, resolveBasket, basketCache)
         .then(data => {
           setPlottedSeries(prev => prev.map(ps =>
             ps.id === s.id ? { ...ps, data } : ps
@@ -454,7 +583,7 @@ export default function Dashboard() {
         })
         .catch(() => {});
     }
-  }, []);
+  }, [resolveBasket]);
 
   const restoreCharts = useCallback((state: any) => {
     if (!state) return;
@@ -519,10 +648,17 @@ export default function Dashboard() {
     return Array.from(tks);
   }, [plottedSeries]);
 
-  // Fetch OHLC data for all unique tickers
+  // Fetch OHLC data for all unique tickers. BASKET: tickers resolve their OHLC
+  // through the basket pipeline (getBasketOhlc) rather than getOhlcData.
   useEffect(() => {
     for (const tk of uniquePaneTickers) {
       if (!ohlcCache[tk]) {
+        if (isBasketTicker(tk)) {
+          fetchBasketOhlc(tk, resolveBasket).then(res => {
+            if (res) setOhlcCache(prev => ({ ...prev, [tk]: basketOhlcToCandles(res) }));
+          }).catch(() => {});
+          continue;
+        }
         getOhlcData(tk).then(data => {
           setOhlcCache(prev => ({ ...prev, [tk]: data }));
         }).catch(() => {});
@@ -579,9 +715,23 @@ export default function Dashboard() {
       setActiveTicker(ticker);
 
       try {
+        // For BASKET: tickers, resolve OHLC once via the basket pipeline and
+        // prime the OHLC cache so the candle/price pane renders. Metric series
+        // are resolved through the basket-aware path (non-price metrics return
+        // empty, mirroring the bundle's price-source-only basket series).
+        const isBasket = isBasketTicker(ticker);
+        const basketCache = new Map<string, BasketOhlcResult | null>();
+        if (isBasket) {
+          const res = await fetchBasketOhlc(ticker, resolveBasket);
+          basketCache.set(ticker, res ?? null);
+          if (res && paneGeneration === myGeneration) {
+            setOhlcCache(prev => ({ ...prev, [ticker]: basketOhlcToCandles(res) }));
+          }
+        }
+
         const results = await Promise.all(
           metrics.map(async (metric, idx) => {
-            const data = await getMetricSeries(ticker, metric);
+            const data = await getMetricSeriesResolved(ticker, metric, resolveBasket, basketCache);
             return { metric, data, idx };
           })
         );
@@ -633,7 +783,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    [activeView, allViews]
+    [activeView, allViews, resolveBasket]
   );
 
   // Load a pairs preset: fetches derived data for tickerA/tickerB, builds panes with auto-indicators
