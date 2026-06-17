@@ -38,21 +38,32 @@ async function loadGlobalRecords(): Promise<GlobalRecord[]> {
   if (_cache) return _cache;
   if (_inFlight) return _inFlight;
 
-  _inFlight = fetch("/api/global-universe")
-    .then(async (res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const records: GlobalRecord[] = Array.isArray(data)
-        ? data
-        : (data.records ?? data.tickers ?? []);
-      _cache = records;
-      _inFlight = null;
-      return records;
-    })
-    .catch((err) => {
-      _inFlight = null;
-      throw err;
-    });
+  // Production serves the global universe as a static file (/data/global-universe.json);
+  // the reconstructed dev server exposes /api/global-universe. Try the static file first,
+  // fall back to the API. Guard against the SPA index.html being returned for a missing
+  // route (which would otherwise blow up as "Unexpected token '<'" in JSON.parse).
+  const tryFetch = async (url: string): Promise<GlobalRecord[] | null> => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const text = await res.text();
+      if (!text || text.trimStart().startsWith("<")) return null; // HTML, not JSON
+      const data = JSON.parse(text);
+      return Array.isArray(data) ? data : (data.records ?? data.tickers ?? []);
+    } catch {
+      return null;
+    }
+  };
+
+  _inFlight = (async () => {
+    const records =
+      (await tryFetch("/data/global-universe.json")) ??
+      (await tryFetch("/api/global-universe")) ??
+      [];
+    _cache = records;
+    _inFlight = null;
+    return records;
+  })();
 
   return _inFlight;
 }
