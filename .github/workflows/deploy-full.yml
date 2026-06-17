@@ -1,0 +1,108 @@
+name: Deploy reit-viz FULL (server + client) to Vultr
+
+# FULL-STACK deploy: ships BOTH the Node server (dist/index.cjs) and the client
+# (dist/public), refreshes prod deps, and restarts pm2. This REPLACES the live
+# backend — riskier than the client-only deploy. It is manual-only and requires
+# typing the confirm phrase, and it ALWAYS backs up the live install first.
+#
+# Prefer the client-only "Deploy reit-viz to Vultr" workflow for routine frontend
+# changes. Use THIS one only when you've changed server code (reit-viz/server).
+#
+# REQUIRED secret: VULTR_SSH_PASSWORD
+# OPTIONAL repo variables: VULTR_HOST (45.63.20.126), VULTR_USER (root),
+#                          VULTR_DIR (/opt/reit-viz), PM2_APP (reit-viz)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY-FULL to confirm replacing the live backend'
+        type: string
+        required: true
+
+concurrency:
+  group: deploy-reit-viz   # shares the group with the client-only deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-full:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reit-viz
+    steps:
+      - name: Guard — require confirm phrase
+        if: ${{ inputs.confirm != 'DEPLOY-FULL' }}
+        run: |
+          echo "::error::confirm input must be exactly DEPLOY-FULL (got '${{ inputs.confirm }}'). Aborting."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reit-viz/package-lock.json
+
+      - name: Install build deps
+        run: npm ci
+
+      - name: Build server + client
+        run: npm run build   # script/build.ts -> dist/index.cjs (server) + dist/public (client)
+
+      - name: Package release (dist + manifests)
+        run: |
+          tar -czf /tmp/reit-viz-full.tar.gz dist package.json package-lock.json
+          ls -lh /tmp/reit-viz-full.tar.gz
+
+      - name: Deploy to Vultr (backup-first)
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VHOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VUSER: ${{ vars.VULTR_USER || 'root' }}
+          VDIR:  ${{ vars.VULTR_DIR  || '/opt/reit-viz' }}
+          PM2_APP: ${{ vars.PM2_APP || 'reit-viz' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then
+            echo "::error::VULTR_SSH_PASSWORD secret is not set."; exit 1
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          sshpass -e scp $SSHOPTS /tmp/reit-viz-full.tar.gz "$VUSER@$VHOST:/tmp/"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" "VDIR='$VDIR' APP='$PM2_APP' bash -s" <<'REMOTE'
+            set -euo pipefail
+            TS="$(date +%Y%m%d-%H%M%S)"
+            cd "$VDIR"
+            # 1) Backup current dist + data + DBs (data/DBs live outside dist and are preserved as-is).
+            mkdir -p "$VDIR/backups"
+            tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" \
+              --exclude='./backups' dist package.json package-lock.json data.db* data 2>/dev/null || \
+            tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" --exclude='./backups' dist package.json package-lock.json 2>/dev/null || true
+            echo "Backed up to $VDIR/backups/reit-viz-$TS.tar.gz"
+            # 2) Swap in the new dist (replace server bundle + client assets; data/ and data.db untouched).
+            rm -rf "$VDIR/dist.new" && mkdir -p "$VDIR/dist.new"
+            tar -xzf /tmp/reit-viz-full.tar.gz -C "$VDIR/dist.new"
+            rm -rf "$VDIR/dist.prev"
+            [ -d "$VDIR/dist" ] && mv "$VDIR/dist" "$VDIR/dist.prev" || true
+            mv "$VDIR/dist.new/dist" "$VDIR/dist"
+            cp "$VDIR/dist.new/package.json" "$VDIR/package.json"
+            cp "$VDIR/dist.new/package-lock.json" "$VDIR/package-lock.json"
+            rm -rf "$VDIR/dist.new"
+            # 3) Refresh production deps (rebuilds native modules e.g. better-sqlite3).
+            npm ci --omit=dev --no-audit --no-fund
+            # 4) Restart. If it fails to come up, roll back dist and restart.
+            if pm2 restart "$APP" --update-env; then
+              sleep 3
+              echo "pm2 restarted $APP"
+            else
+              echo "::error::pm2 restart failed — rolling back dist"
+              rm -rf "$VDIR/dist" && mv "$VDIR/dist.prev" "$VDIR/dist"
+              pm2 restart "$APP" || true
+              exit 1
+            fi
+            rm -f /tmp/reit-viz-full.tar.gz
+          REMOTE
+          echo "Full deploy complete. Backup retained on server under $VDIR/backups/."
