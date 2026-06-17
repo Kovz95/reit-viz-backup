@@ -2,6 +2,12 @@
 // fetchWorkbookData: used in PairOptimizer.tsx, PairRatios.tsx (returns raw workbook data for a ticker)
 // fetchScatterData: used in Scatter.tsx
 // computeBasketSeries: used in PatternScreener.tsx
+//
+// The live backend has no /api/workbook/data route; PairOptimizer/PairRatios read the
+// result as a sparse-pair map (data[metric] = [[idx,val],...]), so it is derived from
+// GET /api/ticker/<sym> via toSparseMetrics (gL). See lib/tickerData.ts.
+
+import { fetchTickerRaw, toSparseMetrics, type SparsePair } from "@/lib/tickerData";
 
 export interface WorkbookDataResult {
   ticker: string;
@@ -38,16 +44,16 @@ export interface ScatterQueryResult {
 
 export async function fetchWorkbookData(
   ticker: string,
-  start?: string,
-  end?: string
-): Promise<WorkbookDataResult | null> {
-  const params = new URLSearchParams({ ticker });
-  if (start) params.set("start", start);
-  if (end) params.set("end", end);
-
-  const res = await fetch(`/api/workbook/data?${params.toString()}`);
-  if (!res.ok) return null;
-  return res.json();
+  _start?: string,
+  _end?: string
+): Promise<(Record<string, SparsePair[]> & WorkbookDataResult) | null> {
+  const raw = await fetchTickerRaw(ticker);
+  if (!raw) return null;
+  // Consumers (computePairRatios) read this as a sparse-pair map: data[metric] pairs.
+  const sparse = toSparseMetrics(raw.metrics) as Record<string, SparsePair[]> & WorkbookDataResult;
+  sparse.ticker = ticker;
+  sparse.dates = raw.dates;
+  return sparse;
 }
 
 export async function fetchWorkbookTickers(): Promise<any[]> {
@@ -57,18 +63,7 @@ export async function fetchWorkbookTickers(): Promise<any[]> {
   return Array.isArray(data) ? data : (data.tickers ?? []);
 }
 
-export async function fetchWorkbookSeriesForTicker(
-  ticker: string,
-  selection?: { kind?: string; metric?: string; [key: string]: any }
-): Promise<any | null> {
-  const params = new URLSearchParams({ ticker });
-  if (selection?.metric) params.set("metric", selection.metric);
-  if (selection?.kind) params.set("kind", selection.kind);
-
-  const res = await fetch(`/api/workbook/series?${params.toString()}`);
-  if (!res.ok) return null;
-  return res.json();
-}
+export { fetchWorkbookSeriesForTicker } from "@/lib/fetchWorkbookSeriesForTicker";
 
 export async function fetchScatterData(
   metricX: string,

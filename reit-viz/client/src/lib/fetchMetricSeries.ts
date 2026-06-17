@@ -1,22 +1,30 @@
-// Hand-written stub
-// Returns array of {time, value} points so call sites can use .length, .map(), etc.
+// fetchMetricSeries: returns a dense [{time, value}] series for one metric.
+// Used in EvaluatorPanel, Attribution, Distributions, FactorBacktest, MacroRegime,
+// RelativeStrength, SigmaMove, signalUtils.
+//
+// The live backend has no /api/metric-series route; the metric comes from
+// GET /api/ticker/<sym> ({ dates, metrics }). See lib/tickerData.ts.
+
+import { fetchTickerRaw, getDenseSeries } from "@/lib/tickerData";
+
 export type MetricSeriesPoint = { time: string; value: number };
 
 export async function fetchMetricSeries(
   ticker: string,
   metric: string,
-  opts?: { start?: string; end?: string; [key: string]: any }
+  _opts?: { start?: string; end?: string; [key: string]: any }
 ): Promise<MetricSeriesPoint[]> {
-  const params = new URLSearchParams({ ticker, metric });
-  if (opts?.start) params.set("start", opts.start);
-  if (opts?.end) params.set("end", opts.end);
-  const res = await fetch(`/api/metric-series?${params.toString()}`);
-  if (!res.ok) return [];
-  const raw: any = await res.json();
-  // Support both {dates,values} object format and array format
-  if (Array.isArray(raw)) return raw;
-  if (raw && Array.isArray(raw.dates)) {
-    return raw.dates.map((d: string, i: number) => ({ time: d, value: raw.values?.[i] ?? 0 }));
+  const raw = await fetchTickerRaw(ticker);
+  if (!raw) return [];
+  let series = getDenseSeries(raw, metric);
+
+  // Optional client-side date-range trim (the original API accepted start/end).
+  const start = _opts?.start;
+  const end = _opts?.end;
+  if (start || end) {
+    series = series.filter(
+      (p) => (!start || p.time >= start) && (!end || p.time <= end)
+    );
   }
-  return [];
+  return series;
 }

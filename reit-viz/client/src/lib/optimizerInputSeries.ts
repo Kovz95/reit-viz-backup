@@ -2,6 +2,7 @@
 
 import { isBasketTicker } from "@/lib/basketUtils";
 import type { OHLCVResult } from "@/lib/fetchTickerOHLCV";
+import { fetchTickerRaw, toDenseOHLCV, getDenseSeries } from "@/lib/tickerData";
 import { weeklyDownsample, weeklyDownsamplePrices, expandWeeklyToDaily } from "@/lib/weeklyDownsample";
 
 export { isBasketTicker };
@@ -181,22 +182,38 @@ export async function getWorkbookSeries(
   selection: InputSelection,
   opts?: { dateRange?: any }
 ): Promise<{ closes: number[]; highs: number[]; lows: number[]; opens: number[]; dates: string[]; priceDates: string[]; volumes: number[] } | null> {
-  const params = new URLSearchParams({ ticker });
-  if (selection.metric) params.set("metric", selection.metric);
-  if (selection.series) params.set("series", selection.series);
-  const res = await fetch(`/api/workbook/series?${params.toString()}`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  const closes = data.closes ?? [];
-  const dates = data.priceDates ?? data.dates ?? [];
+  // The live backend has no /api/workbook/series route; derive from /api/ticker/<sym>.
+  const raw = await fetchTickerRaw(ticker);
+  if (!raw) return null;
+
+  const metric = selection.metric;
+  // A fundamental-metric selection: that metric's values are the series.
+  if (selection.kind === "workbook" && metric && metric !== "close" && Array.isArray(raw.metrics[metric])) {
+    const series = getDenseSeries(raw, metric);
+    if (series.length === 0) return null;
+    const closes = series.map((p) => p.value);
+    const dates = series.map((p) => p.time);
+    return {
+      closes,
+      highs: closes,
+      lows: closes,
+      opens: closes,
+      dates,
+      priceDates: dates,
+      volumes: new Array(closes.length).fill(0),
+    };
+  }
+
+  const d = toDenseOHLCV(raw);
+  if (d.closes.length === 0) return null;
   return {
-    closes,
-    highs: data.highs ?? closes,
-    lows: data.lows ?? closes,
-    opens: data.opens ?? closes,
-    dates,
-    priceDates: dates,
-    volumes: data.volumes ?? new Array(closes.length).fill(0),
+    closes: d.closes,
+    highs: d.highs,
+    lows: d.lows,
+    opens: d.opens,
+    dates: d.dates,
+    priceDates: d.dates,
+    volumes: d.volumes,
   };
 }
 

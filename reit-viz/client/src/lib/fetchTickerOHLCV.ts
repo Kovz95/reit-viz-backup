@@ -1,5 +1,10 @@
 // Hand-written from call-site inference
 // Used in AutoTrendlineBacktest.tsx, LevelsAndTrendlines.tsx, PairOptimizer.tsx, PatternScreener.tsx
+//
+// The live backend has no /api/ohlcv route — per-ticker prices come from
+// GET /api/ticker/<sym> ({ dates, metrics }). See lib/tickerData.ts.
+
+import { fetchTickerRaw, toDenseOHLCV } from "@/lib/tickerData";
 
 export interface OHLCVBar {
   date: string;
@@ -29,39 +34,35 @@ export async function fetchTickerOHLCV(
   opts?: { freq?: "daily" | "weekly" | "monthly" },
   _extraArg?: any
 ): Promise<OHLCVResult> {
-  const params = new URLSearchParams({ ticker });
-  if (opts?.freq) params.set("freq", opts.freq);
+  const empty: OHLCVResult = {
+    dates: [], opens: [], highs: [], lows: [], closes: [], adjCloses: [],
+    volumes: [], bars: [], dailyIndexMap: new Map(),
+  };
 
-  const res = await fetch(`/api/ohlcv?${params.toString()}`);
-  if (!res.ok) throw new Error(`fetchTickerOHLCV: HTTP ${res.status}`);
-  const data = await res.json();
+  const raw = await fetchTickerRaw(ticker);
+  if (!raw) return empty;
 
-  // Normalise into parallel arrays regardless of server response shape
-  if (Array.isArray(data)) {
-    const bars: OHLCVBar[] = data;
-    const closes = bars.map((b) => b.close);
-    const dailyIndexMap = new Map<string, number>();
-    bars.forEach((b, i) => dailyIndexMap.set(b.date, i));
-    return {
-      dates: bars.map((b) => b.date),
-      opens: bars.map((b) => b.open),
-      highs: bars.map((b) => b.high),
-      lows: bars.map((b) => b.low),
-      closes,
-      adjCloses: closes,
-      volumes: bars.map((b) => b.volume ?? 0),
-      bars,
-      dailyIndexMap,
-    };
-  }
+  const d = toDenseOHLCV(raw);
+  const bars: OHLCVBar[] = d.dates.map((date, i) => ({
+    date,
+    open: d.opens[i],
+    high: d.highs[i],
+    low: d.lows[i],
+    close: d.closes[i],
+    volume: d.volumes[i],
+  }));
+  const dailyIndexMap = new Map<string, number>();
+  d.dates.forEach((date, i) => dailyIndexMap.set(date, i));
 
-  // Server already returned parallel arrays
-  const result = data as OHLCVResult;
-  if (!result.adjCloses) result.adjCloses = result.closes ?? [];
-  if (!result.dailyIndexMap && result.dates) {
-    const m = new Map<string, number>();
-    result.dates.forEach((d, i) => m.set(d, i));
-    result.dailyIndexMap = m;
-  }
-  return result;
+  return {
+    dates: d.dates,
+    opens: d.opens,
+    highs: d.highs,
+    lows: d.lows,
+    closes: d.closes,
+    adjCloses: d.closes,
+    volumes: d.volumes,
+    bars,
+    dailyIndexMap,
+  };
 }
