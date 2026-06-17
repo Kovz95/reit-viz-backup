@@ -18,6 +18,7 @@ interface ClassificationFiltersWithSourceProps {
   testIdPrefix: string;
   source?: string;
   onSourceChange?: (source: string) => void;
+  children?: React.ReactNode;
 }
 
 export function ClassificationFiltersWithSource({
@@ -33,6 +34,7 @@ export function ClassificationFiltersWithSource({
   testIdPrefix,
   source: sourceProp,
   onSourceChange,
+  children,
 }: ClassificationFiltersWithSourceProps) {
   const [localSource, setLocalSource] = useState("workbook");
   const effectiveSource = sourceProp ?? localSource;
@@ -104,6 +106,7 @@ export function ClassificationFiltersWithSource({
             load error
           </span>
         )}
+        {children}
       </div>
       <ClassificationFilters
         filters={filters}
