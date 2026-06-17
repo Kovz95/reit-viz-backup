@@ -34,6 +34,9 @@ import {
   Trash2,
   Columns3,
   Check,
+  Group,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -43,6 +46,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
 
 // ── Ranking Templates ──
@@ -59,12 +69,24 @@ interface CustomTemplate {
   metrics: string[];
   showRevisions: boolean;
   revMetric: string | null;
+  metricWeights?: Record<string, number> | null;
+  metricDirections?: Record<string, number> | null;
 }
 
 /** True when running on the deployed static site (POST/PUT/DELETE blocked). */
 const isDeployed = API_BASE !== "";
 
 const RANKING_TEMPLATES: RankingTemplate[] = [
+  {
+    label: "Rel Value",
+    metrics: [
+      "P/FFO FY2", "P/AFFO FY2", "P/E FY2", "EV/EBITDA FY2", "FFO Yield FY2",
+      "Dividend Yield", "FY1 FFO Growth", "FY2 FFO Growth", "% off 52wk High", "1M Price Chg%",
+      "Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "P/FFO LTM", "P/AFFO LTM", "P/E LTM",
+      "EV/EBITDA LTM", "AFFO Yield FY2", "FFO Yield LTM", "AFFO Yield LTM", "FY1 AFFO Growth",
+      "FY2 AFFO Growth", "FY1 EPS Growth", "FY2 EPS Growth", "Implied Cap Rate",
+    ],
+  },
   {
     label: "REIT FFO Overview",
     metrics: ["Implied Cap Rate", "P/FFO FY2", "FFO FY2", "FY2 FFO Growth", "Dividend Yield"],
@@ -102,6 +124,13 @@ const RANKING_TEMPLATES: RankingTemplate[] = [
     metrics: ["FY2 FFO Growth", "FY2 AFFO Growth", "FY2 EPS Growth", "1Y Price Chg%"],
   },
   {
+    label: "Multiples & Growth",
+    metrics: [
+      "P/FFO FY2", "P/AFFO FY2", "FY1 AFFO Growth", "FY1 FFO Growth", "FY2 AFFO Growth",
+      "FY2 FFO Growth",
+    ],
+  },
+  {
     label: "Short Squeeze Screen",
     metrics: ["Short Interest%", "SI Δ 1M", "SI Δ 3M", "P/FFO FY2", "1M Price Chg%"],
   },
@@ -112,6 +141,7 @@ const RANKING_TEMPLATES: RankingTemplate[] = [
 ];
 
 const METRIC_OPTIONS: Record<string, string[]> = {
+  Volume: ["Volume"],
   Valuation: [
     "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
     "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
@@ -386,17 +416,15 @@ function computeZScores(values: (number | null)[]): (number | null)[] {
   const valid = values.filter((v): v is number => v !== null);
   if (valid.length < 2) return values.map(() => null);
   const mean = valid.reduce((s, v) => s + v, 0) / valid.length;
-  const std = Math.sqrt(valid.reduce((s, v) => s + (v - mean) ** 2, 0) / valid.length);
+  const std = Math.sqrt(valid.reduce((s, v) => s + (v - mean) ** 2, 0) / (valid.length - 1));
   if (std === 0) return values.map((v) => (v !== null ? 0 : null));
   return values.map((v) => (v !== null ? (v - mean) / std : null));
 }
 
 // Percentile rank (0-100)
 function computePercentileRank(value: number, allValues: number[]): number {
-  const sorted = [...allValues].sort((a, b) => a - b);
-  const idx = sorted.findIndex((v) => v >= value);
-  if (idx < 0) return 100;
-  return (idx / sorted.length) * 100;
+  if (allValues.length <= 1) return 50;
+  return (allValues.reduce((acc, v) => acc + (v < value ? 1 : 0), 0) / (allValues.length - 1)) * 100;
 }
 
 // Historical percentile: where does current value sit in its own trailing data
@@ -448,17 +476,26 @@ export default function Ranking() {
 
   const customTemplates: CustomTemplate[] = useMemo(() => {
     if (isDeployed) return memTemplates;
+    const parseJson = (raw: any) => {
+      if (!raw) return null;
+      if (typeof raw === "string") {
+        try { return JSON.parse(raw); } catch { return null; }
+      }
+      return raw;
+    };
     return backendTemplatesRaw.map((t: any) => ({
       id: t.id,
       label: t.label,
       metrics: typeof t.metrics === "string" ? JSON.parse(t.metrics) : t.metrics,
       showRevisions: !!t.showRevisions,
       revMetric: t.revMetric,
+      metricWeights: parseJson(t.metricWeights),
+      metricDirections: parseJson(t.metricDirections),
     }));
   }, [isDeployed, memTemplates, backendTemplatesRaw]);
 
   const saveTemplateMut = useMutation({
-    mutationFn: async (tmpl: { label: string; metrics: string[]; showRevisions: boolean; revMetric: string }) => {
+    mutationFn: async (tmpl: { label: string; metrics: string[]; showRevisions: boolean; revMetric: string; metricWeights?: Record<string, number>; metricDirections?: Record<string, number> }) => {
       if (isDeployed) {
         // In-memory for static mode
         const newTmpl: CustomTemplate = {
@@ -467,6 +504,8 @@ export default function Ranking() {
           metrics: tmpl.metrics,
           showRevisions: tmpl.showRevisions,
           revMetric: tmpl.revMetric,
+          metricWeights: tmpl.metricWeights ?? null,
+          metricDirections: tmpl.metricDirections ?? null,
         };
         setMemTemplates((prev) => [...prev, newTmpl]);
         return newTmpl;
@@ -495,11 +534,19 @@ export default function Ranking() {
   const handleSaveTemplate = () => {
     const name = newTemplateName.trim();
     if (!name || metrics.length === 0) return;
+    const weights: Record<string, number> = {};
+    const directions: Record<string, number> = {};
+    for (const m of metrics) {
+      if (metricWeights[m] !== undefined && metricWeights[m] !== 1) weights[m] = metricWeights[m];
+      if (metricDirections[m] === -1) directions[m] = -1;
+    }
     saveTemplateMut.mutate({
       label: name,
       metrics: [...metrics],
       showRevisions,
       revMetric,
+      metricWeights: Object.keys(weights).length > 0 ? weights : undefined,
+      metricDirections: Object.keys(directions).length > 0 ? directions : undefined,
     });
     setNewTemplateName("");
     setShowSaveInput(false);
@@ -516,7 +563,26 @@ export default function Ranking() {
   const [sparklineLookback, setSparklineLookback] = useState(250);
   const [showRevisions, setShowRevisions] = useState(false);
   const [revMetric, setRevMetric] = useState("FFO FY2");
+  const [metricWeights, setMetricWeights] = useState<Record<string, number>>({});
+  const [metricDirections, setMetricDirections] = useState<Record<string, number>>({});
+  const [showWeights, setShowWeights] = useState(false);
+  const [showBacktest, setShowBacktest] = useState(false);
+  const [backtestLoading, setBacktestLoading] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<any>(null);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [backtestTopN, setBacktestTopN] = useState(10);
   const [colVis, setColVis] = useState<ColumnVisibility>(DEFAULT_COL_VIS);
+  const [groupBy, setGroupBy] = useState<string>("none");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [customLookback, setCustomLookback] = useState(false);
+
+  const toggleGroup = useCallback((name: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }, []);
 
   const toggleColVis = useCallback((path: string) => {
     setColVis(prev => {
@@ -548,7 +614,10 @@ export default function Ranking() {
     revMetric,
     customTemplates: memTemplates,
     colVis,
-  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, memTemplates, colVis]);
+    groupBy,
+    metricWeights,
+    metricDirections,
+  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
 
   const restoreRanking = useCallback((state: any) => {
     if (state.metrics !== undefined) setMetrics(state.metrics);
@@ -564,6 +633,9 @@ export default function Ranking() {
     if (state.revMetric !== undefined) setRevMetric(state.revMetric);
     if (state.customTemplates !== undefined) setMemTemplates(state.customTemplates);
     if (state.colVis !== undefined) setColVis({ ...DEFAULT_COL_VIS, ...state.colVis, groupPctile: { ...DEFAULT_COL_VIS.groupPctile, ...state.colVis?.groupPctile }, groupZScore: { ...DEFAULT_COL_VIS.groupZScore, ...state.colVis?.groupZScore } });
+    if (state.groupBy !== undefined) setGroupBy(state.groupBy);
+    if (state.metricWeights !== undefined) setMetricWeights(state.metricWeights);
+    if (state.metricDirections !== undefined) setMetricDirections(state.metricDirections);
   }, []);
 
   useWorkspaceTab("ranking", serializeRanking, restoreRanking);
@@ -658,12 +730,19 @@ export default function Ranking() {
       const histZScoreMap: Record<string, number | null> = {};
       const sparkData: Record<string, number[]> = {};
       let zSum = 0;
+      let weightSum = 0;
       let zCount = 0;
 
       for (const metric of metrics) {
         const z = zScoresByMetric[metric][idx];
         zScores[metric] = z;
-        if (z !== null) { zSum += z; zCount++; }
+        if (z !== null) {
+          const dir = metricDirections[metric] === -1 ? -1 : 1;
+          const w = metricWeights[metric] !== undefined ? metricWeights[metric] : 1;
+          zSum += dir * z * w;
+          weightSum += w;
+          zCount++;
+        }
 
         const val = r.values[metric];
 
@@ -677,7 +756,7 @@ export default function Ranking() {
             groupPctileMap[metric][lv.key] = computePercentileRank(val, groupVals);
             // Group z-score: (val - groupMean) / groupStd
             const gMean = groupVals.reduce((s, v) => s + v, 0) / groupVals.length;
-            const gStd = Math.sqrt(groupVals.reduce((s, v) => s + (v - gMean) ** 2, 0) / groupVals.length);
+            const gStd = groupVals.length > 1 ? Math.sqrt(groupVals.reduce((s, v) => s + (v - gMean) ** 2, 0) / (groupVals.length - 1)) : 0;
             groupZScoreMap[metric][lv.key] = gStd > 0 ? (val - gMean) / gStd : 0;
           } else {
             groupPctileMap[metric][lv.key] = null;
@@ -691,7 +770,7 @@ export default function Ranking() {
         if (val !== null && trailing.length > 5) {
           histPctileMap[metric] = histPercentile(val, trailing);
           const hMean = trailing.reduce((s, v) => s + v, 0) / trailing.length;
-          const hStd = Math.sqrt(trailing.reduce((s, v) => s + (v - hMean) ** 2, 0) / trailing.length);
+          const hStd = trailing.length > 1 ? Math.sqrt(trailing.reduce((s, v) => s + (v - hMean) ** 2, 0) / (trailing.length - 1)) : 0;
           histZScoreMap[metric] = hStd > 0 ? (val - hMean) / hStd : 0;
         } else {
           histPctileMap[metric] = null;
@@ -710,7 +789,7 @@ export default function Ranking() {
         subindustry: r.subindustry,
         values: r.values,
         zScores,
-        compositeZ: zCount > 0 ? zSum / zCount : null,
+        compositeZ: zCount > 0 && weightSum > 0 ? zSum / weightSum : null,
         groupPctile: groupPctileMap,
         groupZScore: groupZScoreMap,
         histPctile: histPctileMap,
@@ -718,7 +797,7 @@ export default function Ranking() {
         sparklineData: sparkData,
       } as CompositeRow;
     });
-  }, [rawRows, metrics, sparklineMap]);
+  }, [rawRows, metrics, sparklineMap, metricWeights, metricDirections]);
 
   const sorted = useMemo(() => {
     let filtered = compositeRows.filter((r) =>
@@ -746,6 +825,33 @@ export default function Ranking() {
     });
   }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, universeTickers]);
 
+  const grouped = useMemo(() => {
+    if (groupBy === "none") return null;
+    const out: { name: string; rows: CompositeRow[]; avgCompositeZ: number | null }[] = [];
+    const map = new Map<string, CompositeRow[]>();
+    for (const r of sorted) {
+      const name = ((r as any)[groupBy] as string) || "Unclassified";
+      if (!map.has(name)) map.set(name, []);
+      map.get(name)!.push(r);
+    }
+    for (const [name, rows] of map) {
+      const zs = rows.map((r) => r.compositeZ).filter((z): z is number => z !== null);
+      const avg = zs.length > 0 ? zs.reduce((a, b) => a + b, 0) / zs.length : null;
+      out.push({ name, rows, avgCompositeZ: avg });
+    }
+    out.sort((a, b) =>
+      a.avgCompositeZ === null && b.avgCompositeZ === null ? 0
+        : a.avgCompositeZ === null ? 1
+        : b.avgCompositeZ === null ? -1
+        : a.avgCompositeZ - b.avgCompositeZ
+    );
+    return out;
+  }, [sorted, groupBy]);
+
+  useEffect(() => {
+    setCollapsedGroups(new Set());
+  }, [groupBy]);
+
   const addMetric = () => {
     if (pendingMetric && !metrics.includes(pendingMetric)) {
       setMetrics((prev) => [...prev, pendingMetric]);
@@ -756,6 +862,32 @@ export default function Ranking() {
   const removeMetric = (m: string) => {
     setMetrics((prev) => prev.filter((x) => x !== m));
     if (sortCol === m) setSortCol("compositeZ");
+  };
+
+  const runBacktest = async () => {
+    setBacktestLoading(true);
+    setBacktestError(null);
+    setBacktestResult(null);
+    try {
+      const tickers = sorted.slice(0, backtestTopN).map((r) => r.ticker);
+      if (tickers.length === 0) {
+        setBacktestError("No tickers in current filter. Adjust filters and try again.");
+        return;
+      }
+      const res = await apiRequest("POST", "/api/cohort-backtest", {
+        tickers,
+        horizons: [60, 126, 252],
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      setBacktestResult(await res.json());
+    } catch (e: any) {
+      setBacktestError(e?.message || "Backtest failed");
+    } finally {
+      setBacktestLoading(false);
+    }
   };
 
   const exportCSV = () => {
@@ -852,6 +984,8 @@ export default function Ranking() {
                   if (t.showRevisions !== undefined) setShowRevisions(t.showRevisions);
                   else setShowRevisions(false);
                   if (t.revMetric) setRevMetric(t.revMetric);
+                  setMetricWeights({});
+                  setMetricDirections({});
                   setSortCol("compositeZ");
                   setSortDir("asc");
                 }}
@@ -872,6 +1006,8 @@ export default function Ranking() {
                       setMetrics(ct.metrics);
                       setShowRevisions(ct.showRevisions);
                       if (ct.revMetric) setRevMetric(ct.revMetric);
+                      setMetricWeights(ct.metricWeights ?? {});
+                      setMetricDirections(ct.metricDirections ?? {});
                       setSortCol("compositeZ");
                       setSortDir("asc");
                     }}
@@ -961,7 +1097,7 @@ export default function Ranking() {
           ))}
           <div className="flex items-center gap-0.5">
             <Select value={pendingMetric} onValueChange={setPendingMetric}>
-              <SelectTrigger className="h-6 text-[11px] w-[140px]" data-testid="add-metric-select">
+              <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid="add-metric-select">
                 <SelectValue placeholder="Add metric..." />
               </SelectTrigger>
               <SelectContent>
@@ -993,6 +1129,69 @@ export default function Ranking() {
             >
               <Plus className="w-3 h-3" />
             </Button>
+            {metrics.length > 1 && (
+              <DropdownMenu open={showWeights} onOpenChange={setShowWeights}>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] gap-1"
+                    data-testid="composite-weights-btn"
+                    title="Configure composite z-score weights and signs"
+                  >
+                    Weights
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[420px] p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Composite weights & signs</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[10px]"
+                      onClick={() => { setMetricWeights({}); setMetricDirections({}); }}
+                      title="Reset to equal weights, all +"
+                    >
+                      Reset
+                    </Button>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mb-2">
+                    Drag sliders to weight metrics (0–100). Toggle <span className="font-mono">−</span> for "lower-is-better" metrics (e.g. P/FFO). Composite Z = Σ(sign·z·w) / Σw.
+                  </div>
+                  <div className="flex flex-col gap-1.5 max-h-[300px] overflow-y-auto">
+                    {metrics.map((m) => {
+                      const w = metricWeights[m] !== undefined ? metricWeights[m] : 1;
+                      const dir = metricDirections[m] === -1 ? -1 : 1;
+                      return (
+                        <div key={m} className="flex items-center gap-2 text-[11px]">
+                          <span className="font-mono w-[140px] truncate" title={m}>{m}</span>
+                          <button
+                            onClick={() => setMetricDirections((prev) => ({ ...prev, [m]: dir === 1 ? -1 : 1 }))}
+                            className={`w-6 h-6 rounded font-mono text-sm font-bold border ${dir === 1 ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" : "bg-rose-500/10 text-rose-400 border-rose-500/30"}`}
+                            title={dir === 1 ? "Higher z is better (positive contribution)" : "Lower z is better (sign flipped)"}
+                          >
+                            {dir === 1 ? "+" : "−"}
+                          </button>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={Math.round(w * 50)}
+                            onChange={(e) => {
+                              const nv = parseInt(e.target.value) / 50;
+                              setMetricWeights((prev) => ({ ...prev, [m]: nv }));
+                            }}
+                            className="flex-1 h-1.5"
+                          />
+                          <span className="font-mono w-[40px] text-right text-muted-foreground">{w.toFixed(2)}×</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         </div>
 
@@ -1063,19 +1262,63 @@ export default function Ranking() {
         <div className="h-5 w-px bg-border mx-1" />
 
         <span className="text-xs font-semibold text-muted-foreground" title="Lookback window for Hist% / HistZ percentiles and sparkline trail">History</span>
-        <Select value={String(sparklineLookback)} onValueChange={(v) => setSparklineLookback(parseInt(v))}>
-          <SelectTrigger className="h-6 text-[11px] w-[80px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="60">60d</SelectItem>
-            <SelectItem value="120">120d</SelectItem>
-            <SelectItem value="250">1yr</SelectItem>
-            <SelectItem value="500">2yr</SelectItem>
-            <SelectItem value="1260">5yr</SelectItem>
-            <SelectItem value="2520">10yr</SelectItem>
-          </SelectContent>
-        </Select>
+        {(() => {
+          const isPreset = [60, 120, 250, 500, 1260, 2520].includes(sparklineLookback);
+          const showCustom = customLookback || !isPreset;
+          return (
+            <div className="flex items-center gap-1">
+              <Select
+                value={showCustom ? "custom" : String(sparklineLookback)}
+                onValueChange={(v) => {
+                  if (v === "custom") {
+                    setCustomLookback(true);
+                    setTimeout(() => {
+                      const el = document.getElementById("ranking-custom-lookback") as HTMLInputElement | null;
+                      if (el) { el.focus(); el.select(); }
+                    }, 50);
+                  } else {
+                    setCustomLookback(false);
+                    setSparklineLookback(parseInt(v));
+                  }
+                }}
+              >
+                <SelectTrigger className="h-6 text-[11px] w-[80px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="60">60d</SelectItem>
+                  <SelectItem value="120">120d</SelectItem>
+                  <SelectItem value="250">1yr</SelectItem>
+                  <SelectItem value="500">2yr</SelectItem>
+                  <SelectItem value="1260">5yr</SelectItem>
+                  <SelectItem value="2520">10yr</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+              {showCustom && (
+                <Input
+                  id="ranking-custom-lookback"
+                  type="number"
+                  min={5}
+                  max={5000}
+                  placeholder="days"
+                  className="h-6 w-[64px] text-[11px] px-1"
+                  defaultValue={sparklineLookback}
+                  onBlur={(e) => {
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v) && v >= 5 && v <= 5000) setSparklineLookback(v);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const v = parseInt((e.target as HTMLInputElement).value);
+                      if (!isNaN(v) && v >= 5 && v <= 5000) setSparklineLookback(v);
+                    }
+                  }}
+                />
+              )}
+            </div>
+          );
+        })()}
 
         <div className="h-5 w-px bg-border mx-1" />
 
@@ -1162,10 +1405,46 @@ export default function Ranking() {
           totalCount={compositeRows.length}
           testIdPrefix="rank"
         >
+          <Select value={groupBy} onValueChange={(v) => setGroupBy(v)}>
+            <SelectTrigger className="h-6 w-auto min-w-[120px] text-[11px] gap-1">
+              <Group className="w-3 h-3 shrink-0" />
+              <SelectValue placeholder="Group By" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none" className="text-[11px]">No Grouping</SelectItem>
+              {CLASS_LEVELS.map((lv) => (
+                <SelectItem key={lv.key} value={lv.key} className="text-[11px]">{lv.fullLabel}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" size="sm" className="h-6 gap-1 text-[11px]" onClick={exportCSV}>
             <Download className="w-3 h-3" />
             CSV
           </Button>
+          {!isDeployed && (
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-muted-foreground">Top</span>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={backtestTopN}
+                onChange={(e) => setBacktestTopN(Math.max(1, Math.min(100, parseInt(e.target.value) || 10)))}
+                className="h-6 w-12 text-[11px] px-1"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 gap-1 text-[11px]"
+                onClick={() => { setShowBacktest(true); runBacktest(); }}
+                disabled={backtestLoading}
+                title="Backtest the top-N current rows: forward 3M/6M/12M returns vs universe baseline"
+              >
+                <BarChart3 className="w-3 h-3" />
+                {backtestLoading ? "…" : "Backtest"}
+              </Button>
+            </div>
+          )}
         </ClassificationFilters>
       </div>
 
@@ -1250,14 +1529,16 @@ export default function Ranking() {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((row, i) => (
+              {(() => {
+                const totalCols = 4 + metrics.length * countVisibleCols(colVis) + (metrics.length > 1 ? 1 : 0) + (showRevisions ? 5 : 0);
+                const renderRow = (row: CompositeRow, rank: number) => (
                 <tr
                   key={row.ticker}
                   className="group border-b border-border/20 hover:bg-accent/30 transition-colors cursor-pointer"
                   onClick={() => navigateToChart(row.ticker)}
                   data-testid={`rank-row-${row.ticker}`}
                 >
-                  <td className="px-2 py-1 text-muted-foreground font-mono tabular-nums">{i + 1}</td>
+                  <td className="px-2 py-1 text-muted-foreground font-mono tabular-nums">{rank}</td>
                   <td className="px-2 py-1 font-mono font-bold">
                     <button
                       className="text-primary hover:text-primary/80 hover:underline inline-flex items-center gap-0.5"
@@ -1370,11 +1651,110 @@ export default function Ranking() {
                     );
                   })()}
                 </tr>
-              ))}
+                );
+                if (!grouped) return sorted.map((row, i) => renderRow(row, i + 1));
+                let runningRank = 0;
+                return grouped.flatMap((g) => {
+                  const collapsed = collapsedGroups.has(g.name);
+                  const header = (
+                    <tr
+                      key={`group-${g.name}`}
+                      className="bg-accent/60 border-b border-border/40 cursor-pointer hover:bg-accent/80 transition-colors"
+                      onClick={() => toggleGroup(g.name)}
+                    >
+                      <td colSpan={totalCols} className="px-2 py-1.5">
+                        <div className="flex items-center gap-2">
+                          {collapsed
+                            ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                            : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+                          <span className="font-semibold text-[11px]">{g.name}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            ({g.rows.length} ticker{g.rows.length !== 1 ? "s" : ""})
+                          </span>
+                          {g.avgCompositeZ !== null && metrics.length > 1 && (
+                            <span className={`text-[10px] font-mono ${zColor(g.avgCompositeZ)}`}>
+                              Avg Z: {g.avgCompositeZ.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                  if (collapsed) return [header];
+                  const memberRows = g.rows.map((row) => { runningRank++; return renderRow(row, runningRank); });
+                  return [header, ...memberRows];
+                });
+              })()}
             </tbody>
           </table>
         )}
       </div>
+
+      <Dialog open={showBacktest} onOpenChange={setShowBacktest}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Cohort Backtest — Top {backtestTopN}</DialogTitle>
+            <DialogDescription className="text-[11px]">
+              Forward log returns (3M/6M/12M) of the current top-{backtestTopN} cohort vs the full universe at the most recent date with enough forward data. Positive edge = this screen historically beat the broad universe.
+            </DialogDescription>
+          </DialogHeader>
+          {backtestLoading && (
+            <div className="text-[12px] text-muted-foreground py-6 text-center">Running backtest…</div>
+          )}
+          {backtestError && (
+            <div className="text-[12px] text-rose-400 py-3">Error: {backtestError}</div>
+          )}
+          {backtestResult && !backtestLoading && (
+            <div className="space-y-3">
+              <div className="text-[11px] text-muted-foreground">
+                Anchor date: <span className="font-mono text-foreground">{backtestResult.startDate}</span>
+                {" · "}Cohort resolved: <span className="font-mono text-foreground">{backtestResult.cohortResolved}/{backtestResult.cohortRequested}</span>
+                {" · "}Universe size: <span className="font-mono text-foreground">{backtestResult.universeSize}</span>
+              </div>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-1.5 px-2 font-medium text-muted-foreground">Horizon</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Cohort N</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Cohort Mean</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Cohort Median</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Cohort Win%</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Univ Mean</th>
+                    <th className="text-right py-1.5 px-2 font-medium text-muted-foreground">Univ Win%</th>
+                    <th className="text-right py-1.5 px-2 font-semibold">Mean Edge</th>
+                    <th className="text-right py-1.5 px-2 font-semibold">Win% Edge</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backtestResult.horizons.map((h: number) => {
+                    const r = backtestResult.results[h];
+                    const pct1 = (c: number) => `${(c * 100).toFixed(1)}%`;
+                    const pct2 = (c: number) => `${(c * 100).toFixed(2)}%`;
+                    const edgeColor = (c: number) => c > 0 ? "text-emerald-400" : c < 0 ? "text-rose-400" : "text-muted-foreground";
+                    const label = h === 60 ? "3M" : h === 126 ? "6M" : h === 252 ? "12M" : `${h}d`;
+                    return (
+                      <tr key={h} className="border-b border-border/30">
+                        <td className="py-1.5 px-2 font-mono">{label}</td>
+                        <td className="text-right py-1.5 px-2 font-mono text-muted-foreground">{r.cohort.n}</td>
+                        <td className="text-right py-1.5 px-2 font-mono">{pct2(r.cohort.mean)}</td>
+                        <td className="text-right py-1.5 px-2 font-mono">{pct2(r.cohort.median)}</td>
+                        <td className="text-right py-1.5 px-2 font-mono">{pct1(r.cohort.winRate)}</td>
+                        <td className="text-right py-1.5 px-2 font-mono text-muted-foreground">{pct2(r.baseline.mean)}</td>
+                        <td className="text-right py-1.5 px-2 font-mono text-muted-foreground">{pct1(r.baseline.winRate)}</td>
+                        <td className={`text-right py-1.5 px-2 font-mono font-semibold ${edgeColor(r.edge.meanEdge)}`}>{pct2(r.edge.meanEdge)}</td>
+                        <td className={`text-right py-1.5 px-2 font-mono font-semibold ${edgeColor(r.edge.winRateEdge)}`}>{(r.edge.winRateEdge * 100).toFixed(1)}pp</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="text-[10px] text-muted-foreground pt-2">
+                Returns are log returns. Win% = share of names with positive log return at horizon. Win% Edge in percentage points (pp). This is a single-period point estimate; cohort changes day-to-day. For a rolling out-of-sample backtest, use the existing FactorBacktest page.
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

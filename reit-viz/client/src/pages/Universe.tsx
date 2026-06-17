@@ -8,7 +8,8 @@ import { CLASSIFICATION_KEYS } from "@/lib/dataService";
 import { usePageState } from "@/lib/pageState";
 import {
   Globe,
-  Filter,
+  Check,
+  X,
   RotateCcw,
   Pencil,
   Download,
@@ -267,7 +268,7 @@ export default function Universe() {
         <div className="flex items-center gap-3 text-[11px]">
           {isFiltered ? (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 border border-primary/20 text-primary">
-              <Filter className="w-3 h-3" />
+              <Check className="w-3 h-3" />
               <span className="font-medium">{filteredCount}</span>
               <span className="text-primary/70">
                 of {totalCount} tickers active across all tabs
@@ -286,7 +287,7 @@ export default function Universe() {
               className="h-6 px-2 text-[11px] text-muted-foreground"
               onClick={clearAll}
             >
-              <RotateCcw className="w-3 h-3 mr-0.5" />
+              <X className="w-3 h-3 mr-0.5" />
               Reset to all
             </Button>
           )}
@@ -435,7 +436,7 @@ export default function Universe() {
                   data-testid={`universe-row-${ticker.ticker}`}
                 >
                   <td className="py-1 px-2 text-center">
-                    {inFiltered && <Filter className="w-3 h-3 text-primary" />}
+                    {inFiltered && <Check className="w-3 h-3 text-primary" />}
                   </td>
                   <td className="py-1 px-2 font-mono font-bold text-foreground">
                     {ticker.ticker}

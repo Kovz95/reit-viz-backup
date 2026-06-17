@@ -35,6 +35,60 @@ export function computeEMA(data: DataPoint[], period: number): DataPoint[] {
   return result;
 }
 
+/**
+ * Least Squares Moving Average (LSMA).
+ *
+ * For each window of `period` bars ending at index i, fit a linear regression
+ * y = intercept + slope * x  (x = 0..period-1, oldest→newest) and emit the
+ * regression value at the window endpoint, shifted back by `offset` bars:
+ *
+ *   value = intercept + slope * (period - 1 - offset)
+ *
+ * Closed-form slope/intercept use the known sums of x and x² over 0..period-1.
+ * Mirrors the production bundle's `GP`/linreg-MA implementation.
+ */
+export function computeLSMA(data: DataPoint[], period: number, offset = 0): DataPoint[] {
+  const n = data.length;
+  if (n === 0 || period < 2 || n < period) return [];
+
+  const p = period;
+  const sumX = (p * (p - 1)) / 2;
+  const sumXX = ((p - 1) * p * (2 * p - 1)) / 6;
+  const denom = p * sumXX - sumX * sumX;
+  if (denom === 0) return [];
+
+  const result: DataPoint[] = [];
+  for (let i = period - 1; i < n; i++) {
+    let sumY = 0;
+    let sumXY = 0;
+    let ok = true;
+    for (let j = 0; j < period; j++) {
+      const v = data[i - period + 1 + j].value;
+      if (v === null || !Number.isFinite(v)) {
+        ok = false;
+        break;
+      }
+      sumY += v;
+      sumXY += j * v;
+    }
+    if (!ok) continue;
+    const slope = (p * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / p;
+    result.push({ time: data[i].time, value: intercept + slope * (period - 1 - offset) });
+  }
+  return result;
+}
+
+/**
+ * Smoothed Least Squares Moving Average (SLSMA): the LSMA of the LSMA.
+ * Matches the production bundle's `X8e` (LSMA applied twice with the same
+ * period & offset).
+ */
+export function computeSLSMA(data: DataPoint[], period: number, offset = 0): DataPoint[] {
+  const first = computeLSMA(data, period, offset);
+  return computeLSMA(first, period, offset);
+}
+
 export function computeMACD(data: DataPoint[], fast = 12, slow = 26, signal = 9) {
   const emaFast = computeEMA(data, fast);
   const emaSlow = computeEMA(data, slow);

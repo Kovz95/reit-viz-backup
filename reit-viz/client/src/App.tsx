@@ -1,7 +1,8 @@
 // Reconstructed from recovered-bundle/index-CsG73Aq_.js on 2025-01-31
 import { lazy, Suspense } from "react";
 import { Switch, Route, Router, Link, useLocation } from "wouter";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useHashLocation } from "wouter/use-hash-location";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -34,10 +35,13 @@ import {
   Zap,
   GitMerge,
   BarChart2,
+  ChevronDown,
 } from "lucide-react";
 import DataManager from "@/components/DataManager";
 import AutoSaveManager from "@/components/AutoSaveManager";
 import { useUpload } from "@/lib/uploadContext";
+import { useUniverse } from "@/lib/universeContext";
+import { API_BASE } from "@/lib/queryClient";
 import { Loader2, CheckCircle2, AlertCircle, X } from "lucide-react";
 
 // ─── Lazy page imports ───────────────────────────────────────────────────────
@@ -177,9 +181,22 @@ function UploadStatus() {
 
 // ─── NavBar ───────────────────────────────────────────────────────────────────
 
+type NavLink = {
+  path: string;
+  label: string;
+  icon: any;
+  universeControlled?: boolean;
+  group?: { path: string; label: string; icon: any }[];
+};
+
 function NavBar() {
   const [location] = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Which dropdown group (by its synthetic path key) is currently open
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  // Fixed-position coordinates for the open dropdown portal
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   // Auto-scroll the active tab into view
   useEffect(() => {
@@ -190,53 +207,131 @@ function NavBar() {
     }
   }, [location]);
 
-  const links: { path: string; label: string; icon: any; universeControlled?: boolean }[] = [
-    { path: "/", label: "Charts", icon: BarChart3, universeControlled: true },
+  // Close the open dropdown on outside click
+  useEffect(() => {
+    if (!openGroup) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("[data-nav-dropdown]") || t.closest("[data-nav-dropdown-portal]")) return;
+      setOpenGroup(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [openGroup]);
+
+  // Position the open dropdown portal under its trigger; keep it tracking scroll/resize
+  useEffect(() => {
+    if (!openGroup) {
+      setMenuPos(null);
+      return;
+    }
+    const place = () => {
+      const el = triggerRefs.current[openGroup];
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMenuPos({ left: r.left, top: r.bottom });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [openGroup]);
+
+  const links: NavLink[] = [
+    { path: "/", label: "Charts", icon: BarChart3 },
     { path: "/universe", label: "Universe", icon: Globe },
     { path: "/global-universe", label: "Global Universe", icon: Globe },
     { path: "/baskets", label: "Baskets", icon: Grid3X3 },
-    { path: "/ranking", label: "Ranking", icon: ListOrdered, universeControlled: true },
-    { path: "/scatter", label: "XY Scatter", icon: ScatterChart, universeControlled: true },
-    { path: "/factor-backtest", label: "Factor Backtest", icon: TrendingUp, universeControlled: true },
-    { path: "/relative-strength", label: "Rel Strength", icon: TrendingUp, universeControlled: true },
-    { path: "/pairs", label: "Pairs", icon: ArrowRightLeft },
-    { path: "/pair-ratios", label: "Pair Ratios", icon: GitCompareArrows, universeControlled: true },
-    { path: "/pair-screener", label: "Pair Screener", icon: Filter, universeControlled: true },
+    {
+      path: "__cross_section_group",
+      label: "Cross-Section",
+      icon: ListOrdered,
+      universeControlled: true,
+      group: [
+        { path: "/ranking", label: "Ranking", icon: ListOrdered },
+        { path: "/scatter", label: "XY Scatter", icon: ScatterChart },
+        { path: "/factor-backtest", label: "Factor Backtest", icon: TrendingUp },
+        { path: "/relative-strength", label: "Relative Strength", icon: TrendingUp },
+        { path: "/correlation", label: "Correlation", icon: Link2 },
+      ],
+    },
+    {
+      path: "__pairs_group",
+      label: "Pairs",
+      icon: ArrowRightLeft,
+      universeControlled: true,
+      group: [
+        { path: "/pairs", label: "Compare", icon: ArrowRightLeft },
+        { path: "/pair-ratios", label: "Ratios", icon: GitCompareArrows },
+      ],
+    },
     { path: "/scanner", label: "Scanner", icon: Target, universeControlled: true },
-    { path: "/macro", label: "Macro", icon: TrendingUp },
-    { path: "/regime", label: "Regime", icon: Layers },
-    { path: "/rates-forward", label: "Rates Forward", icon: TrendingUp },
-    { path: "/yield-correlation", label: "Yield Corr", icon: Link2 },
-    { path: "/correlation", label: "Correlation", icon: Link2, universeControlled: true },
-    { path: "/valuation", label: "Valuation", icon: Gauge, universeControlled: true },
-    { path: "/val-regime", label: "Val Regime", icon: Layers, universeControlled: true },
-    { path: "/premium-discount", label: "Premium/Discount", icon: Percent, universeControlled: true },
-    { path: "/pd-screener", label: "P/D Screener", icon: Filter, universeControlled: true },
-    { path: "/distributions", label: "Distributions", icon: BarChart2, universeControlled: true },
+    {
+      path: "__macro_group",
+      label: "Macro",
+      icon: TrendingUp,
+      group: [
+        { path: "/macro", label: "Dashboard", icon: TrendingUp },
+        { path: "/rates-forward", label: "Rates Forward", icon: TrendingUp },
+        { path: "/yield-correlation", label: "Yield Corr", icon: Link2 },
+        { path: "/regime", label: "Regime", icon: Layers },
+      ],
+    },
+    {
+      path: "__valuation_group",
+      label: "Valuation",
+      icon: Gauge,
+      universeControlled: true,
+      group: [
+        { path: "/valuation", label: "Valuation", icon: Gauge },
+        { path: "/val-regime", label: "Val Regime", icon: Layers },
+        { path: "/premium-discount", label: "Premium / Discount", icon: Percent },
+        { path: "/distributions", label: "Distributions", icon: BarChart3 },
+      ],
+    },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
-    { path: "/heatmap", label: "Rel Value", icon: Grid3X3, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
-    { path: "/screener", label: "Screener", icon: Filter, universeControlled: true },
-    { path: "/setups-screener", label: "Setups Screener", icon: Filter, universeControlled: true },
-    { path: "/pattern-screener", label: "Pattern Screener", icon: Activity, universeControlled: true },
+    {
+      path: "__screeners_group",
+      label: "Screeners",
+      icon: Filter,
+      universeControlled: true,
+      group: [
+        { path: "/screener", label: "Stock Screener", icon: Filter },
+        { path: "/pair-screener", label: "Pair Screener", icon: Filter },
+        { path: "/pd-screener", label: "P/D Screener", icon: Filter },
+        { path: "/setups-screener", label: "Setups Screener", icon: Target },
+        { path: "/pattern-screener", label: "Pattern Screener", icon: Activity },
+      ],
+    },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
-    { path: "/z-optimizer", label: "Z Optimizer", icon: Crosshair, universeControlled: true },
-    { path: "/pair-optimizer", label: "Pair Opt", icon: Shuffle, universeControlled: true },
-    { path: "/momentum", label: "Momentum", icon: Zap, universeControlled: true },
-    { path: "/ma-crossover", label: "MA Cross", icon: GitMerge, universeControlled: true },
-    { path: "/rsi-regime", label: "RSI Regime", icon: BarChart2, universeControlled: true },
-    { path: "/combo-optimizer", label: "Combo Opt", icon: Shuffle, universeControlled: true },
-    { path: "/roc-optimizer", label: "ROC Opt", icon: Activity, universeControlled: true },
-    { path: "/oscillators", label: "Oscillators", icon: Activity, universeControlled: true },
-    { path: "/range-optimizer", label: "Range Opt", icon: Layers, universeControlled: true },
-    { path: "/harsi-optimizer", label: "HARSI Opt", icon: Crosshair, universeControlled: true },
-    { path: "/slow-stoch-optimizer", label: "SlowStoch Opt", icon: Activity, universeControlled: true },
-    { path: "/dual-ma-optimizer", label: "DualMA Opt", icon: Activity, universeControlled: true },
-    { path: "/tva-optimizer", label: "TVA Opt", icon: Crosshair, universeControlled: true },
-    { path: "/levels", label: "Levels & Trendlines", icon: TrendingUp },
-    { path: "/trendlines", label: "Trendlines", icon: TrendingUp },
-    { path: "/auto-trendline-backtest", label: "Auto Trendline BT", icon: TrendingUp },
+    {
+      path: "__optimizers_group",
+      label: "Optimizers",
+      icon: Crosshair,
+      universeControlled: true,
+      group: [
+        { path: "/z-optimizer", label: "Z Optimizer", icon: Crosshair },
+        { path: "/pair-optimizer", label: "Pair Opt", icon: Shuffle },
+        { path: "/momentum", label: "Momentum", icon: Zap },
+        { path: "/rsi-regime", label: "RSI Regime", icon: BarChart2 },
+        { path: "/combo-optimizer", label: "Combo Opt", icon: Shuffle },
+        { path: "/roc-optimizer", label: "ROC Opt", icon: Activity },
+        { path: "/ma-crossover", label: "MA Cross", icon: GitMerge },
+        { path: "/oscillators", label: "Oscillators", icon: Activity },
+        { path: "/range-optimizer", label: "Range Opt", icon: Crosshair },
+        { path: "/harsi-optimizer", label: "HARSI Opt", icon: Crosshair },
+        { path: "/slow-stoch-optimizer", label: "SlowStoch Opt", icon: Activity },
+        { path: "/dual-ma-optimizer", label: "DualMA Opt", icon: Activity },
+        { path: "/tva-optimizer", label: "TVA Opt", icon: Crosshair },
+        { path: "/levels", label: "Levels & Trendlines", icon: TrendingUp },
+        { path: "/auto-trendline-backtest", label: "Auto Trendline BT", icon: TrendingUp },
+      ],
+    },
     { path: "/price-action", label: "Price Action", icon: Activity, universeControlled: true },
     { path: "/roc-analysis", label: "ROC Deciles", icon: Crosshair, universeControlled: true },
     { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
@@ -254,26 +349,91 @@ function NavBar() {
       </div>
       <div ref={scrollRef} className="flex-1 overflow-x-auto overflow-y-hidden scrollbar-thin py-1">
         <div className="flex items-center gap-1 px-1 w-max">
-          {links.map(({ path, label, icon: Icon, universeControlled }) => {
-            const isActive = location === path || (path !== "/" && location.startsWith(path));
-            const isHome = path === "/" && location === "/";
-            const active = path === "/" ? isHome : isActive;
+          {links.map(({ path, label, icon: Icon, universeControlled, group }) => {
             const isUniverse = path === "/universe";
+            if (group) {
+              const groupActive = group.some(
+                (g) => location === g.path || location.startsWith(g.path)
+              );
+              const isOpen = openGroup === path;
+              return (
+                <div key={path} className="relative" data-nav-dropdown>
+                  <button
+                    ref={(el) => {
+                      triggerRefs.current[path] = el;
+                    }}
+                    onClick={() => setOpenGroup(isOpen ? null : path)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-none text-xs font-medium transition-colors whitespace-nowrap border-b-2 ${
+                      groupActive
+                        ? "border-amber-500 text-amber-200 bg-amber-500/5"
+                        : universeControlled
+                          ? "border-transparent text-red-400/50 hover:text-foreground hover:bg-accent"
+                          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-accent"
+                    }`}
+                    data-testid={`nav-${label.toLowerCase().replace(" ", "-")}`}
+                    data-active={groupActive ? "true" : undefined}
+                  >
+                    <Icon className="w-3 h-3" />
+                    {label}
+                    {universeControlled && (
+                      <span className="w-1 h-1 rounded-full bg-red-500 -mt-1.5 -ml-0.5" />
+                    )}
+                    <ChevronDown
+                      className={`w-3 h-3 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {isOpen &&
+                    menuPos &&
+                    createPortal(
+                      <div
+                        data-nav-dropdown-portal
+                        style={{ position: "fixed", left: menuPos.left, top: menuPos.top + 2 }}
+                        className="z-[1000] bg-card border border-border rounded shadow-lg min-w-[160px] py-1"
+                      >
+                        {group.map((g) => {
+                          const itemActive =
+                            location === g.path || location.startsWith(g.path);
+                          const GIcon = g.icon;
+                          return (
+                            <Link key={g.path} href={g.path}>
+                              <button
+                                onClick={() => setOpenGroup(null)}
+                                className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs font-medium text-left transition-colors ${
+                                  itemActive
+                                    ? "bg-amber-500/10 text-amber-200"
+                                    : "text-foreground hover:bg-accent"
+                                }`}
+                                data-testid={`nav-dropdown-${g.label.toLowerCase().replace(" ", "-")}`}
+                              >
+                                <GIcon className="w-3 h-3" />
+                                {g.label}
+                              </button>
+                            </Link>
+                          );
+                        })}
+                      </div>,
+                      document.body
+                    )}
+                </div>
+              );
+            }
+            const isActive = location === path || (path !== "/" && location.startsWith(path));
+            const active = path === "/" ? location === "/" : isActive;
             return (
               <Link key={path} href={path}>
                 <button
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-none text-xs font-medium transition-colors whitespace-nowrap border-b-2 ${
                     active
                       ? isUniverse
-                        ? "bg-red-600 text-white"
-                        : "bg-primary text-primary-foreground"
+                        ? "border-red-500 text-red-300 bg-red-500/10"
+                        : "border-amber-500 text-amber-200 bg-amber-500/5"
                       : isUniverse
-                        ? "text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                        ? "border-transparent text-red-400/80 hover:text-red-300 hover:bg-red-500/5"
                         : universeControlled
-                          ? "text-red-400/60 hover:text-foreground hover:bg-accent"
-                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                          ? "border-transparent text-red-400/50 hover:text-foreground hover:bg-accent"
+                          : "border-transparent text-muted-foreground hover:text-foreground hover:bg-accent"
                   }`}
-                  data-testid={`nav-${label.toLowerCase().replace(/ /g, "-")}`}
+                  data-testid={`nav-${label.toLowerCase().replace(" ", "-")}`}
                   data-active={active ? "true" : undefined}
                 >
                   <Icon className="w-3 h-3" />
@@ -292,6 +452,135 @@ function NavBar() {
         <DataManager />
       </div>
     </nav>
+  );
+}
+
+// ─── Status bar ───────────────────────────────────────────────────────────────
+// Faithful reconstruction of the production status bar (RHe in the bundle).
+// Renders market status, autosave, quotes, universe count, env, and a cmd-k entry.
+
+const MARKET_LABEL: Record<string, string> = {
+  REGULAR: "OPEN",
+  PRE: "PRE",
+  POST: "POST",
+  CLOSED: "CLOSED",
+  UNKNOWN: "—",
+};
+const MARKET_DOT: Record<string, string> = {
+  REGULAR: "bg-green-500",
+  PRE: "bg-amber-500",
+  POST: "bg-amber-500",
+  CLOSED: "bg-red-500/80",
+  UNKNOWN: "bg-muted-foreground/40",
+};
+const MARKET_TEXT: Record<string, string> = {
+  REGULAR: "text-green-400",
+  PRE: "text-amber-400",
+  POST: "text-amber-400",
+  CLOSED: "text-red-400/90",
+  UNKNOWN: "text-muted-foreground",
+};
+
+function formatAgo(ts: number | null): string {
+  if (!ts) return "—";
+  const e = Math.max(0, Date.now() - ts);
+  return e < 5e3
+    ? "just now"
+    : e < 6e4
+    ? `${Math.floor(e / 1e3)}s ago`
+    : e < 36e5
+    ? `${Math.floor(e / 6e4)}m ago`
+    : `${Math.floor(e / 36e5)}h ago`;
+}
+
+function StatusDivider() {
+  return <span className="h-3 w-px bg-border" />;
+}
+
+function StatusBar({ onOpenPalette }: { onOpenPalette?: () => void }) {
+  // Re-render every 10s so relative "ago" timestamps stay fresh (LHe in bundle)
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1e4);
+    return () => clearInterval(id);
+  }, []);
+
+  // Universe filter counts come from the live UniverseContext.
+  const { filteredCount, totalCount, isFiltered } = useUniverse();
+
+  // Market state / autosave / quote-poll data sources are not present in this
+  // reconstruction; render sensible static/empty states (never crash).
+  const marketState = "UNKNOWN";
+  const autosaveState: "saving" | "error" | "saved" | "idle" = "idle";
+  const lastSavedAt: number | null = null;
+  const lastQuoteFetchedAt: number | null = null;
+  const isDeployed = API_BASE !== "";
+
+  const saveLabel =
+    autosaveState === "saving"
+      ? "saving…"
+      : autosaveState === "error"
+      ? "save error"
+      : autosaveState === "saved" && lastSavedAt
+      ? `saved ${formatAgo(lastSavedAt)}`
+      : "idle";
+  const saveClass =
+    autosaveState === "saving"
+      ? "text-amber-400"
+      : autosaveState === "error"
+      ? "text-red-400"
+      : autosaveState === "saved"
+      ? "text-muted-foreground"
+      : "text-muted-foreground/70";
+
+  return (
+    <div
+      className="flex items-center gap-4 px-3 h-6 bg-card border-t border-border text-[10px] font-mono text-muted-foreground select-none flex-shrink-0"
+      data-testid="status-bar"
+    >
+      <div className="flex items-center gap-1.5" data-testid="status-market">
+        <span className={`w-1.5 h-1.5 rounded-full ${MARKET_DOT[marketState]}`} />
+        <span className={`uppercase tracking-wider ${MARKET_TEXT[marketState]}`}>
+          MKT {MARKET_LABEL[marketState]}
+        </span>
+      </div>
+      <StatusDivider />
+      <div className="flex items-center gap-1.5" data-testid="status-autosave">
+        <span className="text-muted-foreground/60 uppercase tracking-wider">SAVE</span>
+        <span className={saveClass}>{saveLabel}</span>
+      </div>
+      <StatusDivider />
+      <div className="flex items-center gap-1.5" data-testid="status-quotes">
+        <span className="text-muted-foreground/60 uppercase tracking-wider">QTE</span>
+        <span className="text-muted-foreground">
+          {lastQuoteFetchedAt ? formatAgo(lastQuoteFetchedAt) : "—"}
+        </span>
+      </div>
+      <StatusDivider />
+      <div className="flex items-center gap-1.5" data-testid="status-universe">
+        <span className="text-muted-foreground/60 uppercase tracking-wider">UNI</span>
+        <span className={isFiltered ? "text-amber-400" : "text-muted-foreground"}>
+          {filteredCount}
+          <span className="text-muted-foreground/60">/{totalCount}</span>
+        </span>
+      </div>
+      <div className="flex-1" />
+      <div className="flex items-center gap-1.5" data-testid="status-env">
+        <span className="text-muted-foreground/60 uppercase tracking-wider">ENV</span>
+        <span className={isDeployed ? "text-amber-400" : "text-muted-foreground"}>
+          {isDeployed ? "DEPLOYED" : "LOCAL"}
+        </span>
+      </div>
+      <StatusDivider />
+      <button
+        onClick={onOpenPalette}
+        className="flex items-center gap-1 hover:text-foreground transition-colors"
+        data-testid="status-cmdk"
+      >
+        <span className="text-muted-foreground/60 uppercase tracking-wider">CMD</span>
+        <span className="border border-border rounded px-1 text-[9px]">⌘K</span>
+      </button>
+    </div>
   );
 }
 
@@ -370,6 +659,7 @@ function App() {
             </Suspense>
             </ErrorBoundary>
           </div>
+          <StatusBar />
         </div>
       </Router>
       </IndicatorColorsProvider>

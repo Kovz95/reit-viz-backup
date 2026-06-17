@@ -911,9 +911,9 @@ export default function SigmaMove() {
                 .filter((d: string) => earningsYears >= 999 || d >= cutoffDate)
                 .sort() as string[];
               const minBars = Math.max(lookbackDays + horizonN + 5, 90);
-              if (!closeSeries || closeSeries.dates.length < minBars || filteredDates.length === 0) return [];
-              const dates = closeSeries.dates;
-              const closes = closeSeries.values;
+              if (closeSeries.length < minBars || filteredDates.length === 0) return [];
+              const dates = closeSeries.map((p: any) => p.time);
+              const closes = closeSeries.map((p: any) => p.value);
               const dateIndexMap = new Map<string, number>();
               dates.forEach((d: string, idx: number) => dateIndexMap.set(d, idx));
               const sqrtN = Math.sqrt(Math.max(1, horizonN));

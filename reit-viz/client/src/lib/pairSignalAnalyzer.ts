@@ -33,7 +33,7 @@ export interface SingleAnalysisResult {
   bestSignal: string | null;
   bestSignalValue: number | null;
   bestBucketLabel: string;
-  direction: "long" | "short" | "neutral" | null;
+  direction: "long_ratio" | "short_ratio" | "neutral" | null;
   quality: number;
   expectedMove20dPct: number | null;
   expectedPrice20d: number | null;
@@ -51,7 +51,7 @@ export interface PairAnalysisResult {
   bestSignal: string | null;
   bestSignalValue: number | null;
   bestBucketLabel: string;
-  direction: "long" | "short" | "neutral" | null;
+  direction: "long_ratio" | "short_ratio" | "neutral" | null;
   quality: number;
   expectedMove20dPct: number | null;
   expectedRatio20d: number | null;
@@ -102,7 +102,7 @@ export interface SingleSignalRawResult {
     signal: SignalTypeSingle;
     bucket: BucketRow;
     currentSignalValue: number;
-    direction: "long" | "short" | "neutral";
+    direction: "long_ratio" | "short_ratio" | "neutral";
     expectedMove20dPct: number;
     expectedPrice20d: number;
     rationale: string;
@@ -131,7 +131,7 @@ export interface PairSignalRawResult {
      * "short" = sell the ratio (short A / long B),
      * "neutral" = flat.
      */
-    direction: "long" | "short" | "neutral";
+    direction: "long_ratio" | "short_ratio" | "neutral";
     expectedMove20dPct: number;
     expectedRatio20d: number;
     expectedAPrice20dIfBHolds: number;
@@ -474,8 +474,8 @@ export function analyzeTicker(
       bestQ = Math.abs(b.quality);
       const expectedMove = b.avg_20d;
       const expectedPrice = vals[lastIdx] * (1 + expectedMove / 100);
-      const dir: "long" | "short" | "neutral" =
-        expectedMove > 0.3 ? "long" : expectedMove < -0.3 ? "short" : "neutral";
+      const dir: "long_ratio" | "short_ratio" | "neutral" =
+        expectedMove > 0.3 ? "long_ratio" : expectedMove < -0.3 ? "short_ratio" : "neutral";
       const hr = b.hit_20d ?? 50;
       const edgeLabel =
         hr >= 55 ? "actionable edge" :
@@ -640,8 +640,8 @@ export function analyzePairRaw(
       const expectedMove = b.avg_20d; // % change in ratio
       const expectedRatio20d = currentRatio * (1 + expectedMove / 100);
       // If ratio rises: A rises relative to B → long ratio (long A / short B)
-      const dir: "long" | "short" | "neutral" =
-        expectedMove > 0.3 ? "long" : expectedMove < -0.3 ? "short" : "neutral";
+      const dir: "long_ratio" | "short_ratio" | "neutral" =
+        expectedMove > 0.3 ? "long_ratio" : expectedMove < -0.3 ? "short_ratio" : "neutral";
       // Implied individual prices (if the other leg stays flat)
       const expectedAPrice20dIfBHolds = expectedRatio20d * currentB;
       const expectedBPrice20dIfAHolds = currentA / expectedRatio20d;

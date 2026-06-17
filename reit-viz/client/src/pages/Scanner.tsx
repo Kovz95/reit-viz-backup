@@ -1,5 +1,5 @@
 // Reconstructed from recovered-bundle/Scanner-d2v1M_Z9.js on 2026-06-11
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useBaskets } from "@/lib/basketsContext";
 import { useQuery } from "@tanstack/react-query";
 import { fetchWorkbookTickers } from "@/lib/queryClient";
@@ -14,10 +14,11 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { X, Loader2, Database, SortDesc, SortAsc, BarChart2, Zap } from "lucide-react";
+import { X, Loader2, Database, ArrowDown, ArrowUp, BarChart3, Zap } from "lucide-react";
 import { Play } from "@/lib/icons";
 import {
-  analyzeSingleTicker,
+  signalLabel as pairSignalLabel,
+  signalValueFormat as pairSignalValueFormat,
   analyzePairSignals,
 } from "@/lib/pairSignalAnalyzer";
 
@@ -51,7 +52,7 @@ interface PairResult {
   bestSignal: string | null;
   bestSignalValue: number | null;
   bestBucketLabel: string;
-  direction: "long" | "short" | "neutral" | null;
+  direction: string | null;
   quality: number;
   expectedMove20dPct: number | null;
   expectedRatio20d: number | null;
@@ -193,6 +194,7 @@ interface SingleSignalResult {
     rationale: string;
   } | null;
   halfLifeDays: number | null;
+  series: Record<SignalType, { values: (number | null)[] }>;
 }
 
 function computeBuckets(signal: SignalType, signalValues: (number | null)[], closePrices: number[], bins: [number, number, string][]): BucketRow[] {
@@ -215,7 +217,7 @@ function computeBuckets(signal: SignalType, signalValues: (number | null)[], clo
       }
       if (!rets.length) continue;
       const avg = rets.reduce((s, v) => s + v, 0) / rets.length;
-      const hitRate = rets.filter(v => (v < 0) === isLong ? false : true).length / rets.length * 100;
+      const hitRate = rets.filter(v => (v < 0) === isLong).length / rets.length * 100;
       (row as any)[`avg_${days}d`] = avg;
       (row as any)[`hit_${days}d`] = hitRate;
     }
@@ -228,7 +230,7 @@ function computeBuckets(signal: SignalType, signalValues: (number | null)[], clo
 }
 
 function analyzeTicker(prices: Array<{ time: string; value: number }>, ticker: string): SingleSignalResult | null {
-  const clean = prices.filter(p => p.value > 0 && isFinite(p.value));
+  const clean = prices.filter(p => p && p.value > 0 && isFinite(p.value));
   if (clean.length < 250) return null;
   const vals = clean.map(p => p.value);
   const logVals = vals.map(v => Math.log(v));
@@ -293,9 +295,6 @@ function analyzeTicker(prices: Array<{ time: string; value: number }>, ticker: s
   // Find best signal
   let bestNow: SingleSignalResult["bestNow"] = null;
   let bestQ = -Infinity;
-  const signalLabels: Record<SignalType, string> = { price_z: "Price z", dist_200ma: "% from 200MA", rsi14: "RSI(14)", pct: "Percentile" };
-  const formatVal = (s: SignalType, v: number) => s === "rsi14" ? v.toFixed(1) : s === "pct" ? v.toFixed(0) : s === "dist_200ma" ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
-  const revertDir = (s: SignalType) => s === "rsi14" ? " toward 50" : s === "pct" ? " toward median" : " toward zero";
   for (const sig of currentSignals) {
     if (sig.value == null) continue;
     const allBuckets = buckets[sig.signal];
@@ -313,7 +312,7 @@ function analyzeTicker(prices: Array<{ time: string; value: number }>, ticker: s
         direction: dir,
         expectedMove20dPct: expectedMove,
         expectedPrice20d: expectedPrice,
-        rationale: `${signalLabels[sig.signal]} = ${formatVal(sig.signal, sig.value)} sits in the "${b.label}" bucket. Historically, ${ticker} moved ${expectedMove >= 0 ? "+" : ""}${expectedMove.toFixed(2)}% on average over the next 20 trading days (n=${b.n}, hit ${hr.toFixed(0)}% reverting${revertDir(sig.signal)}). ${edgeLabel}.`,
+        rationale: `${signalLabel(sig.signal)} = ${signalValueFormat(sig.signal, sig.value)} sits in the "${b.label}" bucket. Historically, ${ticker} moved ${expectedMove >= 0 ? "+" : ""}${expectedMove.toFixed(2)}% on average over the next 20 trading days (n=${b.n}, hit ${hr.toFixed(0)}% reverting${reversionDir(sig.signal)}). ${edgeLabel}.`,
       };
     }
   }
@@ -321,8 +320,35 @@ function analyzeTicker(prices: Array<{ time: string; value: number }>, ticker: s
   return {
     ticker, firstDate: dates[0], lastDate: dates[lastIdx], n, currentPrice: vals[lastIdx],
     currentSignals, buckets, bestNow, halfLifeDays: computeHalfLife(zScores),
+    series: {
+      price_z: { values: zScores },
+      dist_200ma: { values: dist200 },
+      rsi14: { values: rsi },
+      pct: { values: pct },
+    },
   };
 }
+
+function signalLabel(s: SignalType): string {
+  switch (s) {
+    case "price_z": return "Price z";
+    case "dist_200ma": return "% from 200MA";
+    case "rsi14": return "RSI(14)";
+    case "pct": return "Percentile";
+  }
+}
+
+function reversionDir(s: SignalType): string {
+  return s === "rsi14" ? " toward 50" : s === "pct" ? " toward median" : " toward zero";
+}
+
+function signalValueFormat(s: SignalType, v: number): string {
+  return s === "rsi14" ? v.toFixed(1) : s === "pct" ? v.toFixed(0) : s === "dist_200ma"
+    ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+}
+
+const SIGNAL_TYPES_LIST = ["price_z", "dist_200ma", "rsi14", "pct"] as const;
+const HORIZON_LABELS = [{ key: "5d", label: "5d" }, { key: "10d", label: "10d" }, { key: "20d", label: "20d" }, { key: "60d", label: "60d" }];
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
@@ -332,13 +358,13 @@ const fmtPrice = (v: number | null | undefined) => v == null || !isFinite(v) ? "
 const colorAvg = (v: number | null | undefined) => v == null ? "text-muted-foreground" : v > 0.5 ? "text-emerald-400" : v < -0.5 ? "text-rose-400" : "text-muted-foreground";
 const colorHit = (v: number | null | undefined) => v == null ? "text-muted-foreground" : v >= 65 ? "text-emerald-400 font-semibold" : v >= 55 ? "text-emerald-400/70" : v <= 35 ? "text-rose-400 font-semibold" : v <= 45 ? "text-rose-400/70" : "text-muted-foreground";
 
-// ── StatCard ──────────────────────────────────────────────────────────────────
+// ── MiniStat ──────────────────────────────────────────────────────────────────
 
 function MiniStat({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
   return (
     <div className="bg-card/30 border border-border/30 rounded px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`text-[12px] font-mono font-semibold ${valueClass ?? "text-foreground"}`}>{value}</div>
+      <div className={`text-[12px] font-mono font-semibold ${valueClass || "text-foreground"}`}>{value}</div>
     </div>
   );
 }
@@ -354,9 +380,7 @@ function AvgHitCells({ avg, hit }: { avg: number | null; hit: number | null }) {
   );
 }
 
-// ── SingleSignalAnalyzer ──────────────────────────────────────────────────────
-
-const HORIZON_LABELS = [{ key: "5d", label: "5d" }, { key: "10d", label: "10d" }, { key: "20d", label: "20d" }, { key: "60d", label: "60d" }];
+// ── SingleSignalAnalyzer (floating drill-down) ────────────────────────────────
 
 interface SingleSignalAnalyzerProps {
   ticker: string;
@@ -371,7 +395,7 @@ function SingleSignalAnalyzer({ ticker, initialPrices, asFloating = false, onClo
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useState(() => {
+  useEffect(() => {
     let cancelled = false;
     if (initialPrices && initialPrices.length >= 250) { setPrices(initialPrices); return; }
     setLoading(true); setErr(null);
@@ -381,7 +405,7 @@ function SingleSignalAnalyzer({ ticker, initialPrices, asFloating = false, onClo
       setPrices(pts); setLoading(false);
     }).catch((e: Error) => { if (!cancelled) { setErr(String(e?.message ?? e)); setLoading(false); } });
     return () => { cancelled = true; };
-  });
+  }, [ticker, initialPrices]);
 
   const result = useMemo(() => {
     if (!prices || prices.length < 250) return null;
@@ -421,8 +445,6 @@ function SignalAnalysisPanel({ result, activeSignal, setActiveSignal }: { result
   const buckets = result.buckets[activeSignal];
   const curVal = result.currentSignals.find(s => s.signal === activeSignal)?.value;
   const activeBucketIdx = buckets.findIndex(b => curVal != null && curVal >= b.low && curVal < b.high);
-  const signalLabels: Record<SignalType, string> = { price_z: "Price z", dist_200ma: "% from 200MA", rsi14: "RSI(14)", pct: "Percentile" };
-  const formatVal = (s: SignalType, v: number) => s === "rsi14" ? v.toFixed(1) : s === "pct" ? v.toFixed(0) : s === "dist_200ma" ? `${v >= 0 ? "+" : ""}${v.toFixed(1)}%` : `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 
   return (
     <>
@@ -439,7 +461,7 @@ function SignalAnalysisPanel({ result, activeSignal, setActiveSignal }: { result
             <span className="text-[11px] font-semibold uppercase tracking-wider">Best signal right now</span>
             <span className="text-[10px] text-muted-foreground ml-auto">quality {best.bucket.quality.toFixed(2)} · n={best.bucket.n}</span>
           </div>
-          <div className="text-[12px] text-foreground/90 leading-snug">{best.bucket.label} on <span className="font-semibold">{signalLabels[best.signal]}</span> ({formatVal(best.signal, best.currentSignalValue)})</div>
+          <div className="text-[12px] text-foreground/90 leading-snug">{best.bucket.label} on <span className="font-semibold">{signalLabel(best.signal)}</span> ({signalValueFormat(best.signal, best.currentSignalValue)})</div>
           <div className="text-[11px] text-muted-foreground leading-snug">{best.rationale}</div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-1 pt-2 border-t border-amber-500/20">
             <MiniStat label="20d expected" value={`${best.expectedMove20dPct >= 0 ? "+" : ""}${best.expectedMove20dPct.toFixed(2)}%`} valueClass={best.expectedMove20dPct < 0 ? "text-rose-400" : "text-emerald-400"} />
@@ -459,12 +481,12 @@ function SignalAnalysisPanel({ result, activeSignal, setActiveSignal }: { result
       )}
       {/* Signal tabs */}
       <div className="flex items-center gap-1 flex-wrap pt-1">
-        {SIGNAL_TYPES.map(s => {
+        {SIGNAL_TYPES_LIST.map(s => {
           const v = result.currentSignals.find(sg => sg.signal === s)?.value;
           return (
             <button key={s} onClick={() => setActiveSignal(s)} data-testid={`btn-single-signal-${s}`}
               className={`px-2 py-1 rounded text-[10px] font-medium border transition-colors ${activeSignal === s ? "bg-primary text-primary-foreground border-primary" : "bg-card/30 text-muted-foreground border-border/40 hover:border-border"}`}>
-              {signalLabels[s]}{v != null && <span className="ml-1.5 opacity-80">({formatVal(s, v)})</span>}
+              {signalLabel(s)}{v != null && <span className="ml-1.5 opacity-80">({signalValueFormat(s, v)})</span>}
             </button>
           );
         })}
@@ -497,7 +519,83 @@ function SignalAnalysisPanel({ result, activeSignal, setActiveSignal }: { result
           </tbody>
         </table>
       </div>
+      <div className="text-[9.5px] text-muted-foreground/70 leading-snug px-1">
+        <span className="font-semibold">avg</span> = mean forward % change in {result.ticker}.{" "}
+        <span className="font-semibold">hit</span> = % of observations that reverted in the expected direction ({reversionDir(activeSignal).trim()}).{" "}
+        <span className="font-semibold">Q</span> = quality score on the 20-day horizon.{" "}
+        <span className="font-semibold">Price range</span>{` = $ levels for this bucket given today's μ/σ (RSI buckets show "—" since RSI doesn't translate to a single price).`}{" "}
+        Sample: {result.firstDate} → {result.lastDate}.
+      </div>
     </>
+  );
+}
+
+// ── PairSignalAnalyzer (floating drill-down) ──────────────────────────────────
+
+function PairMiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-card/30 border border-border/30 rounded px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[12px] font-mono font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function PairSignalAnalyzer({ tickerA, tickerB, onClose }: { tickerA: string; tickerB: string; onClose: () => void }) {
+  const [pricesA, setPricesA] = useState<Array<{ time: string; value: number }> | null>(null);
+  const [pricesB, setPricesB] = useState<Array<{ time: string; value: number }> | null>(null);
+
+  useEffect(() => {
+    Promise.all([fetchOhlcSeries(tickerA), fetchOhlcSeries(tickerB)]).then(([a, b]) => {
+      setPricesA(a.dates.map((d: string, i: number) => ({ time: d, value: a.closes[i] })).filter((p: { time: string; value: number }) => p.value > 0));
+      setPricesB(b.dates.map((d: string, i: number) => ({ time: d, value: b.closes[i] })).filter((p: { time: string; value: number }) => p.value > 0));
+    });
+  }, [tickerA, tickerB]);
+
+  const result = useMemo(() => {
+    if (!pricesA || !pricesB || pricesA.length < 200 || pricesB.length < 200) return null;
+    return analyzePairSignals(pricesA, pricesB, tickerA, tickerB);
+  }, [pricesA, pricesB, tickerA, tickerB]);
+
+  return (
+    <div className="fixed top-16 right-4 z-40 w-[640px] max-w-[95vw] max-h-[80vh] flex flex-col bg-card border border-border rounded-lg shadow-2xl overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-card/80 border-b border-border/40">
+        <Zap className="w-3.5 h-3.5 text-amber-400" />
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Pair signal — {tickerA}/{tickerB}</span>
+        <div className="flex-1" />
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
+          <X className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3 text-xs">
+        {!result && <div className="flex items-center text-muted-foreground"><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Loading…</div>}
+        {result && result.bestNow && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+            <div className="text-amber-300 text-[11px] font-semibold uppercase tracking-wider flex items-center gap-2">
+              <Zap className="w-3.5 h-3.5" />Best signal — quality {result.bestNow.bucket.quality.toFixed(2)} · n={result.bestNow.bucket.n}
+            </div>
+            <div className="text-[12px] text-foreground/90">
+              {result.bestNow.bucket.label} on <span className="font-semibold">{pairSignalLabel(result.bestNow.signal)}</span> ({pairSignalValueFormat(result.bestNow.signal, result.bestNow.currentSignalValue)})
+            </div>
+            <div className="text-[11px] text-muted-foreground leading-snug">{result.bestNow.rationale}</div>
+            <div className="grid grid-cols-2 gap-2 mt-1 pt-2 border-t border-amber-500/20">
+              <PairMiniStat label="20d expected" value={`${result.bestNow.expectedMove20dPct >= 0 ? "+" : ""}${result.bestNow.expectedMove20dPct.toFixed(2)}%`} />
+              <PairMiniStat label="Ratio target" value={result.bestNow.expectedRatio20d.toFixed(4)} />
+              <PairMiniStat label={`${tickerA} target (${tickerB} flat)`} value={`$${result.bestNow.expectedAPrice20dIfBHolds.toFixed(2)}`} />
+              <PairMiniStat label={`${tickerB} target (${tickerA} flat)`} value={`$${result.bestNow.expectedBPrice20dIfAHolds.toFixed(2)}`} />
+            </div>
+            <div className="text-[10px] text-muted-foreground/80 pt-1">
+              {(result.bestNow.direction as string) === "short_ratio" ? `Setup: short ${tickerA} / long ${tickerB} (sell the ratio)`
+                : (result.bestNow.direction as string) === "long_ratio" ? `Setup: long ${tickerA} / short ${tickerB} (buy the ratio)`
+                : "No actionable bias."}
+            </div>
+          </div>
+        )}
+        {result && !result.bestNow && (
+          <div className="text-[11px] text-muted-foreground">No high-quality bucket right now.</div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -508,11 +606,129 @@ const CLASS_LABELS: Record<string, string> = {
   industryGroup: "Industry Group", industry: "Industry", subindustry: "Subindustry",
 };
 
+// ── Sort header helpers (shared shape) ────────────────────────────────────────
+
+type SortState = { key: string; dir: -1 | 1 };
+
+function SortableHeader({ k, label, align = "left", sort, setSort }: { k: string; label: string; align?: string; sort: SortState; setSort: (s: SortState) => void }) {
+  const active = sort.key === k;
+  return (
+    <th className={`px-2 py-1.5 cursor-pointer hover:bg-card/60 select-none text-${align}`}
+      onClick={() => setSort({ key: k, dir: active && sort.dir === -1 ? 1 : -1 })}>
+      <span className="inline-flex items-center gap-1">
+        {label}{active && (sort.dir === -1 ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />)}
+      </span>
+    </th>
+  );
+}
+
+// ── SinglesTable ──────────────────────────────────────────────────────────────
+
+function SinglesTable({ rows, sort, setSort, onDrill }: { rows: SingleResult[]; sort: SortState; setSort: (s: SortState) => void; onDrill: (ticker: string) => void }) {
+  return (
+    <table className="w-full text-[10px] font-mono">
+      <thead className="bg-card/40 text-muted-foreground sticky top-0">
+        <tr>
+          <SortableHeader k="ticker" label="Ticker" sort={sort} setSort={setSort} />
+          <SortableHeader k="classification" label="Class" sort={sort} setSort={setSort} />
+          <SortableHeader k="currentPrice" label="Price" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="bestSignal" label="Best signal" sort={sort} setSort={setSort} />
+          <SortableHeader k="bestBucketLabel" label="Bucket" sort={sort} setSort={setSort} />
+          <SortableHeader k="direction" label="Dir" sort={sort} setSort={setSort} />
+          <SortableHeader k="quality" label="Q" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedMove20dPct" label="Exp 20d" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedPrice20d" label="Target $" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="hit20d" label="Hit" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="n" label="n" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="halfLifeDays" label="HL" align="right" sort={sort} setSort={setSort} />
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(t => (
+          <tr key={t.ticker} className="border-t border-border/20 hover:bg-card/40 cursor-pointer" onClick={() => onDrill(t.ticker)} data-testid={`singles-row-${t.ticker}`}>
+            <td className="px-2 py-1 font-semibold text-foreground">{t.ticker}</td>
+            <td className="px-2 py-1 text-foreground/70 truncate max-w-[120px]" title={t.classification}>{t.classification}</td>
+            <td className="px-2 py-1 text-right">${t.currentPrice.toFixed(2)}</td>
+            <td className="px-2 py-1 text-foreground/80">
+              {t.bestSignal ? signalLabel(t.bestSignal as SignalType) : "—"}
+              {t.bestSignalValue != null && t.bestSignal && <span className="ml-1 text-muted-foreground">({signalValueFormat(t.bestSignal as SignalType, t.bestSignalValue)})</span>}
+            </td>
+            <td className="px-2 py-1 text-foreground/70 truncate max-w-[140px]" title={t.bestBucketLabel}>{t.bestBucketLabel}</td>
+            <td className="px-2 py-1">
+              {t.direction === "long" ? <span className="text-emerald-400">LONG</span>
+                : t.direction === "short" ? <span className="text-rose-400">SHORT</span>
+                : <span className="text-muted-foreground">—</span>}
+            </td>
+            <td className={`px-2 py-1 text-right ${t.quality >= 1.5 ? "text-emerald-400 font-semibold" : t.quality >= 0.5 ? "text-emerald-400/70" : t.quality <= -0.5 ? "text-rose-400/70" : "text-muted-foreground"}`}>{t.quality ? t.quality.toFixed(2) : "—"}</td>
+            <td className={`px-2 py-1 text-right ${(t.expectedMove20dPct ?? 0) > 0 ? "text-emerald-400" : (t.expectedMove20dPct ?? 0) < 0 ? "text-rose-400" : ""}`}>{t.expectedMove20dPct != null ? `${t.expectedMove20dPct >= 0 ? "+" : ""}${t.expectedMove20dPct.toFixed(2)}%` : "—"}</td>
+            <td className="px-2 py-1 text-right font-semibold">{t.expectedPrice20d != null ? `$${t.expectedPrice20d.toFixed(2)}` : "—"}</td>
+            <td className={`px-2 py-1 text-right ${(t.hit20d ?? 0) >= 65 ? "text-emerald-400 font-semibold" : (t.hit20d ?? 0) <= 35 ? "text-rose-400 font-semibold" : ""}`}>{t.hit20d != null ? `${t.hit20d.toFixed(0)}%` : "—"}</td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{t.n || "—"}</td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{t.halfLifeDays ? `${t.halfLifeDays.toFixed(0)}d` : "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── PairsTable ────────────────────────────────────────────────────────────────
+
+function PairsTable({ rows, sort, setSort, onDrill }: { rows: PairResult[]; sort: SortState; setSort: (s: SortState) => void; onDrill: (a: string, b: string) => void }) {
+  return (
+    <table className="w-full text-[10px] font-mono">
+      <thead className="bg-card/40 text-muted-foreground sticky top-0">
+        <tr>
+          <SortableHeader k="tickerA" label="A" sort={sort} setSort={setSort} />
+          <SortableHeader k="tickerB" label="B" sort={sort} setSort={setSort} />
+          <SortableHeader k="ratio" label="A/B" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="bestSignal" label="Best signal" sort={sort} setSort={setSort} />
+          <SortableHeader k="bestBucketLabel" label="Bucket" sort={sort} setSort={setSort} />
+          <SortableHeader k="direction" label="Setup" sort={sort} setSort={setSort} />
+          <SortableHeader k="quality" label="Q" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedMove20dPct" label="Ratio 20d" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedRatio20d" label="Tgt ratio" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedAIfBFlat" label="A tgt (B flat)" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="expectedBIfAFlat" label="B tgt (A flat)" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="hit20d" label="Hit" align="right" sort={sort} setSort={setSort} />
+          <SortableHeader k="n" label="n" align="right" sort={sort} setSort={setSort} />
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(t => (
+          <tr key={`${t.tickerA}_${t.tickerB}`} className="border-t border-border/20 hover:bg-card/40 cursor-pointer" onClick={() => onDrill(t.tickerA, t.tickerB)} data-testid={`pairs-row-${t.tickerA}-${t.tickerB}`}>
+            <td className="px-2 py-1 font-semibold text-foreground">{t.tickerA}</td>
+            <td className="px-2 py-1 font-semibold text-foreground">{t.tickerB}</td>
+            <td className="px-2 py-1 text-right text-foreground/70">{isFinite(t.ratio) ? t.ratio.toFixed(4) : "—"}</td>
+            <td className="px-2 py-1 text-foreground/80">
+              {t.bestSignal ? pairSignalLabel(t.bestSignal) : "—"}
+              {t.bestSignalValue != null && t.bestSignal && <span className="ml-1 text-muted-foreground">({pairSignalValueFormat(t.bestSignal, t.bestSignalValue)})</span>}
+            </td>
+            <td className="px-2 py-1 text-foreground/70 truncate max-w-[120px]" title={t.bestBucketLabel}>{t.bestBucketLabel}</td>
+            <td className="px-2 py-1 text-[10px]">
+              {t.direction === "long_ratio" ? <span><span className="text-emerald-400">LONG</span> {t.tickerA} / <span className="text-rose-400">SHORT</span> {t.tickerB}</span>
+                : t.direction === "short_ratio" ? <span><span className="text-rose-400">SHORT</span> {t.tickerA} / <span className="text-emerald-400">LONG</span> {t.tickerB}</span>
+                : <span className="text-muted-foreground">—</span>}
+            </td>
+            <td className={`px-2 py-1 text-right ${t.quality >= 1.5 ? "text-emerald-400 font-semibold" : t.quality >= 0.5 ? "text-emerald-400/70" : t.quality <= -0.5 ? "text-rose-400/70" : "text-muted-foreground"}`}>{t.quality ? t.quality.toFixed(2) : "—"}</td>
+            <td className={`px-2 py-1 text-right ${(t.expectedMove20dPct ?? 0) > 0 ? "text-emerald-400" : (t.expectedMove20dPct ?? 0) < 0 ? "text-rose-400" : ""}`}>{t.expectedMove20dPct != null ? `${t.expectedMove20dPct >= 0 ? "+" : ""}${t.expectedMove20dPct.toFixed(2)}%` : "—"}</td>
+            <td className="px-2 py-1 text-right">{t.expectedRatio20d != null ? t.expectedRatio20d.toFixed(4) : "—"}</td>
+            <td className="px-2 py-1 text-right font-semibold">{t.expectedAIfBFlat != null ? `$${t.expectedAIfBFlat.toFixed(2)}` : "—"}</td>
+            <td className="px-2 py-1 text-right font-semibold">{t.expectedBIfAFlat != null ? `$${t.expectedBIfAFlat.toFixed(2)}` : "—"}</td>
+            <td className={`px-2 py-1 text-right ${(t.hit20d ?? 0) >= 65 ? "text-emerald-400 font-semibold" : (t.hit20d ?? 0) <= 35 ? "text-rose-400 font-semibold" : ""}`}>{t.hit20d != null ? `${t.hit20d.toFixed(0)}%` : "—"}</td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{t.n}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function Scanner() {
   const { baskets } = useBaskets();
-  const { data: allTickers } = useQuery<TickerMeta[]>({ queryKey: ["tickers"], queryFn: fetchWorkbookTickers, staleTime: Infinity });
+  const { data: allTickers } = useQuery<any[]>({ queryKey: ["tickers"], queryFn: fetchWorkbookTickers, staleTime: Infinity });
 
   const [universeMode, setUniverseMode] = useState<UniverseMode>("workbook");
   const [selectedBasket, setSelectedBasket] = useState("");
@@ -525,10 +741,10 @@ export default function Scanner() {
   const [pairResults, setPairResults] = useState<PairResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef(false);
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-  const [selectedPair, setSelectedPair] = useState<{ tickerA: string; tickerB: string } | null>(null);
-  const [singleSort, setSingleSort] = useState<{ key: string; dir: -1 | 1 }>({ key: "quality", dir: -1 });
-  const [pairSort, setPairSort] = useState<{ key: string; dir: -1 | 1 }>({ key: "quality", dir: -1 });
+  const [drillTicker, setDrillTicker] = useState<string | null>(null);
+  const [drillPair, setDrillPair] = useState<{ a: string; b: string } | null>(null);
+  const [singleSort, setSingleSort] = useState<SortState>({ key: "quality", dir: -1 });
+  const [pairSort, setPairSort] = useState<SortState>({ key: "quality", dir: -1 });
   const [minN, setMinN] = useState(20);
   const [filterQuery, setFilterQuery] = useState("");
   const [hideSmall, setHideSmall] = useState(false);
@@ -558,33 +774,36 @@ export default function Scanner() {
 
   const classMap = useMemo(() => {
     const m = new Map<string, string>();
-    if (allTickers) for (const t of allTickers as any[]) m.set(t.ticker, t[classField] ?? "—");
+    if (allTickers) for (const t of allTickers as any[]) m.set(t.ticker, t[classField] || "—");
     return m;
   }, [allTickers, classField]);
 
   async function runScan() {
-    if (activeTickers.length === 0) { setError("Universe is empty — pick a basket / classification with tickers."); return; }
     if (activeTickers.length < 2 && scanMode === "pairs") { setError("Need at least 2 tickers in the universe to scan pairs."); return; }
+    if (activeTickers.length === 0) { setError("Universe is empty — pick a basket / classification with tickers."); return; }
     cancelRef.current = false;
     setScanning(true); setError(null); setSingleResults([]); setPairResults([]);
     setProgress({ done: 0, total: 0, currentTask: "Loading prices…" });
     const CONCURRENCY = 8;
     const priceMap = new Map<string, Array<{ time: string; value: number }>>();
-    let idx = 0;
-    setProgress({ done: 0, total: activeTickers.length, currentTask: "Loading prices…" });
-    async function loadWorker() {
-      while (idx < activeTickers.length) {
-        if (cancelRef.current) return;
-        const i = idx++, ticker = activeTickers[i];
-        try {
-          const data = await fetchOhlcSeries(ticker);
-          const pts = data.dates.map((d: string, j: number) => ({ time: d, value: data.closes[j] })).filter((p: any) => p.value > 0 && isFinite(p.value));
-          if (pts.length >= 250) priceMap.set(ticker, pts);
-        } catch (e) { console.warn(`[Scanner] fetch failed for ${ticker}:`, e); }
-        setProgress(prev => ({ ...prev, done: prev.done + 1, currentTask: `Loading prices (${i + 1}/${activeTickers.length}): ${ticker}` }));
-      }
+    {
+      let idx = 0;
+      const total = activeTickers.length;
+      setProgress({ done: 0, total, currentTask: "Loading prices…" });
+      const loadWorker = async () => {
+        while (idx < total) {
+          if (cancelRef.current) return;
+          const i = idx++, ticker = activeTickers[i];
+          try {
+            const data = await fetchOhlcSeries(ticker);
+            const pts = data.dates.map((d: string, j: number) => ({ time: d, value: data.closes[j] })).filter((p: any) => p.value > 0 && isFinite(p.value));
+            if (pts.length >= 250) priceMap.set(ticker, pts);
+          } catch (e) { console.warn(`[Scanner] fetch failed for ${ticker}:`, e); }
+          setProgress(prev => ({ ...prev, done: prev.done + 1, currentTask: `Loading prices (${i + 1}/${total}): ${ticker}` }));
+        }
+      };
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => loadWorker()));
     }
-    await Promise.all(Array.from({ length: CONCURRENCY }, () => loadWorker()));
     if (cancelRef.current) { setScanning(false); return; }
     if (scanMode === "singles") {
       const results: SingleResult[] = [];
@@ -595,11 +814,13 @@ export default function Scanner() {
         const analysis = analyzeTicker(prices, ticker);
         if (analysis) {
           const best = analysis.bestNow;
-          results.push({ ticker, classification: classMap.get(ticker) ?? "—", currentPrice: analysis.currentPrice, bestSignal: best?.signal ?? null, bestSignalValue: best?.currentSignalValue ?? null, bestBucketLabel: best?.bucket.label ?? "—", direction: best?.direction ?? null, quality: best?.bucket.quality ?? 0, expectedMove20dPct: best?.expectedMove20dPct ?? null, expectedPrice20d: best?.expectedPrice20d ?? null, hit20d: best?.bucket.hit_20d ?? null, n: best?.bucket.n ?? 0, halfLifeDays: analysis.halfLifeDays });
-          if (!best) results[results.length - 1].bestBucketLabel = "current buckets too small (n<20)";
+          results.push({ ticker, classification: classMap.get(ticker) || "—", currentPrice: analysis.currentPrice, bestSignal: best?.signal ?? null, bestSignalValue: best?.currentSignalValue ?? null, bestBucketLabel: best?.bucket.label ?? "—", direction: best?.direction ?? null, quality: best?.bucket.quality ?? 0, expectedMove20dPct: best?.expectedMove20dPct ?? null, expectedPrice20d: best?.expectedPrice20d ?? null, hit20d: best?.bucket.hit_20d ?? null, n: best?.bucket.n ?? 0, halfLifeDays: analysis.halfLifeDays });
         } else {
-          const prices2 = priceMap.get(ticker);
-          results.push({ ticker, classification: classMap.get(ticker) ?? "—", currentPrice: prices2 ? prices2[prices2.length - 1].value : 0, bestSignal: null, bestSignalValue: null, bestBucketLabel: "insufficient history (<250 bars)", direction: null, quality: 0, expectedMove20dPct: null, expectedPrice20d: null, hit20d: null, n: 0, halfLifeDays: null });
+          const prices2 = priceMap.get(ticker)!;
+          results.push({ ticker, classification: classMap.get(ticker) || "—", currentPrice: prices2[prices2.length - 1].value, bestSignal: null, bestSignalValue: null, bestBucketLabel: "insufficient history (<250 bars)", direction: null, quality: 0, expectedMove20dPct: null, expectedPrice20d: null, hit20d: null, n: 0, halfLifeDays: null });
+        }
+        if (analysis && !analysis.bestNow) {
+          results[results.length - 1].bestBucketLabel = "current buckets too small (n<20)";
         }
         if (i % 5 === 0) { setProgress({ done: i + 1, total: loaded.length, currentTask: `Analyzing ${ticker}` }); await new Promise(r => setTimeout(r, 0)); }
       }
@@ -617,9 +838,9 @@ export default function Scanner() {
           const pairAnalysis = analyzePairSignals(pA, pB, tA, tB);
           if (pairAnalysis) {
             const best = pairAnalysis.bestNow;
-            results.push({ tickerA: tA, tickerB: tB, classA: classMap.get(tA) ?? "—", classB: classMap.get(tB) ?? "—", ratio: pairAnalysis.currentRatio, bestSignal: best?.signal ?? null, bestSignalValue: best?.currentSignalValue ?? null, bestBucketLabel: best?.bucket.label ?? "current buckets too small (n<20)", direction: best?.direction ?? null, quality: best?.bucket.quality ?? 0, expectedMove20dPct: best?.expectedMove20dPct ?? null, expectedRatio20d: best?.expectedRatio20d ?? null, expectedAIfBFlat: best?.expectedAPrice20dIfBHolds ?? null, expectedBIfAFlat: best?.expectedBPrice20dIfAHolds ?? null, hit20d: best?.bucket.hit_20d ?? null, n: best?.bucket.n ?? 0 });
+            results.push({ tickerA: tA, tickerB: tB, classA: classMap.get(tA) || "—", classB: classMap.get(tB) || "—", ratio: pairAnalysis.currentRatio, bestSignal: best?.signal ?? null, bestSignalValue: best?.currentSignalValue ?? null, bestBucketLabel: best?.bucket.label ?? "current buckets too small (n<20)", direction: best?.direction ?? null, quality: best?.bucket.quality ?? 0, expectedMove20dPct: best?.expectedMove20dPct ?? null, expectedRatio20d: best?.expectedRatio20d ?? null, expectedAIfBFlat: best?.expectedAPrice20dIfBHolds ?? null, expectedBIfAFlat: best?.expectedBPrice20dIfAHolds ?? null, hit20d: best?.bucket.hit_20d ?? null, n: best?.bucket.n ?? 0 });
           } else {
-            results.push({ tickerA: tA, tickerB: tB, classA: classMap.get(tA) ?? "—", classB: classMap.get(tB) ?? "—", ratio: NaN, bestSignal: null, bestSignalValue: null, bestBucketLabel: "insufficient overlap (<250 bars)", direction: null, quality: 0, expectedMove20dPct: null, expectedRatio20d: null, expectedAIfBFlat: null, expectedBIfAFlat: null, hit20d: null, n: 0 });
+            results.push({ tickerA: tA, tickerB: tB, classA: classMap.get(tA) || "—", classB: classMap.get(tB) || "—", ratio: NaN, bestSignal: null, bestSignalValue: null, bestBucketLabel: "insufficient overlap (<250 bars)", direction: null, quality: 0, expectedMove20dPct: null, expectedRatio20d: null, expectedAIfBFlat: null, expectedBIfAFlat: null, hit20d: null, n: 0 });
           }
           pairDone++;
           if (pairDone % 50 === 0) { setProgress({ done: pairDone, total: totalPairs, currentTask: `${tA}/${tB} (${pairDone}/${totalPairs})` }); await new Promise(r => setTimeout(r, 0)); }
@@ -654,20 +875,6 @@ export default function Scanner() {
       return typeof va === "string" ? d * va.localeCompare(vb) : d * (va - vb);
     });
   }, [pairResults, pairSort, minN, filterQuery, hideSmall]);
-
-  function sortSingles(key: string) { setSingleSort(prev => ({ key, dir: prev.key === key ? (-prev.dir as -1 | 1) : -1 })); }
-  function sortPairs(key: string) { setPairSort(prev => ({ key, dir: prev.key === key ? (-prev.dir as -1 | 1) : -1 })); }
-
-  function SortHeader({ k, label, sort, onSort }: { k: string; label: string; sort: { key: string; dir: -1 | 1 }; onSort: (k: string) => void }) {
-    return (
-      <th onClick={() => onSort(k)} className="px-2 py-1.5 cursor-pointer hover:bg-muted/40 select-none text-right whitespace-nowrap">
-        <div className="flex items-center justify-end gap-1">
-          {label}
-          {sort.key === k ? (sort.dir === 1 ? <SortAsc className="w-2.5 h-2.5" /> : <SortDesc className="w-2.5 h-2.5" />) : <BarChart2 className="w-2.5 h-2.5 opacity-20" />}
-        </div>
-      </th>
-    );
-  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -745,116 +952,65 @@ export default function Scanner() {
             {scanning && <Loader2 className="w-3 h-3 animate-spin" />}
             <span className="font-mono">{progress.done}/{progress.total}</span>
             <div className="flex-1 max-w-md h-1.5 bg-border/30 rounded overflow-hidden">
-              <div className="h-full bg-primary" style={{ width: progress.total > 0 ? `${progress.done / progress.total * 100}%` : "0%" }} />
+              <div className="h-full bg-primary" style={{ width: `${progress.total ? progress.done / progress.total * 100 : 0}%` }} />
             </div>
-            <span className="truncate max-w-[200px]">{progress.currentTask}</span>
+            <span className="truncate max-w-md">{progress.currentTask}</span>
           </div>
         )}
-        {error && <div className="text-rose-400 text-[11px]">{error}</div>}
+        {error && <div className="text-rose-400 text-xs">{error}</div>}
         {/* Post-scan filters */}
         {(singleResults.length > 0 || pairResults.length > 0) && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <Input value={filterQuery} onChange={e => setFilterQuery(e.target.value)} placeholder="Filter ticker / class…" className="h-7 w-40 text-[11px]" />
-            <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer">
-              <input type="checkbox" checked={hideSmall} onChange={e => setHideSmall(e.target.checked)} className="w-3 h-3" />
-              Actionable only (n≥{minN}, signal non-null)
+          <div className="flex items-center gap-2 text-[10px]">
+            <span className="text-muted-foreground">Filter:</span>
+            <Input value={filterQuery} onChange={e => setFilterQuery(e.target.value)} placeholder="ticker or classification" className="h-6 w-48 text-[11px]" />
+            <span className="text-muted-foreground">Min sample n ≥</span>
+            <Input type="number" value={minN} onChange={e => setMinN(Math.max(0, parseInt(e.target.value) || 0))} className="h-6 w-16 text-[11px]" />
+            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none ml-1">
+              <input type="checkbox" checked={hideSmall} onChange={e => setHideSmall(e.target.checked)} className="h-3 w-3 cursor-pointer accent-amber-400" />
+              <span className="text-foreground/80">Hide blank rows (no edge / insufficient data)</span>
             </label>
+            <span className="text-muted-foreground ml-auto">
+              {(() => {
+                const all = scanMode === "singles" ? singleResults : pairResults;
+                const shown = scanMode === "singles" ? sortedSingles.length : sortedPairs.length;
+                const withEdge = all.filter(y => y.bestSignal != null).length;
+                const blank = all.length - withEdge;
+                return (
+                  <>
+                    Showing <span className="text-foreground">{shown}</span> /{" "}
+                    <span className="text-foreground">{all.length}</span> · <span className="text-emerald-400">{withEdge}</span> with edge,{" "}
+                    <span className="text-muted-foreground">{blank}</span> blank
+                  </>
+                );
+              })()}
+            </span>
           </div>
         )}
       </div>
 
       {/* Results */}
-      <div className="flex-1 overflow-hidden flex">
-        {/* Main table */}
-        <div className={`flex-1 overflow-auto ${selectedTicker || selectedPair ? "hidden lg:block" : ""}`}>
-          {scanMode === "singles" && sortedSingles.length > 0 && (
-            <table className="w-full text-[10px] font-mono border-collapse">
-              <thead className="bg-card/40 border-b border-border sticky top-0">
-                <tr>
-                  <th className="text-left px-2 py-1.5">Ticker</th>
-                  <th className="text-left px-2 py-1.5">Class</th>
-                  <SortHeader k="quality" label="Quality" sort={singleSort} onSort={sortSingles} />
-                  <SortHeader k="expectedMove20dPct" label="20d Exp" sort={singleSort} onSort={sortSingles} />
-                  <th className="text-right px-2 py-1.5">Direction</th>
-                  <SortHeader k="hit20d" label="Hit%" sort={singleSort} onSort={sortSingles} />
-                  <SortHeader k="n" label="n" sort={singleSort} onSort={sortSingles} />
-                  <th className="text-left px-2 py-1.5">Bucket</th>
-                  <SortHeader k="currentPrice" label="Price" sort={singleSort} onSort={sortSingles} />
-                  <SortHeader k="halfLifeDays" label="HL" sort={singleSort} onSort={sortSingles} />
-                </tr>
-              </thead>
-              <tbody>
-                {sortedSingles.map(r => (
-                  <tr key={r.ticker} onClick={() => setSelectedTicker(r.ticker === selectedTicker ? null : r.ticker)}
-                    className={`border-b border-border/30 cursor-pointer hover:bg-muted/20 ${r.ticker === selectedTicker ? "bg-primary/10" : ""}`}>
-                    <td className="px-2 py-1 font-semibold text-foreground">{r.ticker}</td>
-                    <td className="px-2 py-1 text-muted-foreground truncate max-w-[80px]">{r.classification}</td>
-                    <td className={`px-2 py-1 text-right ${r.quality >= 1.5 ? "text-emerald-400 font-semibold" : r.quality >= 0.5 ? "text-emerald-400/70" : r.quality <= -0.5 ? "text-rose-400/70" : "text-muted-foreground"}`}>{r.quality.toFixed(2)}</td>
-                    <td className={`px-2 py-1 text-right ${colorAvg(r.expectedMove20dPct)}`}>{fmtAvg(r.expectedMove20dPct)}</td>
-                    <td className="px-2 py-1 text-right">
-                      {r.direction && <span className={`px-1 py-0.5 rounded text-[9px] ${r.direction === "long" ? "bg-emerald-500/15 text-emerald-400" : r.direction === "short" ? "bg-rose-500/15 text-rose-400" : "text-muted-foreground"}`}>{r.direction}</span>}
-                    </td>
-                    <td className={`px-2 py-1 text-right ${colorHit(r.hit20d)}`}>{fmtHit(r.hit20d)}</td>
-                    <td className="px-2 py-1 text-right text-muted-foreground">{r.n || "—"}</td>
-                    <td className="px-2 py-1 text-muted-foreground max-w-[120px] truncate">{r.bestBucketLabel}</td>
-                    <td className="px-2 py-1 text-right">{fmtPrice(r.currentPrice)}</td>
-                    <td className="px-2 py-1 text-right text-muted-foreground">{r.halfLifeDays ? `${r.halfLifeDays.toFixed(1)}d` : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {scanMode === "pairs" && sortedPairs.length > 0 && (
-            <table className="w-full text-[10px] font-mono border-collapse">
-              <thead className="bg-card/40 border-b border-border sticky top-0">
-                <tr>
-                  <th className="text-left px-2 py-1.5">Pair</th>
-                  <SortHeader k="quality" label="Quality" sort={pairSort} onSort={sortPairs} />
-                  <SortHeader k="expectedMove20dPct" label="20d Exp" sort={pairSort} onSort={sortPairs} />
-                  <th className="text-right px-2 py-1.5">Direction</th>
-                  <SortHeader k="hit20d" label="Hit%" sort={pairSort} onSort={sortPairs} />
-                  <SortHeader k="n" label="n" sort={pairSort} onSort={sortPairs} />
-                  <th className="text-left px-2 py-1.5">Bucket</th>
-                  <SortHeader k="ratio" label="Ratio" sort={pairSort} onSort={sortPairs} />
-                </tr>
-              </thead>
-              <tbody>
-                {sortedPairs.map(r => {
-                  const key = `${r.tickerA}/${r.tickerB}`;
-                  const isSelected = selectedPair?.tickerA === r.tickerA && selectedPair?.tickerB === r.tickerB;
-                  return (
-                    <tr key={key} onClick={() => setSelectedPair(isSelected ? null : { tickerA: r.tickerA, tickerB: r.tickerB })}
-                      className={`border-b border-border/30 cursor-pointer hover:bg-muted/20 ${isSelected ? "bg-primary/10" : ""}`}>
-                      <td className="px-2 py-1 font-semibold text-foreground">{r.tickerA} / {r.tickerB}</td>
-                      <td className={`px-2 py-1 text-right ${r.quality >= 1.5 ? "text-emerald-400 font-semibold" : r.quality >= 0.5 ? "text-emerald-400/70" : "text-muted-foreground"}`}>{r.quality.toFixed(2)}</td>
-                      <td className={`px-2 py-1 text-right ${colorAvg(r.expectedMove20dPct)}`}>{fmtAvg(r.expectedMove20dPct)}</td>
-                      <td className="px-2 py-1 text-right">
-                        {r.direction && <span className={`px-1 py-0.5 rounded text-[9px] ${r.direction === "long" ? "bg-emerald-500/15 text-emerald-400" : r.direction === "short" ? "bg-rose-500/15 text-rose-400" : "text-muted-foreground"}`}>{r.direction}</span>}
-                      </td>
-                      <td className={`px-2 py-1 text-right ${colorHit(r.hit20d)}`}>{fmtHit(r.hit20d)}</td>
-                      <td className="px-2 py-1 text-right text-muted-foreground">{r.n || "—"}</td>
-                      <td className="px-2 py-1 text-muted-foreground max-w-[120px] truncate">{r.bestBucketLabel}</td>
-                      <td className="px-2 py-1 text-right">{isFinite(r.ratio) ? r.ratio.toFixed(4) : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-          {!scanning && singleResults.length === 0 && pairResults.length === 0 && (
-            <div className="flex items-center justify-center h-full text-muted-foreground text-xs p-8 text-center">
-              Click "Run scan" to analyze tickers. Each row will show the best predictive signal and expected 20-day move.
-            </div>
-          )}
-        </div>
-
-        {/* Detail panel */}
-        {selectedTicker && (
-          <div className="w-full lg:w-[680px] border-l border-border flex flex-col">
-            <SingleSignalAnalyzer ticker={selectedTicker} onClose={() => setSelectedTicker(null)} asFloating={false} />
+      <div className="flex-1 overflow-auto">
+        {scanMode === "singles" ? (
+          <SinglesTable rows={sortedSingles} sort={singleSort} setSort={setSingleSort} onDrill={t => setDrillTicker(t)} />
+        ) : (
+          <PairsTable rows={sortedPairs} sort={pairSort} setSort={setPairSort} onDrill={(a, b) => setDrillPair({ a, b })} />
+        )}
+        {!scanning && singleResults.length === 0 && pairResults.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+            <BarChart3 className="w-12 h-12 opacity-30" />
+            <p className="text-sm">No scan run yet. Pick a universe and click "Run scan".</p>
+            <p className="text-[10px] opacity-80">
+              {scanMode === "singles"
+                ? "Singles scan analyzes each ticker for mean-reversion setups across price-z, % from 200MA, RSI(14), and percentile."
+                : "Pairs scan analyzes every (N choose 2) combination for ratio mean-reversion across raw z, OLS-residual z, β-adj spread z, and percentile."}
+            </p>
           </div>
         )}
       </div>
+
+      {/* Floating drill-down analyzers */}
+      {drillTicker && <SingleSignalAnalyzer ticker={drillTicker} asFloating onClose={() => setDrillTicker(null)} />}
+      {drillPair && <PairSignalAnalyzer tickerA={drillPair.a} tickerB={drillPair.b} onClose={() => setDrillPair(null)} />}
     </div>
   );
 }

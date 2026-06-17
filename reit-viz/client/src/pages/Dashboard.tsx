@@ -13,6 +13,11 @@ import { getSeriesColor } from "@/lib/chartColors";
 import { useUniverse } from "@/lib/universeContext";
 import { apiRequest, API_BASE } from "@/lib/queryClient";
 import { useWorkspaceContext, useWorkspaceTab } from "@/lib/workspaceContext";
+import { useBaskets } from "@/lib/useBaskets";
+import type { Basket } from "@/lib/useBaskets";
+import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
+import { getBasketOhlc, buildBasketOhlc } from "@/lib/basketOhlc";
+import type { BasketOhlcResult } from "@/lib/basketOhlc";
 
 export interface CustomChartView {
   id: number;
@@ -196,6 +201,74 @@ const PAIRS_PRESETS: PairsPresetDef[] = [
 
 export { PAIRS_PRESETS };
 
+// ── Relative-Value Presets: per-metric A/B ratio series across panes ──
+export interface RelativeValuePresetDef {
+  label: string;
+  panes: {
+    metric: string;
+    label: (a: string, b: string) => string;
+    indicators?: ActiveIndicators;
+  }[];
+}
+
+const RELATIVE_VALUE_PRESETS: RelativeValuePresetDef[] = [
+  {
+    label: "Rel Val: P/FFO + FFO Growth",
+    panes: [
+      { metric: "P/FFO FY2", label: (a, b) => `P/FFO FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 FFO Growth", label: (a, b) => `FY2 FFO Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: P/E + EPS Growth",
+    panes: [
+      { metric: "P/E FY2", label: (a, b) => `P/E FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EPS Growth", label: (a, b) => `FY2 EPS Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: EV/EBITDA + EBITDA Growth",
+    panes: [
+      { metric: "EV/EBITDA FY2", label: (a, b) => `EV/EBITDA FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EBITDA Growth", label: (a, b) => `FY2 EBITDA Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Price + P/FFO + FFO Growth",
+    panes: [
+      { metric: "close", label: (a, b) => `Price: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "P/FFO FY2", label: (a, b) => `P/FFO FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 FFO Growth", label: (a, b) => `FY2 FFO Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Price + P/E + EPS Growth",
+    panes: [
+      { metric: "close", label: (a, b) => `Price: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "P/E FY2", label: (a, b) => `P/E FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FY2 EPS Growth", label: (a, b) => `FY2 EPS Growth: ${a}/${b}` },
+    ],
+  },
+  {
+    label: "Rel Val: Dividend Yield + FFO Yield",
+    panes: [
+      { metric: "Dividend Yield", label: (a, b) => `Div Yield: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+      { metric: "FFO Yield FY2", label: (a, b) => `FFO Yield FY2: ${a}/${b}`, indicators: { mean: { rolling: true, period: 252 } } },
+    ],
+  },
+];
+
+export { RELATIVE_VALUE_PRESETS };
+
+// ── Server-backed custom chart (persistent blank canvas) ──
+export interface SavedCustomChart {
+  id: number;
+  name: string;
+  state: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 const DEFAULT_VIEW = "Price vs P/FFO FY2";
 
 let nextPaneId = 1;
@@ -205,6 +278,102 @@ let paneGeneration = 0;
 // Module-level map to persist custom series styling across component re-mounts
 // Keys are series IDs, values are { color, lineWidth, lineStyle }
 const seriesStyleOverrides = new Map<string, { color?: string; lineWidth?: number; lineStyle?: number }>();
+
+// ── Basket series resolution ──────────────────────────────────────────────
+// Resolve a BASKET:<id> ticker's OHLCV via the basket infrastructure
+// (buildBasketOhlc + getBasketOhlc → /api/basket/ohlc) instead of the normal
+// per-ticker getTickerRaw path. Mirrors the bundle, where getOhlcData /
+// getMetricSeries dispatch on the "BASKET:" prefix and delegate to the
+// basket OHLC helpers (index-CsG73Aq_.js ~15077, 15168, 15262).
+
+/** Fetch and cache the BasketOhlcResult for a BASKET:<id> ticker. */
+async function fetchBasketOhlc(
+  basketTicker: string,
+  resolve: (id: string) => Basket | undefined
+): Promise<BasketOhlcResult | null> {
+  const id = extractBasketId(basketTicker);
+  if (!id) return null;
+  const basket = resolve(id);
+  if (!basket) return null;
+  const def = buildBasketOhlc(basket.tickers, basket, {
+    weighting: basket.weighting,
+    rebalance: basket.rebalance,
+    customWeights: basket.customWeights,
+    volLookback: basket.volLookback,
+  });
+  // Preserve the basket's display name for any downstream labelling.
+  (def as any).name = basket.name ?? def.name;
+  return getBasketOhlc(def);
+}
+
+/** Convert a BasketOhlcResult into lightweight-charts OHLC candle points. */
+function basketOhlcToCandles(res: BasketOhlcResult): { time: string; open: number; high: number; low: number; close: number }[] {
+  const out: { time: string; open: number; high: number; low: number; close: number }[] = [];
+  const n = Math.min(
+    res.priceDates.length,
+    res.closes.length
+  );
+  for (let i = 0; i < n; i++) {
+    const close = res.closes[i];
+    if (close == null || !Number.isFinite(close)) continue;
+    const open = res.opens?.[i];
+    const high = res.highs?.[i];
+    const low = res.lows?.[i];
+    out.push({
+      time: res.priceDates[i],
+      open: Number.isFinite(open) ? open : close,
+      high: Number.isFinite(high) ? high : close,
+      low: Number.isFinite(low) ? low : close,
+      close,
+    });
+  }
+  out.sort((a, b) => a.time.localeCompare(b.time));
+  return out;
+}
+
+/** Extract a single metric (close/open/high/low/volume) as {time,value}[] from a BasketOhlcResult. */
+function basketMetricSeries(res: BasketOhlcResult, metric: string): { time: string; value: number }[] {
+  let arr: number[] | undefined;
+  switch (metric) {
+    case "close": arr = res.closes; break;
+    case "open": arr = res.opens; break;
+    case "high": arr = res.highs; break;
+    case "low": arr = res.lows; break;
+    case "Volume": arr = res.volumes; break;
+    default: arr = undefined;
+  }
+  if (!arr) return [];
+  const out: { time: string; value: number }[] = [];
+  const n = Math.min(res.priceDates.length, arr.length);
+  for (let i = 0; i < n; i++) {
+    const v = arr[i];
+    if (v != null && Number.isFinite(v)) out.push({ time: res.priceDates[i], value: v });
+  }
+  return out;
+}
+
+/**
+ * Basket-aware replacement for getMetricSeries: routes BASKET: tickers through
+ * the basket OHLC pipeline, everything else through the normal path.
+ */
+async function getMetricSeriesResolved(
+  ticker: string,
+  metric: string,
+  resolve: (id: string) => Basket | undefined,
+  basketCache?: Map<string, BasketOhlcResult | null>
+): Promise<{ time: string; value: number }[]> {
+  if (isBasketTicker(ticker)) {
+    let res = basketCache?.get(ticker);
+    if (res === undefined) {
+      res = await fetchBasketOhlc(ticker, resolve);
+      basketCache?.set(ticker, res);
+    }
+    if (!res) return [];
+    // Only price-source metrics are defined for a synthetic basket series.
+    return basketMetricSeries(res, metric);
+  }
+  return getMetricSeries(ticker, metric);
+}
 
 export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -229,11 +398,36 @@ export default function Dashboard() {
   // Universe context (for workspace save/load)
   const universe = useUniverse();
 
+  // Basket store (for resolving BASKET: chart series).
+  // Mirrored to a ref so async callbacks (loadViewForTicker / refetchSeriesData)
+  // can resolve a basket by id without being re-created on every basket change.
+  const { baskets, getBasket } = useBaskets();
+  const basketsRef = useRef<Basket[]>([]);
+  basketsRef.current = baskets;
+  const resolveBasket = useCallback(
+    (id: string): Basket | undefined => basketsRef.current.find((b) => b.id === id),
+    []
+  );
+
   // Workspace tracking (manual save/load only — autosave handled by AutoSaveManager)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null);
   const [layoutMode, setLayoutMode] = useState<GridLayout>("1x1");
   // Per-pane indicator state (lifted here for workspace persistence)
   const [indicatorsMap, setIndicatorsMap] = useState<Record<number, any>>({});
+  // Per-pane color-by-metric state (lifted here for workspace persistence)
+  const [colorByMap, setColorByMap] = useState<Record<number, string>>({});
+
+  // Refs mirroring current state, for the custom-chart autosave snapshot
+  const panesRef = useRef<PaneInfo[]>([]);
+  panesRef.current = panes;
+  const activeTickerRef = useRef<string | null>(null);
+  activeTickerRef.current = activeTicker;
+  const chartConfigRef = useRef<ChartConfig>(chartConfig);
+  chartConfigRef.current = chartConfig;
+  const layoutModeRef = useRef<GridLayout>(layoutMode);
+  layoutModeRef.current = layoutMode;
+  const indicatorsMapRef = useRef<Record<number, any>>(indicatorsMap);
+  indicatorsMapRef.current = indicatorsMap;
 
   // ── Custom Chart View Templates ──
   const qc = useQueryClient();
@@ -301,13 +495,16 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
     ]);
     // Strip data from series that can be re-fetched to keep the blob small.
     // Keep data inline for uploaded series AND derived (synthetic) series.
+    // BASKET: series are kept inline too — they are synthetic (computed from a
+    // basket definition that lives in localStorage and may differ on reload),
+    // mirroring how the bundle groups "BASKET:" with the synthetic-ticker set.
     const lightSeries = plottedSeries.map(s => {
       const isUploaded = s.id.startsWith("uploaded:") || s.metric.startsWith("xl:");
-      const isDerived = SYNTHETIC_TICKERS.has(s.ticker);
+      const isDerived = SYNTHETIC_TICKERS.has(s.ticker) || isBasketTicker(s.ticker);
       return (isUploaded || isDerived) ? s : { ...s, data: [] };
     });
     return {
@@ -321,27 +518,42 @@ export default function Dashboard() {
       customChartViews: memChartViews,
       layoutMode,
       indicatorsMap,
+      colorByMap,
     };
-  }, [plottedSeries, panes, activeTicker, chartConfig, activeView, fundamentalSheets, memChartViews, layoutMode, indicatorsMap]);
+  }, [plottedSeries, panes, activeTicker, chartConfig, activeView, fundamentalSheets, memChartViews, layoutMode, indicatorsMap, colorByMap]);
 
   const refetchSeriesData = useCallback((stateSeries: PlottedSeries[]) => {
     // Synthetic tickers whose data is persisted inline — never try to re-fetch
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
     ]);
-    // Re-fetch OHLC for tickers (skip synthetic)
+    // Per-call cache so a basket's OHLC is fetched once even if it backs both
+    // an OHLC pane and multiple metric series.
+    const basketCache = new Map<string, BasketOhlcResult | null>();
+
+    // Re-fetch OHLC for tickers (skip synthetic). BASKET: tickers resolve their
+    // OHLC via the basket pipeline (getBasketOhlc) rather than getOhlcData.
     const tks = new Set<string>();
     for (const s of stateSeries) {
       if (s.ticker && s.ticker !== "MACRO" && !SYNTHETIC_TICKERS.has(s.ticker) && s.metric === "close") tks.add(s.ticker);
     }
     for (const tk of tks) {
+      if (isBasketTicker(tk)) {
+        fetchBasketOhlc(tk, resolveBasket).then(res => {
+          basketCache.set(tk, res ?? null);
+          if (res) setOhlcCache(prev => ({ ...prev, [tk]: basketOhlcToCandles(res) }));
+        }).catch(() => {});
+        continue;
+      }
       getOhlcData(tk).then(data => {
         setOhlcCache(prev => ({ ...prev, [tk]: data }));
       }).catch(() => {});
     }
-    // Re-fetch data for all non-uploaded, non-derived series with empty data
+    // Re-fetch data for all non-uploaded, non-derived series with empty data.
+    // (BASKET: series persist their data inline, so they normally skip this;
+    //  the basket-aware getMetricSeriesResolved handles any that are empty.)
     const seriesToFetch = stateSeries.filter(
       (s: any) => !s.id.startsWith("uploaded:") && !s.metric.startsWith("xl:") && !SYNTHETIC_TICKERS.has(s.ticker) && (!s.data || s.data.length === 0)
     );
@@ -363,7 +575,7 @@ export default function Dashboard() {
           .catch(() => {});
         continue;
       }
-      getMetricSeries(s.ticker, s.metric)
+      getMetricSeriesResolved(s.ticker, s.metric, resolveBasket, basketCache)
         .then(data => {
           setPlottedSeries(prev => prev.map(ps =>
             ps.id === s.id ? { ...ps, data } : ps
@@ -371,7 +583,7 @@ export default function Dashboard() {
         })
         .catch(() => {});
     }
-  }, []);
+  }, [resolveBasket]);
 
   const restoreCharts = useCallback((state: any) => {
     if (!state) return;
@@ -387,6 +599,7 @@ export default function Dashboard() {
     if (state.customChartViews) setMemChartViews(state.customChartViews);
     if (state.layoutMode) setLayoutMode(state.layoutMode);
     if (state.indicatorsMap) setIndicatorsMap(state.indicatorsMap);
+    setColorByMap(state.colorByMap && typeof state.colorByMap === "object" ? state.colorByMap : {});
     if (state.plottedSeries) {
       setPlottedSeries(state.plottedSeries);
       refetchSeriesData(state.plottedSeries);
@@ -435,10 +648,17 @@ export default function Dashboard() {
     return Array.from(tks);
   }, [plottedSeries]);
 
-  // Fetch OHLC data for all unique tickers
+  // Fetch OHLC data for all unique tickers. BASKET: tickers resolve their OHLC
+  // through the basket pipeline (getBasketOhlc) rather than getOhlcData.
   useEffect(() => {
     for (const tk of uniquePaneTickers) {
       if (!ohlcCache[tk]) {
+        if (isBasketTicker(tk)) {
+          fetchBasketOhlc(tk, resolveBasket).then(res => {
+            if (res) setOhlcCache(prev => ({ ...prev, [tk]: basketOhlcToCandles(res) }));
+          }).catch(() => {});
+          continue;
+        }
         getOhlcData(tk).then(data => {
           setOhlcCache(prev => ({ ...prev, [tk]: data }));
         }).catch(() => {});
@@ -480,9 +700,14 @@ export default function Dashboard() {
   // Load a preset view for a given ticker
   const loadViewForTicker = useCallback(
     async (ticker: string, viewName?: string) => {
-      const view = viewName || activeView;
-      const metrics = allViews[view];
-      if (!metrics) return;
+      let view = viewName || activeView;
+      let metrics = allViews[view];
+      if (!metrics) {
+        view = DEFAULT_VIEW;
+        metrics = allViews[view];
+        if (!metrics) return;
+        setActiveView(view);
+      }
 
       paneGeneration++;
       const myGeneration = paneGeneration;
@@ -490,9 +715,23 @@ export default function Dashboard() {
       setActiveTicker(ticker);
 
       try {
+        // For BASKET: tickers, resolve OHLC once via the basket pipeline and
+        // prime the OHLC cache so the candle/price pane renders. Metric series
+        // are resolved through the basket-aware path (non-price metrics return
+        // empty, mirroring the bundle's price-source-only basket series).
+        const isBasket = isBasketTicker(ticker);
+        const basketCache = new Map<string, BasketOhlcResult | null>();
+        if (isBasket) {
+          const res = await fetchBasketOhlc(ticker, resolveBasket);
+          basketCache.set(ticker, res ?? null);
+          if (res && paneGeneration === myGeneration) {
+            setOhlcCache(prev => ({ ...prev, [ticker]: basketOhlcToCandles(res) }));
+          }
+        }
+
         const results = await Promise.all(
           metrics.map(async (metric, idx) => {
-            const data = await getMetricSeries(ticker, metric);
+            const data = await getMetricSeriesResolved(ticker, metric, resolveBasket, basketCache);
             return { metric, data, idx };
           })
         );
@@ -544,7 +783,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    [activeView, allViews]
+    [activeView, allViews, resolveBasket]
   );
 
   // Load a pairs preset: fetches derived data for tickerA/tickerB, builds panes with auto-indicators
@@ -608,10 +847,294 @@ export default function Dashboard() {
     [activeTicker]
   );
 
+  // Load a relative-value preset: builds per-metric A/B ratio series across panes
+  const loadRelativeValuePreset = useCallback(
+    async (preset: RelativeValuePresetDef, tickerB: string) => {
+      if (!activeTicker) return;
+      const tickerA = activeTicker;
+      paneGeneration++;
+      const myGeneration = paneGeneration;
+      setIsLoadingView(true);
+      setActiveView(preset.label);
+
+      try {
+        // Compute element-wise A/B ratios for each preset metric (mirrors getRelativeValueData)
+        const metrics = preset.panes.map((p) => p.metric);
+        const ratioByMetric: Record<string, { time: string; value: number }[]> = {};
+        await Promise.all(
+          metrics.map(async (metric) => {
+            const [a, b] = await Promise.all([
+              getMetricSeries(tickerA, metric),
+              getMetricSeries(tickerB, metric),
+            ]);
+            const bMap = new Map<string, number>();
+            for (const d of b) bMap.set(d.time, d.value);
+            const out: { time: string; value: number }[] = [];
+            for (const d of a) {
+              const denom = bMap.get(d.time);
+              if (denom !== undefined && denom !== 0 && isFinite(d.value) && isFinite(denom)) {
+                out.push({ time: d.time, value: d.value / denom });
+              }
+            }
+            ratioByMetric[metric] = out;
+          })
+        );
+
+        // If a restore happened while we were fetching, abandon this load
+        if (paneGeneration !== myGeneration) {
+          setIsLoadingView(false);
+          return;
+        }
+        nextPaneId = 1;
+        const newPanes: PaneInfo[] = [];
+        const newSeries: PlottedSeries[] = [];
+        const newIndicatorsMap: Record<number, ActiveIndicators> = {};
+
+        for (const paneDef of preset.panes) {
+          const data = ratioByMetric[paneDef.metric];
+          if (!data || data.length === 0) continue;
+
+          const paneId = nextPaneId++;
+          const label = paneDef.label(tickerA, tickerB);
+          newPanes.push({ id: paneId, label, ticker: tickerA });
+
+          const seriesId = `relval:${paneDef.metric}:${tickerA}:${tickerB}:${nextSeriesSeq++}`;
+          newSeries.push({
+            id: seriesId,
+            ticker: "RELVAL",
+            metric: paneDef.metric,
+            color: getSeriesColor(newSeries.length),
+            paneIndex: paneId,
+            data,
+            visible: true,
+            label,
+          });
+
+          if (paneDef.indicators) {
+            newIndicatorsMap[paneId] = paneDef.indicators;
+          }
+        }
+
+        setPanes(newPanes);
+        setPlottedSeries(newSeries);
+        setIsLoadingView(false);
+        return newIndicatorsMap;
+      } catch (e) {
+        console.error("Failed to load relative value preset", e);
+      }
+      setIsLoadingView(false);
+      return undefined;
+    },
+    [activeTicker]
+  );
+
+  // ── Server-backed Custom Charts (persistent blank canvases) ──
+  const [activeCustomChartId, setActiveCustomChartId] = useState<number | null>(null);
+  const activeCustomChartIdRef = useRef<number | null>(null);
+  activeCustomChartIdRef.current = activeCustomChartId;
+  const [lastManualSaveAt, setLastManualSaveAt] = useState<number | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Suppress autosave until this timestamp (ms) — used right after a fresh load
+  const autosaveSuppressUntilRef = useRef<number>(0);
+
+  const AUTOSAVE_ENABLED_KEY = "reit-viz-custom-chart-autosave-enabled-v1";
+  const [autoSaveEnabled, setAutoSaveEnabledState] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(AUTOSAVE_ENABLED_KEY);
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const autoSaveEnabledRef = useRef(autoSaveEnabled);
+  autoSaveEnabledRef.current = autoSaveEnabled;
+
+  const { data: savedCustomCharts = [] } = useQuery<SavedCustomChart[]>({
+    queryKey: ["/api/custom-charts"],
+  });
+
+  const createCustomChartMut = useMutation({
+    mutationFn: async (vars: { name: string; state: any }) => {
+      const res = await apiRequest("POST", "/api/custom-charts", {
+        name: vars.name,
+        state: JSON.stringify(vars.state),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const updateCustomChartMut = useMutation({
+    mutationFn: async (vars: { id: number; state?: any; name?: string }) => {
+      const body: any = {};
+      if (vars.state !== undefined) body.state = JSON.stringify(vars.state);
+      if (vars.name !== undefined) body.name = vars.name;
+      const res = await apiRequest("POST", `/api/custom-charts/${vars.id}/update`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const renameCustomChartMut = useMutation({
+    mutationFn: async (vars: { id: number; name: string }) => {
+      const res = await apiRequest("POST", `/api/custom-charts/${vars.id}/rename`, { name: vars.name });
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const deleteCustomChartMut = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("POST", `/api/custom-charts/${id}/delete`, {});
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/custom-charts"] });
+    },
+  });
+
+  const setAutoSaveEnabled = useCallback((enabled: boolean) => {
+    setAutoSaveEnabledState(enabled);
+    try {
+      localStorage.setItem(AUTOSAVE_ENABLED_KEY, enabled ? "1" : "0");
+    } catch {}
+    if (!enabled && autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+  }, []);
+
+  // Build the autosave snapshot from current refs
+  const buildCustomChartSnapshot = useCallback(() => ({
+    plottedSeries: plottedSeriesRef.current,
+    panes: panesRef.current,
+    activeTicker: activeTickerRef.current,
+    chartConfig: chartConfigRef.current,
+    layoutMode: layoutModeRef.current,
+    indicatorsMap: indicatorsMapRef.current,
+  }), []);
+
+  // Debounced autosave: writes 2s after edits while a custom chart is active
+  const scheduleCustomChartAutosave = useCallback(() => {
+    if (!activeCustomChartIdRef.current || !autoSaveEnabledRef.current) return;
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      const id = activeCustomChartIdRef.current;
+      if (!id || Date.now() < autosaveSuppressUntilRef.current) return;
+      updateCustomChartMut.mutate({ id, state: buildCustomChartSnapshot() });
+    }, 2000);
+  }, [updateCustomChartMut, buildCustomChartSnapshot]);
+
+  // Trigger autosave whenever the chart contents change (while a chart is active)
+  useEffect(() => {
+    if (!activeCustomChartId) return;
+    scheduleCustomChartAutosave();
+  }, [plottedSeries, panes, activeTicker, chartConfig, layoutMode, indicatorsMap, activeCustomChartId, scheduleCustomChartAutosave]);
+
+  // Create a new blank server-backed chart and make it active
+  const handleNewChart = useCallback(async () => {
+    paneGeneration++;
+    nextPaneId = 1;
+    setPanes([]);
+    setPlottedSeries([]);
+    setActiveTicker(null);
+    setIndicatorsMap({});
+    const name = `Chart ${savedCustomCharts.length + 1}`;
+    try {
+      const created = await createCustomChartMut.mutateAsync({
+        name,
+        state: { panes: [], plottedSeries: [], activeTicker: null, chartConfig, layoutMode, indicatorsMap: {} },
+      });
+      setActiveCustomChartId(created.id);
+      setActiveView(`📌 ${created.name}`);
+    } catch (e) {
+      console.error("Failed to create custom chart", e);
+      setActiveView("(Blank)");
+    }
+  }, [savedCustomCharts.length, chartConfig, layoutMode, createCustomChartMut]);
+
+  // Save the current view as a brand-new server-backed chart
+  const handleSaveCurrentAsNewChart = useCallback(async (name?: string) => {
+    const chartName = (name && name.trim()) || `Chart ${savedCustomCharts.length + 1}`;
+    try {
+      const created = await createCustomChartMut.mutateAsync({
+        name: chartName,
+        state: buildCustomChartSnapshot(),
+      });
+      autosaveSuppressUntilRef.current = Date.now() + 3000;
+      setActiveCustomChartId(created.id);
+      setActiveView(`📌 ${created.name}`);
+    } catch (e) {
+      console.error("Failed to save current view as new chart", e);
+    }
+  }, [savedCustomCharts.length, createCustomChartMut, buildCustomChartSnapshot]);
+
+  // Force-save the active custom chart immediately (bypasses autosave debounce)
+  const handleManualSaveCustomChart = useCallback(async () => {
+    const id = activeCustomChartIdRef.current;
+    if (!id) return;
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    try {
+      await updateCustomChartMut.mutateAsync({ id, state: buildCustomChartSnapshot() });
+      setLastManualSaveAt(Date.now());
+    } catch (e) {
+      console.error("Manual save failed", e);
+    }
+  }, [updateCustomChartMut, buildCustomChartSnapshot]);
+
+  // Load a saved custom chart by id and make it active
+  const handleLoadCustomChart = useCallback(async (id: number) => {
+    let chart: SavedCustomChart | undefined = savedCustomCharts.find((c) => c.id === id);
+    try {
+      const res = await apiRequest("GET", `/api/custom-charts/${id}`);
+      chart = await res.json();
+    } catch {}
+    if (!chart) return;
+    paneGeneration++;
+    autosaveSuppressUntilRef.current = Date.now() + 3500;
+    setActiveCustomChartId(id);
+    try {
+      const state = typeof chart.state === "string" ? JSON.parse(chart.state) : (chart.state as any);
+      if (state.panes) setPanes(state.panes);
+      if (state.activeTicker) setActiveTicker(state.activeTicker);
+      if (state.chartConfig) setChartConfig(state.chartConfig);
+      if (state.layoutMode) setLayoutMode(state.layoutMode);
+      if (state.indicatorsMap) setIndicatorsMap(state.indicatorsMap);
+      if (state.plottedSeries) {
+        setPlottedSeries(state.plottedSeries);
+        refetchSeriesData(state.plottedSeries);
+      }
+      setActiveView(`📌 ${chart.name}`);
+      const maxPaneId = (state.panes || []).reduce((m: number, p: any) => Math.max(m, p.id || 0), 0);
+      nextPaneId = Math.max(nextPaneId, maxPaneId + 1);
+    } catch (e) {
+      console.error("Failed to load custom chart", e);
+    }
+  }, [savedCustomCharts, refetchSeriesData]);
+
+  // Exit custom-chart mode, returning to the carousel default view
+  const handleExitCustomChart = useCallback(() => {
+    setActiveCustomChartId(null);
+    const ticker = activeTicker || (tickerList.length > 0 ? tickerList[0].ticker : null);
+    if (ticker) loadViewForTicker(ticker);
+  }, [activeTicker, tickerList, loadViewForTicker]);
+
   // Navigate to next/prev ticker
   const navigateTicker = useCallback(
     (direction: "next" | "prev") => {
-      if (!tickerList.length || currentTickerIndex < 0) return;
+      if (!tickerList.length) return;
+      if (currentTickerIndex < 0) {
+        loadViewForTicker(tickerList[0].ticker);
+        return;
+      }
       const newIndex =
         direction === "next"
           ? (currentTickerIndex + 1) % tickerList.length
@@ -654,6 +1177,38 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Cross-page "go to symbol" navigation:
+  //  - listen for the "reit-viz:goto-symbol" CustomEvent (detail.symbol)
+  //  - drain a localStorage pending-symbol on mount (set before this page loaded)
+  // Routes through the existing pending-ticker + loadViewForTicker flow so the
+  // active view is actually loaded (the pending-ref effects below handle the
+  // case where the ticker list has not loaded yet).
+  useEffect(() => {
+    const gotoSymbol = (sym: string) => {
+      const t = sym.trim().toUpperCase();
+      if (!t) return;
+      if (tickerList.length > 0 && tickerList.some((tk) => tk.ticker === t)) {
+        pendingTickerRef.current = null;
+        loadViewForTicker(t);
+      } else {
+        pendingTickerRef.current = t;
+      }
+    };
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      gotoSymbol(((detail.symbol || "") as string).toString());
+    };
+    window.addEventListener("reit-viz:goto-symbol", handler);
+    try {
+      const stored = localStorage.getItem("reit-viz.dashboard.pending-symbol");
+      if (stored) {
+        localStorage.removeItem("reit-viz.dashboard.pending-symbol");
+        gotoSymbol(stored);
+      }
+    } catch {}
+    return () => window.removeEventListener("reit-viz:goto-symbol", handler);
+  }, [tickerList, loadViewForTicker]);
+
   // Auto-load first ticker (or URL-specified ticker) with default view
   useEffect(() => {
     if (tickerList.length > 0 && !activeTicker && !isLoadingView) {
@@ -678,11 +1233,12 @@ export default function Dashboard() {
   const changeView = useCallback(
     (viewName: string) => {
       setActiveView(viewName);
-      if (activeTicker) {
-        loadViewForTicker(activeTicker, viewName);
+      const ticker = activeTicker || (tickerList.length > 0 ? tickerList[0].ticker : null);
+      if (ticker) {
+        loadViewForTicker(ticker, viewName);
       }
     },
-    [activeTicker, loadViewForTicker]
+    [activeTicker, tickerList, loadViewForTicker]
   );
 
   // Add series with specific add mode
@@ -850,6 +1406,11 @@ export default function Dashboard() {
           onSelectTicker={(ticker: string) => loadViewForTicker(ticker)}
           activeView={activeView}
           presetViews={Object.keys(PRESET_VIEWS)}
+          viewGroups={[
+            { label: "Preset Views", views: PRESET_VIEWS },
+            { label: "Fundamentals", views: FUNDAMENTAL_VIEWS },
+            { label: "Interview Prep", views: INTERVIEW_VIEWS },
+          ].map((g) => ({ label: g.label, items: Object.keys(g.views) }))}
           fundamentalViews={Object.keys(FUNDAMENTAL_VIEWS)}
           interviewViews={Object.keys(INTERVIEW_VIEWS)}
           customChartViews={customChartViews}
@@ -869,10 +1430,30 @@ export default function Dashboard() {
           onCrosshairTimeChange={setCrosshairTime}
           pairsPresets={PAIRS_PRESETS}
           onLoadPairsPreset={loadPairsPreset}
+          relativeValuePresets={RELATIVE_VALUE_PRESETS}
+          onLoadRelativeValuePreset={loadRelativeValuePreset}
+          onNewChart={handleNewChart}
+          onSaveCurrentAsNewChart={handleSaveCurrentAsNewChart}
+          onManualSaveCustomChart={handleManualSaveCustomChart}
+          isSavingCustomChart={createCustomChartMut.isPending || updateCustomChartMut.isPending}
+          lastManualSaveAt={lastManualSaveAt}
+          autoSaveEnabled={autoSaveEnabled}
+          onAutoSaveEnabledChange={setAutoSaveEnabled}
+          savedCustomCharts={savedCustomCharts}
+          activeCustomChartId={activeCustomChartId}
+          onLoadCustomChart={handleLoadCustomChart}
+          onRenameCustomChart={(id, name) => renameCustomChartMut.mutate({ id, name })}
+          onDeleteCustomChart={(id) => {
+            deleteCustomChartMut.mutate(id);
+            if (activeCustomChartId === id) handleExitCustomChart();
+          }}
+          onExitCustomChart={handleExitCustomChart}
           layoutMode={layoutMode}
           onLayoutModeChange={setLayoutMode}
           indicatorsMap={indicatorsMap}
           onIndicatorsMapChange={setIndicatorsMap}
+          colorByMap={colorByMap}
+          onColorByMapChange={setColorByMap}
           toolbarRight={
             <WorkspaceManager
               onSave={serializeState}

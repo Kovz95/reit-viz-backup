@@ -18,6 +18,8 @@ import { d as detectTrendlines, D as TrendlinesPanel, T as TrendlinesSubPanel } 
 import { g as getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { C as ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { u as useGlobalUniverse } from "@/lib/globalUniverse";
+import { filterTickersByClassification } from "@/lib/filterTickersByClassification";
+import ClassificationFilters from "@/components/ClassificationFilters";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -185,7 +187,7 @@ function CrossingScreener() {
       0;
     if (hasFilters) return [];
     const source_ = pcSource === "global" ? universeMetas : allTickers;
-    return detectSRLevels(source_, pcFilters, pcClassSearch, pcManualTickers)
+    return filterTickersByClassification(source_, pcFilters, pcClassSearch, pcManualTickers)
       .map((t: any) => t.ticker.toUpperCase())
       .filter((t: string, idx: number, arr: string[]) => arr.indexOf(t) === idx);
   }, [source, allTickers, universeMetas, pcSource, pcFilters, pcClassSearch, pcManualTickers]);
@@ -367,8 +369,9 @@ function CrossingScreener() {
           const rangeIndices: number[] = [];
           for (let v = 0; v < pairDates.length; v++) {
             const d = pairDates[v];
-            if (d && (rangeStart && d < rangeStart) || (rangeEnd && d > rangeEnd)) continue;
-            rangeIndices.push(v);
+            if (d && !(rangeStart && d < rangeStart) && !(rangeEnd && d > rangeEnd)) {
+              rangeIndices.push(v);
+            }
           }
           if (rangeIndices.length < MIN_BARS) {
             resultSkipped.push({
@@ -722,8 +725,7 @@ function CrossingScreener() {
 
         {/* Universe filter */}
         {source === "universe" && (
-          <div
-            // @ts-ignore — ClassificationFilters props passed through
+          <ClassificationFilters
             filters={filters}
             onFiltersChange={setFilters}
             search={search}

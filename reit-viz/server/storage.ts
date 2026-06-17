@@ -52,14 +52,27 @@ sqlite.exec(`
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS ranking_templates (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    label          TEXT    NOT NULL,
-    metrics        TEXT    NOT NULL,
-    show_revisions INTEGER NOT NULL DEFAULT 0,
-    rev_metric     TEXT,
-    created_at     TEXT    NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    label             TEXT    NOT NULL,
+    metrics           TEXT    NOT NULL,
+    show_revisions    INTEGER NOT NULL DEFAULT 0,
+    rev_metric        TEXT,
+    metric_weights    TEXT,
+    metric_directions TEXT,
+    created_at        TEXT    NOT NULL
   );
 `);
+
+// Migrate older DBs that pre-date the metric_weights / metric_directions columns.
+// The drizzle schema (shared/schema.ts) selects these columns, so their absence
+// makes GET /api/ranking-templates throw "no such column" (HTTP 500).
+for (const col of ["metric_weights", "metric_directions"]) {
+  try {
+    sqlite.exec(`ALTER TABLE ranking_templates ADD COLUMN ${col} TEXT;`);
+  } catch {
+    // column already exists — ignore
+  }
+}
 
 export interface IStorage {
   listWorkspaces(): Workspace[];

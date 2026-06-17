@@ -30,7 +30,16 @@ import {
   X,
   LayoutTemplate,
   Palette,
+  FolderOpen,
+  FilePlus,
+  Pencil,
+  ArrowLeft,
+  Eye,
+  Sparkles,
+  StickyNote,
+  Layers3,
 } from "lucide-react";
+import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
 import type { GridLayout } from "./GridLayoutPicker";
 import {
@@ -63,7 +72,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
-import type { CustomChartView, PairsPresetDef } from "@/pages/Dashboard";
+import type { CustomChartView, PairsPresetDef, RelativeValuePresetDef, SavedCustomChart } from "@/pages/Dashboard";
 import {
   Dialog,
   DialogContent,
@@ -87,6 +96,10 @@ interface ChartAreaProps {
   onSelectTicker: (ticker: string) => void;
   activeView: string;
   presetViews: string[];
+  /** Optional labeled view groups; when present, renders the preset-view
+   *  menu as labeled groups, falling back to the presetViews/fundamentalViews/
+   *  interviewViews trio when absent. */
+  viewGroups?: { label: string; items: string[] }[];
   fundamentalViews?: string[];
   interviewViews?: string[];
   customChartViews: CustomChartView[];
@@ -110,6 +123,37 @@ interface ChartAreaProps {
   pairsPresets?: PairsPresetDef[];
   /** Called to load a pairs preset — returns indicators map for auto-apply */
   onLoadPairsPreset?: (preset: PairsPresetDef, tickerB: string) => Promise<Record<number, ActiveIndicators> | undefined>;
+  /** Relative-value preset definitions */
+  relativeValuePresets?: RelativeValuePresetDef[];
+  /** Called to load a relative-value preset — returns indicators map for auto-apply */
+  onLoadRelativeValuePreset?: (preset: RelativeValuePresetDef, tickerB: string) => Promise<Record<number, ActiveIndicators> | undefined>;
+  // ── Server-backed custom charts (persistent blank canvases) ──
+  /** Create a new blank server-backed chart and make it active */
+  onNewChart?: () => void;
+  /** Save the current view as a brand-new server-backed chart (name optional) */
+  onSaveCurrentAsNewChart?: (name?: string) => void;
+  /** Force-save the active custom chart immediately (bypasses autosave debounce) */
+  onManualSaveCustomChart?: () => void;
+  /** True while a custom-chart save mutation is in flight */
+  isSavingCustomChart?: boolean;
+  /** Timestamp (ms) of the last successful manual save, or null */
+  lastManualSaveAt?: number | null;
+  /** Whether autosave is enabled */
+  autoSaveEnabled?: boolean;
+  /** Called when autosave enabled toggle changes */
+  onAutoSaveEnabledChange?: (enabled: boolean) => void;
+  /** List of saved server-backed custom charts */
+  savedCustomCharts?: SavedCustomChart[];
+  /** The active custom chart id, or null when in carousel mode */
+  activeCustomChartId?: number | null;
+  /** Load a saved custom chart by id */
+  onLoadCustomChart?: (id: number) => void;
+  /** Rename a saved custom chart */
+  onRenameCustomChart?: (id: number, name: string) => void;
+  /** Delete a saved custom chart */
+  onDeleteCustomChart?: (id: number) => void;
+  /** Exit custom-chart mode, returning to the carousel */
+  onExitCustomChart?: () => void;
   /** Current grid layout mode (persisted by parent) */
   layoutMode?: GridLayout;
   /** Called when user changes grid layout */
@@ -118,6 +162,10 @@ interface ChartAreaProps {
   indicatorsMap?: Record<number, ActiveIndicators>;
   /** Called when indicators change on any pane */
   onIndicatorsMapChange?: (map: Record<number, ActiveIndicators>) => void;
+  /** Per-pane color-by-metric state (lifted to parent for persistence) */
+  colorByMap?: Record<number, string>;
+  /** Called when color-by settings change on any pane */
+  onColorByMapChange?: (map: Record<number, string>) => void;
 }
 
 export default function ChartArea({
@@ -133,6 +181,7 @@ export default function ChartArea({
   onSelectTicker,
   activeView,
   presetViews,
+  viewGroups,
   fundamentalViews,
   interviewViews,
   customChartViews,
@@ -150,10 +199,27 @@ export default function ChartArea({
   onCrosshairTimeChange,
   pairsPresets,
   onLoadPairsPreset,
+  relativeValuePresets,
+  onLoadRelativeValuePreset,
+  onNewChart,
+  onSaveCurrentAsNewChart,
+  onManualSaveCustomChart,
+  isSavingCustomChart,
+  lastManualSaveAt,
+  autoSaveEnabled = true,
+  onAutoSaveEnabledChange,
+  savedCustomCharts,
+  activeCustomChartId,
+  onLoadCustomChart,
+  onRenameCustomChart,
+  onDeleteCustomChart,
+  onExitCustomChart,
   layoutMode: layoutModeProp,
   onLayoutModeChange,
   indicatorsMap: indicatorsMapProp,
   onIndicatorsMapChange,
+  colorByMap: colorByMapProp,
+  onColorByMapChange,
 }: ChartAreaProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [maximizedPaneId, setMaximizedPaneId] = useState<number | null>(null);
@@ -163,8 +229,15 @@ export default function ChartArea({
   // ── Pairs preset picker state ──
   const [pairsPickerOpen, setPairsPickerOpen] = useState(false);
   const [pendingPairsPreset, setPendingPairsPreset] = useState<PairsPresetDef | null>(null);
+  const [pendingRelValPreset, setPendingRelValPreset] = useState<RelativeValuePresetDef | null>(null);
   const [pairsTickerSearch, setPairsTickerSearch] = useState("");
   const [pairsTickerList, setPairsTickerList] = useState<TickerMeta[]>([]);
+
+  // ── Custom-chart toolbar state ──
+  const [saveAsNewChartOpen, setSaveAsNewChartOpen] = useState(false);
+  const [saveAsNewChartName, setSaveAsNewChartName] = useState("");
+  const [renameChartId, setRenameChartId] = useState<number | null>(null);
+  const [renameChartName, setRenameChartName] = useState("");
 
   // Fetch ticker list for pairs picker
   useEffect(() => {
@@ -175,19 +248,35 @@ export default function ChartArea({
 
   const handleSelectPairsPreset = useCallback((preset: PairsPresetDef) => {
     setPendingPairsPreset(preset);
+    setPendingRelValPreset(null);
+    setPairsPickerOpen(true);
+    setPairsTickerSearch("");
+  }, []);
+
+  const handleSelectRelValPreset = useCallback((preset: RelativeValuePresetDef) => {
+    setPendingRelValPreset(preset);
+    setPendingPairsPreset(null);
     setPairsPickerOpen(true);
     setPairsTickerSearch("");
   }, []);
 
   const handlePairsTickerSelect = useCallback(async (tickerB: string) => {
     setPairsPickerOpen(false);
+    if (pendingRelValPreset && onLoadRelativeValuePreset) {
+      const newIndicators = await onLoadRelativeValuePreset(pendingRelValPreset, tickerB);
+      if (newIndicators) {
+        setIndicatorsMap(prev => ({ ...prev, ...newIndicators }));
+      }
+      setPendingRelValPreset(null);
+      return;
+    }
     if (!pendingPairsPreset || !onLoadPairsPreset) return;
     const newIndicators = await onLoadPairsPreset(pendingPairsPreset, tickerB);
     if (newIndicators) {
       setIndicatorsMap(prev => ({ ...prev, ...newIndicators }));
     }
     setPendingPairsPreset(null);
-  }, [pendingPairsPreset, onLoadPairsPreset]);
+  }, [pendingPairsPreset, pendingRelValPreset, onLoadPairsPreset, onLoadRelativeValuePreset]);
 
   const handleSaveView = useCallback(() => {
     const name = newViewName.trim();
@@ -283,6 +372,14 @@ export default function ChartArea({
   const [showQuarterShading, setShowQuarterShading] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
   const [showExDiv, setShowExDiv] = useState(false);
+  // ── Chart-feature toggles (local UI state; deeper wiring tracked in needsMore) ──
+  const [showHoverReadout, setShowHoverReadout] = useState(false);
+  const [showSignalAnalyzer, setShowSignalAnalyzer] = useState(false);
+  const [showQuickAnalyze, setShowQuickAnalyze] = useState(false);
+  const [showSimilarSetups, setShowSimilarSetups] = useState(false);
+  const [showPDRatio, setShowPDRatio] = useState(false);
+  const [showPremCorr, setShowPremCorr] = useState(false);
+  const [showAnnotations, setShowAnnotations] = useState(false);
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
   const [exDivDates, setExDivDates] = useState<string[]>([]);
   // Macro event vertical line toggles
@@ -291,7 +388,25 @@ export default function ChartArea({
 
   // ── Color-by-variable per pane ──
   // paneId → metric name
-  const [colorByMap, setColorByMap] = useState<Record<number, string>>({});
+  // Prefer prop from parent (persisted in workspace state), fall back to local.
+  const [localColorByMap, setLocalColorByMap] = useState<Record<number, string>>({});
+  const colorByMap = colorByMapProp ?? localColorByMap;
+  const setColorByMap = useCallback((valOrFn: Record<number, string> | ((prev: Record<number, string>) => Record<number, string>)) => {
+    if (onColorByMapChange) {
+      if (typeof valOrFn === "function") {
+        setLocalColorByMap(prev => {
+          const next = (valOrFn as (p: Record<number, string>) => Record<number, string>)(colorByMapProp ?? prev);
+          onColorByMapChange(next);
+          return next;
+        });
+      } else {
+        onColorByMapChange(valOrFn);
+        setLocalColorByMap(valOrFn);
+      }
+    } else {
+      setLocalColorByMap(valOrFn as any);
+    }
+  }, [onColorByMapChange, colorByMapProp]);
   // paneId → { data: Map<time, normalisedValue>, range: {min, max} }
   const [colorByDataMap, setColorByDataMap] = useState<Record<number, { data: Map<string, number>; range: { min: number; max: number } }>>({});
   // Popover open state per pane
@@ -632,6 +747,7 @@ export default function ChartArea({
           </Button>
         )}
         {/* Carousel nav: arrows + searchable dropdown */}
+        <div className="flex items-center gap-0" data-testid="single-ticker-cluster">
         <Button
           variant="ghost" size="sm" className="h-7 w-7 p-0"
           onClick={() => onNavigateTicker("prev")}
@@ -705,6 +821,15 @@ export default function ChartArea({
         >
           <ChevronRight className="w-4 h-4" />
         </Button>
+        </div>
+
+        {/* Basket selector — plot a saved basket as a chart series */}
+        <BasketTickerPill
+          activeTicker={activeTicker}
+          onSelectTicker={onSelectTicker}
+          fallbackTicker={currentTicker?.ticker ?? tickerList[0]?.ticker ?? null}
+          size="sm"
+        />
 
         <div className="mx-1 w-px h-4 bg-border" />
 
@@ -717,51 +842,74 @@ export default function ChartArea({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72 max-h-[420px] overflow-y-auto">
-            <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {presetViews.map((v) => (
-              <DropdownMenuItem
-                key={v}
-                className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
-                onClick={() => onChangeView(v)}
-                data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
-              >
-                {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                <span className="truncate">{v}</span>
-              </DropdownMenuItem>
-            ))}
-            {fundamentalViews && fundamentalViews.length > 0 && (
+            {viewGroups && viewGroups.length > 0 ? (
+              viewGroups.map((group, gi) => (
+                <div key={`group-${group.label}`}>
+                  {gi > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-[10px]">{group.label}</DropdownMenuLabel>
+                  {gi === 0 && <DropdownMenuSeparator />}
+                  {group.items.map((v) => (
+                    <DropdownMenuItem
+                      key={`g-${group.label}-${v}`}
+                      className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                      onClick={() => onChangeView(v)}
+                      data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                    >
+                      {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                      <span className="truncate" title={v}>{v}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </div>
+              ))
+            ) : (
               <>
+                <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px]">Fundamentals</DropdownMenuLabel>
-                {fundamentalViews.map((v) => (
+                {presetViews.map((v) => (
                   <DropdownMenuItem
-                    key={`fund-${v}`}
+                    key={v}
                     className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
                     onClick={() => onChangeView(v)}
-                    data-testid={`view-fund-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                    data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                   >
                     {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
                     <span className="truncate">{v}</span>
                   </DropdownMenuItem>
                 ))}
-              </>
-            )}
-            {interviewViews && interviewViews.length > 0 && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-[10px]">Interview Prep</DropdownMenuLabel>
-                {interviewViews.map((v) => (
-                  <DropdownMenuItem
-                    key={`intv-${v}`}
-                    className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
-                    onClick={() => onChangeView(v)}
-                    data-testid={`view-intv-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
-                  >
-                    {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                    <span className="truncate">{v}</span>
-                  </DropdownMenuItem>
-                ))}
+                {fundamentalViews && fundamentalViews.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px]">Fundamentals</DropdownMenuLabel>
+                    {fundamentalViews.map((v) => (
+                      <DropdownMenuItem
+                        key={`fund-${v}`}
+                        className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                        onClick={() => onChangeView(v)}
+                        data-testid={`view-fund-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                      >
+                        {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                        <span className="truncate">{v}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+                {interviewViews && interviewViews.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px]">Interview Prep</DropdownMenuLabel>
+                    {interviewViews.map((v) => (
+                      <DropdownMenuItem
+                        key={`intv-${v}`}
+                        className={`text-[11px] cursor-pointer ${v === activeView ? "bg-accent" : ""}`}
+                        onClick={() => onChangeView(v)}
+                        data-testid={`view-intv-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                      >
+                        {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                        <span className="truncate">{v}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
               </>
             )}
             {customChartViews.length > 0 && (
@@ -806,6 +954,23 @@ export default function ChartArea({
                   >
                     {p.label === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
                     <span className="truncate">{p.label}</span>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
+            {relativeValuePresets && relativeValuePresets.length > 0 && onLoadRelativeValuePreset && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-[10px]">Relative Value</DropdownMenuLabel>
+                {relativeValuePresets.map((p) => (
+                  <DropdownMenuItem
+                    key={`relval-${p.label}`}
+                    className={`text-[11px] cursor-pointer ${p.label === activeView ? "bg-accent" : ""}`}
+                    onClick={() => handleSelectRelValPreset(p)}
+                    data-testid={`relval-preset-${p.label.replace(/[\s|/]+/g, "-").toLowerCase()}`}
+                  >
+                    {p.label === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
+                    <span className="truncate" title={p.label}>{p.label}</span>
                   </DropdownMenuItem>
                 ))}
               </>
@@ -859,6 +1024,248 @@ export default function ChartArea({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Custom charts (server-backed persistent canvases) */}
+        {onNewChart && (
+          <div className="flex items-center gap-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant={activeCustomChartId ? "default" : "ghost"}
+                  size="sm"
+                  className="h-7 text-[11px] gap-1 px-2"
+                  data-testid="saved-charts-btn"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">
+                    {activeCustomChartId
+                      ? savedCustomCharts?.find((c) => c.id === activeCustomChartId)?.name || "Custom Chart"
+                      : "My Charts"}
+                  </span>
+                  <ChevronsUpDown className="w-3 h-3 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[320px]">
+                {activeCustomChartId && (
+                  <div className="px-2 py-1.5 text-[10px] text-muted-foreground border-b border-border/40 mb-1 space-y-1">
+                    <div>
+                      {isSavingCustomChart ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Saving…
+                        </span>
+                      ) : lastManualSaveAt ? (
+                        <span>
+                          Last manual save:{" "}
+                          {new Date(lastManualSaveAt).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          })}
+                        </span>
+                      ) : (
+                        <span>Not yet manually saved</span>
+                      )}
+                    </div>
+                    {onAutoSaveEnabledChange && (
+                      <label
+                        className="flex items-center gap-2 cursor-pointer select-none py-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid="autosave-toggle"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3 accent-primary cursor-pointer"
+                          checked={autoSaveEnabled}
+                          onChange={(e) => onAutoSaveEnabledChange(e.target.checked)}
+                        />
+                        <span>
+                          Autosave {autoSaveEnabled ? "on" : "off"}
+                          <span className="text-muted-foreground/70">
+                            {" · "}
+                            {autoSaveEnabled ? "writes 2s after edits" : "manual save only"}
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
+                {activeCustomChartId && onExitCustomChart && (
+                  <>
+                    <DropdownMenuItem onClick={onExitCustomChart} data-testid="back-to-carousel">
+                      <ArrowLeft className="w-3.5 h-3.5 mr-2" />
+                      Back to Carousel
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onClick={onNewChart} data-testid="new-chart-dropdown">
+                  <FilePlus className="w-3.5 h-3.5 mr-2" />
+                  New Blank Chart
+                </DropdownMenuItem>
+                {onSaveCurrentAsNewChart && (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setSaveAsNewChartName(`Chart ${(savedCustomCharts?.length ?? 0) + 1}`);
+                      setSaveAsNewChartOpen(true);
+                    }}
+                    data-testid="save-current-as-new-chart"
+                  >
+                    <Save className="w-3.5 h-3.5 mr-2" />
+                    Save Current View as New Chart
+                  </DropdownMenuItem>
+                )}
+                {savedCustomCharts && savedCustomCharts.length > 0 && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground">
+                      Saved Charts
+                    </DropdownMenuLabel>
+                    {savedCustomCharts.map((c) => (
+                      <DropdownMenuItem
+                        key={c.id}
+                        className={`flex items-center justify-between group ${activeCustomChartId === c.id ? "bg-accent" : ""}`}
+                        onClick={(e) => {
+                          if (!(e.target as HTMLElement).closest("[data-action]")) {
+                            onLoadCustomChart?.(c.id);
+                          }
+                        }}
+                        data-testid={`saved-chart-${c.id}`}
+                      >
+                        <span className="flex items-center gap-2 flex-1 min-w-0">
+                          {activeCustomChartId === c.id && <Check className="w-3 h-3 shrink-0" />}
+                          <span className="truncate" title={c.name}>{c.name}</span>
+                        </span>
+                        <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
+                          <button
+                            data-action="rename"
+                            className="p-0.5 rounded hover:bg-muted"
+                            title="Rename"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenameChartId(c.id);
+                              setRenameChartName(c.name);
+                            }}
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          <button
+                            data-action="delete"
+                            className="p-0.5 rounded hover:bg-destructive/20 text-destructive"
+                            title="Delete"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteCustomChart?.(c.id);
+                            }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {activeCustomChartId && onManualSaveCustomChart && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] gap-1 px-2"
+                onClick={() => onManualSaveCustomChart()}
+                disabled={isSavingCustomChart}
+                data-testid="manual-save-chart-btn"
+                title="Force-save now (bypasses 2s autosave debounce)"
+              >
+                {isSavingCustomChart ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">Save</span>
+              </Button>
+            )}
+
+            {/* Save current view as new chart dialog */}
+            <Dialog open={saveAsNewChartOpen} onOpenChange={(o) => { if (!o) setSaveAsNewChartOpen(false); }}>
+              <DialogContent className="sm:max-w-[380px]">
+                <DialogHeader>
+                  <DialogTitle className="text-sm">Save Current View as New Chart</DialogTitle>
+                </DialogHeader>
+                <div className="text-[11px] text-muted-foreground">
+                  Captures the current panes, series, indicators, and active ticker. The new chart becomes active and autosaves your subsequent edits.
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={saveAsNewChartName}
+                    onChange={(e) => setSaveAsNewChartName(e.target.value)}
+                    placeholder="Chart name"
+                    className="h-8 text-sm"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && saveAsNewChartName.trim()) {
+                        onSaveCurrentAsNewChart?.(saveAsNewChartName.trim());
+                        setSaveAsNewChartOpen(false);
+                      }
+                    }}
+                    data-testid="save-as-new-chart-input"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    disabled={!saveAsNewChartName.trim()}
+                    onClick={() => {
+                      onSaveCurrentAsNewChart?.(saveAsNewChartName.trim());
+                      setSaveAsNewChartOpen(false);
+                    }}
+                    data-testid="save-as-new-chart-confirm"
+                  >
+                    Save
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {/* Rename chart dialog */}
+            <Dialog open={renameChartId !== null} onOpenChange={(o) => { if (!o) setRenameChartId(null); }}>
+              <DialogContent className="sm:max-w-[340px]">
+                <DialogHeader>
+                  <DialogTitle className="text-sm">Rename Chart</DialogTitle>
+                </DialogHeader>
+                <div className="flex gap-2">
+                  <Input
+                    value={renameChartName}
+                    onChange={(e) => setRenameChartName(e.target.value)}
+                    placeholder="Chart name"
+                    className="h-8 text-sm"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && renameChartName.trim() && renameChartId !== null) {
+                        onRenameCustomChart?.(renameChartId, renameChartName.trim());
+                        setRenameChartId(null);
+                      }
+                    }}
+                    data-testid="rename-chart-input"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    disabled={!renameChartName.trim()}
+                    onClick={() => {
+                      if (renameChartName.trim() && renameChartId !== null) {
+                        onRenameCustomChart?.(renameChartId, renameChartName.trim());
+                        setRenameChartId(null);
+                      }
+                    }}
+                    data-testid="rename-chart-confirm"
+                  >
+                    Rename
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        )}
 
         <div className="mx-1 w-px h-4 bg-border" />
 
@@ -964,6 +1371,18 @@ export default function ChartArea({
           </>
         )}
 
+        {/* Hover readout toggle */}
+        <Button
+          variant={showHoverReadout ? "default" : "ghost"}
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={() => setShowHoverReadout(!showHoverReadout)}
+          data-testid="toggle-hover-readout"
+          title="Toggle hover values above plots"
+        >
+          <Eye className="w-3.5 h-3.5" />
+        </Button>
+
         {/* Quarter shading toggle */}
         <Button
           variant={showQuarterShading ? "default" : "ghost"}
@@ -1064,6 +1483,18 @@ export default function ChartArea({
           </PopoverContent>
         </Popover>
 
+        {/* Annotations / notes toggle */}
+        <Button
+          variant={showAnnotations ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-1.5 text-[10px] gap-0.5"
+          onClick={() => setShowAnnotations(!showAnnotations)}
+          data-testid="annotations-toggle"
+          title="Chart annotations / notes"
+        >
+          <StickyNote className="w-3 h-3" />
+        </Button>
+
         {/* Indicators */}
         <Button
           variant={showIndicators ? "default" : "ghost"}
@@ -1095,6 +1526,17 @@ export default function ChartArea({
           data-testid="toggle-pairs"
         >
           Pairs
+        </Button>
+
+        {/* Quick Analyze */}
+        <Button
+          variant={showQuickAnalyze ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => { setShowQuickAnalyze(!showQuickAnalyze); setShowIndicators(false); setShowCorrelation(false); }}
+          data-testid="toggle-quick-analyze"
+        >
+          Quick Analyze
         </Button>
 
         {/* Draw tools */}
@@ -1142,6 +1584,114 @@ export default function ChartArea({
             Clear
           </Button>
         )}
+
+        {/* Clear seeded S/R levels & trendlines for the active ticker */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-[11px] text-muted-foreground hover:text-foreground px-2"
+          onClick={() => {
+            const tkr = (activeTicker || "").toUpperCase();
+            if (tkr) {
+              try {
+                for (const key of [
+                  "reit-viz-srlevel-seeds-v1",
+                  "reit-viz-srlevel-persistent-v1",
+                  "reit-viz-trendline-seeds-v1",
+                  "reit-viz-trendline-persistent-v1",
+                ]) {
+                  const raw = localStorage.getItem(key);
+                  if (!raw) continue;
+                  const parsed = JSON.parse(raw);
+                  if (parsed && parsed[tkr]) {
+                    delete parsed[tkr];
+                    localStorage.setItem(key, JSON.stringify(parsed));
+                  }
+                }
+                paneRefs.current.forEach(r => r?.clearDrawings?.());
+                setDrawingCount(0);
+                const toast = document.createElement("div");
+                toast.textContent = `Cleared seeded levels & trendlines for ${tkr}`;
+                toast.className =
+                  "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-cyan-500/20 text-cyan-300 text-xs font-mono border border-cyan-500/40 shadow-lg";
+                document.body.appendChild(toast);
+                setTimeout(() => { toast.remove(); }, 2500);
+              } catch {}
+            }
+          }}
+          title={`Clear seeded S/R levels and trendlines for ${activeTicker ?? "current ticker"}`}
+          data-testid="clear-seeded-overlays"
+        >
+          <Trash2 className="w-3 h-3 mr-1" />
+          Clear Seeds
+        </Button>
+
+        {/* Seeded overlays manager (S/R levels & auto-trendlines) */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 text-[11px] text-muted-foreground hover:text-foreground px-2"
+          title={`Manage seeded overlays for ${activeTicker ?? "current ticker"}`}
+          data-testid="seeded-overlays-manager"
+        >
+          <Layers3 className="w-3 h-3 mr-1" />
+          Seeds
+        </Button>
+
+        {/* Predictive-signal analyzer toggle */}
+        <Button
+          variant={showSignalAnalyzer ? "default" : "ghost"}
+          size="sm"
+          className="h-7 px-2 text-[10px] font-semibold"
+          onClick={() => setShowSignalAnalyzer(v => !v)}
+          disabled={!activeTicker}
+          title={activeTicker ? `Show predictive-signal analyzer for ${activeTicker}` : "Select a ticker first"}
+          data-testid="toggle-signal-analyzer"
+        >
+          <Sparkles className="w-3 h-3 mr-1" />
+          Signals
+        </Button>
+
+        {/* Quant subplot toggles: PD Ratio, Prem↔Growth Corr, Similar Setups */}
+        <button
+          onClick={() => setShowPDRatio(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPDRatio ? "border-violet-500 bg-violet-500/15 text-violet-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-pd-ratio"
+          title="Show/hide PD Ratio subplot"
+        >
+          PD Ratio
+        </button>
+        <button
+          onClick={() => setShowPremCorr(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPremCorr ? "border-teal-500 bg-teal-500/15 text-teal-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-prem-corr"
+          title="Show/hide Prem↔Growth Corr subplot"
+        >
+          Prem↔Growth Corr
+        </button>
+        <button
+          onClick={() => setShowSimilarSetups(v => !v)}
+          className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showSimilarSetups ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+          data-testid="toggle-similar-setups"
+          title="Show/hide Similar Setups panel"
+        >
+          Similar Setups
+        </button>
+
+        {/* Auto-size: reset all pane sizes (fit content) to defaults */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-[10px] font-mono font-semibold"
+          onClick={() => {
+            paneRefs.current.forEach(r => r?.fitContent?.());
+          }}
+          title="Reset all pane sizes (grid panes + sub-indicators) to defaults"
+          data-testid="autosize-all"
+        >
+          <Maximize2 className="w-3 h-3 mr-1" />
+          Auto-size
+        </Button>
 
         <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setIsMaximized(!isMaximized)} data-testid="maximize">
           {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -1325,7 +1875,7 @@ export default function ChartArea({
         <DialogContent className="sm:max-w-[380px]">
           <DialogHeader>
             <DialogTitle className="text-sm">
-              {pendingPairsPreset?.label} — Pick Ticker B
+              {(pendingRelValPreset ?? pendingPairsPreset)?.label} — Pick Ticker B
             </DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">

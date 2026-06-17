@@ -17,7 +17,7 @@ import {
 } from "@/lib/forwardReturns";
 import type { SignalSummary, CompositeScore } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
-import { filterByDateRange, createDateRange, defaultInputSelection } from "@/lib/optimizerInputSeries";
+import { filterByDateRange, createDateRange, defaultInputSelection, resampleWeekly } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -190,6 +190,7 @@ function detectHaFlip(
   minIdx: number
 ): { index: number; direction: string }[] {
   const result: { index: number; direction: string }[] = [];
+  let signTracker = 0;
   let consecutiveCount = 0;
   let lastDir: string | null = null;
   let flipStart = -1;
@@ -197,8 +198,9 @@ function detectHaFlip(
     const hc = haClose[i];
     const ho = haOpen[i];
     if (hc === null || ho === null) {
-      consecutiveCount = 0;
+      signTracker = 0;
       lastDir = null;
+      consecutiveCount = 0;
       continue;
     }
     const diff = hc - ho;
@@ -207,14 +209,15 @@ function detectHaFlip(
       if (lastDir) consecutiveCount += 1;
       continue;
     }
-    if (consecutiveCount === 0) {
-      consecutiveCount = dir;
+    if (signTracker === 0) {
+      signTracker = dir;
       continue;
     }
-    if (dir !== consecutiveCount) {
+    if (dir !== signTracker) {
       lastDir = dir > 0 ? "buy" : "sell";
       flipStart = i;
-      consecutiveCount = dir;
+      consecutiveCount = 0;
+      signTracker = dir;
     } else if (lastDir) consecutiveCount += 1;
     if (lastDir && consecutiveCount >= confirmation) {
       const emitIdx = flipStart + confirmation;
@@ -726,14 +729,14 @@ export default function HarsiOptimizer() {
   } | null> {
     try {
       const raw = await getTickerRaw(ticker);
-      if (!raw || (raw as any).adjCloses.length < 252) return null;
-      const adjCloses: number[] = (raw as any).adjCloses;
-      const closes: number[] = (raw as any).closes;
-      const rawHighs: number[] = (raw as any).highs;
-      const rawLows: number[] = (raw as any).lows;
-      const opens: number[] = (raw as any).opens;
-      const volumes: number[] = (raw as any).volumes;
-      const rawDates: string[] = (raw as any).dates;
+      const filtered: any = (filterByDateRange as any)(raw, dr ?? null);
+      const adjCloses: number[] = filtered.adjCloses;
+      const closes: number[] = filtered.closes;
+      const rawHighs: number[] = filtered.highs;
+      const rawLows: number[] = filtered.lows;
+      const opens: number[] = filtered.opens;
+      const volumes: number[] = filtered.volumes;
+      const rawDates: string[] = filtered.dates;
       const adjFactors = closes.map((c, i) => {
         const adj = adjCloses[i];
         return c > 0 && Number.isFinite(c) && Number.isFinite(adj) ? adj / c : 1;
@@ -746,7 +749,7 @@ export default function HarsiOptimizer() {
       for (let i = 0; i < dates.length; i++) dateMap.set(dates[i], i);
       const globalIdxFromRaw = rawDates.map((d) => dateMap.get(d) ?? -1);
 
-      const resampled: any = (weeklyDownsampleD as any)(
+      const resampled: any = (resampleWeekly as any)(
         {
           dates: rawDates,
           opens: adjOpens,

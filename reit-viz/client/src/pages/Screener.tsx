@@ -423,7 +423,7 @@ function getLookbackRange(
   }
 
   if (mode === "preset") {
-    const days = cond.lookbackPresetDays ?? 252;
+    const days = cond.lookbackPresetDays ?? 21;
     const startIdx = Math.max(0, series.length - days);
     return { startIdx, endIdx };
   }
@@ -501,7 +501,7 @@ async function evaluateCondition(
     } else if (cond.rightType === "percentile") {
       const pct = cond.rightPercentile ?? 50;
       const lookback = cond.lookbackDays ?? 252;
-      const window = leftRaw.slice(-lookback).map((d) => d.value);
+      const window = leftSeries.slice(-lookback).map((d) => d.value).filter((v) => Number.isFinite(v));
       if (window.length === 0) return { leftVal: leftLast, pass: false, matchDate: null };
       window.sort((a, b) => a - b);
       const idx = Math.max(0, Math.min(window.length - 1, Math.round((pct / 100) * (window.length - 1))));
@@ -537,7 +537,7 @@ async function evaluateCondition(
   if (cond.rightType === "percentile") {
     const pct = cond.rightPercentile ?? 50;
     const lookback = cond.lookbackDays ?? 252;
-    const window = leftRaw.slice(-lookback).map((d) => d.value);
+    const window = leftSeries.slice(-lookback).map((d) => d.value).filter((v) => Number.isFinite(v));
     if (window.length === 0) return { leftVal: latestLeft, pass: false, matchDate: null };
     window.sort((a, b) => a - b);
     const idx = Math.max(0, Math.min(window.length - 1, Math.round((pct / 100) * (window.length - 1))));
@@ -612,8 +612,8 @@ function conditionLabel(cond: ScreenerCondition): string {
   const lbMode = cond.lookbackMode ?? "now";
   let lbStr = "";
   if (lbMode === "preset") {
-    const preset = LOOKBACK_PRESETS.find((p) => p.days === (cond.lookbackPresetDays ?? 252));
-    lbStr = ` (any in ${preset?.label ?? "1Y"})`;
+    const preset = LOOKBACK_PRESETS.find((p) => p.days === (cond.lookbackPresetDays ?? 21));
+    lbStr = ` (any in ${preset?.label ?? "1M"})`;
   } else if (lbMode === "custom") {
     const s = cond.lookbackStartDate ?? "...";
     const e = cond.lookbackEndDate ?? "...";
@@ -1072,7 +1072,7 @@ function ConditionRow({
             Now
           </button>
           <button
-            onClick={() => patch({ lookbackMode: "preset", lookbackPresetDays: c.lookbackPresetDays ?? 252 })}
+            onClick={() => patch({ lookbackMode: "preset", lookbackPresetDays: c.lookbackPresetDays ?? 21 })}
             className={`px-1.5 text-[10px] font-medium transition-colors flex items-center gap-0.5 ${
               (c.lookbackMode ?? "now") === "preset"
                 ? "bg-primary text-primary-foreground"
@@ -1107,7 +1107,7 @@ function ConditionRow({
                 key={p.days}
                 onClick={() => patch({ lookbackPresetDays: p.days })}
                 className={`px-1.5 text-[10px] font-medium transition-colors ${
-                  (c.lookbackPresetDays ?? 252) === p.days
+                  (c.lookbackPresetDays ?? 21) === p.days
                     ? "bg-accent text-accent-foreground"
                     : "bg-muted/20 text-muted-foreground hover:bg-muted/40"
                 }`}
@@ -1190,7 +1190,9 @@ export default function Screener() {
   const [sort, setSort] = useState<SortState>({ key: "ticker", dir: "asc" });
 
   // Pairs screening state
-  const [screenMode, setScreenMode] = useState<"single" | "pairs">("single");
+  const [screenMode, setScreenMode] = useState<"single" | "pairs" | "pairCombo">("single");
+  // RV (relative-value) verdict filter — applied after other conditions (single mode)
+  const [rvFilter, setRvFilter] = useState<"all" | "attractive" | "expensive" | "neutral">("all");
   const [pairsMetricA, setPairsMetricA] = useState("close");
   const [pairsMetricB, setPairsMetricB] = useState("close");
   const [pairsZWindow, setPairsZWindow] = useState(60);
@@ -1639,6 +1641,18 @@ export default function Screener() {
             <ArrowRightLeft size={10} />
             Pairs
           </button>
+          <button
+            onClick={() => setScreenMode("pairCombo")}
+            className={`px-2.5 text-[10px] font-medium transition-colors flex items-center gap-1 ${
+              screenMode === "pairCombo"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/20 text-muted-foreground hover:bg-muted/40"
+            }`}
+            data-testid="btn-mode-pairCombo"
+          >
+            <ArrowRightLeft size={10} />
+            Pair Combo
+          </button>
         </div>
 
         {/* Load screens dropdown (single mode only) */}
@@ -1764,6 +1778,66 @@ export default function Screener() {
         )}
 
         <div className="flex-1" />
+
+        {/* RV verdict filter (single mode only) */}
+        {screenMode === "single" && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className={`flex items-center gap-1 text-[10px] h-5 px-1.5 rounded border transition-colors ${
+                  rvFilter !== "all"
+                    ? rvFilter === "attractive"
+                      ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : rvFilter === "expensive"
+                        ? "border-rose-500/50 bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        : "border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid="btn-toggle-rv-filter"
+                title="Filter results by Relative Value verdict (cross-sectional vs peer group)"
+              >
+                <Filter size={9} />
+                RV:{" "}
+                {rvFilter === "all"
+                  ? "Off"
+                  : rvFilter === "attractive"
+                    ? "Attractive"
+                    : rvFilter === "expensive"
+                      ? "Expensive"
+                      : "Neutral"}
+                <ChevronDownIcon size={9} />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-3" align="end">
+              <div className="text-xs font-semibold mb-2">RV Verdict Filter</div>
+              <div className="text-[10px] text-muted-foreground mb-3 leading-relaxed">
+                Cross-sectional value: combines today's premium-vs-peers percentile (conditional on growth) and growth percentile (conditional on premium). Applied AFTER your other conditions.
+              </div>
+              <div className="text-[10px] text-muted-foreground mb-1">Show only</div>
+              <div className="flex gap-1 mb-3">
+                {([
+                  { key: "all", label: "Off" },
+                  { key: "attractive", label: "Attractive" },
+                  { key: "expensive", label: "Expensive" },
+                  { key: "neutral", label: "Neutral" },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.key}
+                    onClick={() => setRvFilter(opt.key)}
+                    className={`flex-1 text-[10px] h-6 rounded border transition-colors ${
+                      rvFilter === opt.key
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    }`}
+                    data-testid={`btn-rv-filter-${opt.key}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
 
         {/* Universe filter toggle */}
         <button

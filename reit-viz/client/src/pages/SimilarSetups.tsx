@@ -22,6 +22,7 @@ import {
   featureKeys,
   computeFeatures,
   computeTimeDim,
+  timeFeatureMeta,
   dispatchAlgo,
 } from "@/lib/similarSetupsAlgorithms";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
@@ -148,6 +149,12 @@ const FEATURE_CATEGORIES = [
   "App-Specific",
   "Time",
 ];
+
+// Time-dimension feature keys come from the lib's separate timeFeatureMeta
+// (bundle export `T`/`ae` = TIME_FEATURE_META): dowSin/dowCos/moySin/moyCos.
+const timeFeatureKeys: string[] = Object.keys(
+  timeFeatureMeta as Record<string, unknown>
+);
 
 // ---------------------------------------------------------------------------
 // Math helpers
@@ -503,9 +510,7 @@ function computeSetupResult(
   const enabledTechnical = (featureKeys as string[]).filter(
     (k) => enabledFeatures.has(k) && !isDisabled(k)
   );
-  const enabledTime = Object.keys(
-    featureKeys as Record<string, unknown>
-  ).filter((k) => enabledFeatures.has(k));
+  const enabledTime = timeFeatureKeys.filter((k) => enabledFeatures.has(k));
 
   if (enabledTechnical.length + enabledTime.length === 0) return null;
 
@@ -572,19 +577,7 @@ function computeSetupResult(
     });
   }
 
-  if (candidateBars.length === 0) {
-    return {
-      enabledList: allEnabled,
-      todayZ,
-      matches: [],
-      total: 0,
-      algoInfo: "no candidate bars",
-      h1M: null,
-      h3M: null,
-      h6M: null,
-      h1Y: null,
-    };
-  }
+  if (candidateBars.length === 0) return null;
 
   const algoInput = {
     bars: candidateBars,
@@ -2247,8 +2240,7 @@ export default function SimilarSetups() {
           </button>
           <span className="text-[10px] font-mono text-muted-foreground/70 ml-2">
             {enabledFeatures.size}/
-            {(featureKeys as string[]).length +
-              Object.keys(featureKeys as Record<string, unknown>).length}{" "}
+            {(featureKeys as string[]).length + timeFeatureKeys.length}{" "}
             enabled
           </span>
         </div>
@@ -2256,7 +2248,7 @@ export default function SimilarSetups() {
         {FEATURE_CATEGORIES.map((category) => {
           const keys =
             category === "Time"
-              ? Object.keys(featureKeys as Record<string, unknown>)
+              ? timeFeatureKeys
               : (featureKeys as string[]).filter(
                   (k) =>
                     (featureMeta as Record<string, { category: string }>)[k]?.category ===

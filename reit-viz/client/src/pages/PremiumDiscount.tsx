@@ -717,7 +717,6 @@ export default function PremiumDiscount() {
 
   // Rolling correlation series
   const rollCorrSeries = useMemo(() => computeRollingCorr(premiumSeries, growthSeries, rollWindow, rollLag), [premiumSeries, growthSeries, rollWindow, rollLag]);
-  const rollCorrRatioVsAB = useMemo(() => computeRollingCorr(ratioSeries as any, rawRatioSeries as any, rollWindow, rollLag), [ratioSeries, rollWindow, rollLag]);
   const bestLag = useMemo(() => {
     if (premiumSeries.length < 30 || growthSeries.length < 30) return null;
     const ccf = crossCorrelate(premiumSeries, growthSeries, 60);
@@ -2015,8 +2014,7 @@ export default function PremiumDiscount() {
           {/* Controls row */}
           <div className="flex items-center gap-2">
             <button onClick={() => setShowEarnings(!showEarnings)} className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border rounded ${showEarnings ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`} data-testid="toggle-earnings" title="Toggle earnings date markers">
-              {/* Calendar icon placeholder */}
-              <span className="w-3.5 h-3.5 inline-block" /> Earnings
+              <Calendar className="w-3.5 h-3.5" /> Earnings
             </button>
             <button onClick={handleExportCSV} className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground" data-testid="btn-csv" disabled={premiumSeries.length === 0}>
               <Download className="w-3.5 h-3.5" /> CSV

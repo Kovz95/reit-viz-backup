@@ -20,6 +20,8 @@ import { Download } from "lucide-react";
 import { hitRateClass, formatPct, pfClass, pfTextColor, scoreTextColor, scoreBackgroundColor } from "@/lib/formattingHelpers";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { useFrequency, isValidFrequency } from "@/lib/useFrequency";
+import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -27,6 +29,13 @@ interface HorizonDef { label: string; days: number; }
 const FWD_HORIZONS = FORWARD_HORIZONS as HorizonDef[];
 
 const Z_SCORE_WINDOWS = [21, 42, 63, 126, 189, 252, 504];
+
+const DEFAULT_METRICS = [
+  "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
+  "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2",
+  "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
+  "Dividend Yield", "Implied Cap Rate",
+];
 
 const GROUP_BY_OPTIONS = [
   { key: "economy", label: "Economy" },
@@ -175,8 +184,18 @@ export default function PairOptimizer() {
     [allTickers, universeTickers]
   );
   const classFilter = useOptimizerClassFilter(filteredTickers, mode === "scan", "pair-opt-clf");
-  const effectiveTickers = mode === "scan" ? classFilter.filteredTickers : filteredTickers;
-  const [availableMetrics, setAvailableMetrics] = useState<string[]>([]);
+
+  // Classification-filter + manual-ticker state for scan mode
+  const [clfFilters, setClfFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [clfSearch, setClfSearch] = useState("");
+  const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
+  const scanFilteredTickers = useMemo(
+    () => applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers),
+    [filteredTickers, clfFilters, clfSearch, clfManualTickers]
+  );
+
+  const effectiveTickers = mode === "scan" ? scanFilteredTickers : filteredTickers;
+  const [availableMetrics, setAvailableMetrics] = useState<string[]>(DEFAULT_METRICS);
 
   useEffect(() => {
     fetchWorkbookTickers().then((tickers: any[]) => {
@@ -187,7 +206,7 @@ export default function PairOptimizer() {
       }
       if (tickers.length > 0 && tickers[0].metrics) {
         const metricNames = tickers[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
-        const filtered = availableMetrics.filter((m) => metricNames.includes(m));
+        const filtered = DEFAULT_METRICS.filter((m) => metricNames.includes(m));
         if (filtered.length > 0) setAvailableMetrics(filtered);
       }
     });
@@ -553,17 +572,22 @@ export default function PairOptimizer() {
             </div>
           </div>
 
-          {/* Universe source (scan mode) */}
-          {mode === "scan" && classFilter.universeSourceUI && (
-            <div className="flex flex-col gap-0.5">
-              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Universe Source</label>
-              {classFilter.universeSourceUI}
-            </div>
-          )}
-          {mode === "scan" && classFilter.classFilterUI && (
+          {/* Universe source + classification filter (scan mode) */}
+          {mode === "scan" && (
             <div className="flex flex-col gap-0.5 w-full mt-1">
               <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Classification Filter</label>
-              {classFilter.classFilterUI}
+              <ClassificationFiltersWithSource
+                workbookTickers={filteredTickers}
+                filters={clfFilters}
+                onFiltersChange={setClfFilters}
+                search={clfSearch}
+                onSearchChange={setClfSearch}
+                manualTickers={clfManualTickers}
+                onManualTickersChange={setClfManualTickers}
+                filteredCount={scanFilteredTickers.length}
+                totalCount={filteredTickers.length}
+                testIdPrefix="pair-opt-clf"
+              />
             </div>
           )}
 

@@ -1,0 +1,83 @@
+name: Deploy reit-viz to Vultr
+
+# Mirrors the manual pipeline documented in README.md:
+#   npx vite build  →  tar dist/public  →  scp to server  →  extract + pm2 restart
+# This is a CLIENT-ONLY deploy (frontend assets). The Node server on Vultr is left
+# running as-is, exactly like the manual process.
+#
+# REQUIRED GitHub secret (Settings → Secrets and variables → Actions):
+#   VULTR_SSH_PASSWORD   – root SSH password for the Vultr box
+# OPTIONAL repo variables (Settings → Secrets and variables → Actions → Variables):
+#   VULTR_HOST   – defaults to 45.63.20.126
+#   VULTR_USER   – defaults to root
+#   VULTR_PATH   – defaults to /opt/reit-viz/dist/public
+#   PM2_APP      – defaults to reit-viz
+#
+# Manual only — never deploys automatically. Trigger from the Actions tab
+# (workflow_dispatch). By default it runs build-only (a dry run); tick the
+# "deploy" input to actually ship to Vultr.
+#
+# Until VULTR_SSH_PASSWORD is set, the deploy step fails safely (no prod change).
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to Vultr after building (unchecked = build-only dry run)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-reit-viz
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reit-viz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reit-viz/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build client (vite)
+        # NOT `npm run build` — that runs the full build script which wipes dist.
+        run: npx vite build
+
+      - name: Package client bundle
+        run: |
+          tar --exclude='data.db*' --exclude='data/yahoo-cache' \
+            -czf /tmp/reit-viz-deploy.tar.gz -C dist/public .
+          ls -lh /tmp/reit-viz-deploy.tar.gz
+
+      - name: Deploy to Vultr
+        if: ${{ inputs.deploy }}
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VULTR_HOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VULTR_USER: ${{ vars.VULTR_USER || 'root' }}
+          VULTR_PATH: ${{ vars.VULTR_PATH || '/opt/reit-viz/dist/public' }}
+          PM2_APP: ${{ vars.PM2_APP || 'reit-viz' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then
+            echo "::error::VULTR_SSH_PASSWORD secret is not set — skipping deploy."
+            echo "Add it under Settings → Secrets and variables → Actions, then re-run."
+            exit 1
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          sshpass -e scp $SSHOPTS /tmp/reit-viz-deploy.tar.gz "$VULTR_USER@$VULTR_HOST:/tmp/"
+          sshpass -e ssh $SSHOPTS "$VULTR_USER@$VULTR_HOST" \
+            "mkdir -p '$VULTR_PATH' && tar xzf /tmp/reit-viz-deploy.tar.gz -C '$VULTR_PATH/' && pm2 restart '$PM2_APP' && rm -f /tmp/reit-viz-deploy.tar.gz"
+          echo "Deployed to $VULTR_USER@$VULTR_HOST:$VULTR_PATH and restarted pm2 app '$PM2_APP'."

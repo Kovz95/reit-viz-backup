@@ -18,6 +18,7 @@ interface ClassificationFiltersWithSourceProps {
   testIdPrefix: string;
   source?: string;
   onSourceChange?: (source: string) => void;
+  children?: React.ReactNode;
 }
 
 export function ClassificationFiltersWithSource({
@@ -33,6 +34,7 @@ export function ClassificationFiltersWithSource({
   testIdPrefix,
   source: sourceProp,
   onSourceChange,
+  children,
 }: ClassificationFiltersWithSourceProps) {
   const [localSource, setLocalSource] = useState("workbook");
   const effectiveSource = sourceProp ?? localSource;
@@ -58,7 +60,7 @@ export function ClassificationFiltersWithSource({
     if (effectiveSource === "global") return loading || error ? [] : metas;
   }, [effectiveSource, loading, error, metas]);
 
-  const workbookCount = workbookTickers.length;
+  const workbookCount = workbookTickers?.length ?? 0;
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -104,6 +106,7 @@ export function ClassificationFiltersWithSource({
             load error
           </span>
         )}
+        {children}
       </div>
       <ClassificationFilters
         filters={filters}

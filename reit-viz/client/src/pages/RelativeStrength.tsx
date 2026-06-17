@@ -490,7 +490,6 @@ function runBacktest(compositePanel: MatrixPanel, pricePanel: MatrixPanel, opts:
         const key = `D${bucket + 1}`;
         bucketReturns[h.label][key].push(ret);
         bucketHits[h.label][key].push(ret >= hitThreshold ? 1 : 0);
-        nObs++;
       }
       const rets = observations.map(o => o.ret);
       const icScores = observations.map(o => o.score);
@@ -502,6 +501,7 @@ function runBacktest(compositePanel: MatrixPanel, pricePanel: MatrixPanel, opts:
       if (q1Rets.length > 0 && qLast.length > 0) {
         longShortByHorizon[h.label].push({ date: compositePanel.dates[d], ret: arrayMean(q1Rets) - arrayMean(qLast) });
       }
+      if (h.label === "1M") nObs += observations.length;
     }
 
     // 1M equity curve

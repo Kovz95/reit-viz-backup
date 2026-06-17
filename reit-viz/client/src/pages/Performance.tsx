@@ -100,10 +100,10 @@ function checkWindowRelevance(
     const daysUntilStartPrev = daysDiff(today, prevYearStart);
     const daysUntilEndCurr = daysDiff(today, end);
 
-    if (daysUntilEndNextYear >= -7 && daysUntilStartPrev <= lookaheadDays) {
-      const isActive = daysUntilStartPrev <= 0 && daysUntilEndNextYear >= 0;
-      if (daysUntilEndNextYear < -7 || (!isActive && daysUntilStartPrev > lookaheadDays)) return null;
-      return { daysUntilStart: daysUntilStartPrev, daysUntilEnd: daysUntilEndNextYear, isActive };
+    if (daysUntilEndCurr >= -7 && daysUntilStartPrev <= lookaheadDays) {
+      const isActive = daysUntilStartPrev <= 0 && daysUntilEndCurr >= 0;
+      if (daysUntilEndCurr < -7 || (!isActive && daysUntilStartPrev > lookaheadDays)) return null;
+      return { daysUntilStart: daysUntilStartPrev, daysUntilEnd: daysUntilEndCurr, isActive };
     }
     const isActiveCurr = daysUntilStart <= 0 && daysUntilEndNextYear >= 0;
     if (daysUntilEndNextYear < -7 || (!isActiveCurr && daysUntilStart > lookaheadDays)) return null;

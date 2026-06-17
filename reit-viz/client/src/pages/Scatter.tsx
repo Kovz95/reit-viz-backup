@@ -896,6 +896,15 @@ export default function Scatter() {
     }
   }, [showQuadrants, transformedPoints.length]);
 
+  const handleExportPng = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const a = document.createElement("a");
+    a.download = `scatter_${metricX}_vs_${metricY}.png`.replace(/[^a-zA-Z0-9._-]/g, "_");
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  };
+
   const handleExportCsv = () => {
     const extraCol = colorMode === "metric" ? "," + colorMetric : "";
     const header = `Ticker,Name,Subindustry,${metricX},${metricY}${metricZ !== "none" ? "," + metricZ : ""}${extraCol}${overallRegression ? ",Residual" : ""}`;
@@ -1102,6 +1111,25 @@ export default function Scatter() {
             getCanvas={() => canvasRef.current}
             label={`Scatter_${metricX}_vs_${metricY}`}
           />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="p-0.5 rounded bg-background/80 hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+                title="Export chart"
+                data-testid="export-chart"
+              >
+                <Download className="w-3 h-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[120px]">
+              <DropdownMenuItem onClick={handleExportPng} data-testid="export-png">
+                Export PNG
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleExportCsv} data-testid="export-csv">
+                Export CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" className="h-6 gap-1 text-[11px]" onClick={handleExportCsv}>
             <Download className="w-3 h-3" />
             CSV

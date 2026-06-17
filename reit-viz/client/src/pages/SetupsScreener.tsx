@@ -174,7 +174,7 @@ async function analyzeOneTicker(params: {
     const isDisabled = (key: string): boolean => {
       const def = (computeFeatures as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key]
         ?? (featureMeta as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
-      return !!(def && ((def.requiresVolume && !hasVolume) || (def.requiresBench && !hasBench)));
+      return !!(!def || (def.requiresVolume && !hasVolume) || (def.requiresBench && !hasBench));
     };
 
     const validFeatureKeys: string[] = (featureKeys as string[]).filter(k => params.enabled.has(k) && !isDisabled(k));
@@ -294,16 +294,24 @@ async function analyzeConsensus(params: {
     result.consensus_sd6M = stdArr(med6Ms); result.consensus_sd1Y = stdArr(med1Ys);
     result.mean1M = weightedAvg(valid.map(p => p.r.mean1M ?? NaN), counts);
     result.mean3M = weightedAvg(valid.map(p => p.r.mean3M ?? NaN), counts);
+    result.mean6M = weightedAvg(valid.map(p => p.r.mean6M ?? NaN), counts);
+    result.mean1Y = weightedAvg(valid.map(p => p.r.mean1Y ?? NaN), counts);
     result.hitLong3M = weightedAvg(valid.map(p => p.r.hitLong3M ?? NaN), counts);
     result.hitShort3M = weightedAvg(valid.map(p => p.r.hitShort3M ?? NaN), counts);
     result.baseLong3M = weightedAvg(valid.map(p => p.r.baseLong3M ?? NaN), counts);
     result.baseShort3M = weightedAvg(valid.map(p => p.r.baseShort3M ?? NaN), counts);
     result.hitLong1M = weightedAvg(valid.map(p => p.r.hitLong1M ?? NaN), counts);
     result.hitShort1M = weightedAvg(valid.map(p => p.r.hitShort1M ?? NaN), counts);
+    result.baseLong1M = weightedAvg(valid.map(p => p.r.baseLong1M ?? NaN), counts);
+    result.baseShort1M = weightedAvg(valid.map(p => p.r.baseShort1M ?? NaN), counts);
     result.hitLong6M = weightedAvg(valid.map(p => p.r.hitLong6M ?? NaN), counts);
     result.hitShort6M = weightedAvg(valid.map(p => p.r.hitShort6M ?? NaN), counts);
+    result.baseLong6M = weightedAvg(valid.map(p => p.r.baseLong6M ?? NaN), counts);
+    result.baseShort6M = weightedAvg(valid.map(p => p.r.baseShort6M ?? NaN), counts);
     result.hitLong1Y = weightedAvg(valid.map(p => p.r.hitLong1Y ?? NaN), counts);
     result.hitShort1Y = weightedAvg(valid.map(p => p.r.hitShort1Y ?? NaN), counts);
+    result.baseLong1Y = weightedAvg(valid.map(p => p.r.baseLong1Y ?? NaN), counts);
+    result.baseShort1Y = weightedAvg(valid.map(p => p.r.baseShort1Y ?? NaN), counts);
     result.matchN = valid.reduce((s, p) => s + (p.r.matchN ?? 0), 0);
     result.baseN = valid.reduce((s, p) => s + (p.r.baseN ?? 0), 0);
 

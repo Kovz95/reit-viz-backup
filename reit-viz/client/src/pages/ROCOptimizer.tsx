@@ -436,11 +436,12 @@ function downsampleWeeklyLocal(prices: number[], dates: string[]): { prices: num
 }
 
 function mapWeeklyToDaily(
+  period: number,
   weeklyValues: number[],
   weekIndex: number[],
   dailyLength: number
 ): number[] {
-  const v = computeROC(weeklyValues, weekIndex[0] ?? 1);
+  const v = computeROC(weeklyValues, period);
   const out = new Array(dailyLength).fill(NaN);
   let c = -1;
   for (let i = 0; i < dailyLength; i++) {
@@ -850,12 +851,14 @@ export default function ROCOptimizer() {
           const optsWithPrecomputed = { ...opts } as any;
           if (frequency === "weekly_on_daily" && weeklyData) {
             optsWithPrecomputed.precomputedROC = mapWeeklyToDaily(
+              opts.period,
               weeklyData.prices,
               weeklyData.weekIndex,
               workingCloses.length
             );
             if (opts.slowPeriod !== undefined) {
               optsWithPrecomputed.precomputedSlowROC = mapWeeklyToDaily(
+                opts.slowPeriod,
                 weeklyData.prices,
                 weeklyData.weekIndex,
                 workingCloses.length
@@ -1207,7 +1210,7 @@ export default function ROCOptimizer() {
       }
       signalIndices.sort((a, b) => a - b);
 
-      const evalResultData = buildBacktestResult(workingCloses, workingDates, signalIndices, evalSide, returnBasis, minHold, null, "3M");
+      const evalResultData = buildBacktestResult(workingCloses, workingDates, signalIndices, evalSide, targetReturn, minHold, null, "3M");
       setEvalResult(evalResultData);
       setEvalPriceContext({
         prices: workingCloses,
@@ -1474,9 +1477,9 @@ export default function ROCOptimizer() {
             slopeLookback: gcfg.slopeLookback,
           };
           if (frequency === "weekly_on_daily" && weeklyData) {
-            gopts.precomputedROC = mapWeeklyToDaily(weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
+            gopts.precomputedROC = mapWeeklyToDaily(gcfg.period, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
             if (gcfg.slowPeriod !== undefined)
-              gopts.precomputedSlowROC = mapWeeklyToDaily(weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
+              gopts.precomputedSlowROC = mapWeeklyToDaily(gcfg.slowPeriod, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
           }
 
           const detected = detectSignals(workingCloses, allCats, gopts, startIdx);
@@ -2850,10 +2853,12 @@ export default function ROCOptimizer() {
                   <div className="flex flex-col gap-0.5">
                     <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider"> </label>
                     <button
-                      className="text-xs font-mono font-bold px-4 py-1 rounded bg-violet-600 text-white hover:bg-violet-500"
+                      data-testid="grid-search-btn"
+                      className="text-xs font-mono font-bold px-4 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-500"
                       onClick={runGridSearch}
+                      title={`Comprehensive grid search across all ROC signal families. ${gridConfigCount} configs per ticker (${gridSize} sweep). Each config evaluated for both long and short side.`}
                     >
-                      Grid Search
+                      Grid Search ({gridConfigCount})
                     </button>
                   </div>
                 </>
@@ -2871,19 +2876,28 @@ export default function ROCOptimizer() {
 
           {/* Results area */}
           <div className="flex-1 overflow-auto px-4 py-3">
+            {/* Empty state */}
+            {results.length === 0 && gridResults.length === 0 && !running && (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                Tests ROC zero-cross, threshold-cross, fast/slow ROC cross, and slope/curvature signals against forward returns
+              </div>
+            )}
             {/* Grid results */}
             {gridResults.length > 0 && (
-              <div className="mb-6">
+              <div className="mb-6" data-testid="grid-results">
                 <h3 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">
                   Grid Search Results — {gridResults.length} tickers
                 </h3>
                 {gridResults.map((gr) => {
-                  const bullCombos = gr.topCombos
-                    .filter((c) => c.bullSignals >= minSignals)
-                    .filter((_, i) => i < 20);
-                  const bearCombos = gr.topCombos
-                    .filter((c) => c.bearSignals >= minSignals)
-                    .filter((_, i) => i < 20);
+                  const minSig = Math.max(0, minSignals | 0);
+                  const bullCombos = [...gr.topCombos]
+                    .filter((c) => c.bullSignals > 0 && c.bullSignals >= minSig)
+                    .sort((a, b) => b.bullScore - a.bullScore)
+                    .slice(0, 25);
+                  const bearCombos = [...gr.topCombos]
+                    .filter((c) => c.bearSignals > 0 && c.bearSignals >= minSig)
+                    .sort((a, b) => b.bearScore - a.bearScore)
+                    .slice(0, 25);
                   const sortedBull = sortGridCombos(bullCombos, "long", gridLongSort);
                   const sortedBear = sortGridCombos(bearCombos, "short", gridShortSort);
                   const isExpanded = expandedGridTicker === gr.ticker;
@@ -2892,7 +2906,7 @@ export default function ROCOptimizer() {
                       <button
                         className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-accent/30"
                         onClick={() => setExpandedGridTicker(isExpanded ? null : gr.ticker)}
-                        data-testid={`grid-ticker-${gr.ticker}`}
+                        data-testid={`grid-row-${gr.ticker}`}
                       >
                         <span className="font-bold text-sm text-foreground">{gr.ticker}</span>
                         <span className="text-[10px] font-mono text-muted-foreground">{gr.name}</span>
@@ -3653,16 +3667,6 @@ export default function ROCOptimizer() {
                       </div>
                     );
                   })()}
-              </div>
-            )}
-
-            {/* Loading state when optimize running */}
-            {running && filteredSortedResults.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-16 gap-3">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
-                <p className="text-sm text-muted-foreground">
-                  Running… {progress.current} / {progress.total}
-                </p>
               </div>
             )}
           </div>

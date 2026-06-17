@@ -4,6 +4,14 @@ import { apiRequest } from "@/lib/queryClient";
 import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import { getMetricSeries, computeFormula } from "@/lib/dataService";
+import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
+import {
+  alignSeries,
+  computeDerived,
+  DERIVED_DEFS,
+  type DerivedType,
+  type TV,
+} from "@/lib/pairMath";
 import { useUpload } from "@/lib/uploadContext";
 import { getSeriesColor } from "@/lib/chartColors";
 import {
@@ -25,6 +33,7 @@ import {
   Calculator,
   ChevronsUpDown,
   Check,
+  ChevronsDownUp,
   Globe,
   Upload,
   FileSpreadsheet,
@@ -117,6 +126,7 @@ function groupByClassification(tickers: TickerMeta[], field: ClassificationKey) 
 
 const METRIC_CATEGORIES: Record<string, string[]> = {
   Price: ["close", "open", "high", "low"],
+  Volume: ["Volume"],
   Valuation: [
     "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
     "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
@@ -136,6 +146,7 @@ const METRIC_CATEGORIES: Record<string, string[]> = {
     "FY1 EPS Growth", "FY2 EPS Growth",
     "FY1 FFO Growth", "FY2 FFO Growth",
     "FY1 AFFO Growth", "FY2 AFFO Growth",
+    "FY2 EBITDA Growth",
   ],
   Performance: [
     "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
@@ -143,6 +154,10 @@ const METRIC_CATEGORIES: Record<string, string[]> = {
   ],
   "Short Interest": [
     "Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
+  ],
+  Volatility: [
+    "HV 30D", "HV 60D", "HV 90D", "HV 180D",
+    "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
   ],
   Other: [
     "Enterprise Value", "52wk High", "52wk Low", "Dividend",
@@ -213,6 +228,99 @@ export default function Sidebar({
   const [metricSearch, setMetricSearch] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+
+  // ── Yahoo free-form ticker search/add ──
+  const YAHOO_LS_KEY = "reit-viz.yahooTickers.v1";
+  const [yahooTickers, setYahooTickers] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(YAHOO_LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.filter((s) => typeof s === "string");
+      }
+    } catch {}
+    return [];
+  });
+  const [yahooQuery, setYahooQuery] = useState("");
+  const [yahooDropdownOpen, setYahooDropdownOpen] = useState(false);
+  const [yahooResults, setYahooResults] = useState<{ symbol: string; name: string; exchange: string }[]>([]);
+  const [yahooSearching, setYahooSearching] = useState(false);
+  const [yahooActiveIdx, setYahooActiveIdx] = useState(0);
+  const yahooAbort = useRef<AbortController | null>(null);
+  const yahooDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Persist Yahoo tickers
+  useEffect(() => {
+    try {
+      localStorage.setItem(YAHOO_LS_KEY, JSON.stringify(yahooTickers));
+    } catch {}
+  }, [yahooTickers]);
+
+  // Auto-expand the Yahoo group when there are Yahoo tickers
+  useEffect(() => {
+    if (yahooTickers.length > 0) {
+      setExpandedGroups((prev) => {
+        if (prev.has("__yahoo__")) return prev;
+        const next = new Set(prev);
+        next.add("__yahoo__");
+        return next;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Debounced Yahoo symbol search via /api/yahoo-search
+  useEffect(() => {
+    const q = yahooQuery.trim();
+    if (yahooDebounce.current) {
+      clearTimeout(yahooDebounce.current);
+      yahooDebounce.current = null;
+    }
+    if (q.length < 1) {
+      setYahooResults([]);
+      setYahooSearching(false);
+      return;
+    }
+    setYahooSearching(true);
+    yahooDebounce.current = setTimeout(() => {
+      yahooAbort.current?.abort();
+      const ctrl = new AbortController();
+      yahooAbort.current = ctrl;
+      fetch(`/api/yahoo-search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
+        .then((r) => (r.ok ? r.json() : { results: [] }))
+        .then((j) => {
+          const list = Array.isArray(j?.results) ? j.results : [];
+          setYahooResults(list);
+          setYahooActiveIdx(0);
+          setYahooSearching(false);
+        })
+        .catch((e) => {
+          if (e?.name !== "AbortError") setYahooSearching(false);
+        });
+    }, 220);
+    return () => {
+      if (yahooDebounce.current) clearTimeout(yahooDebounce.current);
+    };
+  }, [yahooQuery]);
+
+  const addYahooTicker = useCallback((raw: string) => {
+    const sym = raw.trim().toUpperCase();
+    if (!sym) return;
+    setYahooTickers((prev) => (prev.includes(sym) ? prev : [...prev, sym]));
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      next.add("__yahoo__");
+      return next;
+    });
+    setYahooQuery("");
+    setYahooDropdownOpen(false);
+    setYahooResults([]);
+  }, []);
+
+  const removeYahooTicker = useCallback((raw: string) => {
+    const sym = raw.toUpperCase();
+    setYahooTickers((prev) => prev.filter((t) => t !== sym));
+  }, []);
   const [openSections, setOpenSections] = useState<Set<string>>(
     new Set(["tickers", "series", "layout"])
   );
@@ -511,15 +619,45 @@ export default function Sidebar({
           <BarChart3 className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold tracking-tight">REIT Viz</span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="h-7 w-7 p-0"
-          data-testid="close-sidebar"
-        >
-          <PanelLeftClose className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              const all = [
+                "charttype", "tickers", "series", "fundamental",
+                "layout", "macro", "baskets", "compare", "pairs", "formula",
+              ];
+              setOpenSections(prev =>
+                all.every(s => prev.has(s)) ? new Set() : new Set(all)
+              );
+            }}
+            className="h-7 w-7 p-0"
+            data-testid="toggle-all-sections"
+            title={
+              ["charttype", "tickers", "series", "fundamental", "layout",
+               "macro", "baskets", "compare", "pairs", "formula"]
+                .every(s => openSections.has(s))
+                ? "Collapse all sections"
+                : "Expand all sections"
+            }
+          >
+            {["charttype", "tickers", "series", "fundamental", "layout",
+              "macro", "baskets", "compare", "pairs", "formula"]
+              .every(s => openSections.has(s))
+              ? <ChevronsDownUp className="w-4 h-4" />
+              : <ChevronsUpDown className="w-4 h-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-7 w-7 p-0"
+            data-testid="close-sidebar"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
@@ -626,24 +764,181 @@ export default function Sidebar({
                   ))}
                 </div>
               </div>
+              {/* Yahoo free-form ticker search + add */}
+              <div className="flex items-center gap-1">
+                <Popover open={yahooDropdownOpen && yahooQuery.trim().length > 0} onOpenChange={setYahooDropdownOpen}>
+                  <PopoverTrigger asChild>
+                    <div className="relative flex-1">
+                      <Globe className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sky-400 pointer-events-none" />
+                      <Input
+                        placeholder="Search Yahoo ticker (e.g. AAPL)…"
+                        value={yahooQuery}
+                        onChange={(e) => {
+                          setYahooQuery(e.target.value.toUpperCase());
+                          setYahooDropdownOpen(true);
+                        }}
+                        onFocus={() => {
+                          if (yahooQuery.trim().length > 0) setYahooDropdownOpen(true);
+                        }}
+                        onKeyDown={(e) => {
+                          const list = yahooResults;
+                          if (e.key === "ArrowDown" && list.length > 0) {
+                            e.preventDefault();
+                            setYahooActiveIdx((i) => Math.min(i + 1, list.length - 1));
+                            setYahooDropdownOpen(true);
+                          } else if (e.key === "ArrowUp" && list.length > 0) {
+                            e.preventDefault();
+                            setYahooActiveIdx((i) => Math.max(i - 1, 0));
+                          } else if (e.key === "Enter") {
+                            e.preventDefault();
+                            const hit = list[yahooActiveIdx];
+                            if (hit) addYahooTicker(hit.symbol);
+                            else if (yahooQuery.trim()) addYahooTicker(yahooQuery);
+                          } else if (e.key === "Escape") {
+                            setYahooDropdownOpen(false);
+                          }
+                        }}
+                        className="h-7 text-xs pl-7 bg-background border-sky-500/30"
+                        data-testid="yahoo-ticker-input"
+                      />
+                    </div>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="start"
+                    side="bottom"
+                    sideOffset={4}
+                    onOpenAutoFocus={(e) => e.preventDefault()}
+                    className="p-0 w-[var(--radix-popover-trigger-width)] min-w-[260px] max-h-[280px] overflow-hidden"
+                    data-testid="yahoo-ticker-dropdown"
+                  >
+                    {yahooSearching && yahooResults.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground">
+                        Searching…
+                      </div>
+                    ) : yahooResults.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-muted-foreground">
+                        No matches. Press Enter to add “{yahooQuery.trim()}” as-is.
+                      </div>
+                    ) : (
+                      <div className="max-h-[280px] overflow-y-auto py-1">
+                        {yahooResults.map((r, idx) => (
+                          <button
+                            key={`${r.symbol}-${idx}`}
+                            type="button"
+                            onMouseEnter={() => setYahooActiveIdx(idx)}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              addYahooTicker(r.symbol);
+                            }}
+                            className={`w-full text-left px-2 py-1 text-xs flex items-center gap-2 hover:bg-accent hover:text-accent-foreground ${idx === yahooActiveIdx ? "bg-accent text-accent-foreground" : ""}`}
+                            data-testid={`yahoo-ticker-option-${r.symbol}`}
+                          >
+                            <span className="font-mono font-semibold text-sky-300 shrink-0 min-w-[64px]">
+                              {r.symbol}
+                            </span>
+                            <span className="truncate flex-1">{r.name}</span>
+                            <span className="text-[10px] text-muted-foreground shrink-0">
+                              {r.exchange}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </PopoverContent>
+                </Popover>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2 text-xs"
+                  disabled={!yahooQuery.trim()}
+                  onClick={() => addYahooTicker(yahooQuery)}
+                  data-testid="yahoo-ticker-add"
+                  title="Add Yahoo ticker"
+                >
+                  <Plus className="w-3 h-3" />
+                </Button>
+              </div>
               <div className="space-y-0.5 max-h-[300px] overflow-y-auto">
+                {yahooTickers.length > 0 && (
+                  <div data-testid="yahoo-tickers-group">
+                    <div className="flex items-center gap-1 w-full px-1 py-0.5 text-[11px] font-medium text-sky-400 uppercase tracking-wider">
+                      <button
+                        className="flex items-center gap-1 flex-1 text-left min-w-0"
+                        onClick={() => toggleGroup("__yahoo__")}
+                        data-testid="group-toggle-yahoo"
+                      >
+                        {expandedGroups.has("__yahoo__") ? (
+                          <ChevronDown className="w-3 h-3 flex-shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3 flex-shrink-0" />
+                        )}
+                        <Globe className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">Yahoo</span>
+                      </button>
+                      <span className="flex-shrink-0 text-[10px] opacity-50 ml-1">
+                        {yahooTickers.length}
+                      </span>
+                    </div>
+                    {expandedGroups.has("__yahoo__") &&
+                      yahooTickers.map((sym) => {
+                        const id = `YAHOO:${sym}`;
+                        return (
+                          <div
+                            key={id}
+                            className={`group flex items-center gap-2 w-full text-left px-3 py-1 text-xs rounded ${activeTicker === id ? "bg-primary/15 text-primary" : "hover:bg-accent"}`}
+                          >
+                            <button
+                              className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                              onClick={() => selectTicker(id)}
+                              data-testid={`ticker-${id}`}
+                            >
+                              <span className="font-mono font-semibold w-12 text-sky-300">
+                                {sym}
+                              </span>
+                              <span className="text-muted-foreground truncate text-[10px]">
+                                Yahoo
+                              </span>
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeYahooTicker(sym);
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-400 transition-opacity"
+                              title={`Remove ${sym}`}
+                              data-testid={`yahoo-ticker-remove-${sym}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
                 {filteredGroups.map(([groupName, items]) => (
                   <div key={groupName}>
-                    <button
-                      className="flex items-center gap-1 w-full text-left px-1 py-0.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
-                      onClick={() => toggleGroup(groupName)}
+                    <div
+                      className="flex items-center gap-1 w-full px-1 py-0.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground"
                       data-testid={`group-${groupName}`}
                     >
-                      {expandedGroups.has(groupName) ? (
-                        <ChevronDown className="w-3 h-3" />
-                      ) : (
-                        <ChevronRight className="w-3 h-3" />
-                      )}
-                      {tickerGroupBy === "subindustry" ? groupName.replace(" Equity REITs", "") : groupName}
-                      <span className="ml-auto text-[10px] opacity-50">
+                      <button
+                        className="flex items-center gap-1 flex-1 text-left min-w-0"
+                        onClick={() => toggleGroup(groupName)}
+                        data-testid={`group-toggle-${groupName}`}
+                      >
+                        {expandedGroups.has(groupName) ? (
+                          <ChevronDown className="w-3 h-3 flex-shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3 flex-shrink-0" />
+                        )}
+                        <span className="truncate">
+                          {tickerGroupBy === "subindustry" ? groupName.replace(" Equity REITs", "") : groupName}
+                        </span>
+                      </button>
+                      <span className="flex-shrink-0 text-[10px] opacity-50 ml-1">
                         {items.length}
                       </span>
-                    </button>
+                    </div>
                     {expandedGroups.has(groupName) &&
                       items.map((t) => (
                         <button
@@ -1234,15 +1529,74 @@ export default function Sidebar({
             />
           )}
 
-          {/* Formula / Series Builder */}
+          {/* Baskets */}
           <SectionHeader
-            title="Formula"
+            title="Baskets"
+            icon={<Layers className="w-3.5 h-3.5" />}
+            section="baskets"
+            isOpen={openSections.has("baskets")}
+            onToggle={() => toggleSection("baskets")}
+          />
+          {openSections.has("baskets") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Saved baskets appear here.
+              </div>
+            </div>
+          )}
+
+          {/* Compare */}
+          <SectionHeader
+            title="Compare"
+            icon={<BarChart3 className="w-3.5 h-3.5" />}
+            section="compare"
+            isOpen={openSections.has("compare")}
+            onToggle={() => toggleSection("compare")}
+          />
+          {openSections.has("compare") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Compare tickers across metrics.
+              </div>
+            </div>
+          )}
+
+          {/* Pairs */}
+          <SectionHeader
+            title="Pairs"
+            icon={<TrendingUp className="w-3.5 h-3.5" />}
+            section="pairs"
+            isOpen={openSections.has("pairs")}
+            onToggle={() => toggleSection("pairs")}
+          />
+          {openSections.has("pairs") && (
+            <div className="px-2 pb-2 space-y-2">
+              <div className="text-[10px] text-muted-foreground text-center py-2">
+                Pair-trade presets and ratios.
+              </div>
+            </div>
+          )}
+
+          {/* Pairs & Formula / Series Builder */}
+          <SectionHeader
+            title="Pairs & Formula"
             icon={<Calculator className="w-3.5 h-3.5" />}
             section="formula"
             isOpen={openSections.has("formula")}
             onToggle={() => toggleSection("formula")}
           />
           {openSections.has("formula") && (
+            <PairsFormulaSection
+              tickers={tickers}
+              allMetrics={allMetrics}
+              plottedSeries={plottedSeries}
+              panes={panes}
+              onAddFormulaSeries={onAddFormulaSeries}
+            />
+          )}
+
+          {/* (legacy) Formula / Series Builder — superseded by Pairs & Formula */}
+          {false && (
             <div className="px-2 pb-2 space-y-2">
               {/* Series A */}
               <div className="space-y-1">
@@ -1644,6 +1998,525 @@ function MacroOverlaySection({
             </div>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Pairs & Formula builder (arithmetic + pair-math) ──
+const PF_DERIVED_NEEDS_WIN: Record<string, boolean> = {
+  zscore: true, correlation: true, beta: true, r2: true,
+};
+
+function PairsFormulaSection({
+  tickers,
+  allMetrics,
+  plottedSeries,
+  panes,
+  onAddFormulaSeries,
+}: {
+  tickers: TickerMeta[];
+  allMetrics: string[];
+  plottedSeries: PlottedSeries[];
+  panes: PaneInfo[];
+  onAddFormulaSeries: (series: PlottedSeries, targetPaneId?: number) => void;
+}) {
+  const [mode, setMode] = useState<"arithmetic" | "pair">("arithmetic");
+  const [legA, setLegA] = useState("");
+  const [legB, setLegB] = useState("");
+  const [metricA, setMetricA] = useState("close");
+  const [metricB, setMetricB] = useState("close");
+  const [operator, setOperator] = useState("+");
+  const [rightSide, setRightSide] = useState<"series" | "number">("series");
+  const [constant, setConstant] = useState("");
+  const [label, setLabel] = useState("");
+  const [output, setOutput] = useState<DerivedType>("olsResidZ");
+  const [zwin, setZwin] = useState(60);
+  const [betaLookback, setBetaLookback] = useState(52);
+  const [spreadZwin, setSpreadZwin] = useState(8);
+  const [olsResidWin, setOlsResidWin] = useState(52);
+  const [bandMode, setBandMode] = useState<"static" | "expanding">("static");
+  const [paneTarget, setPaneTarget] = useState("new");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [legAOpen, setLegAOpen] = useState(false);
+  const [legBOpen, setLegBOpen] = useState(false);
+
+  const tickerNames = useMemo(() => tickers.map((t) => t.ticker).sort(), [tickers]);
+  const nameByTicker = useMemo(() => {
+    const m = new Map<string, string>();
+    tickers.forEach((t) => m.set(t.ticker, t.name || ""));
+    return m;
+  }, [tickers]);
+
+  const outputDef = useMemo(() => DERIVED_DEFS.find((d) => d.type === output), [output]);
+  const needsZWin = !!outputDef && PF_DERIVED_NEEDS_WIN[output];
+
+  const wantsB = mode === "pair" || rightSide === "series";
+
+  const autoLabel = useMemo(() => {
+    if (mode === "arithmetic") {
+      const op = operator === "*" ? "×" : operator === "/" ? "÷" : operator;
+      const left = legA ? `${legA}${metricA !== "close" ? ":" + metricA : ""}` : "?";
+      const right = rightSide === "number"
+        ? (constant || "?")
+        : legB ? `${legB}${metricB !== "close" ? ":" + metricB : ""}` : "?";
+      return `${left} ${op} ${right}`;
+    }
+    if (!legA || !legB) return "?";
+    const a = `${legA}${metricA !== "close" ? ":" + metricA : ""}`;
+    const b = `${legB}${metricB !== "close" ? ":" + metricB : ""}`;
+    const suffix = needsZWin ? ` — ${outputDef?.label} (${zwin}d)` : ` — ${outputDef?.label}`;
+    return `${a} / ${b}${suffix}`;
+  }, [mode, operator, legA, legB, metricA, metricB, rightSide, constant, needsZWin, outputDef, zwin]);
+
+  // Fetch a {time,value} series for a leg (close → fetchCloseSeries, else getMetricSeries)
+  const fetchLeg = useCallback(async (ticker: string, metric: string): Promise<TV[]> => {
+    if (metric === "close") {
+      const cs = await fetchCloseSeries(ticker);
+      return cs.map((p) => ({ time: p.time, value: p.close }));
+    }
+    const ms = await getMetricSeries(ticker, metric);
+    return ms.map((p: any) => ({ time: p.time, value: p.value }));
+  }, []);
+
+  const handleAdd = useCallback(async () => {
+    setError("");
+    if (!legA) { setError("Pick Leg A"); return; }
+    if (mode === "arithmetic") {
+      if (rightSide === "series" && !legB) { setError("Pick Leg B"); return; }
+      if (rightSide === "number" && constant === "") { setError("Enter a number"); return; }
+    } else {
+      if (!legB) { setError("Pick Leg B"); return; }
+      if (legA === legB && metricA === metricB) { setError("Legs must differ"); return; }
+    }
+
+    setLoading(true);
+    try {
+      if (mode === "arithmetic") {
+        const a = await fetchLeg(legA, metricA);
+        if (a.length === 0) { setError("No data for Leg A"); setLoading(false); return; }
+        let out: TV[] = [];
+        if (rightSide === "number") {
+          const k = parseFloat(constant);
+          for (const p of a) {
+            let v: number;
+            switch (operator) {
+              case "+": v = p.value + k; break;
+              case "-": v = p.value - k; break;
+              case "*": v = p.value * k; break;
+              case "/": if (k === 0) continue; v = p.value / k; break;
+              default: continue;
+            }
+            if (isFinite(v)) out.push({ time: p.time, value: v });
+          }
+        } else {
+          const b = await fetchLeg(legB, metricB);
+          if (b.length === 0) { setError("No data for Leg B"); setLoading(false); return; }
+          const mapB = new Map(b.map((p) => [p.time, p.value]));
+          for (const p of a) {
+            const bv = mapB.get(p.time);
+            if (bv === undefined) continue;
+            let v: number;
+            switch (operator) {
+              case "+": v = p.value + bv; break;
+              case "-": v = p.value - bv; break;
+              case "*": v = p.value * bv; break;
+              case "/": if (bv === 0) continue; v = p.value / bv; break;
+              default: continue;
+            }
+            if (isFinite(v)) out.push({ time: p.time, value: v });
+          }
+        }
+        if (out.length === 0) { setError("No overlapping data"); setLoading(false); return; }
+        const lbl = label || autoLabel;
+        const series: PlottedSeries = {
+          id: `formula:${lbl}:${Date.now()}`,
+          ticker: legA,
+          metric: `formula:${lbl}`,
+          color: getSeriesColor(plottedSeries.length),
+          paneIndex: 0,
+          data: out as any,
+          visible: true,
+          label: lbl,
+        };
+        const tgt = paneTarget !== "new" ? parseInt(paneTarget) : undefined;
+        onAddFormulaSeries(series, tgt);
+      } else {
+        // Pair math
+        const a = await fetchLeg(legA, metricA);
+        const b = await fetchLeg(legB, metricB);
+        if (a.length === 0) { setError("No data for Leg A"); setLoading(false); return; }
+        if (b.length === 0) { setError("No data for Leg B"); setLoading(false); return; }
+        const aligned = alignSeries(a as any, b as any);
+        const win =
+          output === "spreadZ" ? betaLookback :
+          output === "olsResidZ" ? olsResidWin :
+          zwin;
+        const out = computeDerived(output, aligned, win);
+        if (!out || out.length === 0) { setError("No data for this selection"); setLoading(false); return; }
+        const lbl = autoLabel;
+        const isZ = output === "zscore" || output === "spreadZ" || output === "olsResidZ";
+        const series: PlottedSeries = {
+          id: `pairs:${output}:${legA}:${legB}:${Date.now()}`,
+          ticker: legA,
+          metric: `pairs:${output}`,
+          color: getSeriesColor(plottedSeries.length),
+          paneIndex: 0,
+          data: out as any,
+          visible: true,
+          label: lbl,
+          ...(isZ ? { pairsBandMode: bandMode } as any : {}),
+        };
+        const tgt = paneTarget !== "new" ? parseInt(paneTarget) : undefined;
+        onAddFormulaSeries(series, tgt);
+      }
+    } catch (e: any) {
+      setError(e?.message || "Failed to compute series");
+    }
+    setLoading(false);
+  }, [mode, legA, legB, metricA, metricB, operator, rightSide, constant, label, autoLabel, output, zwin, betaLookback, olsResidWin, spreadZwin, bandMode, paneTarget, plottedSeries.length, onAddFormulaSeries, fetchLeg]);
+
+  const metricOptions = useMemo(() => {
+    const opts = new Set<string>(["close", ...allMetrics]);
+    return Array.from(opts);
+  }, [allMetrics]);
+
+  const LegPicker = ({
+    value, onChange, testId, open, setOpen,
+  }: {
+    value: string; onChange: (v: string) => void; testId: string;
+    open: boolean; setOpen: (b: boolean) => void;
+  }) => (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 flex-1 justify-between px-2 text-[11px] font-mono w-full"
+          data-testid={testId}
+        >
+          <span className={value ? "" : "text-muted-foreground font-sans"}>
+            {value || "Pick ticker"}
+          </span>
+          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[420px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search ticker..." className="h-7 text-[11px]" />
+          <CommandList className="max-h-[260px]">
+            <CommandEmpty>No ticker found.</CommandEmpty>
+            <CommandGroup>
+              {tickerNames.map((t) => (
+                <CommandItem
+                  key={t}
+                  value={`${t} ${nameByTicker.get(t) || ""}`}
+                  onSelect={() => { onChange(t); setOpen(false); }}
+                  className="text-[11px]"
+                >
+                  <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${value === t ? "opacity-100" : "opacity-0"}`} />
+                  <span className="font-mono font-bold mr-1 whitespace-nowrap">{t}</span>
+                  <span className="text-muted-foreground text-[10px] flex-1 min-w-0 truncate" title={nameByTicker.get(t)}>
+                    {nameByTicker.get(t)}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+
+  const MetricPicker = ({
+    value, onChange, testId,
+  }: { value: string; onChange: (v: string) => void; testId: string }) => (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-6 text-[11px]" data-testid={testId}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="max-h-[420px]">
+        {Object.entries(METRIC_CATEGORIES).map(([cat, metrics]) => (
+          <div key={cat}>
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {cat}
+            </div>
+            {metrics.map((m) => (
+              <SelectItem key={m} value={m} className="text-[11px]">
+                <span className="whitespace-nowrap">{m}</span>
+              </SelectItem>
+            ))}
+          </div>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  return (
+    <div className="px-2 pb-2 pt-1 space-y-2">
+      {/* Mode toggle */}
+      <div className="flex items-center gap-0.5">
+        <Button
+          variant={mode === "arithmetic" ? "default" : "outline"}
+          size="sm"
+          className="h-6 px-2 text-[10px] flex-1"
+          onClick={() => setMode("arithmetic")}
+          data-testid="pf-mode-arithmetic"
+          title="Add, subtract, multiply, divide two series (or a series and a number)"
+        >
+          Arithmetic
+        </Button>
+        <Button
+          variant={mode === "pair" ? "default" : "outline"}
+          size="sm"
+          className="h-6 px-2 text-[10px] flex-1"
+          onClick={() => setMode("pair")}
+          data-testid="pf-mode-pair"
+          title="Derived pair outputs: ratio, log ratio, Z, spread Z, OLS resid Z, correlation, beta, R², percentile"
+        >
+          Pair Math
+        </Button>
+      </div>
+
+      {/* Leg A */}
+      <div className="space-y-1">
+        <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+          {mode === "arithmetic" ? "Series A" : "Leg A"}
+        </div>
+        <div className="flex items-stretch gap-1">
+          <LegPicker value={legA} onChange={setLegA} testId="pf-leg-a" open={legAOpen} setOpen={setLegAOpen} />
+        </div>
+        <MetricPicker value={metricA} onChange={setMetricA} testId="pf-metric-a" />
+      </div>
+
+      {/* Arithmetic operator + right side */}
+      {mode === "arithmetic" && (
+        <>
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+              Operator
+            </div>
+            <Select value={operator} onValueChange={setOperator}>
+              <SelectTrigger className="h-6 text-[11px]" data-testid="pf-operator">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="+">+ Add</SelectItem>
+                <SelectItem value="-">− Subtract</SelectItem>
+                <SelectItem value="*">× Multiply</SelectItem>
+                <SelectItem value="/">÷ Divide</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+              Right side
+            </div>
+            <Select value={rightSide} onValueChange={(v) => setRightSide(v as "series" | "number")}>
+              <SelectTrigger className="h-6 text-[11px]" data-testid="pf-right-side">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="series">Another series</SelectItem>
+                <SelectItem value="number">A number</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </>
+      )}
+
+      {/* Leg B */}
+      {wantsB && (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+            {mode === "arithmetic" ? "Series B" : "Leg B"}
+          </div>
+          <div className="flex items-stretch gap-1">
+            <LegPicker value={legB} onChange={setLegB} testId="pf-leg-b" open={legBOpen} setOpen={setLegBOpen} />
+          </div>
+          <MetricPicker value={metricB} onChange={setMetricB} testId="pf-metric-b" />
+        </div>
+      )}
+
+      {/* Number input */}
+      {mode === "arithmetic" && rightSide === "number" && (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+            Number
+          </div>
+          <Input
+            type="number"
+            step="any"
+            placeholder="e.g. 100"
+            value={constant}
+            onChange={(e) => setConstant(e.target.value)}
+            className="h-6 text-[11px] bg-background"
+            data-testid="pf-constant"
+          />
+        </div>
+      )}
+
+      {/* Label */}
+      {mode === "arithmetic" && (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+            Label (optional)
+          </div>
+          <Input
+            placeholder={autoLabel}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="h-6 text-[11px] bg-background"
+            data-testid="pf-label"
+          />
+        </div>
+      )}
+
+      {/* Pair math: output + windows + bands */}
+      {mode === "pair" && (
+        <>
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+              Output
+            </div>
+            <Select value={output} onValueChange={(v) => setOutput(v as DerivedType)}>
+              <SelectTrigger className="h-6 text-[11px]" data-testid="pf-output">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DERIVED_DEFS.map((d) => (
+                  <SelectItem key={d.type} value={d.type}>{d.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {needsZWin && (
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] text-muted-foreground w-[80px] flex-shrink-0">Window</label>
+              <Input
+                type="number"
+                min={2}
+                max={500}
+                step={1}
+                value={zwin}
+                onChange={(e) => setZwin(Math.max(2, parseInt(e.target.value) || 60))}
+                className="h-6 text-[10px] w-[80px] font-mono"
+                data-testid="pf-zwin"
+              />
+              <span className="text-[9px] text-muted-foreground">days</span>
+            </div>
+          )}
+          {output === "spreadZ" && (
+            <>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] text-muted-foreground w-[80px] flex-shrink-0">β lookback</label>
+                <Input
+                  type="number"
+                  min={5}
+                  max={500}
+                  step={1}
+                  value={betaLookback}
+                  onChange={(e) => setBetaLookback(Math.max(5, parseInt(e.target.value) || 52))}
+                  className="h-6 text-[10px] w-[80px] font-mono"
+                  data-testid="pf-beta-lookback"
+                />
+                <span className="text-[9px] text-muted-foreground">days</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] text-muted-foreground w-[80px] flex-shrink-0">Z window</label>
+                <Input
+                  type="number"
+                  min={2}
+                  max={200}
+                  step={1}
+                  value={spreadZwin}
+                  onChange={(e) => setSpreadZwin(Math.max(2, parseInt(e.target.value) || 8))}
+                  className="h-6 text-[10px] w-[80px] font-mono"
+                  data-testid="pf-spreadzwin"
+                />
+                <span className="text-[9px] text-muted-foreground">days</span>
+              </div>
+            </>
+          )}
+          {output === "olsResidZ" && (
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] text-muted-foreground w-[80px] flex-shrink-0">OLS window</label>
+              <Input
+                type="number"
+                min={5}
+                max={500}
+                step={1}
+                value={olsResidWin}
+                onChange={(e) => setOlsResidWin(Math.max(5, parseInt(e.target.value) || 52))}
+                className="h-6 text-[10px] w-[80px] font-mono"
+                data-testid="pf-olsresidwin"
+              />
+              <span className="text-[9px] text-muted-foreground">days</span>
+            </div>
+          )}
+          {(output === "zscore" || output === "spreadZ" || output === "olsResidZ") && (
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+                ±σ Bands
+              </div>
+              <div className="flex items-center gap-0.5">
+                <Button
+                  variant={bandMode === "static" ? "default" : "outline"}
+                  size="sm"
+                  className="h-6 px-2 text-[10px] flex-1"
+                  onClick={() => setBandMode("static")}
+                  data-testid="pf-bands-static"
+                >
+                  Static
+                </Button>
+                <Button
+                  variant={bandMode === "expanding" ? "default" : "outline"}
+                  size="sm"
+                  className="h-6 px-2 text-[10px] flex-1"
+                  onClick={() => setBandMode("expanding")}
+                  data-testid="pf-bands-expanding"
+                >
+                  Expanding
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Add to pane */}
+      <div className="space-y-1">
+        <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+          Add to pane
+        </div>
+        <Select value={paneTarget} onValueChange={setPaneTarget}>
+          <SelectTrigger className="h-6 text-[11px]" data-testid="pf-pane-target">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="new">New pane</SelectItem>
+            {panes.map((p) => (
+              <SelectItem key={p.id} value={String(p.id)}>{p.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {error && <div className="text-[11px] text-destructive">{error}</div>}
+
+      <Button
+        size="sm"
+        className="w-full h-7 text-xs"
+        onClick={handleAdd}
+        disabled={loading || !legA || (wantsB && !legB)}
+        data-testid="pf-add"
+      >
+        {loading ? "Computing..." : mode === "arithmetic" ? "Add formula series" : "Add pairs series"}
+      </Button>
+
+      <div className="text-[10px] text-muted-foreground leading-relaxed">
+        Arithmetic supports +, −, ×, ÷ between two series or a series and a number. Pair Math provides derived outputs (ratio, log ratio, spread, Z-scores, correlation, beta, R², percentile) on close prices.
       </div>
     </div>
   );

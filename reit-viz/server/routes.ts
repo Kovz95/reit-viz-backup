@@ -4963,4 +4963,972 @@ export async function registerRoutes(server: Server, app: Express) {
 
     res.json({ ok, failed, errors });
   });
+
+  // ── Yahoo Finance symbol search ─────────────────────────────────────────
+  // GET /api/yahoo-search?q=...  → { results: [{ symbol, name, exchange }] }
+  // Proxies Yahoo's public v1 search/autocomplete endpoint.
+  app.get("/api/yahoo-search", async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
+    if (!q) return res.json({ results: [] });
+    try {
+      const url =
+        `https://query1.finance.yahoo.com/v1/finance/search` +
+        `?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&listsCount=0`;
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Accept: "application/json",
+        },
+      });
+      if (!resp.ok) throw new Error(`Yahoo search HTTP ${resp.status}`);
+      const json: any = await resp.json();
+      const results = (json?.quotes ?? [])
+        .filter((it: any) => it && it.symbol)
+        .map((it: any) => ({
+          symbol: String(it.symbol),
+          name: String(it.shortname ?? it.longname ?? it.shortName ?? ""),
+          exchange: String(it.exchDisp ?? it.exchange ?? ""),
+        }));
+      res.json({ results });
+    } catch (e: any) {
+      res.status(502).json({ results: [], error: e?.message ?? String(e) });
+    }
+  });
+
+  // ── Classification overrides (per-ticker industry/sector reassignment) ───
+  // Persisted as a flat { TICKER: { sector?, subsector?, ... } } map on disk.
+  const CLASSIFICATION_FIELDS = [
+    "economy",
+    "sector",
+    "subsector",
+    "industryGroup",
+    "industry",
+    "subindustry",
+  ] as const;
+  const overridesFile = path.join(DATA_DIR, "classification-overrides.json");
+
+  function loadOverrides(): Record<string, Record<string, string>> {
+    try {
+      if (!fs.existsSync(overridesFile)) return {};
+      return readJSON(overridesFile);
+    } catch {
+      return {};
+    }
+  }
+  function saveOverrides(map: Record<string, Record<string, string>>): void {
+    fs.writeFileSync(overridesFile, JSON.stringify(map, null, 2));
+  }
+  // Keep only known fields with non-empty string values.
+  function sanitizeOverride(input: any): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (input && typeof input === "object") {
+      for (const f of CLASSIFICATION_FIELDS) {
+        const v = input[f];
+        if (typeof v === "string" && v.trim() !== "") out[f] = v;
+      }
+    }
+    return out;
+  }
+
+  app.get("/api/classification-overrides", (_req, res) => {
+    res.json({ overrides: loadOverrides() });
+  });
+
+  // Batch import — body: { overrides: {TICKER: {...}}, mode: "merge" | "replace" }
+  app.post("/api/classification-overrides/_bulk", (req, res) => {
+    const { overrides, mode } = req.body as {
+      overrides?: Record<string, any>;
+      mode?: string;
+    };
+    const incoming: Record<string, Record<string, string>> = {};
+    for (const [t, ov] of Object.entries(overrides ?? {})) {
+      const clean = sanitizeOverride(ov);
+      if (Object.keys(clean).length > 0) incoming[t.toUpperCase()] = clean;
+    }
+    const next = mode === "replace" ? incoming : { ...loadOverrides(), ...incoming };
+    saveOverrides(next);
+    res.json({});
+  });
+
+  // Reset all overrides.
+  app.post("/api/classification-overrides/_reset", (_req, res) => {
+    saveOverrides({});
+    res.json({});
+  });
+
+  // Delete one ticker's overrides.
+  app.post("/api/classification-overrides/:ticker/delete", (req, res) => {
+    const ticker = String(req.params.ticker).toUpperCase();
+    const map = loadOverrides();
+    delete map[ticker];
+    saveOverrides(map);
+    res.json({});
+  });
+
+  // Upsert one ticker's overrides — body: { overrides: {...} }. Empty → delete.
+  app.post("/api/classification-overrides/:ticker", (req, res) => {
+    const ticker = String(req.params.ticker).toUpperCase();
+    const clean = sanitizeOverride((req.body as any)?.overrides);
+    const map = loadOverrides();
+    if (Object.keys(clean).length === 0) {
+      delete map[ticker];
+    } else {
+      map[ticker] = clean;
+    }
+    saveOverrides(map);
+    res.json({});
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Reconstructed endpoints used by the rebuilt client (optimizer / workbook /
+  // performance / baskets / peer-relative pages). These read the same data
+  // layer as the rest of the file: DATA_DIR/tickers/<TICKER>.json (RLE-encoded
+  // metrics, decoded via decodeMetricToMap) + DATA_DIR/tickers.json metadata +
+  // getDates(). When per-ticker series files are absent (metadata-only deploy)
+  // they return a correct empty-but-valid shape instead of crashing — mirroring
+  // how /api/scatter and /api/batch-performance already behave.
+  //
+  // NONE of these existed in stale-source/server/routes.ts (it has the same
+  // route set as this file), so all are written from the client call-site
+  // shapes in reit-viz/client/src/lib/{fetchWorkbookSeriesForTicker,
+  // fetchWorkbookData,fetchTickerOHLCV,fetchPeerRelative,globalUniverse,
+  // fetchPerfData,basketOhlc,optimizerInputSeries}.ts.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // Read + decode a single ticker's raw metric file. Returns null if missing.
+  function readTickerRaw(symbol: string): Record<string, any> | null {
+    const fp = path.join(DATA_DIR, "tickers", `${symbol.toUpperCase()}.json`);
+    if (!fs.existsSync(fp)) return null;
+    try {
+      return readJSON(fp);
+    } catch {
+      return null;
+    }
+  }
+
+  // Build full-length parallel arrays (one entry per date index) for a metric,
+  // carrying forward the last seen value? No — we keep exact-date values and
+  // leave gaps as null. Callers that need price candles use buildOHLCBars.
+  function metricToFullArray(encoded: any, n: number): (number | null)[] {
+    const map = decodeMetricToMap(encoded || []);
+    const arr: (number | null)[] = new Array(n).fill(null);
+    for (const [idx, val] of map.entries()) {
+      if (idx >= 0 && idx < n) arr[idx] = val;
+    }
+    return arr;
+  }
+
+  // Build compact OHLCV bars for a ticker (only dates that have a close).
+  function buildOHLCBars(raw: Record<string, any>, dates: string[]) {
+    const close = decodeMetricToMap(raw.close || []);
+    const open = decodeMetricToMap(raw.open || []);
+    const high = decodeMetricToMap(raw.high || []);
+    const low = decodeMetricToMap(raw.low || []);
+    const vol = decodeMetricToMap(raw.volume || raw.Volume || []);
+    const bars: {
+      date: string; open: number; high: number; low: number; close: number; volume: number;
+    }[] = [];
+    for (let i = 0; i < dates.length; i++) {
+      const c = close.get(i);
+      if (c === undefined) continue;
+      bars.push({
+        date: dates[i],
+        open: open.get(i) ?? c,
+        high: high.get(i) ?? c,
+        low: low.get(i) ?? c,
+        close: c,
+        volume: vol.get(i) ?? 0,
+      });
+    }
+    return bars;
+  }
+
+  // ── GET /api/workbook/series — metric/price series for one ticker ──
+  // Query: ticker, metric?, series?, kind?
+  // Returns { closes, highs, lows, opens, volumes, priceDates, metric? }.
+  // When `metric` (or series=<metricName>) is a non-price metric, `closes`
+  // carries that metric's values (so the optimizer treats it as the input
+  // series); highs/lows/opens mirror it. Otherwise returns raw OHLC.
+  app.get("/api/workbook/series", (req, res) => {
+    try {
+      const ticker = String(req.query.ticker || "").toUpperCase();
+      if (!ticker) return res.status(400).json({ error: "ticker required" });
+      const metric = (req.query.metric as string) || undefined;
+      const seriesParam = (req.query.series as string) || undefined;
+      const dates = getDates();
+      const raw = readTickerRaw(ticker);
+      const empty = { closes: [], highs: [], lows: [], opens: [], volumes: [], priceDates: [], metric };
+      if (!raw) return res.json(empty);
+
+      const priceLike = (s?: string) => !s || ["close", "open", "high", "low", "price"].includes(s.toLowerCase());
+      const requested = metric || (seriesParam && !priceLike(seriesParam) ? seriesParam : undefined);
+
+      if (requested && raw[requested]) {
+        // Non-price metric: emit only the dates that actually have a value, so
+        // the optimizer gets a clean series with aligned priceDates.
+        const map = decodeMetricToMap(raw[requested]);
+        const idxs = [...map.keys()].sort((a, b) => a - b);
+        const vals = idxs.map((i) => map.get(i)!);
+        const pdates = idxs.map((i) => dates[i]).filter((d) => d !== undefined);
+        return res.json({
+          closes: vals, highs: vals, lows: vals, opens: vals,
+          volumes: new Array(vals.length).fill(0),
+          priceDates: pdates, metric: requested,
+        });
+      }
+
+      // Default: OHLCV from price candles.
+      const bars = buildOHLCBars(raw, dates);
+      return res.json({
+        closes: bars.map((b) => b.close),
+        highs: bars.map((b) => b.high),
+        lows: bars.map((b) => b.low),
+        opens: bars.map((b) => b.open),
+        volumes: bars.map((b) => b.volume),
+        priceDates: bars.map((b) => b.date),
+        metric,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "workbook/series failed" });
+    }
+  });
+
+  // ── GET /api/workbook/data — full workbook data for one ticker ──
+  // Query: ticker, start?, end?
+  // Returns { ticker, dates, opens, highs, lows, closes, volumes, metrics }.
+  app.get("/api/workbook/data", (req, res) => {
+    try {
+      const ticker = String(req.query.ticker || "").toUpperCase();
+      if (!ticker) return res.status(400).json({ error: "ticker required" });
+      const start = (req.query.start as string) || undefined;
+      const end = (req.query.end as string) || undefined;
+      const dates = getDates();
+      const raw = readTickerRaw(ticker);
+      if (!raw) {
+        return res.json({ ticker, dates: [], opens: [], highs: [], lows: [], closes: [], volumes: [], metrics: {} });
+      }
+
+      let bars = buildOHLCBars(raw, dates);
+      if (start) bars = bars.filter((b) => b.date >= start);
+      if (end) bars = bars.filter((b) => b.date <= end);
+      const keepDates = new Set(bars.map((b) => b.date));
+
+      // Decode every non-price metric onto the kept (close-bearing) dates.
+      const PRICE_KEYS = new Set(["open", "high", "low", "close", "volume", "Volume"]);
+      const metrics: Record<string, (number | null)[]> = {};
+      for (const key of Object.keys(raw)) {
+        if (PRICE_KEYS.has(key)) continue;
+        const map = decodeMetricToMap(raw[key]);
+        metrics[key] = bars.map((b, i) => {
+          const di = dates.indexOf(b.date);
+          return di >= 0 && map.has(di) ? map.get(di)! : null;
+        });
+      }
+
+      res.json({
+        ticker,
+        dates: bars.map((b) => b.date),
+        opens: bars.map((b) => b.open),
+        highs: bars.map((b) => b.high),
+        lows: bars.map((b) => b.low),
+        closes: bars.map((b) => b.close),
+        volumes: bars.map((b) => b.volume),
+        metrics,
+      });
+      void keepDates;
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "workbook/data failed" });
+    }
+  });
+
+  // ── GET /api/ohlcv — OHLCV bars for one ticker ──
+  // Query: ticker, freq? (daily|weekly|monthly)
+  // Returns array of { date, open, high, low, close, volume }.
+  app.get("/api/ohlcv", (req, res) => {
+    try {
+      const ticker = String(req.query.ticker || "").toUpperCase();
+      if (!ticker) return res.status(400).json({ error: "ticker required" });
+      const freq = (req.query.freq as string) || "daily";
+      const dates = getDates();
+      const raw = readTickerRaw(ticker);
+      if (!raw) return res.json([]);
+
+      let bars = buildOHLCBars(raw, dates);
+
+      if (freq === "weekly" || freq === "monthly") {
+        // Aggregate by ISO-year+week (weekly) or year+month (monthly).
+        const keyOf = (d: string) => {
+          if (freq === "monthly") return d.slice(0, 7); // YYYY-MM
+          const dt = new Date(d + "T00:00:00Z");
+          // ISO week key
+          const tmp = new Date(dt);
+          tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+          const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+          const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+          return `${tmp.getUTCFullYear()}-W${week}`;
+        };
+        const groups = new Map<string, typeof bars>();
+        for (const b of bars) {
+          const k = keyOf(b.date);
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k)!.push(b);
+        }
+        const agg: typeof bars = [];
+        for (const grp of groups.values()) {
+          if (!grp.length) continue;
+          agg.push({
+            date: grp[grp.length - 1].date,
+            open: grp[0].open,
+            high: Math.max(...grp.map((g) => g.high)),
+            low: Math.min(...grp.map((g) => g.low)),
+            close: grp[grp.length - 1].close,
+            volume: grp.reduce((s, g) => s + (g.volume || 0), 0),
+          });
+        }
+        agg.sort((a, b) => a.date.localeCompare(b.date));
+        bars = agg;
+      }
+
+      res.json(bars);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "ohlcv failed" });
+    }
+  });
+
+  // ── GET /api/peer-relative — a ticker's metric vs its peer group ──
+  // Query: ticker, dimension, peerClass, metric, aggregation? (median|mean)
+  // Returns { targetSeries: (number|null)[], groupSeries: (number|null)[], dates }.
+  // Both series are full-length parallel arrays indexed by the dates array.
+  app.get("/api/peer-relative", (req, res) => {
+    try {
+      const ticker = String(req.query.ticker || "").toUpperCase();
+      const dimension = String(req.query.dimension || "subindustry");
+      const peerClass = String(req.query.peerClass || "");
+      const metric = String(req.query.metric || "");
+      const aggregation = String(req.query.aggregation || "median");
+      if (!ticker || !metric) {
+        return res.status(400).json({ error: "ticker and metric required" });
+      }
+      const dates = getDates();
+      const n = dates.length;
+
+      const tickersMeta: any[] = (() => {
+        try { return readJSON(path.join(DATA_DIR, "tickers.json")); } catch { return []; }
+      })();
+      const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
+
+      // Resolve the peer group: all tickers sharing the same classification value.
+      const selfMeta = metaByTicker.get(ticker);
+      const classValue = peerClass || (selfMeta ? selfMeta[dimension] : "");
+      const peers = tickersMeta
+        .filter((t: any) => classValue && t[dimension] === classValue)
+        .map((t: any) => t.ticker);
+
+      // Target ticker series (full-length).
+      const targetRaw = readTickerRaw(ticker);
+      const targetSeries: (number | null)[] = targetRaw && targetRaw[metric]
+        ? metricToFullArray(targetRaw[metric], n)
+        : new Array(n).fill(null);
+
+      // Peer aggregate per date index.
+      const perIdx: number[][] = [];
+      for (const peer of peers) {
+        if (peer === ticker) continue;
+        const raw = readTickerRaw(peer);
+        if (!raw || !raw[metric]) continue;
+        const map = decodeMetricToMap(raw[metric]);
+        for (const [idx, val] of map.entries()) {
+          if (idx < 0 || idx >= n) continue;
+          (perIdx[idx] ||= []).push(val);
+        }
+      }
+      const groupSeries: (number | null)[] = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) {
+        const vals = perIdx[i];
+        if (!vals || !vals.length) continue;
+        if (aggregation === "mean") {
+          groupSeries[i] = vals.reduce((s, v) => s + v, 0) / vals.length;
+        } else {
+          const sorted = [...vals].sort((a, b) => a - b);
+          const m = sorted.length;
+          groupSeries[i] = m % 2 ? sorted[(m - 1) / 2] : (sorted[m / 2 - 1] + sorted[m / 2]) / 2;
+        }
+      }
+
+      res.json({ targetSeries, groupSeries, dates, peerClass: classValue, n: peers.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "peer-relative failed" });
+    }
+  });
+
+  // ── GET /api/global-universe — ticker universe list ──
+  // Returns the tickers.json metadata array (client also accepts {records}).
+  app.get("/api/global-universe", (_req, res) => {
+    try {
+      const tickersMeta: any[] = readJSON(path.join(DATA_DIR, "tickers.json"));
+      const records = tickersMeta.map((t: any) => ({
+        ticker: t.ticker,
+        name: t.name ?? "",
+        economy: t.economy ?? "",
+        sector: t.sector ?? "",
+        subsector: t.subsector ?? "",
+        industryGroup: t.industryGroup ?? "",
+        industry: t.industry ?? "",
+        subindustry: t.subindustry ?? "",
+        ...t,
+      }));
+      res.json(records);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "global-universe failed" });
+    }
+  });
+
+  // ── Shared performance helpers (price-return computations) ──
+  // Reused by /api/performance, monthly-seasonality, event-returns, seasonal.
+  function perfFindDateIdx(dates: string[], target: string): number {
+    let lo = 0, hi = dates.length - 1, best = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (dates[mid] <= target) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return best;
+  }
+  function perfSubtractDays(dateStr: string, days: number): string {
+    const d = new Date(dateStr + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - days);
+    return d.toISOString().slice(0, 10);
+  }
+  function perfCloseAt(closeMap: Map<number, number>, targetIdx: number, back = 20): number | null {
+    for (let i = targetIdx; i >= Math.max(0, targetIdx - back); i--) {
+      if (closeMap.has(i)) return closeMap.get(i)!;
+    }
+    return null;
+  }
+  function perfCloseAtForward(closeMap: Map<number, number>, targetIdx: number, fwd = 20): number | null {
+    for (let i = targetIdx; i <= targetIdx + fwd; i++) {
+      if (closeMap.has(i)) return closeMap.get(i)!;
+    }
+    return null;
+  }
+  function perfReturn(closeMap: Map<number, number>, fromIdx: number, toIdx: number): number | null {
+    const f = perfCloseAtForward(closeMap, fromIdx);
+    const t = perfCloseAt(closeMap, toIdx);
+    if (f === null || t === null || f === 0) return null;
+    return ((t - f) / f) * 100;
+  }
+
+  // ── GET /api/performance — period & quarterly returns for all tickers ──
+  // Query: start?, end? (custom range). Returns a flat array of rows:
+  // { ticker, name, classification…, 1W,1M,3M,6M,12M, custom, Q1..Q4, lastClose }.
+  // Same computation as POST /api/batch-performance, exposed as GET returning
+  // the bare array (the client's fetchPerfData expects an array).
+  app.get("/api/performance", (req, res) => {
+    try {
+      const customStart = (req.query.start as string) || undefined;
+      const customEnd = (req.query.end as string) || undefined;
+
+      const tickerDir = path.join(DATA_DIR, "tickers");
+      const dates = getDates();
+      const tickersMeta: any[] = (() => {
+        try { return readJSON(path.join(DATA_DIR, "tickers.json")); } catch { return []; }
+      })();
+      if (!fs.existsSync(tickerDir) || dates.length === 0) {
+        // No series data: return metadata rows with null returns so the table
+        // still renders ticker/classification columns.
+        return res.json(tickersMeta.map((m: any) => ({
+          ticker: m.ticker, name: m.name || "",
+          economy: m.economy || "", sector: m.sector || "", subsector: m.subsector || "",
+          industryGroup: m.industryGroup || "", industry: m.industry || "", subindustry: m.subindustry || "",
+          "1W": null, "1M": null, "3M": null, "6M": null, "12M": null,
+          custom: null, Q1: null, Q2: null, Q3: null, Q4: null, lastClose: null,
+        })));
+      }
+
+      const lastDate = dates[dates.length - 1];
+      const periodOffsets: Record<string, number> = { "1W": 7, "1M": 30, "3M": 91, "6M": 182, "12M": 365 };
+
+      let customFromIdx = -1, customToIdx = -1;
+      if (customStart && customEnd) {
+        customFromIdx = perfFindDateIdx(dates, customStart);
+        customToIdx = perfFindDateIdx(dates, customEnd);
+      }
+
+      const firstYear = parseInt(dates[0].slice(0, 4));
+      const lastYear = parseInt(lastDate.slice(0, 4));
+      const qRanges: { quarter: number; fromIdx: number; toIdx: number }[] = [];
+      for (let y = firstYear; y <= lastYear; y++) {
+        for (const [q, from, to] of [[1, `${y}-01-01`, `${y}-03-31`], [2, `${y}-04-01`, `${y}-06-30`], [3, `${y}-07-01`, `${y}-09-30`], [4, `${y}-10-01`, `${y}-12-31`]] as [number, string, string][]) {
+          const fi = perfFindDateIdx(dates, from), ti = perfFindDateIdx(dates, to);
+          if (fi >= 0 && ti > fi) qRanges.push({ quarter: q, fromIdx: fi, toIdx: ti });
+        }
+      }
+
+      const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
+      const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
+      const rows: any[] = [];
+
+      for (const file of files) {
+        const ticker = file.replace(".json", "");
+        const meta = metaByTicker.get(ticker);
+        if (!meta) continue;
+        const row: any = {
+          ticker, name: meta.name || "",
+          economy: meta.economy || "", sector: meta.sector || "", subsector: meta.subsector || "",
+          industryGroup: meta.industryGroup || "", industry: meta.industry || "", subindustry: meta.subindustry || "",
+          "1W": null, "1M": null, "3M": null, "6M": null, "12M": null,
+          custom: null, Q1: null, Q2: null, Q3: null, Q4: null, lastClose: null,
+        };
+        try {
+          const raw = readJSON(path.join(tickerDir, file));
+          if (!raw.close) { rows.push(row); continue; }
+          const closeMap = decodeMetricToMap(raw.close);
+          let lastIdx = -1;
+          for (const idx of closeMap.keys()) if (idx > lastIdx) lastIdx = idx;
+          if (lastIdx < 0) { rows.push(row); continue; }
+          row.lastClose = closeMap.get(lastIdx) ?? null;
+          const tickerLastDate = lastIdx < dates.length ? dates[lastIdx] : lastDate;
+          for (const [key, days] of Object.entries(periodOffsets)) {
+            const startIdx = Math.max(0, perfFindDateIdx(dates, perfSubtractDays(tickerLastDate, days)));
+            row[key] = perfReturn(closeMap, startIdx, lastIdx);
+          }
+          if (customFromIdx >= 0 && customToIdx >= 0) {
+            row.custom = perfReturn(closeMap, customFromIdx, customToIdx);
+          }
+          const qReturns: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
+          for (const qr of qRanges) {
+            const ret = perfReturn(closeMap, qr.fromIdx, qr.toIdx);
+            if (ret !== null) qReturns[qr.quarter].push(ret);
+          }
+          for (const q of [1, 2, 3, 4]) {
+            const arr = qReturns[q];
+            if (arr.length) row[`Q${q}`] = arr.reduce((s, v) => s + v, 0) / arr.length;
+          }
+        } catch { /* skip */ }
+        rows.push(row);
+      }
+
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "performance failed" });
+    }
+  });
+
+  // ── GET /api/performance/monthly-seasonality ──
+  // Returns array of { ticker, name, Jan..Dec (avg monthly % return), yearsOfData }.
+  app.get("/api/performance/monthly-seasonality", (_req, res) => {
+    try {
+      const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const tickerDir = path.join(DATA_DIR, "tickers");
+      const dates = getDates();
+      const tickersMeta: any[] = (() => {
+        try { return readJSON(path.join(DATA_DIR, "tickers.json")); } catch { return []; }
+      })();
+      if (!fs.existsSync(tickerDir) || dates.length === 0) {
+        return res.json(tickersMeta.map((m: any) => {
+          const row: any = { ticker: m.ticker, name: m.name || "", yearsOfData: 0 };
+          for (const mo of MONTHS) row[mo] = null;
+          return row;
+        }));
+      }
+      const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
+      const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
+      const rows: any[] = [];
+
+      for (const file of files) {
+        const ticker = file.replace(".json", "");
+        const meta = metaByTicker.get(ticker);
+        const row: any = { ticker, name: meta?.name || "", yearsOfData: 0 };
+        for (const mo of MONTHS) row[mo] = null;
+        try {
+          const raw = readJSON(path.join(tickerDir, file));
+          if (!raw.close) { rows.push(row); continue; }
+          const closeMap = decodeMetricToMap(raw.close);
+          // Collect month-end close per (year, month).
+          const monthEnd = new Map<string, { idx: number; close: number }>();
+          const years = new Set<number>();
+          for (const [idx, close] of closeMap.entries()) {
+            if (idx >= dates.length) continue;
+            const d = dates[idx];
+            const ym = d.slice(0, 7);
+            const prev = monthEnd.get(ym);
+            if (!prev || idx > prev.idx) monthEnd.set(ym, { idx, close });
+            years.add(parseInt(d.slice(0, 4)));
+          }
+          row.yearsOfData = years.size;
+          // Monthly return = (thisMonthEndClose / prevMonthEndClose - 1) * 100.
+          const sortedKeys = [...monthEnd.keys()].sort();
+          const byMonth: Record<number, number[]> = {};
+          for (let i = 1; i < sortedKeys.length; i++) {
+            const cur = monthEnd.get(sortedKeys[i])!;
+            const prv = monthEnd.get(sortedKeys[i - 1])!;
+            if (!prv.close) continue;
+            const ret = (cur.close / prv.close - 1) * 100;
+            const mo = parseInt(sortedKeys[i].slice(5, 7)); // 1..12
+            (byMonth[mo] ||= []).push(ret);
+          }
+          for (let m = 1; m <= 12; m++) {
+            const arr = byMonth[m];
+            row[MONTHS[m - 1]] = arr && arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+          }
+        } catch { /* skip */ }
+        rows.push(row);
+      }
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "monthly-seasonality failed" });
+    }
+  });
+
+  // ── GET /api/performance/event-returns — forward returns around events ──
+  // Query: kind (e.g. earnings). Returns array of
+  // { ticker, name, eventCount, avg: {window: %}, winRate: {window: %} }
+  // where windows are calendar-day offsets (-5,-3,-1,1,3,5,10).
+  // Uses DATA_DIR/events.json (per-ticker event dates) when present.
+  app.get("/api/performance/event-returns", (req, res) => {
+    try {
+      const PRE = [-5, -3, -1];
+      const POST = [1, 3, 5, 10];
+      const WINDOWS = [...PRE, ...POST];
+      const tickerDir = path.join(DATA_DIR, "tickers");
+      const dates = getDates();
+      const tickersMeta: any[] = (() => {
+        try { return readJSON(path.join(DATA_DIR, "tickers.json")); } catch { return []; }
+      })();
+      const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
+
+      // events.json shape is flexible: { TICKER: [{date, type?}, ...] } or
+      // an array of { ticker, date, type }. Normalise to Map<ticker, dates[]>.
+      const eventsByTicker = new Map<string, string[]>();
+      const eventsPath = path.join(DATA_DIR, "events.json");
+      const kind = (req.query.kind as string) || "";
+      if (fs.existsSync(eventsPath)) {
+        try {
+          const ev = readJSON(eventsPath);
+          const push = (tk: string, d: string) => {
+            if (!d) return;
+            let arr = eventsByTicker.get(tk);
+            if (!arr) { arr = []; eventsByTicker.set(tk, arr); }
+            arr.push(d);
+          };
+          if (Array.isArray(ev)) {
+            for (const e of ev) {
+              if (kind && e.type && String(e.type).toLowerCase() !== kind.toLowerCase()) continue;
+              if (e.ticker && e.date) push(String(e.ticker).toUpperCase(), String(e.date));
+            }
+          } else if (ev && typeof ev === "object") {
+            for (const [tk, list] of Object.entries(ev)) {
+              const arr = Array.isArray(list) ? list : [];
+              for (const e of arr as any[]) {
+                const d = typeof e === "string" ? e : e?.date;
+                const ty = typeof e === "object" ? e?.type : undefined;
+                if (kind && ty && String(ty).toLowerCase() !== kind.toLowerCase()) continue;
+                if (d) push(tk.toUpperCase(), String(d));
+              }
+            }
+          }
+        } catch { /* ignore malformed events */ }
+      }
+
+      if (!fs.existsSync(tickerDir) || dates.length === 0) {
+        return res.json(tickersMeta.map((m: any) => ({
+          ticker: m.ticker, name: m.name || "", eventCount: 0,
+          avg: Object.fromEntries(WINDOWS.map((w) => [w, null])),
+          winRate: Object.fromEntries(WINDOWS.map((w) => [w, null])),
+        })));
+      }
+
+      const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
+      const rows: any[] = [];
+      for (const file of files) {
+        const ticker = file.replace(".json", "");
+        const meta = metaByTicker.get(ticker);
+        const evDates = eventsByTicker.get(ticker) || [];
+        const row: any = {
+          ticker, name: meta?.name || "", eventCount: 0,
+          avg: Object.fromEntries(WINDOWS.map((w) => [w, null])),
+          winRate: Object.fromEntries(WINDOWS.map((w) => [w, null])),
+        };
+        if (!evDates.length) { rows.push(row); continue; }
+        try {
+          const raw = readJSON(path.join(tickerDir, file));
+          if (!raw.close) { rows.push(row); continue; }
+          const closeMap = decodeMetricToMap(raw.close);
+          const collected: Record<number, number[]> = {};
+          for (const w of WINDOWS) collected[w] = [];
+          let count = 0;
+          for (const ed of evDates) {
+            const evIdx = perfFindDateIdx(dates, ed);
+            if (evIdx < 0) continue;
+            const base = perfCloseAt(closeMap, evIdx);
+            if (base === null || base === 0) continue;
+            count++;
+            for (const w of WINDOWS) {
+              const targetDate = perfSubtractDays(dates[evIdx], -w); // +w days
+              const ti = perfFindDateIdx(dates, targetDate);
+              const px = w < 0 ? perfCloseAt(closeMap, ti) : perfCloseAtForward(closeMap, ti);
+              if (px === null) continue;
+              collected[w].push(((px - base) / base) * 100);
+            }
+          }
+          row.eventCount = count;
+          for (const w of WINDOWS) {
+            const arr = collected[w];
+            if (arr.length) {
+              row.avg[w] = arr.reduce((s, v) => s + v, 0) / arr.length;
+              row.winRate[w] = (arr.filter((v) => v > 0).length / arr.length) * 100;
+            }
+          }
+        } catch { /* skip */ }
+        rows.push(row);
+      }
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "event-returns failed" });
+    }
+  });
+
+  // ── GET /api/performance/seasonal-patterns — recurring calendar windows ──
+  // Query: minYears?, minDays?, maxDays?. Returns array of
+  // { ticker, name, yearsOfData, bullish: Win[], bearish: Win[] } where
+  // Win = { startLabel, endLabel, calendarDays, avgReturn, medianReturn,
+  //         winRate, years, tStat, startMMDD, endMMDD }.
+  app.get("/api/performance/seasonal-patterns", (req, res) => {
+    try {
+      const minYears = parseInt(req.query.minYears as string) || 5;
+      const minDays = parseInt(req.query.minDays as string) || 5;
+      const maxDays = parseInt(req.query.maxDays as string) || 30;
+      const tickerDir = path.join(DATA_DIR, "tickers");
+      const dates = getDates();
+      const tickersMeta: any[] = (() => {
+        try { return readJSON(path.join(DATA_DIR, "tickers.json")); } catch { return []; }
+      })();
+      const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
+      if (!fs.existsSync(tickerDir) || dates.length === 0) {
+        return res.json(tickersMeta.map((m: any) => ({
+          ticker: m.ticker, name: m.name || "", yearsOfData: 0, bullish: [], bearish: [],
+        })));
+      }
+
+      const mmdd = (d: string) => d.slice(5); // MM-DD
+      const labelOf = (d: string) => {
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        return `${months[parseInt(d.slice(5, 7)) - 1]} ${parseInt(d.slice(8, 10))}`;
+      };
+      const median = (a: number[]) => {
+        const s = [...a].sort((x, y) => x - y); const m = s.length;
+        return m % 2 ? s[(m - 1) / 2] : (s[m / 2 - 1] + s[m / 2]) / 2;
+      };
+
+      const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
+      const rows: any[] = [];
+      // Candidate windows: each calendar month start, with several durations.
+      const starts = ["01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01", "10-01", "11-01", "12-01"];
+      const durations = [minDays, Math.round((minDays + maxDays) / 2), maxDays].filter((v, i, arr) => arr.indexOf(v) === i);
+
+      for (const file of files) {
+        const ticker = file.replace(".json", "");
+        const meta = metaByTicker.get(ticker);
+        const row: any = { ticker, name: meta?.name || "", yearsOfData: 0, bullish: [], bearish: [] };
+        try {
+          const raw = readJSON(path.join(tickerDir, file));
+          if (!raw.close) { rows.push(row); continue; }
+          const closeMap = decodeMetricToMap(raw.close);
+          const yearSet = new Set<number>();
+          for (const idx of closeMap.keys()) if (idx < dates.length) yearSet.add(parseInt(dates[idx].slice(0, 4)));
+          const years = [...yearSet].sort();
+          row.yearsOfData = years.length;
+          if (years.length < minYears) { rows.push(row); continue; }
+
+          const windows: any[] = [];
+          for (const sMMDD of starts) {
+            for (const dur of durations) {
+              const rets: number[] = [];
+              let startD = "", endD = "";
+              for (const y of years) {
+                const sDate = `${y}-${sMMDD}`;
+                const eDateRaw = perfSubtractDays(sDate, -dur);
+                const si = perfFindDateIdx(dates, sDate);
+                const ei = perfFindDateIdx(dates, eDateRaw);
+                if (si < 0 || ei <= si) continue;
+                const r = perfReturn(closeMap, si, ei);
+                if (r === null) continue;
+                rets.push(r);
+                if (!startD) { startD = sDate; endD = eDateRaw; }
+              }
+              if (rets.length < minYears) continue;
+              const mean = rets.reduce((s, v) => s + v, 0) / rets.length;
+              const variance = rets.reduce((s, v) => s + (v - mean) ** 2, 0) / Math.max(1, rets.length - 1);
+              const std = Math.sqrt(variance);
+              const tStat = std === 0 ? 0 : (mean / (std / Math.sqrt(rets.length)));
+              windows.push({
+                startLabel: labelOf(startD), endLabel: labelOf(endD),
+                startMMDD: mmdd(startD), endMMDD: mmdd(endD),
+                calendarDays: dur, avgReturn: mean, medianReturn: median(rets),
+                winRate: (rets.filter((v) => v > 0).length / rets.length) * 100,
+                years: rets.length, tStat,
+              });
+            }
+          }
+          // Bullish = highest positive t-stat; bearish = lowest negative t-stat.
+          const sortedByT = [...windows].sort((a, b) => b.tStat - a.tStat);
+          row.bullish = sortedByT.filter((w) => w.avgReturn > 0).slice(0, 5);
+          row.bearish = sortedByT.filter((w) => w.avgReturn < 0).sort((a, b) => a.tStat - b.tStat).slice(0, 5);
+        } catch { /* skip */ }
+        rows.push(row);
+      }
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "seasonal-patterns failed" });
+    }
+  });
+
+  // ── POST /api/basket/ohlc — equal-weighted basket OHLCV ──
+  // Body: { basket: { tickers: string[], weights?: number[] }, dateRange? }
+  // Returns array of { date, open, high, low, close, volume } where each bar is
+  // a weighted index (rebased to 100 at the first common date) of constituents.
+  app.post("/api/basket/ohlc", (req, res) => {
+    try {
+      const basket = (req.body as any)?.basket || {};
+      const tickers: string[] = (basket.tickers || []).map((t: string) => String(t).toUpperCase());
+      const weights: number[] | undefined = basket.weights;
+      const dateRange = (req.body as any)?.dateRange;
+      if (!tickers.length) return res.json([]);
+      const dates = getDates();
+
+      // Load constituent close/open/high/low maps.
+      const constituents = tickers
+        .map((tk) => {
+          const raw = readTickerRaw(tk);
+          if (!raw || !raw.close) return null;
+          return {
+            ticker: tk,
+            close: decodeMetricToMap(raw.close),
+            open: decodeMetricToMap(raw.open || []),
+            high: decodeMetricToMap(raw.high || []),
+            low: decodeMetricToMap(raw.low || []),
+            vol: decodeMetricToMap(raw.volume || raw.Volume || []),
+          };
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+      if (!constituents.length) return res.json([]);
+
+      const w = weights && weights.length === constituents.length
+        ? weights
+        : new Array(constituents.length).fill(1 / constituents.length);
+      const wSum = w.reduce((s, v) => s + v, 0) || 1;
+      const wn = w.map((v) => v / wSum);
+
+      // Per-constituent first-available close (for rebasing to an index).
+      const bases = constituents.map((c) => {
+        let firstIdx = Infinity, firstClose = NaN;
+        for (const [idx, val] of c.close.entries()) if (idx < firstIdx) { firstIdx = idx; firstClose = val; }
+        return firstClose;
+      });
+
+      let startStr: string | undefined, endStr: string | undefined;
+      if (dateRange) {
+        startStr = dateRange.start ?? dateRange.startDate;
+        endStr = dateRange.end ?? dateRange.endDate;
+      }
+
+      const bars: any[] = [];
+      for (let i = 0; i < dates.length; i++) {
+        const d = dates[i];
+        if (startStr && d < startStr) continue;
+        if (endStr && d > endStr) continue;
+        let o = 0, h = 0, l = 0, c = 0, v = 0, totW = 0;
+        let any = false;
+        for (let k = 0; k < constituents.length; k++) {
+          const con = constituents[k];
+          const cl = con.close.get(i);
+          if (cl === undefined || !Number.isFinite(bases[k]) || bases[k] === 0) continue;
+          any = true;
+          const wk = wn[k];
+          totW += wk;
+          const idxC = (cl / bases[k]) * 100;
+          const idxO = ((con.open.get(i) ?? cl) / bases[k]) * 100;
+          const idxH = ((con.high.get(i) ?? cl) / bases[k]) * 100;
+          const idxL = ((con.low.get(i) ?? cl) / bases[k]) * 100;
+          o += idxO * wk; h += idxH * wk; l += idxL * wk; c += idxC * wk;
+          v += (con.vol.get(i) ?? 0) * wk;
+        }
+        if (!any || totW === 0) continue;
+        bars.push({ date: d, open: o / totW, high: h / totW, low: l / totW, close: c / totW, volume: v });
+      }
+      res.json(bars);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "basket/ohlc failed" });
+    }
+  });
+
+  // ── POST /api/basket/series — equal-weighted basket metric/price series ──
+  // Body: { basket: { tickers: string[], weights?: number[] }, metric? }
+  // Returns { closes, highs, lows, opens, volumes, priceDates } — the basket
+  // index series, matching the workbook/series shape consumers expect.
+  app.post("/api/basket/series", (req, res) => {
+    try {
+      const basket = (req.body as any)?.basket || {};
+      const metric: string | undefined = (req.body as any)?.metric || basket.metric;
+      const tickers: string[] = (basket.tickers || []).map((t: string) => String(t).toUpperCase());
+      const weights: number[] | undefined = basket.weights;
+      const empty = { closes: [], highs: [], lows: [], opens: [], volumes: [], priceDates: [] };
+      if (!tickers.length) return res.json(empty);
+      const dates = getDates();
+
+      if (metric) {
+        // Weighted average of a non-price metric across constituents per date.
+        const maps = tickers
+          .map((tk) => { const raw = readTickerRaw(tk); return raw && raw[metric] ? decodeMetricToMap(raw[metric]) : null; })
+          .filter((m): m is Map<number, number> => m !== null);
+        if (!maps.length) return res.json(empty);
+        const w = weights && weights.length === maps.length ? weights : new Array(maps.length).fill(1);
+        const closes: number[] = [], pdates: string[] = [];
+        for (let i = 0; i < dates.length; i++) {
+          let sum = 0, totW = 0;
+          for (let k = 0; k < maps.length; k++) {
+            const val = maps[k].get(i);
+            if (val === undefined) continue;
+            sum += val * w[k]; totW += w[k];
+          }
+          if (totW === 0) continue;
+          closes.push(sum / totW); pdates.push(dates[i]);
+        }
+        return res.json({
+          closes, highs: closes, lows: closes, opens: closes,
+          volumes: new Array(closes.length).fill(0), priceDates: pdates, metric,
+        });
+      }
+
+      // Default: reuse the basket OHLC index and reshape to parallel arrays.
+      const constituents = tickers
+        .map((tk) => { const raw = readTickerRaw(tk); return raw && raw.close ? decodeMetricToMap(raw.close) : null; })
+        .filter((m): m is Map<number, number> => m !== null);
+      if (!constituents.length) return res.json(empty);
+      const w = weights && weights.length === constituents.length ? weights : new Array(constituents.length).fill(1);
+      const bases = constituents.map((m) => {
+        let firstIdx = Infinity, firstClose = NaN;
+        for (const [idx, val] of m.entries()) if (idx < firstIdx) { firstIdx = idx; firstClose = val; }
+        return firstClose;
+      });
+      const closes: number[] = [], pdates: string[] = [];
+      for (let i = 0; i < dates.length; i++) {
+        let sum = 0, totW = 0;
+        for (let k = 0; k < constituents.length; k++) {
+          const cl = constituents[k].get(i);
+          if (cl === undefined || !Number.isFinite(bases[k]) || bases[k] === 0) continue;
+          sum += (cl / bases[k]) * 100 * w[k]; totW += w[k];
+        }
+        if (totW === 0) continue;
+        closes.push(sum / totW); pdates.push(dates[i]);
+      }
+      res.json({
+        closes, highs: closes, lows: closes, opens: closes,
+        volumes: new Array(closes.length).fill(0), priceDates: pdates,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "basket/series failed" });
+    }
+  });
 }

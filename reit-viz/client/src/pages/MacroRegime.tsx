@@ -1,5 +1,7 @@
 // Reconstructed from recovered-bundle/MacroRegime-DwnEMx4A.js on 2026-06-11
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { createChart, ColorType, CrosshairMode, AreaSeries, LineSeries } from "lightweight-charts";
+import type { IChartApi, ISeriesApi } from "lightweight-charts";
 import { useAppContext } from "@/lib/appContext";
 import { fetchMacroSeriesBatch } from "@/lib/macroStatic";
 import { fetchMetricSeries } from "@/lib/queryClient";
@@ -398,11 +400,14 @@ function computeTickerRegimeStats(
     if (returns.length < minObs) continue;
     const avg = returns.reduce((s, v) => s + v, 0) / returns.length;
     const variance = returns.reduce((s, v) => s + (v - avg) ** 2, 0) / returns.length;
-    const annualizedReturn = (Math.pow(returns.reduce((s, v) => s * (1 + v / 100), 1), 12 / returns.length) - 1) * 100;
-    const annVol = Math.sqrt(variance) * Math.sqrt(12);
-    const hitRate = returns.filter(v => v >= 0).length / returns.length * 100;
+    const stdDev = Math.sqrt(variance);
+    const totalReturn = (returns.reduce((s, v) => s * (1 + v / 100), 1) - 1) * 100;
+    const geoMonthly = Math.pow(1 + totalReturn / 100, 1 / returns.length) - 1;
+    const annualizedReturn = (Math.pow(1 + geoMonthly, 12) - 1) * 100;
+    const annVol = stdDev * Math.sqrt(12);
     const sharpe = annVol > 0 ? (annualizedReturn - 2) / annVol : 0;
-    stats.push({ ticker, regime, monthsObserved: returns.length, annualizedReturn, hitRate, sharpe, totalReturn: (Math.pow(1 + avg / 100, returns.length) - 1) * 100 });
+    const hitRate = returns.filter(v => v >= 0).length / returns.length * 100;
+    stats.push({ ticker, regime, monthsObserved: returns.length, annualizedReturn, hitRate, sharpe, totalReturn });
   }
   return stats;
 }
@@ -559,7 +564,7 @@ interface TransitionPanelProps {
 }
 
 function TransitionPanel({ transitions, growthDelta, inflationDelta }: TransitionPanelProps) {
-  const domain = Math.max(1.5, ...transitions.map(t => Math.abs(t.growthMove)), ...transitions.map(t => Math.abs(t.inflationMove)));
+  const domain = Math.max(1, Math.abs(growthDelta) * 1.4, Math.abs(inflationDelta) * 1.4, ...transitions.map(t => Math.abs(t.growthMove)), ...transitions.map(t => Math.abs(t.inflationMove)));
   return (
     <div className="space-y-3">
       {transitions.map(t => {
@@ -602,6 +607,17 @@ interface TrajectoryScatterProps {
   intensityCutoff: number;
 }
 
+function arrowheadPoints(x1: number, y1: number, x2: number, y2: number, size: number): string {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  const tip = { x: x2, y: y2 };
+  const left = { x: x2 - ux * size + px * (size / 2), y: y2 - uy * size + py * (size / 2) };
+  const right = { x: x2 - ux * size - px * (size / 2), y: y2 - uy * size - py * (size / 2) };
+  return `${tip.x},${tip.y} ${left.x},${left.y} ${right.x},${right.y}`;
+}
+
 function TrajectoryScatter({ trajectory, intensityCutoff }: TrajectoryScatterProps) {
   const gDeltas = trajectory.map(c => c.growthDelta);
   const iDeltas = trajectory.map(c => c.inflationDelta);
@@ -611,14 +627,26 @@ function TrajectoryScatter({ trajectory, intensityCutoff }: TrajectoryScatterPro
   const cx = toSvgX(0), cy = toSvgY(0);
   const strongX = toSvgX(intensityCutoff), weakX = toSvgX(-intensityCutoff);
   const strongY = toSvgY(intensityCutoff), weakY = toSvgY(-intensityCutoff);
-  const points = trajectory.map(c => ({ x: toSvgX(c.growthDelta), y: toSvgY(c.inflationDelta), month: c.month, smoothed: c.smoothedGranular }));
+  const points = trajectory.map(c => ({
+    x: toSvgX(c.growthDelta),
+    y: toSvgY(c.inflationDelta),
+    month: c.month,
+    smoothed: c.smoothedGranular,
+    rawFamily: c.rawRegime,
+  }));
   const last = points[points.length - 1];
   const prev = points[points.length - 2];
   const lastMeta = last ? GRANULAR_META[last.smoothed] : null;
+  const lastFamily = last ? toCoarseRegime(last.smoothed) : null;
+  const lastRawFamily = last?.rawFamily ?? null;
+  const familyMismatch = lastFamily !== null && lastRawFamily !== null && lastFamily !== lastRawFamily;
 
   interface QuadRectProps { x1: number; y1: number; x2: number; y2: number; fill: string }
   function QuadRect({ x1, y1, x2, y2, fill }: QuadRectProps) {
-    return <rect x={Math.min(x1, x2)} y={Math.min(y1, y2)} width={Math.abs(x2 - x1)} height={Math.abs(y2 - y1)} fill={fill} />;
+    const x = Math.min(x1, x2), y = Math.min(y1, y2);
+    const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+    if (w <= 0 || h <= 0) return null;
+    return <rect x={x} y={y} width={w} height={h} fill={fill} />;
   }
 
   return (
@@ -630,7 +658,6 @@ function TrajectoryScatter({ trajectory, intensityCutoff }: TrajectoryScatterPro
         </span>
       </div>
       <svg viewBox="0 0 320 320" className="w-full max-h-[360px]" data-testid="quadrant-scatter">
-        {/* Quadrant fills */}
         <QuadRect x1={cx} y1={cy} x2={strongX} y2={weakY} fill={GRANULAR_META.MILD_GOLDILOCKS.bg} />
         <QuadRect x1={strongX} y1={cy} x2={292} y2={292} fill={GRANULAR_META.STRONG_GOLDILOCKS.bg} />
         <QuadRect x1={cx} y1={weakY} x2={strongX} y2={292} fill={GRANULAR_META.STRONG_GOLDILOCKS.bg} />
@@ -643,37 +670,48 @@ function TrajectoryScatter({ trajectory, intensityCutoff }: TrajectoryScatterPro
         <QuadRect x1={weakX} y1={cy} x2={cx} y2={weakY} fill={GRANULAR_META.MILD_DEFLATION.bg} />
         <QuadRect x1={28} y1={cy} x2={weakX} y2={292} fill={GRANULAR_META.STRONG_DEFLATION.bg} />
         <QuadRect x1={weakX} y1={weakY} x2={cx} y2={292} fill={GRANULAR_META.STRONG_DEFLATION.bg} />
-        {/* Axes */}
         <line x1={28} y1={cy} x2={292} y2={cy} stroke="rgba(148,163,184,0.6)" strokeWidth={1} />
         <line x1={cx} y1={28} x2={cx} y2={292} stroke="rgba(148,163,184,0.6)" strokeWidth={1} />
         <line x1={strongX} y1={28} x2={strongX} y2={292} stroke="rgba(148,163,184,0.25)" strokeWidth={1} strokeDasharray="3 3" />
         <line x1={weakX} y1={28} x2={weakX} y2={292} stroke="rgba(148,163,184,0.25)" strokeWidth={1} strokeDasharray="3 3" />
         <line x1={28} y1={strongY} x2={292} y2={strongY} stroke="rgba(148,163,184,0.25)" strokeWidth={1} strokeDasharray="3 3" />
         <line x1={28} y1={weakY} x2={292} y2={weakY} stroke="rgba(148,163,184,0.25)" strokeWidth={1} strokeDasharray="3 3" />
-        {/* Trajectory path */}
-        {points.length > 1 && (
-          <polyline
-            points={points.map(p => `${p.x},${p.y}`).join(" ")}
-            fill="none" stroke="rgba(148,163,184,0.4)" strokeWidth={1}
-          />
-        )}
-        {/* History dots */}
-        {points.slice(0, -1).map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={2.5} fill={GRANULAR_META[p.smoothed].color} opacity={0.5 + (i / points.length) * 0.5} />
-        ))}
-        {/* Arrow from prev to last */}
+        <text x={288} y={40} textAnchor="end" fontSize="9" fill={COARSE_META.REFLATION.color} fontWeight="600">REFLATION</text>
+        <text x={32} y={40} textAnchor="start" fontSize="9" fill={COARSE_META.STAGFLATION.color} fontWeight="600">STAGFLATION</text>
+        <text x={288} y={286} textAnchor="end" fontSize="9" fill={COARSE_META.GOLDILOCKS.color} fontWeight="600">GOLDILOCKS</text>
+        <text x={32} y={286} textAnchor="start" fontSize="9" fill={COARSE_META.DEFLATION.color} fontWeight="600">DEFLATION</text>
+        <text x={292} y={cy - 3} textAnchor="end" fontSize="8" fill="#94a3b8">+Δ GDP YoY</text>
+        <text x={cx + 4} y={36} textAnchor="start" fontSize="8" fill="#94a3b8">+Δ CPI YoY</text>
+        <text x={cx - 4} y={cy + 12} textAnchor="end" fontSize="8" fill="#94a3b8">0</text>
+        {points.slice(1).map((p, i) => {
+          const prevPt = points[i];
+          const op = 0.15 + 0.85 * (i + 1) / points.length;
+          return <line key={`seg-${i}`} x1={prevPt.x} y1={prevPt.y} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth={1.5} strokeOpacity={op} />;
+        })}
+        {points.map((p, i) => {
+          const op = 0.35 + 0.65 * (i + 1) / points.length;
+          const isLast = i === points.length - 1;
+          const color = GRANULAR_META[p.smoothed].color;
+          return <circle key={`pt-${i}`} cx={p.x} cy={p.y} r={isLast ? 6 : 3} fill={color} fillOpacity={op} stroke={isLast ? "#0f172a" : "none"} strokeWidth={isLast ? 2 : 0} />;
+        })}
         {prev && last && (
-          <line x1={prev.x} y1={prev.y} x2={last.x} y2={last.y} stroke={lastMeta?.color ?? "#fff"} strokeWidth={1.5} markerEnd="url(#arrowhead)" />
+          <polygon points={arrowheadPoints(prev.x, prev.y, last.x, last.y, 8)} fill="#fff" />
+        )}
+        {points.length > 0 && (
+          <text x={points[0].x + 6} y={points[0].y + 3} fontSize="8" fill="#64748b">{points[0].month.slice(0, 7)}</text>
         )}
         {last && (
-          <circle cx={last.x} cy={last.y} r={5} fill={lastMeta?.color ?? "#fff"} stroke="white" strokeWidth={1.5} />
+          <text x={last.x + 8} y={last.y + 3} fontSize="9" fill={lastMeta?.color ?? "#fff"} fontWeight="700" data-testid="quadrant-current-label">{trajectory[trajectory.length - 1].month.slice(0, 7)}</text>
         )}
-        {/* Axis labels */}
-        <text x={cx + 4} y={38} fill="rgba(148,163,184,0.7)" fontSize={9}>inflation ↑</text>
-        <text x={cx + 4} y={287} fill="rgba(148,163,184,0.7)" fontSize={9}>inflation ↓</text>
-        <text x={30} y={cy - 4} fill="rgba(148,163,184,0.7)" fontSize={9}>growth ↓</text>
-        <text x={230} y={cy - 4} fill="rgba(148,163,184,0.7)" fontSize={9}>growth ↑</text>
       </svg>
+      <div className="text-[10px] text-muted-foreground px-1 mt-1 leading-tight">
+        Dashed lines = Mild/Strong threshold (±{intensityCutoff.toFixed(2)}pp). Solid axes = regime boundaries.
+        {familyMismatch && lastFamily && lastRawFamily && (
+          <span className="block mt-0.5 text-amber-400/80">
+            Latest raw point sits in {lastRawFamily.toLowerCase()} territory; smoothed regime is still {lastFamily.toLowerCase()} (awaiting confirmation).
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -686,32 +724,122 @@ interface RegimeTimelineProps {
 }
 
 function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }: RegimeTimelineProps) {
-  if (!classifications.length) return null;
-  const displayEpisodes = shading === "coarse" ? episodes : granularEpisodes;
-  const firstDate = classifications[0].month;
-  const lastDate = classifications[classifications.length - 1].month;
-  const toX = (date: string) => {
-    const total = new Date(lastDate).getTime() - new Date(firstDate).getTime();
-    const offset = new Date(date).getTime() - new Date(firstDate).getTime();
-    return total > 0 ? (offset / total) * 100 : 0;
-  };
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<{ bands: ISeriesApi<"Area">[]; growth?: ISeriesApi<"Line">; inflation?: ISeriesApi<"Line"> }>({ bands: [] });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#94a3b8",
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "rgba(148,163,184,0.08)" },
+        horzLines: { color: "rgba(148,163,184,0.08)" },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "rgba(148,163,184,0.2)" },
+      timeScale: { borderColor: "rgba(148,163,184,0.2)", rightOffset: 5 },
+      autoSize: true,
+    });
+    chartRef.current = chart;
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = { bands: [] };
+    };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || classifications.length === 0) return;
+    if (seriesRef.current.growth) chart.removeSeries(seriesRef.current.growth);
+    if (seriesRef.current.inflation) chart.removeSeries(seriesRef.current.inflation);
+    for (const b of seriesRef.current.bands) chart.removeSeries(b);
+    seriesRef.current = { bands: [] };
+
+    const allVals = classifications.flatMap(c => [c.growthYoY, c.inflationYoY]);
+    const lo = Math.min(-2, ...allVals.filter(Number.isFinite));
+    const hi = Math.max(10, ...allVals.filter(Number.isFinite));
+    const bandDefs = shading === "coarse"
+      ? episodes.map(ep => ({ start: ep.start, end: ep.end, bg: COARSE_META[ep.regime as CoarseRegime].bg }))
+      : granularEpisodes.map(ep => ({ start: ep.start, end: ep.end, bg: GRANULAR_META[ep.regime as GranularRegime].bg }));
+
+    for (const def of bandDefs) {
+      const start = def.start;
+      const end = def.end;
+      const months = classifications.filter(c => c.month >= start && c.month <= end).map(c => c.month);
+      if (months.length === 0) continue;
+      const bandData = months.map(m => ({ time: m, value: hi }));
+      const bandSeries = chart.addSeries(AreaSeries, {
+        topColor: def.bg,
+        bottomColor: def.bg,
+        lineColor: "transparent",
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      (bandSeries as ISeriesApi<"Area">).setData(bandData as never);
+      bandSeries.priceScale().applyOptions({ autoScale: false });
+      seriesRef.current.bands.push(bandSeries as ISeriesApi<"Area">);
+    }
+
+    const growthSeries = chart.addSeries(LineSeries, {
+      color: "#10b981",
+      lineWidth: 2,
+      title: "",
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    growthSeries.setData(classifications.filter(c => Number.isFinite(c.growthYoY)).map(c => ({ time: c.month, value: c.growthYoY })) as never);
+    seriesRef.current.growth = growthSeries as ISeriesApi<"Line">;
+
+    const inflationSeries = chart.addSeries(LineSeries, {
+      color: "#f59e0b",
+      lineWidth: 2,
+      title: "",
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    inflationSeries.setData(classifications.filter(c => Number.isFinite(c.inflationYoY)).map(c => ({ time: c.month, value: c.inflationYoY })) as never);
+    seriesRef.current.inflation = inflationSeries as ISeriesApi<"Line">;
+    chart.priceScale("right").applyOptions({ autoScale: false, mode: 0 });
+
+    const scaleSeries = chart.addSeries(LineSeries, {
+      color: "transparent",
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    const span = hi - lo;
+    const bounds = { lo: lo - 0.05 * span, hi: hi + 0.05 * span };
+    scaleSeries.setData([
+      { time: classifications[0].month, value: bounds.lo },
+      { time: classifications[classifications.length - 1].month, value: bounds.hi },
+    ] as never);
+    seriesRef.current.bands.push(scaleSeries as unknown as ISeriesApi<"Area">);
+    chart.timeScale().fitContent();
+  }, [classifications, episodes, granularEpisodes, shading]);
+
   return (
-    <div className="rounded-md border border-border bg-card p-3">
-      <div className="text-xs font-semibold mb-2">Regime Timeline</div>
-      <div className="relative h-12 rounded overflow-hidden">
-        {displayEpisodes.map((ep, i) => {
-          const meta = shading === "coarse" ? COARSE_META[ep.regime as CoarseRegime] : GRANULAR_META[ep.regime as GranularRegime];
-          const x = toX(ep.start);
-          const w = Math.max(0.1, toX(ep.end) - x);
-          return (
-            <div key={i} className="absolute top-0 bottom-0" style={{ left: `${x}%`, width: `${w}%`, background: meta.color, opacity: 0.8 }} title={`${meta.label}: ${ep.start} – ${ep.end}`} />
-          );
-        })}
+    <div className="rounded-md border border-border bg-card p-2">
+      <div className="flex items-center gap-3 px-1 mb-1">
+        <span className="text-xs font-semibold">Regime timeline</span>
+        <span className="flex items-center gap-1.5 text-[11px]">
+          <span className="inline-block w-3 h-0.5 bg-emerald-500" />GDP YoY
+        </span>
+        <span className="flex items-center gap-1.5 text-[11px]">
+          <span className="inline-block w-3 h-0.5 bg-amber-500" />CPI YoY
+        </span>
+        <span className="text-[11px] text-muted-foreground ml-auto flex items-center gap-1">
+          <Info className="w-3 h-3" />Background shading = smoothed regime
+        </span>
       </div>
-      <div className="flex justify-between text-[9px] text-muted-foreground mt-1">
-        <span>{firstDate?.slice(0, 7)}</span>
-        <span>{lastDate?.slice(0, 7)}</span>
-      </div>
+      <div ref={containerRef} className="w-full h-[360px]" />
     </div>
   );
 }
@@ -723,52 +851,91 @@ interface PerTickerTableProps {
   onSort: (col: string) => void;
 }
 
+interface SortableHeaderProps {
+  label: string;
+  column: string;
+  sortColumn: string;
+  sortDir: "asc" | "desc";
+  onSort: (col: string) => void;
+  className?: string;
+  align?: "left" | "center" | "right";
+  testId?: string;
+}
+
+function SortableHeader({ label, column, sortColumn, sortDir, onSort, className = "", align = "right", testId }: SortableHeaderProps) {
+  const active = sortColumn === column;
+  const Icon = active ? (sortDir === "asc" ? SortAsc : SortDesc) : ArrowUpDown;
+  const justify = align === "left" ? "justify-start" : align === "center" ? "justify-center" : "justify-end";
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(column)}
+      className={`w-full inline-flex items-center gap-1 ${justify} cursor-pointer select-none transition-colors ${active ? "text-foreground" : "text-muted-foreground hover:text-foreground"} ${className}`}
+      data-testid={testId}
+      title={`Sort by ${label}`}
+    >
+      <span>{label}</span>
+      <Icon className={`w-3 h-3 ${active ? "opacity-100" : "opacity-40"}`} />
+    </button>
+  );
+}
+
 function PerTickerTable({ rows, sortColumn, sortDir, onSort }: PerTickerTableProps) {
-  function SortableHeader({ k, label, align = "right" }: { k: string; label: string; align?: "left" | "right" }) {
+  if (rows.length === 0) {
     return (
-      <th onClick={() => onSort(k)} className={`px-2 py-1.5 cursor-pointer hover:bg-muted/40 select-none ${align === "right" ? "text-right" : "text-left"}`}>
-        <div className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
-          <span>{label}</span>
-          {sortColumn === k ? (sortDir === "asc" ? <SortAsc className="w-2.5 h-2.5" /> : <SortDesc className="w-2.5 h-2.5" />) : <ArrowUpDown className="w-2.5 h-2.5 opacity-30" />}
-        </div>
-      </th>
+      <div className="text-xs text-muted-foreground py-6 text-center border border-dashed border-border rounded-md">
+        No ticker data yet — adjust your Universe filter or wait for prices to load.
+      </div>
     );
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-[10px]">
-        <thead className="bg-muted/30 border-b border-border sticky top-0">
-          <tr>
-            <SortableHeader k="ticker" label="Ticker" align="left" />
-            {COARSE_ORDER.map(r => (
-              <th key={r} colSpan={3} className="px-2 py-1.5 text-center" style={{ color: COARSE_META[r].color }}>{COARSE_META[r].label}</th>
-            ))}
-          </tr>
-          <tr className="text-[9px] text-muted-foreground">
-            <th />
-            {COARSE_ORDER.flatMap(r => [
-              <SortableHeader key={`${r}:annReturn`} k={`${r}:annReturn`} label="Ann Ret" />,
-              <SortableHeader key={`${r}:hitRate`} k={`${r}:hitRate`} label="Hit%" />,
-              <SortableHeader key={`${r}:sharpe`} k={`${r}:sharpe`} label="Sharpe" />,
-            ])}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={row.ticker} className="border-b border-border/40 hover:bg-muted/20">
-              <td className="px-2 py-1 font-semibold">{row.ticker}</td>
-              {COARSE_ORDER.flatMap(r => {
-                const s = row.byR[r];
-                return [
-                  <td key={`${r}:ar`} className={`px-2 py-1 text-right font-mono ${s ? (s.annualizedReturn >= 0 ? "text-emerald-500" : "text-rose-500") : "text-muted-foreground"}`}>{s ? fmtPct(s.annualizedReturn) : "—"}</td>,
-                  <td key={`${r}:hr`} className="px-2 py-1 text-right font-mono">{s ? `${s.hitRate.toFixed(0)}%` : "—"}</td>,
-                  <td key={`${r}:sh`} className="px-2 py-1 text-right font-mono">{s ? fmtNum(s.sharpe) : "—"}</td>,
-                ];
-              })}
+    <div className="rounded-md border border-border overflow-hidden">
+      <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+        <table className="w-full text-xs font-mono">
+          <thead className="bg-card sticky top-0 z-10">
+            <tr className="border-b border-border">
+              <th className="text-left px-2 py-1.5 sticky left-0 bg-card" rowSpan={2}>
+                <SortableHeader label="Ticker" column="ticker" sortColumn={sortColumn} sortDir={sortDir} onSort={onSort} align="left" testId="sort-header-ticker" />
+              </th>
+              {COARSE_ORDER.map(r => (
+                <th key={r} colSpan={3} className="text-center px-2 py-1.5 border-l border-border" style={{ color: COARSE_META[r].color }}>{COARSE_META[r].label}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+            <tr className="border-b border-border bg-card text-[10px]">
+              {COARSE_ORDER.map(r => (
+                <Fragment key={r + "-headers"}>
+                  <th className="px-1.5 py-1 border-l border-border">
+                    <SortableHeader label="Ann Ret" column={`${r}:annReturn`} sortColumn={sortColumn} sortDir={sortDir} onSort={onSort} testId={`sort-header-${r.toLowerCase()}-annreturn`} />
+                  </th>
+                  <th className="px-1.5 py-1">
+                    <SortableHeader label="Hit %" column={`${r}:hitRate`} sortColumn={sortColumn} sortDir={sortDir} onSort={onSort} testId={`sort-header-${r.toLowerCase()}-hitrate`} />
+                  </th>
+                  <th className="px-1.5 py-1">
+                    <SortableHeader label="Sharpe" column={`${r}:sharpe`} sortColumn={sortColumn} sortDir={sortDir} onSort={onSort} testId={`sort-header-${r.toLowerCase()}-sharpe`} />
+                  </th>
+                </Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ ticker, byR }) => (
+              <tr key={ticker} className="border-b border-border/50 hover:bg-accent/50">
+                <td className="px-2 py-1 sticky left-0 bg-background font-semibold">{ticker}</td>
+                {COARSE_ORDER.map(r => {
+                  const s = byR[r];
+                  return (
+                    <Fragment key={r}>
+                      <td className="px-1.5 py-1 text-right border-l border-border" style={{ color: s ? (s.annualizedReturn >= 0 ? "#34d399" : "#f87171") : "#475569" }}>{s ? fmtPct(s.annualizedReturn) : "—"}</td>
+                      <td className="px-1.5 py-1 text-right text-muted-foreground">{s ? `${s.hitRate.toFixed(0)}%` : "—"}</td>
+                      <td className="px-1.5 py-1 text-right text-muted-foreground">{s ? fmtNum(s.sharpe) : "—"}</td>
+                    </Fragment>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -829,9 +996,9 @@ export default function MacroRegime() {
 
   // Determine ticker universe
   const tickers = useMemo(() => {
-    if (isFiltered && universeTickers && universeTickers.size > 0) return [...universeTickers];
+    if (universeTickers && universeTickers.size > 0) return [...universeTickers];
     return filteredTickersList.map(t => t.ticker);
-  }, [universeTickers, filteredTickersList, isFiltered]);
+  }, [universeTickers, filteredTickersList]);
 
   // Load per-ticker stats
   useEffect(() => {

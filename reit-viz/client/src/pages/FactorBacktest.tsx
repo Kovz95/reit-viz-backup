@@ -221,9 +221,9 @@ function runBacktest(observations: Observation[], opts: { threshold: number; sec
 
   // For IC and equity curve
   const icPerDate: { date: string; horizon: string; ic: number | null }[] = [];
-  const perDateQ1Q5: Record<string, { q1: number[]; q5: number[] }> = {};
-  for (const h of HORIZONS) perDateQ1Q5[h.label] = { q1: [], q5: [] };
-  const equityByDate: Record<string, { q1: number[]; q5: number[] }> = {};
+  // Per-date, per-horizon Q1/Q5 returns (drives both long-short spread and equity curve)
+  const perDateQ1Q5: Record<string, Record<string, { q1: number[]; q5: number[] }>> = {};
+  for (const date of dates) { perDateQ1Q5[date] = {}; for (const h of HORIZONS) perDateQ1Q5[date][h.label] = { q1: [], q5: [] }; }
 
   let totalObs = 0;
 
@@ -264,20 +264,14 @@ function runBacktest(observations: Observation[], opts: { threshold: number; sec
       const fwd = fwdMap.get(valid[i]);
       const sr = srMap?.get(valid[i]);
       for (const h of HORIZONS) {
-        const v = fwd?.[h.label]; if (v != null && Number.isFinite(v)) qBuckets[q][h.label].push(v);
+        const v = fwd?.[h.label];
+        if (v != null && Number.isFinite(v)) {
+          qBuckets[q][h.label].push(v);
+          if (q === "Q1") perDateQ1Q5[date][h.label].q1.push(v);
+          if (q === "Q5") perDateQ1Q5[date][h.label].q5.push(v);
+        }
         const sv = sr?.[h.label]; if (sv != null && Number.isFinite(sv)) qSR[q][h.label].push(sv);
-        if (q === "Q1") perDateQ1Q5[h.label].q1.push(v ?? NaN);
-        if (q === "Q5") perDateQ1Q5[h.label].q5.push(v ?? NaN);
       }
-    }
-
-    // Equity curve (1M only)
-    if (!equityByDate[date]) equityByDate[date] = { q1: [], q5: [] };
-    for (let i = 0; i < valid.length; i++) {
-      const fwd = fwdMap.get(valid[i]);
-      const v1M = fwd?.["1M"]; if (v1M == null || !Number.isFinite(v1M)) continue;
-      if (quintiles[i] === 1) equityByDate[date].q1.push(v1M);
-      if (quintiles[i] === 5) equityByDate[date].q5.push(v1M);
     }
 
     // Quadrant (median split on each axis)
@@ -314,9 +308,9 @@ function runBacktest(observations: Observation[], opts: { threshold: number; sec
   for (const h of HORIZONS) longShortPerDate[h.label] = [];
   for (const date of dates) {
     for (const h of HORIZONS) {
-      const q1Rets = qBuckets["Q1"][h.label].filter(Number.isFinite);
-      const q5Rets = qBuckets["Q5"][h.label].filter(Number.isFinite);
-      if (q1Rets.length && q5Rets.length) longShortPerDate[h.label].push(arrayMean(q1Rets) - arrayMean(q5Rets));
+      const { q1, q5 } = perDateQ1Q5[date][h.label];
+      if (q1.length === 0 || q5.length === 0) continue;
+      longShortPerDate[h.label].push(arrayMean(q1) - arrayMean(q5));
     }
   }
 
@@ -337,7 +331,7 @@ function runBacktest(observations: Observation[], opts: { threshold: number; sec
   let q1Cum = 1, q5Cum = 1, lsCum = 1;
   const equityCurve: { date: string; q1: number; q5: number; ls: number }[] = [];
   for (const date of dates) {
-    const eq = equityByDate[date];
+    const eq = perDateQ1Q5[date]["1M"];
     if (!eq || eq.q1.length === 0 || eq.q5.length === 0) continue;
     const q1Ret = arrayMean(eq.q1), q5Ret = arrayMean(eq.q5);
     q1Cum *= 1 + q1Ret; q5Cum *= 1 + q5Ret; lsCum *= 1 + (q1Ret - q5Ret);
@@ -544,10 +538,11 @@ export default function FactorBacktest() {
       }
 
       if (observations.length === 0) {
+        const totalPairs = rebalIdxs.length * universeTickers.length;
         const msgs: string[] = [];
-        if (hasYSet.size === 0) msgs.push(`Y metric "${metricY}" returned no data for any of ${universeTickers.length} tickers.`);
-        if (hasXSet.size === 0) msgs.push(`X metric "${metricX}" returned no data for any of ${universeTickers.length} tickers.`);
-        if (msgs.length === 0) msgs.push(`Joined 0 candidate pairs. Missing X: ${missingX}, missing Y: ${missingY}, failed normalize: ${failedNorm}, no close: ${noClose}, no close on date: ${noCloseOnDate}.`);
+        if (hasYSet.size === 0) msgs.push(`Y metric "${metricY}" returned no data for any of ${universeTickers.length} tickers — check that this metric exists for your universe.`);
+        if (hasXSet.size === 0) msgs.push(`X metric "${metricX}" returned no data for any of ${universeTickers.length} tickers — check that this metric exists for your universe.`);
+        if (msgs.length === 0) msgs.push(`Joined 0 of ${totalPairs.toLocaleString()} candidate (date×ticker) pairs. Missing X: ${missingX.toLocaleString()}, missing Y: ${missingY.toLocaleString()}, failed normalize: ${failedNorm.toLocaleString()}, no close series: ${noClose.toLocaleString()}, no close on rebal date: ${noCloseOnDate.toLocaleString()}. Tickers with any X: ${hasXSet.size}, with any Y: ${hasYSet.size}, with any close: ${hasCloseSet.size}.`);
         throw new Error(msgs.join(" "));
       }
       void loadedCount;

@@ -24,7 +24,7 @@ import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getTickers, getDates, getTickerRaw, filterByDateRange } from "@/lib/dataService";
 import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
-import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { weeklyDownsample, weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
@@ -38,12 +38,12 @@ import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
 import * as React from "react";
 import "@/lib/harsi";
-import "@/lib/tva";
+import { tvaCompute } from "@/lib/tva";
 import { buildBacktestResult as buildEvalResult, EvaluatorPanelResult, EvaluatorPanelLoader as HitConditionsPanel } from "@/components/EvaluatorPanel";
 const EvalResultPanel = EvaluatorPanelResult;
 
-// tva compute function — loaded as side-effect from @/lib/tva
-const computeTva = ((globalThis as any).__computeTva ?? ((_p: any, _v: any, _l: any, _s: any, _m: any) => ({ os: [], bullPressure: [], bearPressure: [], a: [], b: [] }))) as any;
+// tva compute function
+const computeTva = tvaCompute as any;
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -415,7 +415,7 @@ export default function TVAOptimizer() {
       const signalIdx = evalSide === "long" ? signals.longIdx.slice() : signals.shortIdx.slice();
       signalIdx.sort((a: number, b: number) => a - b);
 
-      const evalRes = (buildEvalResult as any)(prices, dates, signalIdx, side, targetReturn, minHold, undefined, "3M");
+      const evalRes = (buildEvalResult as any)(prices, dates, signalIdx, side, targetReturn, minHold, null, "3M");
       setEvalResult(evalRes);
       setEvalPriceCtx({
         prices,
@@ -548,7 +548,7 @@ export default function TVAOptimizer() {
           rawVolumes2 = filtered.volumes;
 
           if ((frequency as string) === "weekly_on_daily") {
-            weeklyResult = (weeklyDownsample as any)(filtered.adjCloses, filtered.dates);
+            weeklyResult = (weeklyDownsamplePrices as any)(filtered.adjCloses, filtered.dates);
             if (weeklyResult.prices.length < MIN_HISTORY_WEEKLY) {
               allSkipped.push({ ticker: entry.ticker, reason: "insufficient weekly history" });
               setProgress({ current: s + 1, total: tickerEntries.length }); continue;
@@ -557,10 +557,7 @@ export default function TVAOptimizer() {
             workPrices = weeklyResult.prices; workVolumes = weeklyVols;
             dailyPrices = filtered.adjCloses; workDates = filtered.dates; workGlobalIndices = [];
           } else {
-            weeklyResampled = (weeklyDownsample as any)(
-              { dates: filtered.dates, closes: filtered.adjCloses, adjCloses: filtered.adjCloses, highs: filtered.highs, lows: filtered.lows },
-              freq
-            );
+            weeklyResampled = (weeklyDownsample as any)(filtered, freq);
             if (freq === "weekly" && weeklyResampled.adjCloses.length < MIN_HISTORY_WEEKLY) {
               allSkipped.push({ ticker: entry.ticker, reason: "insufficient weekly history" });
               setProgress({ current: s + 1, total: tickerEntries.length }); continue;

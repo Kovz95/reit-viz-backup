@@ -489,8 +489,7 @@ export default function RSIRegimeOptimizer() {
                       dailyIdx,
                       targetReturn,
                       dir,
-                      band,
-                      minHold
+                      band
                     );
                     zoneBuckets[zone].push(profile);
                   }
@@ -559,7 +558,7 @@ export default function RSIRegimeOptimizer() {
                         : n;
                     if (dailyIdx < 0) continue;
                     transitionBuckets[key].push(
-                      (computeForwardProfile as any)(rawPrices, dailyIdx, targetReturn, dir, band, minHold)
+                      (computeForwardProfile as any)(rawPrices, dailyIdx, targetReturn, dir, band)
                     );
                   }
                 }

@@ -10,3 +10,6 @@ reit-viz/node_modules/
 reit-viz/dist/
 reit-viz/.cache/
 stale-source/node_modules/
+
+# One-off diagnostic harness (Playwright diff tool)
+diag/

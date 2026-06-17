@@ -14,9 +14,16 @@ import type { OHLCVBar } from "@/lib/fetchTickerOHLCV";
  */
 export function getDailyIndexFromWeekly(
   weeklyIdx: number,
-  weeklyBars: OHLCVBar[],
-  dailyBars: OHLCVBar[]
+  weeklyBars: OHLCVBar[] | { dailyIndexMap?: number[] } | any,
+  dailyBars?: OHLCVBar[]
 ): number {
+  // Bundle form (d0): (weeklyIdx, weeklyResult) → weeklyResult.dailyIndexMap[weeklyIdx].
+  // Most optimizer pages call it this way with a resample result object.
+  if (weeklyBars && Array.isArray(weeklyBars.dailyIndexMap)) {
+    const map: number[] = weeklyBars.dailyIndexMap;
+    return weeklyIdx >= 0 && weeklyIdx < map.length ? map[weeklyIdx] : weeklyIdx;
+  }
+  // Legacy 3-arg binary-search form (date-matched).
   if (weeklyIdx < 0 || weeklyIdx >= weeklyBars.length) return -1;
   if (!dailyBars || dailyBars.length === 0) return -1;
 

@@ -402,6 +402,12 @@ export async function getDates(): Promise<string[]> {
   return datesCache;
 }
 
+/** Alias for getDates() — the global trading-date axis (bundle's `js` helper).
+ *  premiumDiscount.ts imports this name; keep it in sync with getDates. */
+export async function getTradingDates(): Promise<string[]> {
+  return getDates();
+}
+
 export async function getEvents(): Promise<Record<string, any>> {
   if (eventsCache) return eventsCache;
   eventsCache = await fetchWithApiFallback<Record<string, any>>("/api/events", "events.json");
@@ -2302,13 +2308,115 @@ export function filterTickersByDimension(
   return tickers.filter((t) => t[dimension] === value);
 }
 
-/** Get a group median series for a basket of tickers */
+// ── Group-median aggregation helpers ──────────────────────────────────────
+// Recovered to match recovered-bundle/index-CsG73Aq_.js peer-relative logic
+// (same approach as client/src/lib/premiumDiscount.ts: index each peer's metric
+// series onto the global trading-date axis with forward-fill, then take the
+// per-date median/mean across peers).
+
+/** Median of a numeric array (returns NaN for empty). */
+function _median(arr: number[]): number {
+  if (arr.length === 0) return NaN;
+  const s = arr.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+}
+
+/** Mean of a numeric array (returns NaN for empty). */
+function _mean(arr: number[]): number {
+  if (arr.length === 0) return NaN;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+/**
+ * Index a { time, value }[] series onto the global dates array, forward-filling
+ * the last known value across gaps. Returns a Float64Array aligned to `dates`
+ * (NaN until the first observation). Mirrors `indexSeriesToDates` in
+ * premiumDiscount.ts / the bundle's `t5` helper.
+ */
+function _indexSeriesToDates(rawSeries: TimeValue[], dates: string[]): Float64Array {
+  const map = new Map<string, number>();
+  for (const pt of rawSeries) {
+    if (Number.isFinite(pt.value)) map.set(pt.time, pt.value);
+  }
+  const out = new Float64Array(dates.length);
+  let carry = NaN;
+  for (let i = 0; i < dates.length; i++) {
+    const v = map.get(dates[i]);
+    if (v !== undefined) { carry = v; out[i] = v; }
+    else out[i] = carry; // forward-fill
+  }
+  return out;
+}
+
+/**
+ * Aggregate a list of tickers' metric series into a per-date group series on the
+ * global date axis. Returns the indexed Float64Array plus, per date, the count of
+ * contributing peers and the ordered list of tickers that yielded any data.
+ */
+async function _aggregateGroupIndexed(
+  tickers: string[],
+  metric: string,
+  aggregation: "median" | "mean",
+  getMetricSeriesFn: (ticker: string, metric: string) => Promise<TimeValue[]>,
+): Promise<{ indexed: Float64Array; peerCount: number[]; peerTickers: string[]; dates: string[] }> {
+  const dates = await getDates();
+
+  const fetched = (
+    await Promise.all(
+      tickers.map(async (tk) => {
+        try {
+          const raw = await getMetricSeriesFn(tk, metric);
+          if (!raw || raw.length === 0) return null;
+          return { ticker: tk, indexed: _indexSeriesToDates(raw, dates) };
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter((x): x is { ticker: string; indexed: Float64Array } => x !== null);
+
+  const indexed = new Float64Array(dates.length);
+  const peerCount = new Array<number>(dates.length).fill(0);
+  for (let d = 0; d < dates.length; d++) {
+    const vals: number[] = [];
+    for (const f of fetched) {
+      const v = f.indexed[d];
+      if (Number.isFinite(v)) vals.push(v);
+    }
+    peerCount[d] = vals.length;
+    indexed[d] = vals.length === 0 ? NaN : (aggregation === "mean" ? _mean(vals) : _median(vals));
+  }
+
+  return { indexed, peerCount, peerTickers: fetched.map((f) => f.ticker), dates };
+}
+
+/**
+ * Compute the per-date group aggregation (median/mean) for a basket of tickers.
+ *
+ * Used by the Premium/Discount basket-aggregation path:
+ *   getGroupMedianSeries(basket.tickers, metric, getMetricSeries)
+ * returns { groupSeries, peerTickers, peerCount } mirroring the cap-weighted
+ * branch's `{ groupSeries: series, peerTickers, peerCount }` shape.
+ *
+ * - groupSeries: number[] aligned to the global dates array (NaN where no peer
+ *   has data at that date).
+ * - peerTickers: tickers that yielded at least one observation.
+ * - peerCount:   per-date count of contributing peers.
+ */
 export async function getGroupMedianSeries(
-  _tickers: string[],
-  _metric: string,
-  _getMetricSeries?: any
-): Promise<any> {
-  return { dates: [], values: [] };
+  tickers: string[],
+  metric: string,
+  getMetricSeriesFn: (ticker: string, metric: string) => Promise<TimeValue[]> = getMetricSeries,
+  aggregation: "median" | "mean" = "median",
+): Promise<{ groupSeries: number[]; peerTickers: string[]; peerCount: number[] }> {
+  if (!tickers || tickers.length === 0) {
+    return { groupSeries: [], peerTickers: [], peerCount: [] };
+  }
+  const { indexed, peerCount, peerTickers } = await _aggregateGroupIndexed(
+    tickers, metric, aggregation, getMetricSeriesFn || getMetricSeries,
+  );
+  return { groupSeries: Array.from(indexed), peerTickers, peerCount };
 }
 
 /** Fetch close series for a ticker (alias for fetchCloseSeries pattern) */
@@ -2330,13 +2438,48 @@ export const CLASSIFICATION_DIMENSIONS: string[] = [
 ];
 export const CLASSIFICATION_DIMENSION_KEYS = CLASSIFICATION_DIMENSIONS;
 
-/** Get group median by index */
+/**
+ * Compute the peer-group price benchmark series for a classification group,
+ * indexed by GLOBAL date index (i.e. the return value is a plain number[] where
+ * the i-th element is the group aggregate on the i-th global trading date).
+ *
+ * Call sites (MACrossoverOptimizer / ROCOptimizer "relative" return basis) use:
+ *   const peerSeries = await getGroupMedianByIndex(dimension, value, selfTicker, "median");
+ *   ...  const v = peerSeries[globalIndex];   // Number.isFinite(v) ? v : NaN
+ *
+ * Behaviour (matches the bundle's peer-relative benchmark):
+ *  1. Select all tickers whose `dimension` classification equals `value`.
+ *  2. Exclude the requesting `selfTicker` so the benchmark is true peers.
+ *  3. Index each peer's `metric` (default "close") series onto the global date
+ *     axis with forward-fill, then take the per-date median (or mean) across
+ *     peers — NaN where no peer has data.
+ *
+ * @returns number[] aligned to the global dates array (NaN-filled gaps).
+ */
 export async function getGroupMedianByIndex(
-  _tickers: string[],
-  _metric: string,
-  _opts?: any
-): Promise<any> {
-  return null;
+  dimension: string,
+  value: string,
+  selfTicker?: string,
+  aggregation: "median" | "mean" = "median",
+  metric: string = "close",
+): Promise<number[]> {
+  const tickersMeta = await getTickers();
+  const self = selfTicker ? selfTicker.toUpperCase() : "";
+
+  const peers = tickersMeta
+    .filter((t) => (t as any)[dimension] === value)
+    .map((t) => t.ticker)
+    .filter((tk) => tk.toUpperCase() !== self);
+
+  const dates = await getDates();
+  if (peers.length === 0) {
+    return new Array(dates.length).fill(NaN);
+  }
+
+  const { indexed } = await _aggregateGroupIndexed(
+    peers, metric, aggregation, getMetricSeries,
+  );
+  return Array.from(indexed);
 }
 
 /** Stub: fetch raw ticker data for workbook input selection */

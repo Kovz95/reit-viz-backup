@@ -19,7 +19,7 @@ import {
 } from "@/lib/forwardReturns";
 import type { ForwardReturnProfile, SignalSummary, CompositeScore } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
-import { filterByDateRange, createDateRange, defaultInputSelection, isBasketTicker } from "@/lib/optimizerInputSeries";
+import { filterByDateRange, resampleWeekly, createDateRange, defaultInputSelection, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -439,23 +439,18 @@ async function fetchTickerSeries(
     for (let i = 0; i < globalDates.length; i++) dateMap.set(globalDates[i], i);
     const globalIndices = filtered.dates.map((d: string) => dateMap.get(d) ?? -1);
 
+    const resampled: any = (resampleWeekly as any)({
+      dates: filtered.dates, opens, highs, lows,
+      closes: filtered.adjCloses, adjCloses: filtered.adjCloses, volumes: filtered.volumes
+    }, frequency);
     const minLength = frequency === "weekly" ? 52 : 252;
-    let resampled: any;
-    if (frequency === "weekly") {
-      resampled = (filterByDateRange as any)({
-        dates: filtered.dates, opens, highs, lows,
-        closes: filtered.adjCloses, adjCloses: filtered.adjCloses, volumes: filtered.volumes
-      }, dateRange, "weekly");
-    } else {
-      resampled = { dates: filtered.dates, highs, lows, closes: filtered.adjCloses, volumes: filtered.volumes, dailyIndexMap: filtered.dates.map((_: any, i: number) => i) };
-    }
-    if (!resampled || resampled.closes.length < minLength) return null;
-    const resampledGlobalIndices = (resampled.dailyIndexMap ?? []).map((idx: number) => idx >= 0 ? globalIndices[idx] ?? -1 : -1);
+    if (resampled.closes.length < minLength) return null;
+    const resampledGlobalIndices = resampled.dailyIndexMap.map((idx: number) => idx >= 0 ? globalIndices[idx] ?? -1 : -1);
     return {
       closes: resampled.closes,
-      highs: resampled.highs ?? highs,
-      lows: resampled.lows ?? lows,
-      volumes: resampled.volumes ?? [],
+      highs: resampled.highs,
+      lows: resampled.lows,
+      volumes: resampled.volumes,
       priceDates: resampled.dates,
       globalIndices: resampledGlobalIndices,
     };
@@ -703,9 +698,9 @@ export default function SlowStochOptimizer() {
         } else if (frequency === "weekly_on_daily" && mode !== "pair" && mode !== "pairCombo") {
           const daily = await fetchTickerSeries(item.ticker, "daily", globalDates, dateRange);
           if (!daily) return;
-          const wkCloses = weeklyDownsample(daily.closes as any) as any;
-          const wkHighs = weeklyDownsample(daily.highs as any) as any;
-          const wkLows = weeklyDownsample(daily.lows as any) as any;
+          const wkCloses = weeklyDownsample(daily.closes as any, daily.priceDates as any) as any;
+          const wkHighs = weeklyDownsample(daily.highs as any, daily.priceDates as any) as any;
+          const wkLows = weeklyDownsample(daily.lows as any, daily.priceDates as any) as any;
           if ((wkCloses.prices ?? wkCloses)?.length < 52) return;
           const weekIdx = wkCloses.weekIndex ?? [];
           const volsWeekly = (() => {
