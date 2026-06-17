@@ -22,6 +22,7 @@ import {
   featureKeys,
   computeFeatures,
   computeTimeDim,
+  timeFeatureMeta,
   dispatchAlgo,
 } from "@/lib/similarSetupsAlgorithms";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
@@ -149,14 +150,11 @@ const FEATURE_CATEGORIES = [
   "Time",
 ];
 
-// Time-dimension feature keys. The bundle imports a separate time-meta object
-// (export `ae` / T = TIME_FEATURE_META) and uses Object.keys(ae) wherever the
-// "Time" feature keys are needed. The shared lib only exports the merged
-// `featureMeta` plus the technical-only `featureKeys` array, so we recover the
-// time keys here as (featureMeta keys − technical featureKeys).
+// Time-dimension feature keys come from the lib's separate timeFeatureMeta
+// (bundle export `T`/`ae` = TIME_FEATURE_META): dowSin/dowCos/moySin/moyCos.
 const timeFeatureKeys: string[] = Object.keys(
-  featureMeta as Record<string, unknown>
-).filter((k) => !(featureKeys as string[]).includes(k));
+  timeFeatureMeta as Record<string, unknown>
+);
 
 // ---------------------------------------------------------------------------
 // Math helpers
