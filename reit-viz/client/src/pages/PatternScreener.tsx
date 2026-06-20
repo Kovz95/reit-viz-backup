@@ -220,6 +220,16 @@ function buildChannelOptions(config: ScreenerConfig) {
 // ---------------------------------------------------------------------------
 // Data converters
 // ---------------------------------------------------------------------------
+function ohlcvResultToBars(r: import("@/lib/fetchTickerOHLCV").OHLCVResult): OHLCBar[] {
+  return r.dates.map((time, i) => ({
+    time,
+    open: r.opens[i],
+    high: r.highs[i],
+    low: r.lows[i],
+    close: r.closes[i],
+  }));
+}
+
 function ohlcToCloseSeries(bars: OHLCBar[]) {
   return bars.map((b) => ({ time: b.time, value: b.close }));
 }
@@ -230,6 +240,15 @@ function ohlcToBars(bars: OHLCBar[]) {
 
 function filterFiniteValues(series: { time: string; value: number }[]) {
   return series.filter((p) => Number.isFinite(p.value)).map((p) => ({ time: p.time, value: p.value }));
+}
+
+function ratioToSeries(
+  data: import("@/lib/yahooPairsRatio").PairRatioData | null
+): { time: string; value: number }[] {
+  if (!data) return [];
+  const ratio = data.ratio ?? [];
+  const dates = data.dates ?? [];
+  return ratio.map((value, i) => ({ time: dates[i] ?? String(i), value }));
 }
 
 // ---------------------------------------------------------------------------
@@ -320,8 +339,9 @@ export default function PatternScreener() {
           key: singleTicker,
           label: singleTicker,
           loader: async () => {
-            const bars = await fetchTickerOHLCV(singleTicker);
-            return { ohlcLike: bars, series: ohlcToCloseSeries(bars), bars: ohlcToBars(bars) };
+            const result = await fetchTickerOHLCV(singleTicker);
+            const bars = ohlcvResultToBars(result);
+            return { ohlcLike: result, series: ohlcToCloseSeries(bars), bars: ohlcToBars(bars) };
           },
         },
       ];
@@ -335,8 +355,9 @@ export default function PatternScreener() {
         key: t.ticker,
         label: t.ticker,
         loader: async () => {
-          const bars = await fetchTickerOHLCV(t.ticker);
-          return { ohlcLike: bars, series: ohlcToCloseSeries(bars), bars: ohlcToBars(bars) };
+          const result = await fetchTickerOHLCV(t.ticker);
+          const bars = ohlcvResultToBars(result);
+          return { ohlcLike: result, series: ohlcToCloseSeries(bars), bars: ohlcToBars(bars) };
         },
       }));
     }
@@ -349,10 +370,11 @@ export default function PatternScreener() {
           label: pairKey,
           loader: async () => {
             const data = await getYahooPairsRatio(pairTickerA, pairTickerB, "close", "close");
+            const series = filterFiniteValues(ratioToSeries(data));
             return {
               ohlcLike: null,
-              series: filterFiniteValues(data.ratio),
-              bars: filterFiniteValues(data.ratio),
+              series,
+              bars: series,
             };
           },
         },
@@ -364,10 +386,11 @@ export default function PatternScreener() {
         label: pair.label,
         loader: async () => {
           const data = await getYahooPairsRatio(pair.a, pair.b, "close", "close");
+          const series = filterFiniteValues(ratioToSeries(data));
           return {
             ohlcLike: null,
-            series: filterFiniteValues(data.ratio),
-            bars: filterFiniteValues(data.ratio),
+            series,
+            bars: series,
           };
         },
       }));
@@ -430,7 +453,7 @@ export default function PatternScreener() {
 
         try {
           const { series, bars } = await item.loader();
-          const minBars = Math.max(patternOpts.minBars, channelOpts.minBars);
+          const minBars = Math.max(patternOpts.minBars ?? 0, channelOpts.minBars ?? 0);
           if (series.length < minBars) {
             setRows((prev) => {
               const next = prev.slice();
@@ -455,8 +478,8 @@ export default function PatternScreener() {
                   label: p.label || getPatternLabel(p.type),
                   direction: p.direction,
                   confidence: p.confidence,
-                  r2: p.r2,
-                  touches: p.touches,
+                  r2: p.r2 ?? 0,
+                  touches: p.touches ?? 0,
                   startTime: p.startTime,
                   endTime: p.endTime,
                   ageBars: Math.max(0, lastIdx - p.endIndex),
@@ -479,7 +502,7 @@ export default function PatternScreener() {
                   label: ch.label,
                   direction: dir,
                   confidence: ch.score,
-                  r2: ch.r2,
+                  r2: ch.r2 ?? 0,
                   touches: 0,
                   startTime: String(bars[ch.startIdx]?.time ?? ""),
                   endTime: String(bars[ch.endIdx]?.time ?? ""),

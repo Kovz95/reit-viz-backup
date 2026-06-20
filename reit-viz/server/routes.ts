@@ -1786,7 +1786,7 @@ export async function registerRoutes(server: Server, app: Express) {
         // Check if it's a FRED series
         else if (FRED_SERIES[id]) {
           const data = await getMacroSeries(id);
-          result[id] = { data, meta: { id, ...FRED_SERIES[id] } };
+          result[id] = { data, meta: { ...FRED_SERIES[id], id } };
         }
         else {
           result[id] = { data: [], meta: { id, label: id, error: "Unknown series" } };
@@ -4207,12 +4207,17 @@ export async function registerRoutes(server: Server, app: Express) {
 
       let tickersToWrite = parsedTickers.filter((t: any) => !keepSet.has(t.ticker));
 
-      // Copy selected ticker data files from temp to data/tickers/
+      // Copy ticker data files from temp to data/tickers/. "keep" preserves the
+      // EXISTING price series — but only when one actually exists on disk. When
+      // the existing entry is metadata-only (no per-ticker price file, e.g. a
+      // seed/Tickerlist row), there is nothing to keep, so write the freshly
+      // parsed file rather than leave the chart permanently blank.
       const tickerDir = path.join(dataDir, "tickers");
       if (!fs.existsSync(tickerDir)) fs.mkdirSync(tickerDir, { recursive: true });
-      for (const t of tickersToWrite) {
-        const src = path.join(tempTickerDir, `${t.ticker}.json`);
+      for (const t of parsedTickers) {
         const dst = path.join(tickerDir, `${t.ticker}.json`);
+        if (keepSet.has(t.ticker) && fs.existsSync(dst)) continue;
+        const src = path.join(tempTickerDir, `${t.ticker}.json`);
         if (fs.existsSync(src)) {
           fs.copyFileSync(src, dst);
         }

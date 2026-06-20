@@ -14,6 +14,9 @@ import {
 } from "@/lib/pairMath";
 import { useUpload } from "@/lib/uploadContext";
 import { getSeriesColor } from "@/lib/chartColors";
+import ChartsComparePanel from "./ChartsComparePanel";
+import BasketMetricInspector, { type InspectableBasket } from "./BasketMetricInspector";
+import { useBaskets } from "@/lib/useBaskets";
 import {
   ChevronDown,
   ChevronRight,
@@ -188,6 +191,14 @@ export default function Sidebar({
   const { fundamentalSheets, removeFundamentalWorkbook } = useUpload();
   const uploadedSheets = fundamentalSheets;
   const onRemoveWorkbook = removeFundamentalWorkbook;
+
+  // ── Saved baskets + metric inspector (basket-math-metric / basket-math-asof) ──
+  const { baskets } = useBaskets();
+  const [inspectBasketId, setInspectBasketId] = useState<string | null>(null);
+  const inspectBasket = useMemo<InspectableBasket | null>(
+    () => (baskets.find((b) => b.id === inspectBasketId) as InspectableBasket | undefined) ?? null,
+    [baskets, inspectBasketId]
+  );
 
   // Resizable sidebar width
   const MIN_W = 280;
@@ -626,7 +637,7 @@ export default function Sidebar({
             onClick={() => {
               const all = [
                 "charttype", "tickers", "series", "fundamental",
-                "layout", "macro", "baskets", "compare", "pairs", "formula",
+                "layout", "macro", "baskets", "compare", "pairs",
               ];
               setOpenSections(prev =>
                 all.every(s => prev.has(s)) ? new Set() : new Set(all)
@@ -636,14 +647,14 @@ export default function Sidebar({
             data-testid="toggle-all-sections"
             title={
               ["charttype", "tickers", "series", "fundamental", "layout",
-               "macro", "baskets", "compare", "pairs", "formula"]
+               "macro", "baskets", "compare", "pairs"]
                 .every(s => openSections.has(s))
                 ? "Collapse all sections"
                 : "Expand all sections"
             }
           >
             {["charttype", "tickers", "series", "fundamental", "layout",
-              "macro", "baskets", "compare", "pairs", "formula"]
+              "macro", "baskets", "compare", "pairs"]
               .every(s => openSections.has(s))
               ? <ChevronsDownUp className="w-4 h-4" />
               : <ChevronsUpDown className="w-4 h-4" />}
@@ -1539,9 +1550,41 @@ export default function Sidebar({
           />
           {openSections.has("baskets") && (
             <div className="px-2 pb-2 space-y-2">
-              <div className="text-[10px] text-muted-foreground text-center py-2">
-                Saved baskets appear here.
-              </div>
+              {baskets.length === 0 ? (
+                <div className="text-[10px] text-muted-foreground text-center py-2">
+                  Saved baskets appear here.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {baskets.map((b) => (
+                    <div
+                      key={b.id}
+                      className="flex items-center justify-between gap-1.5 px-1.5 py-1 rounded border border-border/40 bg-muted/20"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-foreground truncate">{b.name}</div>
+                        <div className="text-[9px] text-muted-foreground truncate">
+                          {b.tickers.length} ticker{b.tickers.length === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 text-[10px] px-1.5"
+                        onClick={() => setInspectBasketId(b.id)}
+                        title="Inspect basket metric math"
+                      >
+                        Inspect
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <BasketMetricInspector
+                basket={inspectBasket}
+                open={inspectBasketId !== null}
+                onClose={() => setInspectBasketId(null)}
+              />
             </div>
           )}
 
@@ -1555,37 +1598,24 @@ export default function Sidebar({
           />
           {openSections.has("compare") && (
             <div className="px-2 pb-2 space-y-2">
-              <div className="text-[10px] text-muted-foreground text-center py-2">
-                Compare tickers across metrics.
-              </div>
+              <ChartsComparePanel
+                tickers={tickers}
+                plottedSeries={plottedSeries}
+                onAddSeriesWithMode={onAddSeriesWithMode}
+                onRemoveSeries={onRemoveSeries}
+              />
             </div>
           )}
 
-          {/* Pairs */}
+          {/* Pairs & Formula / Series Builder (bundle section id: "pairs") */}
           <SectionHeader
-            title="Pairs"
-            icon={<TrendingUp className="w-3.5 h-3.5" />}
+            title="Pairs & Formula"
+            icon={<Calculator className="w-3.5 h-3.5" />}
             section="pairs"
             isOpen={openSections.has("pairs")}
             onToggle={() => toggleSection("pairs")}
           />
           {openSections.has("pairs") && (
-            <div className="px-2 pb-2 space-y-2">
-              <div className="text-[10px] text-muted-foreground text-center py-2">
-                Pair-trade presets and ratios.
-              </div>
-            </div>
-          )}
-
-          {/* Pairs & Formula / Series Builder */}
-          <SectionHeader
-            title="Pairs & Formula"
-            icon={<Calculator className="w-3.5 h-3.5" />}
-            section="formula"
-            isOpen={openSections.has("formula")}
-            onToggle={() => toggleSection("formula")}
-          />
-          {openSections.has("formula") && (
             <PairsFormulaSection
               tickers={tickers}
               allMetrics={allMetrics}

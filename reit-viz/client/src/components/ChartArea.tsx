@@ -9,6 +9,11 @@ import ChartPane from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
 import PairsPickerPanel from "./PairsPickerPanel";
+import QuickAnalyzePanel from "./QuickAnalyzePanel";
+import SignalEngineAnalyzer from "./SignalEngineAnalyzer";
+import { SeededOverlaysManager } from "./SeededOverlaysManager";
+import { ChartsSimilarSetupsPanel } from "./ChartsSimilarSetupsPanel";
+import ChartsPdSubplots, { type PdSubplotsState } from "./ChartsPdSubplots";
 import {
   PanelLeftOpen,
   Maximize2,
@@ -37,7 +42,6 @@ import {
   Eye,
   Sparkles,
   StickyNote,
-  Layers3,
 } from "lucide-react";
 import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
@@ -80,8 +84,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { getTickers } from "@/lib/dataService";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 // Legacy LayoutMode replaced by GridLayout from GridLayoutPicker
+
+/** Chart annotation record returned by /api/annotations */
+interface Annotation {
+  id: string | number;
+  ticker: string;
+  date: string;
+  text: string;
+  color: string;
+}
 
 interface ChartAreaProps {
   plottedSeries: PlottedSeries[];
@@ -379,7 +394,15 @@ export default function ChartArea({
   const [showSimilarSetups, setShowSimilarSetups] = useState(false);
   const [showPDRatio, setShowPDRatio] = useState(false);
   const [showPremCorr, setShowPremCorr] = useState(false);
-  const [showAnnotations, setShowAnnotations] = useState(false);
+  // ── Annotations popover state (bundle yi/$i/ys/ru/nu/ni) ──
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
+  const [annDate, setAnnDate] = useState("");
+  const [annText, setAnnText] = useState("");
+  const [annColor, setAnnColor] = useState("#f59e0b");
+  const [editingAnnId, setEditingAnnId] = useState<string | number | null>(null);
+  const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  // ── Maximized side-panel enum for the in-Charts quant panels (bundle Ie) ──
+  const [maximizedSidePanel, setMaximizedSidePanel] = useState<"similar" | "pd" | null>(null);
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
   const [exDivDates, setExDivDates] = useState<string[]>([]);
   // Macro event vertical line toggles
@@ -411,6 +434,100 @@ export default function ChartArea({
   const [colorByDataMap, setColorByDataMap] = useState<Record<number, { data: Map<string, number>; range: { min: number; max: number } }>>({});
   // Popover open state per pane
   const [colorByPopoverOpen, setColorByPopoverOpen] = useState<number | null>(null);
+
+  // ── Annotations data (bundle gc/bs/hl + Ws/dl/Xu mutations) ──
+  const queryClient = useQueryClient();
+  const { data: allAnnotations = [] } = useQuery<Annotation[]>({
+    queryKey: ["/api/annotations"],
+  });
+  const annotations = useMemo(
+    () =>
+      activeTicker
+        ? allAnnotations.filter(
+            (a) => a.ticker === activeTicker || a.ticker === "_global"
+          )
+        : [],
+    [allAnnotations, activeTicker]
+  );
+  // hl: chart markers derived from visible annotations
+  const annotationMarkers = useMemo(
+    () =>
+      annotationsVisible
+        ? annotations.map((a) => ({
+            time: a.date,
+            color: a.color || "#f59e0b",
+            label: a.text.length > 20 ? a.text.slice(0, 18) + "…" : a.text,
+          }))
+        : [],
+    [annotations, annotationsVisible]
+  );
+  void annotationMarkers;
+  const invalidateAnnotations = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ["/api/annotations"] }),
+    [queryClient]
+  );
+  const createAnnotation = useMutation({
+    mutationFn: (body: { ticker: string; date: string; text: string; color: string }) =>
+      apiRequest("POST", "/api/annotations", body),
+    onSuccess: invalidateAnnotations,
+  });
+  const updateAnnotation = useMutation({
+    mutationFn: ({ id, ...rest }: { id: string | number; text: string; date: string; color: string }) =>
+      apiRequest("POST", `/api/annotations/${id}/update`, rest),
+    onSuccess: invalidateAnnotations,
+  });
+  const deleteAnnotation = useMutation({
+    mutationFn: (id: string | number) =>
+      apiRequest("POST", `/api/annotations/${id}/delete`),
+    onSuccess: invalidateAnnotations,
+  });
+  const saveAnnotation = useCallback(() => {
+    if (!activeTicker || !annDate || !annText.trim()) return;
+    if (editingAnnId !== null) {
+      updateAnnotation.mutate({ id: editingAnnId, text: annText.trim(), date: annDate, color: annColor });
+      setEditingAnnId(null);
+    } else {
+      createAnnotation.mutate({ ticker: activeTicker, date: annDate, text: annText.trim(), color: annColor });
+    }
+    setAnnDate("");
+    setAnnText("");
+    setAnnColor("#f59e0b");
+  }, [activeTicker, annDate, annText, annColor, editingAnnId, createAnnotation, updateAnnotation]);
+  const startEditAnnotation = useCallback((a: Annotation) => {
+    setEditingAnnId(a.id);
+    setAnnDate(a.date);
+    setAnnText(a.text);
+    setAnnColor(a.color);
+    setAnnotationsOpen(true);
+  }, []);
+
+  // ── PD-subplots state (mirrors PremiumDiscount page state; consumed by ChartsPdSubplots) ──
+  const [pdSubplotsState, setPdSubplotsState] = useState<PdSubplotsState>({
+    showPDRatio: false,
+    showCorrChart: false,
+    valMetric: "premium_discount",
+    growthMetric: "ffo_growth",
+    compareMode: "ticker",
+    dimension: "",
+    classValue: "",
+    peerValueOverride: "",
+    peerTicker: "",
+    groupADim: "",
+    groupAValue: "",
+    groupBDim: "",
+    groupBValue: "",
+    basketId: "",
+    basketAId: "",
+    basketBId: "",
+    rollWindow: 63,
+    rollLag: 0,
+    basketAggregation: "capWeighted",
+  });
+  const handlePdSubplotsStateChange = useCallback(
+    (patch: Partial<PdSubplotsState>) =>
+      setPdSubplotsState((prev) => ({ ...prev, ...patch })),
+    []
+  );
 
   // Chart sync state
   const chartsRef = useRef<Map<number, IChartApi>>(new Map());
@@ -1483,17 +1600,128 @@ export default function ChartArea({
           </PopoverContent>
         </Popover>
 
-        {/* Annotations / notes toggle */}
-        <Button
-          variant={showAnnotations ? "default" : "ghost"}
-          size="sm"
-          className="h-6 px-1.5 text-[10px] gap-0.5"
-          onClick={() => setShowAnnotations(!showAnnotations)}
-          data-testid="annotations-toggle"
-          title="Chart annotations / notes"
+        {/* Annotations / notes popover */}
+        <Popover
+          open={annotationsOpen}
+          onOpenChange={(o) => {
+            setAnnotationsOpen(o);
+            if (!o) {
+              setEditingAnnId(null);
+              setAnnDate("");
+              setAnnText("");
+              setAnnColor("#f59e0b");
+            }
+          }}
         >
-          <StickyNote className="w-3 h-3" />
-        </Button>
+          <PopoverTrigger asChild>
+            <Button
+              variant={annotationsVisible && annotations.length > 0 ? "default" : "ghost"}
+              size="sm"
+              className="h-6 px-1.5 text-[10px] gap-0.5"
+              data-testid="annotations-toggle"
+              title="Chart annotations / notes"
+            >
+              <StickyNote className="w-3 h-3" />
+              {annotations.length > 0 && (
+                <span className="tabular-nums">{annotations.length}</span>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 p-2" align="start" sideOffset={6}>
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-2">
+              {editingAnnId ? "Edit Annotation" : "Add Annotation"}
+            </div>
+            <div className="flex flex-col gap-1.5 mb-2">
+              <Input
+                type="date"
+                value={annDate}
+                onChange={(e) => setAnnDate(e.target.value)}
+                className="h-7 text-xs"
+                data-testid="annotation-date"
+              />
+              <Input
+                value={annText}
+                onChange={(e) => setAnnText(e.target.value)}
+                placeholder="e.g. CEO change, dividend cut..."
+                className="h-7 text-xs"
+                data-testid="annotation-text"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveAnnotation();
+                }}
+              />
+              <div className="flex items-center gap-1.5">
+                <label className="text-[10px] text-muted-foreground">Color:</label>
+                {["#f59e0b", "#ef4444", "#22c55e", "#3b82f6", "#a855f7", "#ec4899"].map((c) => (
+                  <button
+                    key={c}
+                    className={`w-4 h-4 rounded-full border-2 ${annColor === c ? "border-foreground" : "border-transparent"}`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => setAnnColor(c)}
+                  />
+                ))}
+                <Button
+                  size="sm"
+                  className="h-6 text-[10px] ml-auto gap-0.5"
+                  onClick={saveAnnotation}
+                  disabled={!annDate || !annText.trim() || !activeTicker}
+                  data-testid="annotation-save"
+                >
+                  {editingAnnId ? "Update" : "Add"}
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between border-t border-border/50 pt-1.5 mb-1.5">
+              <span className="text-[10px] text-muted-foreground">Show on chart</span>
+              <button
+                className={`text-[10px] px-1.5 py-0.5 rounded ${annotationsVisible ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"}`}
+                onClick={() => setAnnotationsVisible(!annotationsVisible)}
+                data-testid="annotation-visibility-toggle"
+              >
+                {annotationsVisible ? "On" : "Off"}
+              </button>
+            </div>
+            {annotations.length > 0 && (
+              <div className="border-t border-border/50 pt-1.5 max-h-[200px] overflow-auto">
+                <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1">
+                  {activeTicker} Notes ({annotations.length})
+                </div>
+                {annotations.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-start gap-1.5 py-1 border-b border-border/20 last:border-0 group"
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full mt-1 flex-shrink-0"
+                      style={{ backgroundColor: a.color }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-mono text-muted-foreground">{a.date}</div>
+                      <div className="text-xs text-foreground leading-tight">{a.text}</div>
+                    </div>
+                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        className="p-0.5 rounded hover:bg-accent"
+                        onClick={() => startEditAnnotation(a)}
+                        title="Edit"
+                        data-testid={`annotation-edit-${a.id}`}
+                      >
+                        <Pencil className="w-3 h-3 text-muted-foreground" />
+                      </button>
+                      <button
+                        className="p-0.5 rounded hover:bg-red-500/20"
+                        onClick={() => deleteAnnotation.mutate(a.id)}
+                        title="Delete"
+                        data-testid={`annotation-delete-${a.id}`}
+                      >
+                        <Trash2 className="w-3 h-3 text-red-400" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
 
         {/* Indicators */}
         <Button
@@ -1627,16 +1855,7 @@ export default function ChartArea({
         </Button>
 
         {/* Seeded overlays manager (S/R levels & auto-trendlines) */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-[11px] text-muted-foreground hover:text-foreground px-2"
-          title={`Manage seeded overlays for ${activeTicker ?? "current ticker"}`}
-          data-testid="seeded-overlays-manager"
-        >
-          <Layers3 className="w-3 h-3 mr-1" />
-          Seeds
-        </Button>
+        <SeededOverlaysManager activeTicker={activeTicker ?? ""} />
 
         {/* Predictive-signal analyzer toggle */}
         <Button
@@ -1654,7 +1873,7 @@ export default function ChartArea({
 
         {/* Quant subplot toggles: PD Ratio, Prem↔Growth Corr, Similar Setups */}
         <button
-          onClick={() => setShowPDRatio(v => !v)}
+          onClick={() => setShowPDRatio(v => { const next = !v; handlePdSubplotsStateChange({ showPDRatio: next }); return next; })}
           className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPDRatio ? "border-violet-500 bg-violet-500/15 text-violet-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
           data-testid="toggle-pd-ratio"
           title="Show/hide PD Ratio subplot"
@@ -1662,7 +1881,7 @@ export default function ChartArea({
           PD Ratio
         </button>
         <button
-          onClick={() => setShowPremCorr(v => !v)}
+          onClick={() => setShowPremCorr(v => { const next = !v; handlePdSubplotsStateChange({ showCorrChart: next }); return next; })}
           className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 border rounded transition-colors ${showPremCorr ? "border-teal-500 bg-teal-500/15 text-teal-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
           data-testid="toggle-prem-corr"
           title="Show/hide Prem↔Growth Corr subplot"
@@ -1868,6 +2087,47 @@ export default function ChartArea({
             onClose={() => setShowPairs(false)}
           />
         )}
+
+        {showQuickAnalyze && onAddFormulaSeries && (
+          <QuickAnalyzePanel
+            plottedSeries={plottedSeries}
+            panes={panes}
+            onPlot={onAddFormulaSeries}
+            onClose={() => setShowQuickAnalyze(false)}
+          />
+        )}
+
+        {showSignalAnalyzer && activeTicker && (
+          <SignalEngineAnalyzer
+            ticker={activeTicker}
+            asFloating
+            onClose={() => setShowSignalAnalyzer(false)}
+          />
+        )}
+
+        {showSimilarSetups && activeTicker &&
+          (maximizedSidePanel === null || maximizedSidePanel === "similar") && (
+            <ChartsSimilarSetupsPanel
+              ticker={activeTicker}
+              ohlcData={activeTicker ? ohlcCache[activeTicker] : undefined}
+              maximized={maximizedSidePanel === "similar"}
+              onMaximizeChange={(m) => setMaximizedSidePanel(m ? "similar" : null)}
+            />
+          )}
+
+        {(showPDRatio || showPremCorr) &&
+          maximizedSidePanel !== "similar" && (
+            <ChartsPdSubplots
+              mode="single"
+              symbol={activeTicker ?? ""}
+              allTickers={tickerList}
+              state={pdSubplotsState}
+              onStateChange={handlePdSubplotsStateChange}
+              maximizedId={maximizedSidePanel === "pd" ? "pd" : null}
+              onMaximizeChange={(id) => setMaximizedSidePanel(id ? "pd" : null)}
+              fillContainer={maximizedSidePanel === "pd"}
+            />
+          )}
       </div>
 
       {/* Pairs preset ticker picker dialog */}

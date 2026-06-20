@@ -10,7 +10,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { Button } from "@/components/ui/button";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { navigateToTicker } from "@/lib/navigateToTicker";
-import { ExportMenu } from "@/lib/exportMenu";
+import ExportMenu from "@/components/ExportMenu";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
 import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";

@@ -6,7 +6,7 @@ import { ClassificationFilters } from "@/lib/classificationFilters";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 
 interface ClassificationFiltersWithSourceProps {
-  workbookTickers: any[];
+  workbookTickers?: any[];
   filters: ClassFilters;
   onFiltersChange: (filters: ClassFilters) => void;
   search: string;

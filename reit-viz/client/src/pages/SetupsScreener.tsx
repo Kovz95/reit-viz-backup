@@ -172,7 +172,7 @@ async function analyzeOneTicker(params: {
     const hasBench = benchAligned.some(v => Number.isFinite(v));
 
     const isDisabled = (key: string): boolean => {
-      const def = (computeFeatures as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key]
+      const def = (computeFeatures as unknown as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key]
         ?? (featureMeta as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
       return !!(!def || (def.requiresVolume && !hasVolume) || (def.requiresBench && !hasBench));
     };

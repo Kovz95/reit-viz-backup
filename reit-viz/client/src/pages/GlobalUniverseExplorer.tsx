@@ -168,7 +168,7 @@ export default function GlobalUniverseExplorer() {
 
   const filteredRows = useMemo(() => {
     if (loading || error) return [];
-    let rows = applyClassFilters(records, classFilters, search, pastedTickerSet);
+    let rows = applyClassFilters(records as any[], classFilters, search, pastedTickerSet);
     if (activeColFilterFns.length > 0) {
       rows = rows.filter((row) => activeColFilterFns.every((fn) => fn(row as GlobalRecord)));
     }

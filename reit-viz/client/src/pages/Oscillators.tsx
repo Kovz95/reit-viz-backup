@@ -1435,7 +1435,7 @@ export default function Oscillators() {
         </>
       ) : (
         <>
-          <br kind="osc" captureInputs={presetCaptureInputs} applyInputs={presetApplyInputs} />
+          <PresetBar kind="osc" captureInputs={presetCaptureInputs} applyInputs={presetApplyInputs} />
           <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
             <div className="flex items-center gap-4 flex-wrap">
               <div>
@@ -1832,7 +1832,7 @@ export default function Oscillators() {
                         onChange={(e) => setRankBy(e.target.value)}
                         className="text-[10px] font-mono bg-background border border-border rounded px-1.5 py-0.5"
                       >
-                        {(ur as any[]).map((e: any) => (
+                        {(ur as readonly any[]).map((e: any) => (
                           <option key={e.value} value={e.value}>{e.label}</option>
                         ))}
                       </select>
@@ -1857,13 +1857,13 @@ export default function Oscillators() {
                         <th className="text-center px-2 py-1 font-bold">Current Signal</th>
                         <th className="text-center px-2 py-1 font-bold">Best Config</th>
                         <th className="text-center px-2 py-1 font-bold">Best Side</th>
-                        {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
+                        {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
                           <th key={h.label} className="text-center px-2 py-1 font-bold">{returnMode === "band" ? "Band" : "Hit"} {h.label}</th>
                         ))}
-                        {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
+                        {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
                           <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">Avg {h.label}</th>
                         ))}
-                        {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
+                        {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
                           <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
                         ))}
                         <th className="text-center px-2 py-1 font-bold">Score</th>
@@ -1895,7 +1895,7 @@ export default function Oscillators() {
                             </td>
                             <td className="text-center px-2 py-1 text-muted-foreground">{bestCfg?.configLabel}</td>
                             <td className="text-center px-2 py-1 text-primary font-bold">{e.bestCategory}</td>
-                            {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => {
+                            {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => {
                               const rate = bestSummary
                                 ? returnMode === "band"
                                   ? (bestSummary.bandHitRate?.[h.label] ?? bestSummary.hitRate[h.label])
@@ -1907,12 +1907,12 @@ export default function Oscillators() {
                                 </td>
                               );
                             })}
-                            {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
+                            {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
                               <td key={`avg-${h.label}`} className={`text-center px-2 py-1 ${bestSummary ? (bestSummary.avgReturn[h.label] >= 0 ? "text-green-400" : "text-red-400") : ""}`}>
                                 {bestSummary ? lt(bestSummary.avgReturn[h.label]) : "–"}
                               </td>
                             ))}
-                            {(je as any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
+                            {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
                               <td key={`pf-${h.label}`} className={`text-center px-2 py-1 ${bestSummary ? ho(bestSummary.profitFactor[h.label]) : ""}`}>
                                 {bestSummary ? (bestSummary.profitFactor[h.label] >= 99 ? "∞" : bestSummary.profitFactor[h.label].toFixed(2)) : "–"}
                               </td>
@@ -2001,7 +2001,7 @@ export default function Oscillators() {
                                             </tr>
                                           </thead>
                                           <tbody>
-                                            {(je as any[]).map((h: any) => (
+                                            {(je as readonly any[]).map((h: any) => (
                                               <tr key={h.label}>
                                                 <td className="px-1 py-0.5 text-foreground font-bold">{h.label}</td>
                                                 <td className={`text-center px-1 py-0.5 ${Dt(cat.summary.hitRate[h.label])}`}>{ze(cat.summary.hitRate[h.label])}</td>

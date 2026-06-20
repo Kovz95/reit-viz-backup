@@ -279,13 +279,22 @@ export function computePremiumDiff(
  * Used in group-vs-group comparison mode where each side is a group, not a ticker.
  * Returns a PremiumSeriesResult so the caller can treat groupSeries directly.
  */
+export interface PremiumGroupResult {
+  groupSeries: any[];
+  peerTickers: string[];
+  peerCount?: number[];
+  dates?: string[];
+  values?: (number | null)[];
+  targetSeries?: any[];
+}
+
 export async function computePremiumDiffAbs(
   _dim: any,
   _value?: any,
   _metric?: any,
   _aggregation?: any,
   _getMetricSeries?: any
-): Promise<(number | null)[]> {
+): Promise<PremiumGroupResult> {
   const dim: string = _dim ?? "subindustry";
   const value: string = _value ?? "__ALL__";
   const metric: string = _metric ?? "";
@@ -301,7 +310,7 @@ export async function computePremiumDiffAbs(
     tickers = await getTickers();
     tradingDates = await getTradingDates();
   } catch {
-    return [];
+    return { groupSeries: [], peerTickers: [], peerCount: [] };
   }
 
   const ALL_KEY = "__ALL__";

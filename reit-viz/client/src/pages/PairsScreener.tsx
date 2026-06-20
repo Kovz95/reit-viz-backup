@@ -583,7 +583,7 @@ export default function PairsScreener() {
             totalCount={(allTickers as any).length}
             testIdPrefix="screener-paircombo-filter"
             source={source}
-            onSourceChange={setSource}
+            onSourceChange={(s) => setSource(s as "workbook" | "global")}
           />
           <span className="text-[10px] font-mono text-muted-foreground ml-auto">
             {pairComboTickers.length < 2

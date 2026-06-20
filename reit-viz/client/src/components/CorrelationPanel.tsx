@@ -69,7 +69,7 @@ function computeLogRatioZScore(al: Aligned[], win: number): TV[] {
 /** Spread Z: rolling beta on log prices → spread → z-score (dual-window, matches Pairs) */
 function computeSpreadZ(al: Aligned[], betaLookback: number, spreadZWindow: number): TV[] {
   if (al.length < betaLookback) return [];
-  const logA = al.map(d => Math.log(d.value !== undefined ? d.a : d.a));
+  const logA = al.map(d => Math.log(d.a));
   const logB = al.map(d => Math.log(d.b));
   // Rolling beta on log prices → spread
   const rollingSpread: { time: string; value: number }[] = [];

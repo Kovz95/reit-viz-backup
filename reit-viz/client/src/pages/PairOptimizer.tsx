@@ -271,8 +271,9 @@ export default function PairOptimizer() {
   ): Promise<PairResult | null> => {
     try {
       const [dataA, dataB] = await Promise.all([fetchWorkbookData(tA), fetchWorkbookData(tB)]);
+      if (!dataA || !dataB) return null;
       const scalar = getMetricScalar(metric);
-      const inverse = getMetricInverseFlag(metric);
+      const inverse = getMetricInverseFlag(metric) ? -1 : 1;
       const seriesA = dataA[metric] || [];
       const seriesB = dataB[metric] || [];
       const closesA = dataA.close || [];

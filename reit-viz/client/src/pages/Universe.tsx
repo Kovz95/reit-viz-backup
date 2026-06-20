@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useUniverse } from "@/lib/universeContext";
 import { useReclassificationOverrides } from "@/lib/reclassificationOverrides";
+import type { ClassificationField } from "@/lib/reclassificationOverrides";
 import { useExcludedTickers } from "@/lib/excludedTickers";
 import { CLASSIFICATION_KEYS } from "@/lib/dataService";
 import { usePageState } from "@/lib/pageState";
@@ -110,7 +111,7 @@ export default function Universe() {
 
   const [sortCol, setSortCol] = useState("ticker");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [editingCell, setEditingCell] = useState<{ ticker: string; field: string } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ ticker: string; field: ClassificationField } | null>(null);
   const [editValue, setEditValue] = useState("");
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -121,7 +122,7 @@ export default function Universe() {
     }
   }, [editingCell]);
 
-  const startEdit = (ticker: string, field: string, currentValue: string) => {
+  const startEdit = (ticker: string, field: ClassificationField, currentValue: string) => {
     setEditingCell({ ticker, field });
     setEditValue(currentValue || "");
   };
@@ -164,7 +165,7 @@ export default function Universe() {
     [filteredTickersList]
   );
 
-  const classColumns = [
+  const classColumns: { key: ClassificationField; label: string }[] = [
     { key: "economy", label: "Economy" },
     { key: "sector", label: "Sector" },
     { key: "subsector", label: "Subsector" },
@@ -448,7 +449,7 @@ export default function Universe() {
                     const cellValue = ticker[key] || "";
                     const isEditing =
                       editingCell?.ticker === ticker.ticker &&
-                      editingCell.field === key;
+                      editingCell?.field === key;
                     const isOverridden = !!tickerOverrides && tickerOverrides[key] !== undefined;
                     return (
                       <td

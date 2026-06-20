@@ -7,11 +7,10 @@ import { weeklyDownsample, weeklyDownsamplePrices, expandWeeklyToDaily } from "@
 
 export { isBasketTicker };
 
-export interface InputSelection {
-  kind: "ohlcv" | "workbook" | "close" | string;
-  series?: string;
-  metric?: string;
-}
+// Canonical InputSelection/InputSeriesKind live in inputSeriesSelector; re-export
+// them here so optimizer state and the picker component share one type.
+export type { InputSeriesKind, InputSelection } from "@/lib/inputSeriesSelector";
+import type { InputSelection } from "@/lib/inputSeriesSelector";
 
 export const defaultInputSelection: InputSelection = {
   kind: "close",

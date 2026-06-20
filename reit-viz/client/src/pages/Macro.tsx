@@ -54,7 +54,7 @@ interface MacroSeriesMeta {
   label: string;
   category: string;
   unit: string;
-  freq: string;
+  freq?: string;
   cached?: boolean;
   computed?: boolean;
   lastUpdate?: string | null;
@@ -313,7 +313,7 @@ function MacroPane({
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          s.setData(lsmaData.map(d => ({ time: d.time as Time, value: d.value })));
+          s.setData(lsmaData.map((d: any) => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(s);
         }
       }
@@ -329,7 +329,7 @@ function MacroPane({
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          s.setData(slsmaData.map(d => ({ time: d.time as Time, value: d.value })));
+          s.setData(slsmaData.map((d: any) => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(s);
         }
       }

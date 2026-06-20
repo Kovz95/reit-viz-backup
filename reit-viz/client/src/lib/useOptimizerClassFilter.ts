@@ -1,80 +1,181 @@
-// Hand-written from call-site inference (PairOptimizer.tsx, PatternScreener.tsx)
-// useOptimizerClassFilter: applies classification filtering to the ticker list
-// and provides UI elements for the filter controls.
+// Reconstructed from the live production chunk useOptimizerClassFilter-COCFGQs0.js
+// (served by the ground-truth bundle) on 2026-06-17. Renders the real
+// "Universe Source" picker (REIT Workbook / Global) and the classification
+// filter bar, replacing the earlier inferred placeholder.
 
-import { useState, useMemo, createElement } from "react";
-import { emptyClassFilters, applyClassFilters } from "@/components/ClassificationFilters";
+import { useState, useMemo, useCallback, createElement } from "react";
+import ClassificationFilters, {
+  emptyClassFilters,
+  applyClassFilters,
+} from "@/components/ClassificationFilters";
 import type { ClassFilters } from "@/components/ClassificationFilters";
+import { useGlobalUniverse } from "@/lib/globalUniverse";
+
+type UniverseSource = "workbook" | "global";
 
 export interface OptimizerClassFilterResult {
-  /** Filtered tickers list. */
+  /** Filtered tickers list (respects active source + classification filters). */
   filteredTickers: any[];
-  /** ClassFilters state. */
-  classFilter: ClassFilters;
-  /** Setter for classFilter. */
-  setClassFilter: (f: ClassFilters) => void;
-  /** JSX element for the universe-source picker (null when not active). */
-  universeSourceUI: React.ReactNode | null;
   /** JSX element for the classification filter bar (null when not active). */
   classFilterUI: React.ReactNode | null;
+  /** JSX element for the universe-source picker (null when not active). */
+  universeSourceUI: React.ReactNode | null;
+  /** Active universe source. */
+  source: UniverseSource;
+  /** True while the global universe is loading. */
+  globalLoading: boolean;
+  /** Global universe load error (null unless source === "global"). */
+  globalError: string | null;
   /** True when any classification filter is active. */
   hasActiveFilters: boolean;
+  /** Raw filter state. */
+  state: {
+    classFilters: ClassFilters;
+    search: string;
+    manualTickers: Set<string>;
+    source: UniverseSource;
+  };
+  /** Reset all filters (keeps current source). */
+  reset: () => void;
 }
 
 /**
- * Manages a classification filter that narrows an optimizer's ticker universe.
+ * Manages a classification filter that narrows an optimizer's ticker universe,
+ * including the REIT-Workbook vs. Global universe-source toggle.
  *
- * @param tickers      Base ticker list.
- * @param active       When false, pass-through (no filtering UI shown).
- * @param storageKey   Unique key for persisting filter state.
+ * @param tickers       Base (REIT workbook) ticker list.
+ * @param active        When false, pass-through (no filtering UI shown).
+ * @param testIdPrefix  Prefix for data-testid attributes / persistence.
  */
 export function useOptimizerClassFilter(
-  tickers: any[] | null | undefined,
+  tickers: any[],
   active: boolean,
-  storageKey?: string
+  testIdPrefix = "opt-clf"
 ): OptimizerClassFilterResult {
-  const [classFilter, setClassFilter] = useState<ClassFilters>(() =>
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() =>
     emptyClassFilters()
   );
   const [search, setSearch] = useState("");
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const [source, setSourceState] = useState<UniverseSource>("workbook");
 
-  const filteredTickers = useMemo(() => {
-    if (!active || !tickers) return tickers ?? [];
-    return applyClassFilters(tickers, classFilter, search, manualTickers);
-  }, [active, tickers, classFilter, search, manualTickers]);
+  const globalActive = active && source === "global";
+  const { metas, loading, error } = useGlobalUniverse();
 
-  // Minimal inline filter UI — pages render these in their own panel
-  const classFilterUI = active
-    ? createElement(
-        "span",
-        { className: "text-[10px] text-muted-foreground font-mono" },
-        `${filteredTickers.length} tickers`
-      )
-    : null;
+  const pool = useMemo(
+    () => (source === "global" ? (globalActive ? metas : []) : tickers),
+    [source, globalActive, metas, tickers]
+  );
+
+  const filteredTickers = useMemo(
+    () => (active ? applyClassFilters(pool, classFilters, search, manualTickers) : tickers),
+    [pool, tickers, active, classFilters, search, manualTickers]
+  );
+
+  const hasActiveFilters =
+    Object.values(classFilters).some((s: any) => s.size > 0) ||
+    search !== "" ||
+    manualTickers.size > 0;
+
+  const reset = useCallback(() => {
+    setClassFilters(emptyClassFilters());
+    setSearch("");
+    setManualTickers(new Set());
+  }, []);
+
+  const setSource = useCallback((s: UniverseSource) => {
+    setSourceState(s);
+    setClassFilters(emptyClassFilters());
+    setSearch("");
+    setManualTickers(new Set());
+  }, []);
+
+  const workbookCount = tickers.length;
 
   const universeSourceUI = active
     ? createElement(
-        "span",
-        { className: "text-[10px] text-foreground font-mono" },
-        "universe"
-      )
+        "div",
+        {
+          className: "flex items-center gap-2 text-xs",
+          "data-testid": `${testIdPrefix}-universe-source`,
+        },
+        createElement(
+          "span",
+          { className: "text-slate-400 uppercase tracking-wide" },
+          "Universe Source:"
+        ),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => setSource("workbook"),
+            className: `px-2 py-1 rounded border transition-colors ${
+              source === "workbook"
+                ? "bg-sky-500/20 border-sky-500/60 text-sky-200"
+                : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500"
+            }`,
+            "data-testid": `${testIdPrefix}-source-workbook`,
+          },
+          "REIT Workbook (",
+          workbookCount,
+          ")"
+        ),
+        createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => setSource("global"),
+            className: `px-2 py-1 rounded border transition-colors ${
+              source === "global"
+                ? "bg-sky-500/20 border-sky-500/60 text-sky-200"
+                : "bg-slate-800/40 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500"
+            }`,
+            "data-testid": `${testIdPrefix}-source-global`,
+            title:
+              "FactSet/RBICS GLOBAL universe (~9,000 tickers, Yahoo-priced)",
+          },
+          "Global",
+          " ",
+          source === "global"
+            ? loading
+              ? "(loading…)"
+              : `(${metas.length.toLocaleString()})`
+            : "(~9k)"
+        ),
+        source === "global" && error
+          ? createElement(
+              "span",
+              { className: "text-rose-400", title: error },
+              "load error"
+            )
+          : null
+    )
     : null;
 
-  const hasActiveFilters = active && (
-    (classFilter as any)?.sectors?.size > 0 ||
-    (classFilter as any)?.subsectors?.size > 0 ||
-    (classFilter as any)?.industries?.size > 0 ||
-    search.length > 0 ||
-    manualTickers.size > 0
-  );
+  const classFilterUI = active
+    ? createElement(ClassificationFilters, {
+        filters: classFilters,
+        onFiltersChange: setClassFilters,
+        search,
+        onSearchChange: setSearch,
+        manualTickers,
+        onManualTickersChange: setManualTickers,
+        filteredCount: filteredTickers.length,
+        totalCount: pool.length,
+        testIdPrefix,
+        tickerPoolOverride: source === "global" ? pool : undefined,
+      })
+    : null;
 
   return {
     filteredTickers,
-    classFilter,
-    setClassFilter,
-    universeSourceUI,
     classFilterUI,
-    hasActiveFilters: !!hasActiveFilters,
+    universeSourceUI,
+    source,
+    globalLoading: source === "global" && loading,
+    globalError: source === "global" ? error : null,
+    hasActiveFilters,
+    state: { classFilters, search, manualTickers, source },
+    reset,
   };
 }

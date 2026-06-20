@@ -366,10 +366,12 @@ function CrossingScreener() {
           const pairDates = pairData.indices.map((idx: number) => globalDates[idx] || "");
           const pairPrices = pairData.prices;
           const { start: rangeStart, end: rangeEnd } = dateRange;
+          const rangeStartStr = rangeStart instanceof Date ? rangeStart.toISOString().slice(0, 10) : rangeStart;
+          const rangeEndStr = rangeEnd instanceof Date ? rangeEnd.toISOString().slice(0, 10) : rangeEnd;
           const rangeIndices: number[] = [];
           for (let v = 0; v < pairDates.length; v++) {
             const d = pairDates[v];
-            if (d && !(rangeStart && d < rangeStart) && !(rangeEnd && d > rangeEnd)) {
+            if (d && !(rangeStartStr && d < rangeStartStr) && !(rangeEndStr && d > rangeEndStr)) {
               rangeIndices.push(v);
             }
           }

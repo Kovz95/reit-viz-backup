@@ -137,7 +137,7 @@ export default function ValuationRegime() {
           for (const { days, label } of LOOKBACK_WINDOWS) {
             const windowResults: any[] = [];
             for (const band of BAND_THRESHOLDS) {
-              const signals: any[] = [];
+              const signals: number[] = [];
               for (let g = 0; g < metricVals.length; g++) {
                 const windowStart = days === 0 ? 0 : Math.max(0, g - days + 1);
                 const windowSlice = metricVals.slice(windowStart, g + 1);
@@ -157,10 +157,11 @@ export default function ValuationRegime() {
                     if (prevPctile >= band.threshold[0] && (isTopInclusive ? prevPctile <= band.threshold[1] : prevPctile < band.threshold[1])) continue;
                   }
                 }
-                const bandParam = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-                signals.push(computeForwardReturns(priceVals, g, targetReturn, band.direction, bandParam));
+                signals.push(g);
               }
-              const aggregated = aggregateSignals(signals, band.direction);
+              const bandParam = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
+              const returnsByHorizon = computeForwardReturns(priceVals, signals, FWD_HORIZONS, band.direction, bandParam);
+              const aggregated = aggregateSignals(returnsByHorizon, band.direction as "buy" | "sell");
               const bandBool = returnMode === "band";
               const composite = computeComposite(aggregated, band.direction, bandBool);
               windowResults.push({

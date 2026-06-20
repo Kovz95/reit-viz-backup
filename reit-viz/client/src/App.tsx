@@ -39,6 +39,8 @@ import {
 } from "lucide-react";
 import DataManager from "@/components/DataManager";
 import AutoSaveManager from "@/components/AutoSaveManager";
+import CommandPalette from "@/components/CommandPalette";
+import ShortcutsHelp from "@/components/ShortcutsHelp";
 import { useUpload } from "@/lib/uploadContext";
 import { useUniverse } from "@/lib/universeContext";
 import { API_BASE } from "@/lib/queryClient";
@@ -88,6 +90,9 @@ const SlowStochOptimizer = lazy(() => import("@/pages/SlowStochOptimizer"));
 const DualMAOptimizer = lazy(() => import("@/pages/DualMAOptimizer"));
 const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
 const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
+// Standalone Support / Resistance Detector page. The same component is also
+// embedded as a panel inside LevelsAndTrendlines; this wires the dedicated route.
+const SupportResistance = lazy(() => import("@/components/SupportResistance"));
 const Trendlines = lazy(() => import("@/pages/Trendlines"));
 const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
 const PriceAction = lazy(() => import("@/pages/PriceAction"));
@@ -511,7 +516,7 @@ function StatusBar({ onOpenPalette }: { onOpenPalette?: () => void }) {
   // Market state / autosave / quote-poll data sources are not present in this
   // reconstruction; render sensible static/empty states (never crash).
   const marketState = "UNKNOWN";
-  const autosaveState: "saving" | "error" | "saved" | "idle" = "idle";
+  const autosaveState = "idle" as "saving" | "error" | "saved" | "idle";
   const lastSavedAt: number | null = null;
   const lastQuoteFetchedAt: number | null = null;
   const isDeployed = API_BASE !== "";
@@ -584,23 +589,135 @@ function StatusBar({ onOpenPalette }: { onOpenPalette?: () => void }) {
   );
 }
 
-// ─── App ──────────────────────────────────────────────────────────────────────
+// ─── Command-palette / shortcuts orchestration ─────────────────────────────────
+// Digit (1-9) navigation targets (bundle JYe).
+const NUM_NAV = [
+  "/",
+  "/universe",
+  "/ranking",
+  "/scatter",
+  "/pairs",
+  "/macro",
+  "/correlation",
+  "/performance",
+  "/sigma-move",
+];
 
-function App() {
+// Command-palette page list (bundle ZYe).
+const PAGES = [
+  { path: "/", label: "Charts" },
+  { path: "/universe", label: "Universe" },
+  { path: "/ranking", label: "Ranking" },
+  { path: "/scatter", label: "XY Scatter" },
+  { path: "/factor-backtest", label: "Factor Backtest" },
+  { path: "/relative-strength", label: "Relative Strength Engine" },
+  { path: "/pairs", label: "Pairs" },
+  { path: "/pair-screener", label: "Pair Screener" },
+  { path: "/macro", label: "Macro" },
+  { path: "/regime", label: "Regime" },
+  { path: "/correlation", label: "Correlation" },
+  { path: "/valuation", label: "Valuation" },
+  { path: "/spread", label: "Div Spread" },
+  { path: "/performance", label: "Performance" },
+  { path: "/short-interest", label: "Short Interest" },
+  { path: "/pair-ratios", label: "Pair Ratios" },
+  { path: "/screener", label: "Screener" },
+  { path: "/ratings", label: "Ratings" },
+  { path: "/z-optimizer", label: "Z Optimizer" },
+  { path: "/pair-optimizer", label: "Pair Opt" },
+  { path: "/val-regime", label: "Val Regime" },
+  { path: "/momentum", label: "Momentum" },
+  { path: "/ma-crossover", label: "MA Crossover" },
+  { path: "/roc-optimizer", label: "ROC Optimizer" },
+  { path: "/combo-optimizer", label: "Combo Optimizer" },
+  { path: "/rsi-regime", label: "RSI Regime" },
+  { path: "/oscillators", label: "Oscillators" },
+  { path: "/range-optimizer", label: "Range Optimizer" },
+  { path: "/harsi-optimizer", label: "HARSI Optimizer" },
+  { path: "/slow-stoch-optimizer", label: "Slow Stoch Optimizer" },
+  { path: "/dual-ma-optimizer", label: "DualMA Optimizer" },
+  { path: "/tva-optimizer", label: "TVA Optimizer" },
+  { path: "/levels", label: "Levels & Trendlines" },
+  { path: "/support-resistance", label: "Support / Resistance" },
+  { path: "/trendlines", label: "Trendlines" },
+  { path: "/auto-trendline-backtest", label: "Auto Trendline Backtest" },
+  { path: "/price-action", label: "Price Action" },
+  { path: "/roc-analysis", label: "ROC Deciles" },
+  { path: "/sigma-move", label: "Sigma Snapshot" },
+  { path: "/attribution", label: "Attribution" },
+  { path: "/premium-discount", label: "Premium / Discount" },
+  { path: "/pd-screener", label: "P/D Screener" },
+  { path: "/pattern-screener", label: "Pattern Screener" },
+  { path: "/distributions", label: "Distributions" },
+  { path: "/similar-setups", label: "Similar Setups" },
+  { path: "/setups-screener", label: "Setups Screener" },
+  { path: "/rates-forward", label: "Rates Forward" },
+  { path: "/yield-correlation", label: "Yield Corr" },
+  { path: "/alerts", label: "Alerts" },
+  { path: "/baskets", label: "Baskets" },
+  { path: "/data", label: "Data" },
+];
+
+// ─── App shell ──────────────────────────────────────────────────────────────────
+// Inner shell (bundle QYe): holds palette/help state + the global keydown
+// orchestration. Lives inside <Router> so wouter's location hook is available.
+
+function AppShell() {
+  const [, setLocation] = useLocation();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  useEffect(() => {
+    const isEditable = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return !!(
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el.isContentEditable
+      );
+    };
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setPaletteOpen((o) => !o);
+        return;
+      }
+      if (event.key === "Escape") {
+        if (paletteOpen) setPaletteOpen(false);
+        if (helpOpen) setHelpOpen(false);
+        return;
+      }
+      if (!isEditable(event.target)) {
+        if (event.key === "?") {
+          event.preventDefault();
+          setHelpOpen((o) => !o);
+          return;
+        }
+        if (/^[1-9]$/.test(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          const idx = parseInt(event.key, 10) - 1;
+          const path = NUM_NAV[idx];
+          if (path) {
+            event.preventDefault();
+            setLocation(path);
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setLocation, paletteOpen, helpOpen]);
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <UploadProvider>
-      <UniverseProvider>
-      <WorkspaceTabProvider>
-      <IndicatorColorsProvider>
-      <AutoSaveManager />
-      <Router hook={useHashLocation}>
-        <div className="flex flex-col h-screen">
-          <NavBar />
-          <div className="flex-1 overflow-hidden">
-            <ErrorBoundary>
-            <Suspense fallback={<div className="flex items-center justify-center h-full gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading page…</div>}>
-            <Switch>
+    <>
+      <div className="flex flex-col h-screen">
+        <NavBar />
+        <div className="flex-1 overflow-hidden">
+          <ErrorBoundary>
+          <Suspense fallback={<div className="flex items-center justify-center h-full gap-2 text-xs text-muted-foreground"><Loader2 className="w-3.5 h-3.5 animate-spin" />Loading page…</div>}>
+          <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/universe" component={Universe} />
               <Route path="/global-universe" component={GlobalUniverseExplorer} />
@@ -645,6 +762,7 @@ function App() {
               <Route path="/dual-ma-optimizer" component={DualMAOptimizer} />
               <Route path="/tva-optimizer" component={TVAOptimizer} />
               <Route path="/levels" component={LevelsAndTrendlines} />
+              <Route path="/support-resistance" component={SupportResistance} />
               <Route path="/trendlines" component={Trendlines} />
               <Route path="/auto-trendline-backtest" component={AutoTrendlineBacktest} />
               <Route path="/price-action" component={PriceAction} />
@@ -659,8 +777,26 @@ function App() {
             </Suspense>
             </ErrorBoundary>
           </div>
-          <StatusBar />
+          <StatusBar onOpenPalette={() => setPaletteOpen(true)} />
         </div>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} pages={PAGES} />
+      <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <UploadProvider>
+      <UniverseProvider>
+      <WorkspaceTabProvider>
+      <IndicatorColorsProvider>
+      <AutoSaveManager />
+      <Router hook={useHashLocation}>
+        <AppShell />
       </Router>
       </IndicatorColorsProvider>
       </WorkspaceTabProvider>

@@ -9,8 +9,9 @@ import {
   createSeriesMarkers,
   PriceScaleMode,
 } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, Time, SeriesMarker } from "lightweight-charts";
 import type { PlottedSeries, ChartConfig } from "@/pages/Dashboard";
+import { computeMaByType, type MaType } from "@/lib/maEngine";
 import {
   computeSMA,
   computeEMA,
@@ -75,10 +76,27 @@ function generateFutureBars(lastDate: string, count: number): string[] {
   return out;
 }
 
+/** A moving-average-style overlay drawn on top of an active sub-chart indicator. */
+export interface IndicatorOverlay {
+  id: string;
+  source: string;
+  type: string;
+  period: number;
+  mult?: number;
+}
+
 export interface ActiveIndicators {
   sma?: number;
   ema?: number;
   hma?: number;
+  // Extended moving-average overlays (periods); driven by the Find Best MA panel.
+  wma?: number;
+  kama?: number;
+  frama?: number;
+  t3?: number;
+  alma?: number;
+  lsma?: number;
+  slsma?: number;
   rsi?: number;       // period
   macd?: boolean;
   mean?: { rolling: boolean; period: number };
@@ -90,6 +108,9 @@ export interface ActiveIndicators {
   roc?: number;       // period
   stochastic?: { kPeriod: number; dPeriod: number };
   obv?: boolean;
+  ad?: boolean;
+  cmf?: number;       // period
+  indicatorOverlays?: IndicatorOverlay[];
 }
 
 interface Drawing {
@@ -1419,6 +1440,37 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
       }
 
+      // ── Extended MAs (WMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA), driven by Find Best MA ──
+      const EXTRA_MA: Array<[keyof ActiveIndicators, MaType, number, string]> = [
+        ["wma", "WMA", 1, IC.sma],
+        ["kama", "KAMA", 2, IC.ema],
+        ["frama", "FRAMA", 2, IC.hma],
+        ["t3", "T3", 2, IC.ema],
+        ["alma", "ALMA", 1, IC.sma],
+        ["lsma", "LSMA", 1, IC.hma],
+        ["slsma", "SLSMA", 2, IC.ema],
+      ];
+      const closeVals = closeData.map((d) => d.value as number);
+      for (const [field, maType, width, color] of EXTRA_MA) {
+        const period = activeIndicators[field] as number | undefined;
+        if (!period) continue;
+        const series = computeMaByType(closeVals, period, maType);
+        const maData: { time: Time; value: number }[] = [];
+        for (let i = 0; i < closeData.length; i++) {
+          const v = series[i];
+          if (v != null && Number.isFinite(v)) maData.push({ time: closeData[i].time, value: v as number });
+        }
+        if (maData.length > 0) {
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: width as any,
+            title: `${maType} ${period}${baseLabel}`,
+          });
+          s.setData(maData);
+          indicatorSeriesRef.current.push(s);
+        }
+      }
+
       // ── Bollinger Bands ── (overlay on main chart)
       if (activeIndicators.bollinger) {
         const { period, mult } = activeIndicators.bollinger;
@@ -1572,7 +1624,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }));
         signalMarkers.sort((a: any, b: any) => a.time.localeCompare(b.time));
         try {
-          haSignalsPluginRef.current = createSeriesMarkers(signalTarget, signalMarkers);
+          haSignalsPluginRef.current = createSeriesMarkers(signalTarget, signalMarkers as SeriesMarker<Time>[]);
         } catch (e) {
           console.warn("Failed to create HA signal markers:", e);
         }

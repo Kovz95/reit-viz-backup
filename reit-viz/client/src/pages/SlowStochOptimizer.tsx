@@ -17,7 +17,7 @@ import {
   DATE_PRESETS,
   createDateRangeFromPreset,
 } from "@/lib/forwardReturns";
-import type { ForwardReturnProfile, SignalSummary, CompositeScore } from "@/lib/forwardReturns";
+import type { ForwardReturnProfile, SignalSummary, CompositeScore, HorizonLabel } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, resampleWeekly, createDateRange, defaultInputSelection, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
@@ -815,7 +815,7 @@ export default function SlowStochOptimizer() {
         for (const s of sigs) if (s.direction === direction) signalIndices.push(s.index);
       }
       signalIndices.sort((a, b) => a - b);
-      const evalResult = evaluateSignals(closes, priceDates, signalIndices, evalSide, targetReturn, minHold, null, "3M");
+      const evalResult = evaluateSignals(closes, priceDates, signalIndices, evalSide, targetReturn, minHold, undefined, "3M");
       setEvalResult(evalResult);
       setEvalPriceContext({
         prices: closes, highs, lows, volumes, dates: priceDates, globalIndices, benchmarkPrices: null,
@@ -911,7 +911,7 @@ export default function SlowStochOptimizer() {
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
-  const horizons = FORWARD_HORIZONS;
+  const horizons = [...FORWARD_HORIZONS];
   const isBand = returnMode === "band";
 
   return (
@@ -1431,7 +1431,7 @@ function ExpandedDetail({ tr, horizons, useBand, priceContext, hitConditionsOpen
           {topConfigs.map(cfg => {
             const bestCat = cfg.categories.reduce((a, b) => a.composite.score > b.composite.score ? a : b);
             const summary = bestCat.summary;
-            const maxPF = Math.max(...horizons.map((h: any) => summary.profitFactor[h.label] ?? 0));
+            const maxPF = Math.max(...horizons.map((h: any) => summary.profitFactor[h.label as HorizonLabel] ?? 0));
             const hitCondKey = `${tr.ticker}::${cfg.configLabel}::${bestCat.category}`;
             const isHCOpen = hitConditionsOpen.has(hitCondKey);
             const hasHC = !!(bestCat.profiles && bestCat.profiles.length >= 10 && priceContext);
@@ -1451,7 +1451,7 @@ function ExpandedDetail({ tr, horizons, useBand, priceContext, hitConditionsOpen
                   </td>
                   <td className="px-2 py-1 text-right tabular-nums">{summary.count}</td>
                   {horizons.map((h: any) => {
-                    const hitRate = useBand ? (summary.bandHitRate?.[h.label] ?? summary.hitRate[h.label]) : summary.hitRate[h.label];
+                    const hitRate = useBand ? (summary.bandHitRate?.[h.label as HorizonLabel] ?? summary.hitRate[h.label as HorizonLabel]) : summary.hitRate[h.label as HorizonLabel];
                     return <td key={"hh" + h.label + cfg.configKey} className={`px-1.5 py-1 text-right tabular-nums ${hitRateColor(hitRate)}`}>{(hitRate * 100).toFixed(0)}%</td>;
                   })}
                   <td className={`px-2 py-1 text-right tabular-nums ${profitFactorColor(maxPF)}`}>

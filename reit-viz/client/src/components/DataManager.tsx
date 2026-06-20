@@ -90,6 +90,8 @@ export default function DataManager() {
   const [capRateUploading, setCapRateUploading] = useState(false);
   const [capRateResult, setCapRateResult] = useState<string | null>(null);
   const [capRateError, setCapRateError] = useState<string | null>(null);
+  const [capRateConfirmRemove, setCapRateConfirmRemove] = useState(false);
+  const [capRateRemoving, setCapRateRemoving] = useState(false);
   const capRateFileRef = useRef<HTMLInputElement>(null);
   const [capRateMeta, setCapRateMeta] = useState<{
     loaded: boolean;
@@ -521,6 +523,35 @@ export default function DataManager() {
       setWipingWorkbook(false);
     }
   }, [fetchStatus, fetchSources, toast, checkBackend]);
+
+  const handleRemoveCapRate = useCallback(async () => {
+    setCapRateRemoving(true);
+    try {
+      const hasBackend = await checkBackend();
+      if (!hasBackend) {
+        toast({ title: "Remove unavailable", description: "Removing cap rate data requires a live backend server.", variant: "destructive" });
+        setCapRateConfirmRemove(false);
+        return;
+      }
+      const resp = await apiRequest("POST", "/api/data/wipe-caprate");
+      const data = await resp.json();
+      if (!resp.ok) {
+        toast({ title: "Remove failed", description: data.error || "Unknown error", variant: "destructive" });
+      } else {
+        toast({ title: "Cap rate data removed", description: `Stripped Implied Cap Rate from ${data.strippedFiles} ticker file(s).` });
+        fetchCapRateMeta();
+        fetchStatus();
+        fetchSources();
+        clearAllCaches();
+        queryClient.invalidateQueries();
+        setCapRateConfirmRemove(false);
+      }
+    } catch (err: any) {
+      toast({ title: "Remove failed", description: err.message || "Network error", variant: "destructive" });
+    } finally {
+      setCapRateRemoving(false);
+    }
+  }, [fetchCapRateMeta, fetchStatus, fetchSources, toast, checkBackend]);
 
   const handleOpen = (isOpen: boolean) => {
     // Don't allow closing if a merge apply is in progress
@@ -1688,6 +1719,50 @@ export default function DataManager() {
                 <><Upload className="w-3.5 h-3.5" /> Upload Cap Rate Workbook(s)</>
               )}
             </Button>
+          </div>
+
+          {/* Remove implied cap rate data from all tickers */}
+          <div className="flex items-center gap-2">
+            {!capRateConfirmRemove ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-destructive hover:text-destructive"
+                onClick={() => setCapRateConfirmRemove(true)}
+                title="Remove implied cap rate data from all tickers"
+                data-testid="caprate-remove-btn"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1" />
+                Remove
+              </Button>
+            ) : (
+              <>
+                <span className="text-[11px] text-muted-foreground">Remove cap rate data from all tickers?</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs ml-auto"
+                  onClick={() => setCapRateConfirmRemove(false)}
+                  disabled={capRateRemoving}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={handleRemoveCapRate}
+                  disabled={capRateRemoving}
+                  data-testid="caprate-remove-confirm-btn"
+                >
+                  {capRateRemoving ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> Removing...</>
+                  ) : (
+                    "Remove"
+                  )}
+                </Button>
+              </>
+            )}
           </div>
 
           {capRateResult && (

@@ -584,7 +584,7 @@ const FEATURES: FeatureDef[] = [
       const t = getTva(ctx);
       if (!t) return null;
       const os = t.os[i];
-      return os === undefined || !Number.isFinite(os) ? null : os > 0 ? 1 : os < 0 ? -1 : 0;
+      return os == null || !Number.isFinite(os) ? null : os > 0 ? 1 : os < 0 ? -1 : 0;
     },
   },
   {
@@ -2399,7 +2399,10 @@ export function EvaluatorPanelLoader({
           FUNDAMENTAL_METRICS.map(async (metric) => {
             try {
               const series = await fetchMetricSeries(fundTicker, metric);
-              return [metric, alignSeriesToDates(series, priceContext.dates)] as const;
+              const pts = series.dates
+                .map((time, idx) => ({ time, value: series.values[idx] }))
+                .filter((p): p is { time: string; value: number } => p.value != null);
+              return [metric, alignSeriesToDates(pts, priceContext.dates)] as const;
             } catch {
               return [
                 metric,
@@ -2418,11 +2421,14 @@ export function EvaluatorPanelLoader({
         try {
           const macroBatch = await fetchMacroSeriesBatch(MACRO_SERIES);
           if (cancelled) return;
+          const macroByKey = new Map(macroBatch.map((m) => [m.seriesKey, m]));
           for (const key of MACRO_SERIES) {
-            const pts = (macroBatch[key]?.data ?? []) as {
-              time: string;
-              value: number;
-            }[];
+            const entry = macroByKey.get(key);
+            const pts = entry
+              ? entry.dates
+                  .map((time, idx) => ({ time, value: entry.values[idx] }))
+                  .filter((p): p is { time: string; value: number } => p.value != null)
+              : [];
             macro[key] = alignSeriesToDates(pts, priceContext.dates);
           }
         } catch {
@@ -2536,7 +2542,7 @@ export function buildBacktestResult(
     return {
       horizon: label,
       count,
-      hitRate: agg.hitRate[label],
+      hitRate: agg.hitRate?.[label] ?? 0,
       winRate: agg.winRate[label],
       avgReturn,
       medianReturn: agg.medianReturn[label],

@@ -26,11 +26,16 @@ export interface PairRatioData {
 export async function getYahooPairsRatio(
   tickerA: string,
   tickerB: string,
-  globalDates?: string[],
-  opts?: Record<string, any>
+  globalDatesOrMetricA?: string[] | string,
+  optsOrMetricB?: Record<string, any> | string
 ): Promise<PairRatioData | null> {
   try {
     const params = new URLSearchParams({ a: tickerA, b: tickerB });
+    // Some callers pass (a, b, metricA, metricB) field selectors instead of
+    // (a, b, globalDates, opts); fold those into query params.
+    if (typeof globalDatesOrMetricA === "string") params.set("metricA", globalDatesOrMetricA);
+    if (typeof optsOrMetricB === "string") params.set("metricB", optsOrMetricB);
+    const opts = optsOrMetricB && typeof optsOrMetricB === "object" ? optsOrMetricB : undefined;
     if (opts) {
       for (const [k, v] of Object.entries(opts)) {
         params.set(k, String(v));

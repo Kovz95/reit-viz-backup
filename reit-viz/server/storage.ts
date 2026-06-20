@@ -108,7 +108,7 @@ export interface IStorage {
   updateAlert(id: number, updates: any): any | undefined;
   deleteAlert(id: number): boolean;
 
-  listAnnotations(): any[];
+  listAnnotations(ticker?: string): any[];
   createAnnotation(annotation: any): any;
   updateAnnotation(id: number, updates: any): any | undefined;
   deleteAnnotation(id: number): boolean;
@@ -264,8 +264,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Annotations ──
-  listAnnotations(): any[] {
+  listAnnotations(ticker?: string): any[] {
     try {
+      if (ticker) {
+        return (sqlite.prepare("SELECT * FROM annotations WHERE ticker = ? ORDER BY created_at DESC").all(ticker) as any[]);
+      }
       return (sqlite.prepare("SELECT * FROM annotations ORDER BY created_at DESC").all() as any[]);
     } catch { return []; }
   }

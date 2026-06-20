@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useUniverse } from "@/lib/universeContext";
 import { getTickers } from "@/lib/dataService";
 import { getDates } from "@/lib/dataService";
-import { getTickerRaw } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/basketContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -1855,7 +1855,7 @@ export default function RangeOptimizer() {
       setErrorMsg("Select a ticker.");
       return;
     }
-    const raw = await getTickerRaw(selectedTicker);
+    const raw = await fetchTickerOHLCV(selectedTicker);
     if (!raw) throw new Error(`No Yahoo data for ${selectedTicker}.`);
 
     const n = raw.adjCloses.length;
@@ -2042,7 +2042,7 @@ export default function RangeOptimizer() {
 
     const processTicker = async (ticker: string) => {
       try {
-        const raw = await getTickerRaw(ticker);
+        const raw = await fetchTickerOHLCV(ticker);
         if (!raw) return;
         const n = raw.adjCloses.length;
         const adjHighs = new Array(n);
@@ -2166,7 +2166,7 @@ export default function RangeOptimizer() {
 
     const processTicker = async (ticker: string) => {
       try {
-        const raw = await getTickerRaw(ticker);
+        const raw = await fetchTickerOHLCV(ticker);
         if (!raw) return;
         const n = raw.adjCloses.length;
         const adjHighs = new Array(n);

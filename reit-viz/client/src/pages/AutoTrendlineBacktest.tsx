@@ -283,7 +283,10 @@ export default function AutoTrendlineBacktest() {
         .filter(Boolean)
         .map((t) => allTickers.find((u) => u.ticker === t) || { ticker: t, name: t });
     }
-    return (universeTickers && universeTickers.length > 0 ? universeTickers : allTickers) || [];
+    if (universeTickers && universeTickers.size > 0) {
+      return allTickers.filter((t) => universeTickers.has(t.ticker));
+    }
+    return allTickers;
   }, [scopeMode, singleTicker, pairTickerA, pairTickerB, pairCombo.pairs, basketTickers, universeTickers, allTickers]);
 
   const nValues = useMemo(

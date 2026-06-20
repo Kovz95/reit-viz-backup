@@ -3,7 +3,7 @@
 
 import { createElement } from "react";
 
-export type InputSeriesKind = "ohlcv" | "workbook";
+export type InputSeriesKind = "ohlcv" | "workbook" | "close";
 
 export interface InputSelection {
   kind: InputSeriesKind;
@@ -31,6 +31,7 @@ export interface InputSeriesSelectorProps {
   family?: string;
   label?: string;
   className?: string;
+  disabled?: boolean;
 }
 
 /**

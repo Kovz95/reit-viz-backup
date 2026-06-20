@@ -731,8 +731,15 @@ export default function Dashboard() {
 
         const results = await Promise.all(
           metrics.map(async (metric, idx) => {
-            const data = await getMetricSeriesResolved(ticker, metric, resolveBasket, basketCache);
-            return { metric, data, idx };
+            // Isolate per-metric failures: a single metric/ticker with no data
+            // must not reject the whole view and blank the workspace.
+            try {
+              const data = await getMetricSeriesResolved(ticker, metric, resolveBasket, basketCache);
+              return { metric, data, idx };
+            } catch (err) {
+              console.warn(`No data for ${ticker} / ${metric}`, err);
+              return { metric, data: [], idx };
+            }
           })
         );
 

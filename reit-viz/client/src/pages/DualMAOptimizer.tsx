@@ -7,6 +7,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
 import { computeMA, MA_TYPES } from "@/lib/movingAverages";
+import type { MAType } from "@/lib/movingAverages";
 import { filterByDateRange, resampleWeekly, createDateRange, getWorkbookSeries, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { defaultInputSelection } from "@/lib/optimizerInputSeries";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
@@ -271,8 +272,8 @@ function calcStats(
 
 function runBacktest(prices: number[], params: DualMAParams): BacktestResult {
   const n = prices.length;
-  const biasMa = computeMA(prices, params.biasLen, params.biasMAType, params.maOpts);
-  const trigMa = computeMA(prices, params.triggerLen, params.triggerMAType, params.maOpts);
+  const biasMa = computeMA(prices, params.biasLen, params.biasMAType as MAType, params.maOpts);
+  const trigMa = computeMA(prices, params.triggerLen, params.triggerMAType as MAType, params.maOpts);
   const bias = new Int8Array(n);
   const position = new Int8Array(n);
   const trades: TradeRecord[] = [];

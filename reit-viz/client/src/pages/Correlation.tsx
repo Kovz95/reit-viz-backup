@@ -16,7 +16,7 @@ import {
   HistogramSeries,
   PriceScaleMode,
 } from "lightweight-charts";
-import type { IChartApi, Time } from "lightweight-charts";
+import type { IChartApi, Time, LineWidth } from "lightweight-charts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -76,7 +76,7 @@ interface MacroSeriesMeta {
   label: string;
   category: string;
   unit: string;
-  freq: string;
+  freq?: string;
 }
 
 interface PairwiseResult {
@@ -681,7 +681,7 @@ function MiniChart({
     } else {
       const series = chart.addSeries(LineSeries, {
         color,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as LineWidth,
         priceLineVisible: false,
         lastValueVisible: true,
         crosshairMarkerRadius: 3,
@@ -693,7 +693,7 @@ function MiniChart({
     if (secondData && secondData.length > 0) {
       const s2 = chart.addSeries(LineSeries, {
         color: secondColor || COLORS.secondary,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as LineWidth,
         priceLineVisible: false,
         lastValueVisible: true,
         crosshairMarkerRadius: 3,
@@ -703,7 +703,7 @@ function MiniChart({
     if (thirdData && thirdData.length > 0) {
       const s3 = chart.addSeries(LineSeries, {
         color: thirdColor || COLORS.positive,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as LineWidth,
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerRadius: 3,
@@ -713,7 +713,7 @@ function MiniChart({
     if (fourthData && fourthData.length > 0) {
       const s4 = chart.addSeries(LineSeries, {
         color: fourthColor || COLORS.purple,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as LineWidth,
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerRadius: 3,

@@ -875,7 +875,7 @@ export default function ROCOptimizer() {
 
           for (const cat of handler) {
             const catMeta = SIGNAL_META[cat];
-            const direction = catMeta?.direction;
+            const direction: "buy" | "sell" = catMeta?.direction === "sell" ? "sell" : "buy";
             const profiles: any[] = [];
             const signalDates: SignalDate[] = [];
             let lastSignalIdx = -1;
@@ -884,7 +884,7 @@ export default function ROCOptimizer() {
               if (minHold > 0 && lastSignalIdx >= 0 && sigIdx < lastSignalIdx + minHold) continue;
               const dailyIdx =
                 effectiveFreq === "weekly"
-                  ? mapWeeklyIndexToDaily(sigIdx, downsampled)
+                  ? mapWeeklyIndexToDaily(downsampled, sigIdx)
                   : sigIdx;
               if (dailyIdx < 0) continue;
               const profile = computeForwardProfile(
@@ -973,7 +973,7 @@ export default function ROCOptimizer() {
           }
 
           const bestROC = computeROC(src, bestConfig.config.period);
-          const bestROCVal = bestROC[src.length - 1];
+          const bestROCVal = bestROC[src.length - 1] ?? NaN;
           if (Number.isFinite(bestROCVal)) {
             if (signalType === "zero_cross") {
               currentSignal = bestROCVal > 0 ? "ROC Above 0 (Bull)" : "ROC Below 0 (Bear)";
@@ -995,15 +995,15 @@ export default function ROCOptimizer() {
                   : "ROC in band (Neutral)";
             } else if (signalType === "fast_slow_cross") {
               const slowROC = computeROC(src, bestConfig.config.slowPeriod ?? 50);
-              const slowVal = slowROC[src.length - 1];
+              const slowVal = slowROC[src.length - 1] ?? NaN;
               if (Number.isFinite(slowVal))
                 currentSignal =
                   bestROCVal > slowVal ? "Fast ROC > Slow (Bull)" : "Fast ROC < Slow (Bear)";
             } else {
               const slb = bestConfig.config.slopeLookback ?? 5;
               const rocArr = computeROC(src, bestConfig.config.period);
-              const rocCur = rocArr[src.length - 1];
-              const rocPrev = rocArr[src.length - 1 - slb];
+              const rocCur = rocArr[src.length - 1] ?? NaN;
+              const rocPrev = rocArr[src.length - 1 - slb] ?? NaN;
               if (src.length > slb && Number.isFinite(rocPrev))
                 currentSignal =
                   rocCur - rocPrev > 0 ? "ROC Slope Up (Bull)" : "ROC Slope Down (Bear)";
@@ -1210,7 +1210,7 @@ export default function ROCOptimizer() {
       }
       signalIndices.sort((a, b) => a - b);
 
-      const evalResultData = buildBacktestResult(workingCloses, workingDates, signalIndices, evalSide, targetReturn, minHold, null, "3M");
+      const evalResultData = buildBacktestResult(workingCloses, workingDates, signalIndices, evalSide, targetReturn, minHold, undefined, "3M");
       setEvalResult(evalResultData);
       setEvalPriceContext({
         prices: workingCloses,
@@ -1493,7 +1493,7 @@ export default function ROCOptimizer() {
           for (const cat of bullCats) {
             for (const idx of detected[cat]) {
               if (minHold > 0 && lastBull >= 0 && idx < lastBull + minHold) continue;
-              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(idx, downsampled) : idx;
+              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
               if (di < 0) continue;
               const profile = computeForwardProfile(
                 effectiveFreq === "weekly" ? rawCloses : workingCloses,
@@ -1518,7 +1518,7 @@ export default function ROCOptimizer() {
           for (const cat of bearCats) {
             for (const idx of detected[cat]) {
               if (minHold > 0 && lastBear >= 0 && idx < lastBear + minHold) continue;
-              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(idx, downsampled) : idx;
+              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
               if (di < 0) continue;
               const profile = computeForwardProfile(
                 effectiveFreq === "weekly" ? rawCloses : workingCloses,

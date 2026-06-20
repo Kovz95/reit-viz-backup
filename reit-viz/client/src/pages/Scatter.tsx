@@ -279,7 +279,7 @@ export default function Scatter() {
       ),
   });
 
-  const rawPoints: ScatterPoint[] = queryData?.points ?? [];
+  const rawPoints: ScatterPoint[] = (queryData?.points ?? []) as unknown as ScatterPoint[];
   const resolvedDate: string = queryData?.resolvedDate ?? "";
 
   const categoryValues = useMemo(() => {
@@ -1168,7 +1168,7 @@ export default function Scatter() {
               }`}
               onClick={() => {
                 if (colorBy === "subindustry") {
-                  const updated = new Set((classFilters as any)[colorBy]);
+                  const updated = new Set<string>((classFilters as any)[colorBy]);
                   if (updated.has(cat)) updated.delete(cat);
                   else { updated.clear(); updated.add(cat); }
                   setClassFilters({ ...classFilters, [colorBy]: updated });

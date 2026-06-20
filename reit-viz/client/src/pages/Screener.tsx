@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getTickers, getMetricSeries, isPercentMetric, getCustomFundamentalMetrics } from "@/lib/dataService";
+import { getTickers, getMetricSeries, isPercentMetric, getCustomFundamentalMetrics, getTradingDates } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
 import {
   computeSMA,
@@ -64,6 +64,14 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Command,
+  CommandInput,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { apiRequest } from "@/lib/queryClient";
 import type { ScreenerPreset } from "@shared/schema";
@@ -203,6 +211,18 @@ interface ScreenerCondition {
   lookbackEndDate?: string;           // ISO date string for custom mode
 }
 
+interface RvVerdict {
+  ticker: string;
+  label: string;
+  premPctile?: number | null;
+  growthPctile?: number | null;
+  premGap?: number | null;
+  impliedPrem?: number | null;
+  lastP?: number | null;
+  lastG?: number | null;
+  rationale?: string;
+}
+
 interface ScreenerResult {
   ticker: string;
   name: string;
@@ -210,6 +230,7 @@ interface ScreenerResult {
   subsector: string;
   values: Record<string, number | null>; // keyed by condition id → left value (latest or value at match date)
   matchDates: Record<string, string | null>; // keyed by condition id → date when condition was true (lookback mode)
+  rv?: RvVerdict; // relative-value verdict (attached when rvFilter !== "all")
 }
 
 function newCondition(): ScreenerCondition {
@@ -778,24 +799,73 @@ function TickerSelect({
   tickers: TickerMeta[];
   width?: number;
 }) {
+  const [open, setOpen] = useState(false);
+  const selected = tickers.find((t) => t.ticker === value);
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger
-        className="h-7 text-[11px] border-border bg-muted/20 focus:ring-0 focus:ring-offset-0 truncate font-mono"
-        style={{ width }}
-        data-testid="select-ticker2"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent className="text-xs max-h-72">
-        {tickers.map((t) => (
-          <SelectItem key={t.ticker} value={t.ticker} className="text-xs py-0.5">
-            <span className="font-mono">{t.ticker}</span>
-            <span className="ml-1 text-muted-foreground text-[10px]">{t.name}</span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-expanded={open}
+          className="h-7 text-[11px] border border-border bg-muted/20 rounded-md px-2 flex items-center justify-between gap-1 truncate font-mono hover:bg-muted/40 focus:outline-none focus:ring-0"
+          style={{ width }}
+          data-testid="select-ticker2"
+          title={selected ? `${selected.ticker} — ${selected.name}` : "Select ticker"}
+        >
+          <span className="truncate">
+            {selected ? (
+              <>
+                <span>{selected.ticker}</span>
+                <span className="ml-1 text-muted-foreground text-[10px]">{selected.name}</span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">Select…</span>
+            )}
+          </span>
+          <ChevronDownIcon size={10} className="text-muted-foreground shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[420px] p-0" align="start">
+        <Command
+          filter={(val, search) => {
+            const v = search.toLowerCase().trim();
+            return v ? (val.includes(v) ? 1 : 0) : 1;
+          }}
+        >
+          <CommandInput
+            placeholder="Search ticker or name…"
+            className="h-8 text-xs"
+            data-testid="input-ticker2-search"
+          />
+          <CommandList className="max-h-[260px]">
+            <CommandEmpty>No ticker found.</CommandEmpty>
+            <CommandGroup>
+              {tickers.map((t) => (
+                <CommandItem
+                  key={t.ticker}
+                  value={`${t.ticker} ${t.name}`.toLowerCase()}
+                  onSelect={() => {
+                    onChange(t.ticker);
+                    setOpen(false);
+                  }}
+                  className="text-xs py-1 cursor-pointer"
+                  data-testid={`option-ticker2-${t.ticker}`}
+                >
+                  <span className="font-mono w-14 shrink-0 whitespace-nowrap">{t.ticker}</span>
+                  <span className="ml-1 text-muted-foreground text-[10px] flex-1 min-w-0 truncate" title={t.name}>
+                    {t.name}
+                  </span>
+                  {value === t.ticker && (
+                    <Check size={10} className="ml-auto text-primary shrink-0" />
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1157,7 +1227,7 @@ function ConditionRow({
 // ─────────────────────────────────────────────
 // Sort state
 // ─────────────────────────────────────────────
-type SortKey = "ticker" | "name" | "sector" | string;
+type SortKey = "ticker" | "name" | "sector" | "rv_label" | "rv_prem_pct" | "rv_growth_pct" | "rv_prem_gap" | string;
 interface SortState {
   key: SortKey;
   dir: "asc" | "desc";
@@ -1193,6 +1263,12 @@ export default function Screener() {
   const [screenMode, setScreenMode] = useState<"single" | "pairs" | "pairCombo">("single");
   // RV (relative-value) verdict filter — applied after other conditions (single mode)
   const [rvFilter, setRvFilter] = useState<"all" | "attractive" | "expensive" | "neutral">("all");
+  const [rvDimension, setRvDimension] = useState<"subsector" | "sector">("subsector");
+  const [rvValMetric, setRvValMetric] = useState("P/FFO FY2");
+  const [rvGrowthMetric, setRvGrowthMetric] = useState("FY2 FFO Growth");
+  const [rvBand, setRvBand] = useState(0.5);
+  const [lastRunConditions, setLastRunConditions] = useState<ScreenerCondition[] | null>(null);
+  const [warnSource, setWarnSource] = useState<string | null>(null);
   const [pairsMetricA, setPairsMetricA] = useState("close");
   const [pairsMetricB, setPairsMetricB] = useState("close");
   const [pairsZWindow, setPairsZWindow] = useState(60);
@@ -1367,11 +1443,26 @@ export default function Screener() {
     setScanError(null);
     setResults([]);
     setHasRun(false);
+    setLastRunConditions(null);
+    setWarnSource(null);
     abortRef.current = false;
 
     const tickers = scopedTickers;
     const total = tickers.length;
     setScanProgress({ done: 0, total });
+
+    // Compute scan-window banner when any condition uses preset lookback
+    try {
+      if (conditions.some((c) => (c.lookbackMode ?? "now") === "preset")) {
+        const dates = await getTradingDates();
+        const end = dates[dates.length - 1];
+        const presetDays =
+          conditions.find((c) => (c.lookbackMode ?? "now") === "preset")?.lookbackPresetDays ?? 21;
+        const startIdx = Math.max(0, dates.length - presetDays);
+        const start = dates[startIdx];
+        setWarnSource(`Scan window: ${start} to ${end}`);
+      }
+    } catch {}
 
     const matchedResults: ScreenerResult[] = [];
     const BATCH = 20;
@@ -1418,8 +1509,37 @@ export default function Screener() {
         setScanProgress({ done: Math.min(b + BATCH, total), total });
       }
 
-      setResults(matchedResults);
+      // ── Relative-Value verdict filter (applied after AND conditions) ──
+      let finalResults = matchedResults;
+      if (rvFilter !== "all" && matchedResults.length > 0 && !abortRef.current) {
+        const prevWarn = warnSource;
+        try {
+          setWarnSource((w) => (w ? `${w} · Computing RV verdicts...` : "Computing RV verdicts..."));
+          const res = await apiRequest("POST", "/api/rv-verdict-batch", {
+            tickers: matchedResults.map((r) => r.ticker),
+            dimension: rvDimension,
+            valMetric: rvValMetric,
+            growthMetric: rvGrowthMetric,
+            band: rvBand,
+          });
+          const json = await res.json();
+          const rvMap = new Map<string, RvVerdict>();
+          for (const v of json.data || []) rvMap.set(v.ticker, v);
+          const wantedLabel =
+            rvFilter === "attractive" ? "Attractive" : rvFilter === "expensive" ? "Expensive" : "Neutral";
+          finalResults = matchedResults
+            .map((r) => ({ ...r, rv: rvMap.get(r.ticker) }))
+            .filter((r) => r.rv && r.rv.label === wantedLabel);
+          setWarnSource(prevWarn);
+        } catch (err: any) {
+          setWarnSource(prevWarn);
+          setScanError(`RV filter failed: ${err?.message ?? "unknown error"}. Showing all matches.`);
+        }
+      }
+
+      setResults(finalResults);
       setHasRun(true);
+      setLastRunConditions(JSON.parse(JSON.stringify(conditions)));
     } catch (err: any) {
       setScanError(err?.message ?? "Scan failed");
     } finally {
@@ -1558,18 +1678,66 @@ export default function Screener() {
       if (sort.key === "ticker") { av = a.ticker; bv = b.ticker; }
       else if (sort.key === "name") { av = a.name; bv = b.name; }
       else if (sort.key === "sector") { av = a.sector; bv = b.sector; }
+      else if (sort.key === "rv_label") { av = a.rv?.label ?? ""; bv = b.rv?.label ?? ""; }
+      else if (sort.key === "rv_prem_pct") { av = a.rv?.premPctile ?? -Infinity; bv = b.rv?.premPctile ?? -Infinity; }
+      else if (sort.key === "rv_growth_pct") { av = a.rv?.growthPctile ?? -Infinity; bv = b.rv?.growthPctile ?? -Infinity; }
+      else if (sort.key === "rv_prem_gap") { av = a.rv?.premGap ?? -Infinity; bv = b.rv?.premGap ?? -Infinity; }
       else {
         // condition id → numeric value
         av = a.values[sort.key] ?? -Infinity;
         bv = b.values[sort.key] ?? -Infinity;
       }
 
-      if (av === bv) return 0;
+      if (av === bv) return a.ticker.localeCompare(b.ticker);
       const cmp = typeof av === "string" ? av.localeCompare(bv) : av - bv;
       return sort.dir === "asc" ? cmp : -cmp;
     });
     return arr;
   }, [results, sort]);
+
+  // ── Stale-results detection (filters changed since last run) ──
+  const isStale = useMemo(() => {
+    if (!hasRun || !lastRunConditions) return false;
+    try {
+      return JSON.stringify(conditions) !== JSON.stringify(lastRunConditions);
+    } catch {
+      return false;
+    }
+  }, [hasRun, conditions, lastRunConditions]);
+
+  // ── Export single-mode results to CSV ──
+  function exportCsv() {
+    const cols = lastRunConditions ?? conditions;
+    const rows = sortedResults.map((row) => {
+      const rec: Record<string, any> = {
+        ticker: row.ticker,
+        name: row.name,
+        sector: row.sector,
+      };
+      cols.forEach((c) => {
+        rec[c.leftMetric] = row.values[c.id] ?? null;
+      });
+      if (rvFilter !== "all" && row.rv) {
+        rec["RV Verdict"] = row.rv.label;
+        rec["Prem Pctile"] = row.rv.premPctile ?? null;
+        rec["Growth Pctile"] = row.rv.growthPctile ?? null;
+        rec["Prem Gap %"] = row.rv.premGap ?? null;
+        rec["Implied Prem %"] = row.rv.impliedPrem ?? null;
+        rec["Today Prem %"] = row.rv.lastP ?? null;
+        rec["Today Growth Diff (pp)"] = row.rv.lastG ?? null;
+      }
+      return rec;
+    });
+    const header = Object.keys(rows[0] || {});
+    const csv = [
+      header.join(","),
+      ...rows.map((r) => header.map((h) => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `screener_results_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+  }
 
   // ── Sort icon ──
   function SortIcon({ colKey }: { colKey: SortKey }) {
@@ -1835,6 +2003,73 @@ export default function Screener() {
                   </button>
                 ))}
               </div>
+              <div className="border-t border-border pt-2 space-y-2">
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1">Peer dimension</div>
+                  <Select value={rvDimension} onValueChange={(v) => setRvDimension(v as "subsector" | "sector")}>
+                    <SelectTrigger className="h-7 text-[11px]" data-testid="select-rv-dimension">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="subsector">Sub-industry</SelectItem>
+                      <SelectItem value="sector">Sector</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1">Valuation metric</div>
+                  <Select value={rvValMetric} onValueChange={setRvValMetric}>
+                    <SelectTrigger className="h-7 text-[11px]" data-testid="select-rv-val">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="P/FFO FY2">P/FFO FY2</SelectItem>
+                      <SelectItem value="P/FFO LTM">P/FFO LTM</SelectItem>
+                      <SelectItem value="P/AFFO FY2">P/AFFO FY2</SelectItem>
+                      <SelectItem value="EV/EBITDA FY2">EV/EBITDA FY2</SelectItem>
+                      <SelectItem value="EV/EBITDA LTM">EV/EBITDA LTM</SelectItem>
+                      <SelectItem value="P/E FY2">P/E FY2</SelectItem>
+                      <SelectItem value="P/E LTM">P/E LTM</SelectItem>
+                      <SelectItem value="Dividend Yield">Dividend Yield</SelectItem>
+                      <SelectItem value="FFO Yield FY2">FFO Yield FY2</SelectItem>
+                      <SelectItem value="AFFO Yield FY2">AFFO Yield FY2</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1">Growth metric</div>
+                  <Select value={rvGrowthMetric} onValueChange={setRvGrowthMetric}>
+                    <SelectTrigger className="h-7 text-[11px]" data-testid="select-rv-growth">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="FY1 FFO Growth">FY1 FFO Growth</SelectItem>
+                      <SelectItem value="FY2 FFO Growth">FY2 FFO Growth</SelectItem>
+                      <SelectItem value="FY2 AFFO Growth">FY2 AFFO Growth</SelectItem>
+                      <SelectItem value="FY1 EPS Growth">FY1 EPS Growth</SelectItem>
+                      <SelectItem value="FY2 EPS Growth">FY2 EPS Growth</SelectItem>
+                      <SelectItem value="EBITDA FY2 Growth%">EBITDA FY2 Growth</SelectItem>
+                      <SelectItem value="Sales LTM YoY%">Sales LTM YoY%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground mb-1">
+                    Conditional band: ±{rvBand.toFixed(2)}σ
+                  </div>
+                  <Select value={String(rvBand)} onValueChange={(v) => setRvBand(parseFloat(v))}>
+                    <SelectTrigger className="h-7 text-[11px]" data-testid="select-rv-band">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0.25">±0.25σ (tight)</SelectItem>
+                      <SelectItem value="0.5">±0.50σ</SelectItem>
+                      <SelectItem value="0.75">±0.75σ</SelectItem>
+                      <SelectItem value="1">±1.00σ (wide)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </PopoverContent>
           </Popover>
         )}
@@ -2006,7 +2241,7 @@ export default function Screener() {
             {hasRun && !isScanning && (
               <div className="flex flex-col h-full min-h-0">
                 {/* Results header */}
-                <div className="px-3 py-1.5 border-b border-border/40 flex items-center gap-2 shrink-0">
+                <div className="px-3 py-1.5 border-b border-border/40 flex items-center gap-2 shrink-0 flex-wrap">
                   <span className="text-[11px] font-semibold text-foreground" data-testid="text-match-count">
                     {results.length} of {scopedTickers.length} tickers match
                   </span>
@@ -2015,6 +2250,30 @@ export default function Screener() {
                   )}
                   {results.length === 0 && (
                     <span className="text-[11px] text-muted-foreground">— no tickers pass all conditions</span>
+                  )}
+                  {warnSource && (
+                    <span className="text-[10px] text-muted-foreground">{warnSource}</span>
+                  )}
+                  {isStale && (
+                    <button
+                      onClick={runScreen}
+                      className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+                      title="Filters have changed since the last run. Click to re-run."
+                      data-testid="banner-stale-results"
+                    >
+                      <AlertCircle size={10} /> Filters changed — re-run
+                    </button>
+                  )}
+                  {results.length > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={`h-6 gap-1 text-[11px] ${isStale ? "" : "ml-auto"}`}
+                      onClick={exportCsv}
+                      data-testid="export-csv"
+                    >
+                      <Download className="w-3 h-3" />
+                    </Button>
                   )}
                 </div>
 
@@ -2059,6 +2318,42 @@ export default function Screener() {
                               ),
                             ];
                           })}
+                          {rvFilter !== "all" && (
+                            <>
+                              <th
+                                className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+                                onClick={() => toggleSort("rv_label")}
+                                title="Relative Value verdict (cross-sectional vs peers)"
+                                data-testid="th-rv-label"
+                              >
+                                Verdict <SortIcon colKey="rv_label" />
+                              </th>
+                              <th
+                                className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+                                onClick={() => toggleSort("rv_prem_pct")}
+                                title="Premium percentile within peers at similar growth (lower = cheaper)"
+                                data-testid="th-rv-prem-pct"
+                              >
+                                Prem %ile <SortIcon colKey="rv_prem_pct" />
+                              </th>
+                              <th
+                                className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+                                onClick={() => toggleSort("rv_growth_pct")}
+                                title="Growth percentile within peers at similar premium (higher = stronger)"
+                                data-testid="th-rv-growth-pct"
+                              >
+                                Growth %ile <SortIcon colKey="rv_growth_pct" />
+                              </th>
+                              <th
+                                className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+                                onClick={() => toggleSort("rv_prem_gap")}
+                                title="Today's premium minus the median premium of peers at similar growth (negative = below fair)"
+                                data-testid="th-rv-prem-gap"
+                              >
+                                Prem Gap <SortIcon colKey="rv_prem_gap" />
+                              </th>
+                            </>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
@@ -2128,6 +2423,53 @@ export default function Screener() {
                                 ),
                               ];
                             })}
+
+                            {/* RV verdict cells */}
+                            {rvFilter !== "all" && (
+                              <>
+                                <td
+                                  className="px-2 py-1.5 whitespace-nowrap"
+                                  data-testid={`rv-label-${row.ticker}`}
+                                >
+                                  {row.rv ? (
+                                    <span
+                                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                        row.rv.label === "Attractive"
+                                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30"
+                                          : row.rv.label === "Expensive"
+                                            ? "bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30"
+                                            : "bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30"
+                                      }`}
+                                      title={row.rv.rationale || ""}
+                                    >
+                                      {row.rv.label}
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground text-[10px]">—</span>
+                                  )}
+                                </td>
+                                <td
+                                  className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground"
+                                  data-testid={`rv-prem-pct-${row.ticker}`}
+                                >
+                                  {row.rv?.premPctile != null ? row.rv.premPctile.toFixed(0) : "—"}
+                                </td>
+                                <td
+                                  className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground"
+                                  data-testid={`rv-growth-pct-${row.ticker}`}
+                                >
+                                  {row.rv?.growthPctile != null ? row.rv.growthPctile.toFixed(0) : "—"}
+                                </td>
+                                <td
+                                  className="px-2 py-1.5 text-right font-mono tabular-nums text-foreground"
+                                  data-testid={`rv-prem-gap-${row.ticker}`}
+                                >
+                                  {row.rv?.premGap != null
+                                    ? `${row.rv.premGap > 0 ? "+" : ""}${row.rv.premGap.toFixed(1)}%`
+                                    : "—"}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         ))}
                       </tbody>

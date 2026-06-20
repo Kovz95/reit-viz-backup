@@ -708,7 +708,7 @@ export default function ZScoreOptimizer() {
         prevZ = z;
       }
       const signalIndices = (direction === "buy" ? buyIdx : sellIdx).sort((a, b) => a - b);
-      const result = evaluateSignals(priceVals, dates, signalIndices, evalSide, targetReturn, evalHold, null, "3M");
+      const result = evaluateSignals(priceVals, dates, signalIndices, evalSide, targetReturn, evalHold, undefined, "3M");
       setEvalResult(result);
       setEvalPriceContext({
         prices: priceVals,
@@ -1313,7 +1313,9 @@ export default function ZScoreOptimizer() {
                             </div>
                             {panels.filter((n) => hitConditionsOpen.has(n.key)).map((n) => (
                               <div key={`${n.key}-panel`} className="mt-1">
-                                <HitConditionsPanel ticker={e.ticker} priceContext={e.priceContext} signals={n.profiles} direction={n.direction} title={n.title} useBand={isBand} />
+                                {e.priceContext && (
+                                  <HitConditionsPanel ticker={e.ticker} priceContext={e.priceContext} signals={n.profiles} direction={n.direction} title={n.title} useBand={isBand} />
+                                )}
                               </div>
                             ))}
                           </div>

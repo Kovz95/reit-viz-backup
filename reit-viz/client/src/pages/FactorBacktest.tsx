@@ -3,7 +3,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useAppContext } from "@/lib/appContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
-import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
+import { fetchMetricSeries } from "@/lib/signalUtils";
 import { fetchTradingDates } from "@/lib/fetchTradingDates";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { isPercentMetric } from "@/lib/metricUtils";

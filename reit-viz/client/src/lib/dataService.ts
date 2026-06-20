@@ -6,6 +6,8 @@
  * Example: "close": [[0, 23.29], [1, 23.73], ...]
  */
 
+import type { ClassificationField } from "@/lib/reclassificationOverrides";
+
 // ---- Types ----
 export interface TickerMeta {
   ticker: string;
@@ -46,7 +48,7 @@ export interface ClassifiedBase {
   metrics?: string[];
 }
 
-export const CLASSIFICATION_KEYS: (keyof ClassifiedBase)[] = [
+export const CLASSIFICATION_KEYS: ClassificationField[] = [
   "economy", "sector", "subsector", "industryGroup", "industry", "subindustry",
 ];
 
@@ -371,6 +373,13 @@ function dataBase(): string {
 async function fetchJSON<T>(relativePath: string): Promise<T> {
   const resp = await fetch(`${dataBase()}/${relativePath}`);
   if (!resp.ok) throw new Error(`Failed to fetch ${relativePath}: ${resp.status}`);
+  // When a static file is missing, the SPA server responds with index.html
+  // (200, text/html). Guard so callers get a clear error instead of a cryptic
+  // "Unexpected token '<'" JSON.parse failure on the app shell.
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("json")) {
+    throw new Error(`No JSON at ${relativePath} (got ${contentType || "unknown"} — likely missing file)`);
+  }
   return resp.json();
 }
 
@@ -496,10 +505,21 @@ export async function getTickerRaw(symbol: string): Promise<RawTickerData> {
 
       // Static file: contains raw RLE-encoded metric data (NOT tuple format)
       // Format: { close: [v1, v2, "~3", v3, ...], open: [...], ... }
-      const raw = await fetchJSON<Record<string, (number | string | null)[]>>(`tickers/${key}.json`);
-      const tupleData = flatToTuples(raw);
-      tickerDataCache.set(key, tupleData);
-      return tupleData;
+      try {
+        const raw = await fetchJSON<Record<string, (number | string | null)[]>>(`tickers/${key}.json`);
+        const tupleData = flatToTuples(raw);
+        tickerDataCache.set(key, tupleData);
+        return tupleData;
+      } catch {
+        // Neither the API nor a static file has data for this symbol (e.g. a
+        // delisted ticker, or a locally-unprovisioned data dir). Degrade
+        // gracefully: cache and return empty so a single dataless ticker
+        // renders an empty chart instead of throwing "Failed to load view"
+        // and blanking the entire workspace.
+        const empty: RawTickerData = {};
+        tickerDataCache.set(key, empty);
+        return empty;
+      }
     } finally {
       releaseFetchSlot();
       inFlightTickerFetches.delete(key);
@@ -1674,7 +1694,7 @@ export async function getPerformanceData(
 
           // Preset period returns
           for (const key of Object.keys(periodOffsets)) {
-            row[key as keyof PerformanceRow] = priceReturn(closeMap, periodStartIdx[key], lastIdx) as any;
+            (row as any)[key] = priceReturn(closeMap, periodStartIdx[key], lastIdx);
           }
 
           // Custom range return

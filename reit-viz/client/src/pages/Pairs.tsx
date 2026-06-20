@@ -12,7 +12,7 @@ import {
   PriceScaleMode,
   createSeriesMarkers,
 } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, Time, LineWidth } from "lightweight-charts";
 import {
   Select,
   SelectContent,
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, ListFilter, AlertTriangle, Info } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -66,6 +66,8 @@ import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { IndicatorColorEditor } from "@/components/IndicatorsPanel";
 import ExportMenu from "@/components/ExportMenu";
+import { useBaskets } from "@/lib/useBaskets";
+import type { Basket } from "@/lib/useBaskets";
 
 const LOOKBACK_OPTIONS = [
   { label: "20d", value: 20 },
@@ -76,6 +78,36 @@ const LOOKBACK_OPTIONS = [
 
 // Stable empty indicators object — avoids re-creating {} on every render
 const EMPTY_INDICATORS: ActiveIndicators = {};
+
+// Expanding-window mean ± k·σ envelope (used for "expanding" bands on Z charts).
+// Emits a point once at least `minPeriods` finite values have accumulated.
+function expandingMeanStdBands(
+  series: { time: string; value: number }[],
+  k: number = 2,
+  minPeriods: number = 20,
+): { upper: { time: string; value: number }[]; lower: { time: string; value: number }[] } {
+  const upper: { time: string; value: number }[] = [];
+  const lower: { time: string; value: number }[] = [];
+  let count = 0;
+  let sum = 0;
+  let sumSq = 0;
+  for (let i = 0; i < series.length; i++) {
+    const v = series[i].value;
+    if (Number.isFinite(v)) {
+      count += 1;
+      sum += v;
+      sumSq += v * v;
+    }
+    if (count >= minPeriods) {
+      const mean = sum / count;
+      const variance = Math.max(0, sumSq / count - mean * mean);
+      const sd = Math.sqrt(variance);
+      upper.push({ time: series[i].time, value: mean + k * sd });
+      lower.push({ time: series[i].time, value: mean - k * sd });
+    }
+  }
+  return { upper, lower };
+}
 
 // Default visible chart IDs (core 6)
 const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter", "signalAnalyzer"]);
@@ -468,6 +500,7 @@ interface PairsData {
   zScore: DataPoint[];
   spreadZ: DataPoint[];
   olsResidZ: DataPoint[];
+  percentileRank: DataPoint[];
   correlation: DataPoint[];
   rollingBeta: DataPoint[];
   betaAdjSpread: DataPoint[];
@@ -1448,6 +1481,7 @@ function MiniChart({
   height,
   useFlexHeight,
   refLines,
+  refBands,
   secondaryData,
   secondaryColor,
   secondaryLabel,
@@ -1459,6 +1493,7 @@ function MiniChart({
   onUnregisterChart,
   onRegisterSeries,
   onCrosshairMove,
+  onRemove,
 }: {
   data: DataPoint[];
   title: string;
@@ -1466,6 +1501,7 @@ function MiniChart({
   height: number;
   useFlexHeight?: boolean;
   refLines?: { value: number; color: string; style: number; label?: string }[];
+  refBands?: { data: DataPoint[]; color: string; style: number; label?: string }[];
   secondaryData?: DataPoint[];
   secondaryColor?: string;
   secondaryLabel?: string;
@@ -1477,6 +1513,7 @@ function MiniChart({
   onUnregisterChart: (id: string) => void;
   onRegisterSeries: (id: string, series: ISeriesApi<any>) => void;
   onCrosshairMove?: (id: string, data: { time: string; values: Record<string, number> } | null) => void;
+  onRemove?: () => void;
 }) {
   const effectiveFlexHeight = useFlexHeight || isMaximized;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1512,7 +1549,7 @@ function MiniChart({
     // Main series
     const mainSeries = chart.addSeries(LineSeries, {
       color,
-      lineWidth: 1.5,
+      lineWidth: 1.5 as LineWidth,
       priceLineVisible: false,
       lastValueVisible: true,
       crosshairMarkerRadius: 3,
@@ -1527,7 +1564,7 @@ function MiniChart({
     if (secondaryData && secondaryColor) {
       const sec = chart.addSeries(LineSeries, {
         color: secondaryColor,
-        lineWidth: 1.5,
+        lineWidth: 1.5 as LineWidth,
         priceLineVisible: false,
         lastValueVisible: true,
         priceScaleId: "right2",
@@ -1554,6 +1591,23 @@ function MiniChart({
             { time: data[data.length - 1].time as Time, value: rl.value },
           ]);
         }
+      }
+    }
+
+    // Reference bands (expanding envelopes)
+    if (refBands) {
+      for (const rb of refBands) {
+        if (!rb.data || rb.data.length < 2) continue;
+        const bandSeries = chart.addSeries(LineSeries, {
+          color: rb.color,
+          lineWidth: 1,
+          lineStyle: rb.style,
+          title: rb.label || "",
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        bandSeries.setData(rb.data.map((d) => ({ time: d.time as Time, value: d.value })));
       }
     }
 
@@ -1759,7 +1813,7 @@ function MiniChart({
       chartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC]);
+  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands]);
 
   // Log scale
   useEffect(() => {
@@ -1822,6 +1876,18 @@ function MiniChart({
         >
           {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
         </Button>
+        {onRemove && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400"
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            title="Remove plot"
+            data-testid={`pairs-chart-${id}-remove`}
+          >
+            <X className="w-3 h-3" />
+          </Button>
+        )}
       </div>
       <div ref={containerRef} style={effectiveFlexHeight ? { flex: 1 } : { height }} className={effectiveFlexHeight ? "flex-1 min-h-0" : ""} />
       {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV) */}
@@ -1839,6 +1905,143 @@ function MiniChart({
   );
 }
 
+// ── Extra OLS Residual Z chart (per user-added metric pair) ──
+interface ExtraOlsZRow {
+  id: string;
+  metricA: string;
+  metricB: string;
+}
+
+function ExtraOlsZChart({
+  row,
+  tickerA,
+  tickerB,
+  zWindow,
+  betaLookback,
+  spreadZWindow,
+  olsResidWindow,
+  bandsMode,
+  height,
+  isMaximized,
+  onMaximize,
+  onRegisterChart,
+  onUnregisterChart,
+  onRegisterSeries,
+  onCrosshairMove,
+  onRemove,
+  indicatorsForChart,
+}: {
+  row: ExtraOlsZRow;
+  tickerA: string;
+  tickerB: string;
+  zWindow: number;
+  betaLookback: number;
+  spreadZWindow: number;
+  olsResidWindow: number;
+  bandsMode: "static" | "expanding";
+  height: number;
+  isMaximized: boolean;
+  onMaximize: (id: string | null) => void;
+  onRegisterChart: (id: string, chart: IChartApi, dataLength?: number) => void;
+  onUnregisterChart: (id: string) => void;
+  onRegisterSeries: (id: string, series: ISeriesApi<any>) => void;
+  onCrosshairMove?: (id: string, data: { time: string; values: Record<string, number> } | null) => void;
+  onRemove: () => void;
+  indicatorsForChart: ActiveIndicators;
+}) {
+  const chartId = `olsResidZ_extra_${row.id}`;
+  const { data, isLoading } = useQuery({
+    queryKey: ["pairs-extra-olsz", tickerA, tickerB, row.metricA, row.metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow],
+    queryFn: () =>
+      getPairsData(tickerA, tickerB, row.metricA, row.metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow),
+    enabled: !!tickerA && !!tickerB,
+  });
+  const olsResidZ = data?.olsResidZ || [];
+
+  const bands = useMemo(() => {
+    if (bandsMode === "expanding") {
+      const b2 = expandingMeanStdBands(olsResidZ, 2, 20);
+      const b1 = expandingMeanStdBands(olsResidZ, 1, 20);
+      const mid: DataPoint[] = [];
+      for (let i = 0; i < b2.upper.length; i++) {
+        mid.push({
+          time: b2.upper[i].time,
+          value: (b2.upper[i].value + b2.lower[i].value) / 2,
+        });
+      }
+      return {
+        refLines: undefined,
+        refBands: [
+          { data: b2.upper, color: "rgba(244,63,94,0.55)", style: LineStyle.Dashed, label: "+2σ" },
+          { data: b1.upper, color: "rgba(255,255,255,0.18)", style: LineStyle.Dotted },
+          { data: mid, color: "rgba(255,255,255,0.3)", style: LineStyle.Dashed },
+          { data: b1.lower, color: "rgba(255,255,255,0.18)", style: LineStyle.Dotted },
+          { data: b2.lower, color: "rgba(34,197,94,0.55)", style: LineStyle.Dashed, label: "-2σ" },
+        ],
+      };
+    }
+    return {
+      refLines: [
+        { value: 2, color: "rgba(244,63,94,0.45)", style: LineStyle.Dashed, label: "+2σ" },
+        { value: 1, color: "rgba(255,255,255,0.12)", style: LineStyle.Dotted },
+        { value: 0, color: "rgba(255,255,255,0.25)", style: LineStyle.Dashed },
+        { value: -1, color: "rgba(255,255,255,0.12)", style: LineStyle.Dotted },
+        { value: -2, color: "rgba(34,197,94,0.45)", style: LineStyle.Dashed, label: "-2σ" },
+      ],
+      refBands: undefined as { data: DataPoint[]; color: string; style: number; label?: string }[] | undefined,
+    };
+  }, [olsResidZ, bandsMode]);
+
+  const title = `OLS Residual Z — ${row.metricA === row.metricB ? row.metricA : `${row.metricA} / ${row.metricB}`} (${olsResidWindow}d)`;
+
+  if (isLoading && olsResidZ.length === 0) {
+    return (
+      <div className="flex flex-col border-b border-border/30" style={{ minHeight: height }}>
+        <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
+          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+            {title}
+          </span>
+          <div className="flex-1" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400"
+            onClick={onRemove}
+            title="Remove plot"
+            data-testid={`pairs-chart-${chartId}-remove`}
+          >
+            <X className="w-3 h-3" />
+          </Button>
+        </div>
+        <div className="flex items-center justify-center text-[10px] text-muted-foreground" style={{ height: height }}>
+          Loading…
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <MiniChart
+      id={chartId}
+      data={olsResidZ}
+      title={title}
+      color="#a78bfa"
+      height={height}
+      useFlexHeight={true}
+      refLines={bands.refLines}
+      refBands={bands.refBands}
+      activeIndicators={indicatorsForChart}
+      onMaximize={onMaximize}
+      isMaximized={isMaximized}
+      onRegisterChart={onRegisterChart}
+      onUnregisterChart={onUnregisterChart}
+      onRegisterSeries={onRegisterSeries}
+      onCrosshairMove={onCrosshairMove}
+      onRemove={onRemove}
+    />
+  );
+}
+
 export default function Pairs() {
   const [tickerA, setTickerA] = useState("ESS");
   const [tickerB, setTickerB] = useState("MAA");
@@ -1848,6 +2051,8 @@ export default function Pairs() {
   const [betaLookback, setBetaLookback] = useState(52);
   const [spreadZWindow, setSpreadZWindow] = useState(8);
   const [olsResidWindow, setOlsResidWindow] = useState(52);
+  // Additional OLS Residual Z plots, each with its own metric pair
+  const [extraOlsZPlots, setExtraOlsZPlots] = useState<{ id: string; metricA: string; metricB: string }[]>([]);
   // Bands mode (static vs expanding) for mean/std bands rendering
   const [bandsMode, setBandsMode] = useState<"static" | "expanding">("static");
   // EG-spread β mode (rolling/OOS-clean vs full-sample in-sample) for Beta-Adjusted Spread chart
@@ -1863,6 +2068,9 @@ export default function Pairs() {
   // Which chart IDs are toggled on
   const [visibleChartIds, setVisibleChartIds] = useState<Set<string>>(() => new Set(DEFAULT_VISIBLE_CHARTS));
 
+  // Saved baskets (for BASKET: pair tokens + quick presets)
+  const { baskets } = useBaskets();
+
   const serializePairs = useCallback(() => ({
     tickerA,
     tickerB,
@@ -1872,10 +2080,11 @@ export default function Pairs() {
     betaLookback,
     spreadZWindow,
     olsResidWindow,
+    extraOlsZPlots,
     pairsLayout,
     visibleChartIds: [...visibleChartIds],
     indicatorsMap,
-  }), [tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow, pairsLayout, visibleChartIds, indicatorsMap]);
+  }), [tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow, extraOlsZPlots, pairsLayout, visibleChartIds, indicatorsMap]);
 
   const restorePairs = useCallback((state: any) => {
     if (state.tickerA !== undefined) setTickerA(state.tickerA);
@@ -1886,6 +2095,7 @@ export default function Pairs() {
     if (state.betaLookback !== undefined) setBetaLookback(state.betaLookback);
     if (state.spreadZWindow !== undefined) setSpreadZWindow(state.spreadZWindow);
     if (state.olsResidWindow !== undefined) setOlsResidWindow(state.olsResidWindow);
+    if (state.extraOlsZPlots !== undefined) setExtraOlsZPlots(state.extraOlsZPlots);
     if (state.pairsLayout !== undefined) setPairsLayout(state.pairsLayout);
     if (state.visibleChartIds) setVisibleChartIds(new Set(state.visibleChartIds));
     if (state.indicatorsMap !== undefined) setIndicatorsMap(state.indicatorsMap);
@@ -2277,7 +2487,7 @@ export default function Pairs() {
       {/* Controls */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card flex-wrap">
         <span className="text-xs font-semibold text-muted-foreground">A</span>
-        <TickerPicker value={tickerA} onChange={setTickerA} tickers={tickers || []} testId="pairs-ticker-a" />
+        <TickerPicker value={tickerA} onChange={setTickerA} tickers={tickers || []} baskets={baskets} testId="pairs-ticker-a" />
 
         <Button variant="ghost" size="sm" className="h-7 w-7 p-0"
           onClick={handleSwap} data-testid="pairs-swap" title="Swap tickers">
@@ -2285,9 +2495,48 @@ export default function Pairs() {
         </Button>
 
         <span className="text-xs font-semibold text-muted-foreground">B</span>
-        <TickerPicker value={tickerB} onChange={setTickerB} tickers={tickers || []} testId="pairs-ticker-b" />
+        <TickerPicker value={tickerB} onChange={setTickerB} tickers={tickers || []} baskets={baskets} testId="pairs-ticker-b" />
 
         <div className="h-5 w-px bg-border mx-1" />
+
+        {/* Basket quick presets */}
+        {baskets.length >= 2 && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 px-2 text-[10px] gap-1" data-testid="pairs-basket-presets-btn">
+                <Star className="w-3 h-3" />
+                Quick
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[260px] p-0" align="start">
+              <div className="px-3 py-2 border-b border-border">
+                <span className="text-[11px] font-semibold">Basket Quick Presets</span>
+              </div>
+              <div className="py-1 max-h-[300px] overflow-y-auto">
+                {baskets.map((a, u) =>
+                  baskets.slice(u + 1).map((k) => (
+                    <button
+                      key={`${a.id}_${k.id}`}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-accent/50 transition-colors text-muted-foreground"
+                      onClick={() => {
+                        setTickerA(`BASKET:${a.id}`);
+                        setTickerB(`BASKET:${k.id}`);
+                      }}
+                      data-testid={`pair-spec-a-basket-${a.id}`}
+                    >
+                      <Star className="w-3 h-3 flex-shrink-0 text-amber-400" />
+                      <span className="font-mono text-foreground">{a.name}</span>
+                      <span className="text-muted-foreground">/</span>
+                      <span className="font-mono text-foreground">{k.name}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+
+        {baskets.length >= 2 && <div className="h-5 w-px bg-border mx-1" />}
 
         {/* Template presets */}
         <Popover>
@@ -2456,6 +2705,62 @@ export default function Pairs() {
                 />
                 <span className="text-[9px] text-muted-foreground">days</span>
               </div>
+            </div>
+            <div className="border-t border-border pt-2 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-semibold text-foreground">Extra OLS Z Plots</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-5 px-1.5 text-[9px] gap-1"
+                  onClick={() => {
+                    const id = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+                    setExtraOlsZPlots((prev) => [...prev, { id, metricA: "P/FFO FY2", metricB: "P/FFO FY2" }]);
+                  }}
+                  data-testid="pairs-add-extra-olsz"
+                >
+                  <Plus className="w-2.5 h-2.5" />
+                  Add
+                </Button>
+              </div>
+              {extraOlsZPlots.length === 0 ? (
+                <div className="text-[9px] text-muted-foreground/70 leading-tight">
+                  Add additional OLS Residual Z plots with different metric pairs (e.g., P/FFO FY2, EV/EBITDA, FFO Yield).
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
+                  {extraOlsZPlots.map((row, u) => (
+                    <div key={row.id} className="flex items-center gap-1" data-testid={`pairs-extra-olsz-row-${u}`}>
+                      <span className="text-[9px] text-muted-foreground w-[10px]">{u + 1}</span>
+                      <MetricPicker
+                        value={row.metricA}
+                        onChange={(v) =>
+                          setExtraOlsZPlots((prev) => prev.map((p) => (p.id === row.id ? { ...p, metricA: v } : p)))
+                        }
+                        testId={`pairs-extra-olsz-${u}-a`}
+                      />
+                      <span className="text-[9px] text-muted-foreground">/</span>
+                      <MetricPicker
+                        value={row.metricB}
+                        onChange={(v) =>
+                          setExtraOlsZPlots((prev) => prev.map((p) => (p.id === row.id ? { ...p, metricB: v } : p)))
+                        }
+                        testId={`pairs-extra-olsz-${u}-b`}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 flex-shrink-0"
+                        onClick={() => setExtraOlsZPlots((prev) => prev.filter((p) => p.id !== row.id))}
+                        title="Remove"
+                        data-testid={`pairs-extra-olsz-${u}-remove`}
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="text-[9px] text-muted-foreground/70 leading-tight">
               Spread Z: log(A) - {"\u03B2"}*log(B), {"\u03B2"} from rolling OLS, then z-scored.<br />
@@ -2643,7 +2948,10 @@ export default function Pairs() {
           const isMaxMode = maximizedChart !== null;
           const showOlsScatter = visibleChartIds.has("olsScatter") && (maximizedChart === null || maximizedChart === "olsScatter");
           const showSignalAnalyzer = visibleChartIds.has("signalAnalyzer") && (maximizedChart === null || maximizedChart === "signalAnalyzer");
-          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0) + (showSignalAnalyzer ? 1 : 0);
+          const visibleExtraOlsZ = extraOlsZPlots.filter(
+            (row) => maximizedChart === null || maximizedChart === `olsResidZ_extra_${row.id}`,
+          );
+          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0) + (showSignalAnalyzer ? 1 : 0) + visibleExtraOlsZ.length;
           // In maximized mode, fill the entire container
           // Otherwise use a scrollable grid with minimum chart heights
           const containerStyle: React.CSSProperties = isMaxMode
@@ -2719,6 +3027,32 @@ export default function Pairs() {
                       onMaximize={setMaximizedChart}
                     />
                   )}
+                  {/* Extra OLS Residual Z plots */}
+                  {visibleExtraOlsZ.map((row) => {
+                    const extraId = `olsResidZ_extra_${row.id}`;
+                    return (
+                      <ExtraOlsZChart
+                        key={row.id}
+                        row={row}
+                        tickerA={tickerA}
+                        tickerB={tickerB}
+                        zWindow={zWindow}
+                        betaLookback={betaLookback}
+                        spreadZWindow={spreadZWindow}
+                        olsResidWindow={olsResidWindow}
+                        bandsMode={bandsMode}
+                        height={zH}
+                        isMaximized={maximizedChart === extraId}
+                        onMaximize={setMaximizedChart}
+                        onRegisterChart={registerChart}
+                        onUnregisterChart={unregisterChart}
+                        onRegisterSeries={registerSeries}
+                        onCrosshairMove={handlePairsCrosshairMove}
+                        onRemove={() => setExtraOlsZPlots((prev) => prev.filter((p) => p.id !== row.id))}
+                        indicatorsForChart={indicatorsMap[extraId] || EMPTY_INDICATORS}
+                      />
+                    );
+                  })}
                 </>
               )}
             </div>
@@ -2747,33 +3081,68 @@ function TickerPicker({
   value,
   onChange,
   tickers,
+  baskets = [],
   testId,
 }: {
   value: string;
   onChange: (v: string) => void;
   tickers: TickerMeta[];
+  baskets?: Basket[];
   testId: string;
 }) {
   const [open, setOpen] = useState(false);
+  const isBasket = value.startsWith("BASKET:");
+  const basketId = isBasket ? value.slice(7) : null;
+  const selectedBasket = basketId ? baskets.find((b) => b.id === basketId) : null;
+  const displayValue = selectedBasket ? selectedBasket.name : value || "Select...";
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           size="sm"
-          className="h-7 w-[120px] justify-between px-2 font-mono font-bold text-xs"
+          className={`h-7 w-[140px] justify-between px-2 font-mono font-bold text-xs ${
+            isBasket ? "text-amber-300 border-amber-500/40" : ""
+          }`}
           data-testid={testId}
         >
-          {value || "Select..."}
+          <span className="truncate">{displayValue}</span>
           <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[240px] p-0" align="start">
+      <PopoverContent className="w-[440px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search ticker..." className="h-8 text-xs" />
-          <CommandList className="max-h-[250px]">
-            <CommandEmpty>No ticker found.</CommandEmpty>
-            <CommandGroup>
+          <CommandInput placeholder="Search ticker or basket..." className="h-8 text-xs" />
+          <CommandList className="max-h-[300px]">
+            <CommandEmpty>No match found.</CommandEmpty>
+            {baskets.length > 0 && (
+              <CommandGroup heading="Baskets">
+                {baskets.map((b) => (
+                  <CommandItem
+                    key={b.id}
+                    value={`BASKET:${b.id} ${b.name}`}
+                    onSelect={() => {
+                      onChange(`BASKET:${b.id}`);
+                      setOpen(false);
+                    }}
+                    className="text-xs"
+                  >
+                    <Check
+                      className={`w-3 h-3 mr-1.5 flex-shrink-0 ${
+                        value === `BASKET:${b.id}` ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                    <Star className="w-3 h-3 mr-1 text-amber-400 flex-shrink-0" />
+                    <span className="font-mono font-bold mr-1.5 text-amber-300">{b.name}</span>
+                    <span className="text-muted-foreground text-[10px] truncate">
+                      {b.tickers.slice(0, 4).join(", ")}
+                      {b.tickers.length > 4 ? "…" : ""}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+            <CommandGroup heading="Tickers">
               {tickers.map((t) => (
                 <CommandItem
                   key={t.ticker}
@@ -2789,9 +3158,9 @@ function TickerPicker({
                       value === t.ticker ? "opacity-100" : "opacity-0"
                     }`}
                   />
-                  <span className="font-mono font-bold mr-1.5">{t.ticker}</span>
-                  <span className="text-muted-foreground truncate text-[10px]">
-                    {t.name.length > 22 ? t.name.slice(0, 22) + "…" : t.name}
+                  <span className="font-mono font-bold mr-1.5 whitespace-nowrap">{t.ticker}</span>
+                  <span className="text-muted-foreground flex-1 min-w-0 truncate text-[10px]" title={t.name}>
+                    {t.name}
                   </span>
                 </CommandItem>
               ))}

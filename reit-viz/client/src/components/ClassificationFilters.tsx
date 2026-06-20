@@ -339,6 +339,8 @@ export interface ClassificationFiltersProps {
   children?: React.ReactNode;
   /** Data test ID prefix */
   testIdPrefix?: string;
+  /** Optional ticker pool to filter against instead of the default workbook universe */
+  tickerPoolOverride?: any[];
 }
 
 export default function ClassificationFilters({

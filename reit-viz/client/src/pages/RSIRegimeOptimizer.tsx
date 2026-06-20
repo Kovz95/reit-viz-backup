@@ -228,7 +228,7 @@ export default function RSIRegimeOptimizer() {
   const cancelRef = useRef(false);
   const tickerInitRef = useRef(false);
   const [activeTab, setActiveTab] = useState("optimize");
-  const [evalSide, setEvalSide] = useState("long");
+  const [evalSide, setEvalSide] = useState<"long" | "short">("long");
   const [evalResult, setEvalResult] = usePersistedState<any>("rsi:evalResult", null);
   const [evalPriceContext, setEvalPriceContext] = useState<any>(null);
   const [evaluating, setEvaluating] = useState(false);
@@ -886,7 +886,7 @@ export default function RSIRegimeOptimizer() {
         evalSide,
         targetReturn,
         minHold,
-        null,
+        undefined,
         "3M"
       );
       setEvalResult(evalRes);

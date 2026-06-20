@@ -437,7 +437,7 @@ function HarsiDetailPanel({
                         }
                         priceContext={priceContext}
                         signals={bestCat.profiles}
-                        direction={bestCat.category}
+                        direction={bestCat.category === "sell" ? "sell" : "buy"}
                         title={`${cfg.configLabel} — ${bestCat.category === "buy" ? "Long" : "Short"}`}
                         useBand={useBand}
                       />

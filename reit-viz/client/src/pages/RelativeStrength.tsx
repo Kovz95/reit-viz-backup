@@ -5,7 +5,7 @@ import { useLocalStorage } from "@/lib/useLocalStorage";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchTradingDates } from "@/lib/fetchTradingDates";
-import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
+import { fetchMetricSeries } from "@/lib/signalUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -166,7 +166,7 @@ function createMatrix(tickers: string[], dates: string[]): MatrixPanel {
   return { tickers, dates, matrix };
 }
 
-function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: { dates: string[]; values: number[] }) {
+function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: { dates: string[]; values: (number | null)[] }) {
   const dateIndex = new Map<string, number>();
   for (let i = 0; i < panel.dates.length; i++) dateIndex.set(panel.dates[i], i);
   const row = panel.matrix[tickerIdx];
@@ -174,7 +174,7 @@ function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: { dates: s
     const time = series.dates[i];
     const value = series.values[i];
     const idx = dateIndex.get(time);
-    if (idx !== undefined && Number.isFinite(value)) row[idx] = value;
+    if (idx !== undefined && value != null && Number.isFinite(value)) row[idx] = value;
   }
 }
 

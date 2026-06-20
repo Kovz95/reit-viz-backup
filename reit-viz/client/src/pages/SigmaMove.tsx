@@ -648,7 +648,7 @@ export default function SigmaMove() {
       const rows: LiveRow[] = [];
       for (const item of batchData) {
         if (!tickerSet.has(item.ticker)) continue;
-        const closes: number[] = item.values || [];
+        const closes: number[] = (item.values || []).map((v: number | null) => v ?? NaN);
         const { sigmaDaily, sigmaEwmaDaily, hvWindow } = computeVolAndDistribution(
           closes,
           closes.length - 1,

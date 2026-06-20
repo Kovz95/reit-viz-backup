@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, Palette, RotateCcw } from "lucide-react";
+import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, Palette, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -11,11 +11,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { ActiveIndicators } from "./ChartPane";
+import type { ActiveIndicators, IndicatorOverlay } from "./ChartPane";
+import { FindBestMAPanel } from "./FindBestMAPanel";
 import type { PaneInfo } from "@/pages/Dashboard";
 import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
+import PatternsPanel from "./PatternsPanel";
 
 interface IndicatorsPanelProps {
   panes: PaneInfo[];
@@ -202,6 +204,8 @@ export default function IndicatorsPanel({
     }
   };
 
+  const activeTicker = panes.find((p) => p.id === selectedPaneId)?.ticker ?? null;
+
   // Copy indicators from current pane to all other panes
   const copyToAll = () => {
     for (const pane of panes) {
@@ -297,6 +301,9 @@ export default function IndicatorsPanel({
       )}
 
       <div className="p-3 space-y-4">
+        {/* ───── Pattern Recognition ───── */}
+        {selectedPaneId !== null && <PatternsPanel paneId={selectedPaneId} />}
+
         {/* ───── Moving Averages ───── */}
         <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">
           Moving Averages
@@ -326,6 +333,12 @@ export default function IndicatorsPanel({
               defaultLen={20}
               active={activeIndicators.hma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, hma: v })}
+            />
+
+            <FindBestMAPanel
+              ticker={activeTicker}
+              activeIndicators={activeIndicators}
+              onChangeIndicators={setActiveIndicators}
             />
           </>
         )}
@@ -780,9 +793,196 @@ export default function IndicatorsPanel({
           </div>
         )}
 
+        {/* ───── Indicator Overlays ───── */}
+        <IndicatorOverlays
+          activeIndicators={activeIndicators}
+          onChangeIndicators={setActiveIndicators}
+          allCollapsed={allCollapsed}
+        />
+
         {/* ───── Colors ───── */}
         <IndicatorColorEditor />
       </div>
+    </div>
+  );
+}
+
+// ── Indicator Overlays (bundle oWe): overlay an MA-style indicator onto an active sub-chart indicator ──
+const INDICATOR_OVERLAY_LABELS: Record<string, string> = {
+  rsi: "RSI",
+  macd: "MACD",
+  ha: "Heikin-Ashi",
+  atr: "ATR",
+  roc: "ROC",
+  stochastic: "Stochastic",
+  obv: "OBV",
+  ad: "A/D Line",
+  cmf: "CMF",
+};
+
+const OVERLAY_TYPES: { value: string; label: string }[] = [
+  { value: "sma", label: "SMA" },
+  { value: "ema", label: "EMA" },
+  { value: "hma", label: "HMA" },
+  { value: "bollinger", label: "Bollinger" },
+];
+
+function IndicatorOverlays({
+  activeIndicators,
+  onChangeIndicators,
+  allCollapsed,
+}: {
+  activeIndicators: ActiveIndicators;
+  onChangeIndicators: (i: ActiveIndicators) => void;
+  allCollapsed: boolean;
+}) {
+  const overlays = activeIndicators.indicatorOverlays || [];
+
+  const availableSources: string[] = [];
+  if (activeIndicators.rsi !== undefined) availableSources.push("rsi");
+  if (activeIndicators.macd) availableSources.push("macd");
+  if (activeIndicators.atr !== undefined) availableSources.push("atr");
+  if (activeIndicators.roc !== undefined) availableSources.push("roc");
+  if (activeIndicators.stochastic) availableSources.push("stochastic");
+  if (activeIndicators.obv) availableSources.push("obv");
+  if (activeIndicators.ad) availableSources.push("ad");
+  if (activeIndicators.cmf !== undefined) availableSources.push("cmf");
+
+  const [source, setSource] = useState(availableSources[0] || "");
+  const [type, setType] = useState("sma");
+  const [period, setPeriod] = useState(14);
+  const [bbMult, setBbMult] = useState(2);
+
+  const addOverlay = () => {
+    if (!source) return;
+    const overlay: IndicatorOverlay = {
+      id: `${source}-${type}-${period}-${Date.now()}`,
+      source,
+      type,
+      period,
+      ...(type === "bollinger" ? { mult: bbMult } : {}),
+    };
+    onChangeIndicators({ ...activeIndicators, indicatorOverlays: [...overlays, overlay] });
+  };
+
+  const removeOverlay = (id: string) => {
+    onChangeIndicators({
+      ...activeIndicators,
+      indicatorOverlays: overlays.filter((x) => x.id !== id),
+    });
+  };
+
+  return (
+    <div className="border-t border-border pt-3">
+      <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
+        Indicator Overlays
+      </p>
+      {!allCollapsed && (
+        <>
+          {overlays.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-2">
+              {overlays.map((o) => (
+                <span
+                  key={o.id}
+                  className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
+                >
+                  {o.type.toUpperCase()}({o.period})
+                  {o.type === "bollinger" && o.mult !== undefined ? ` ${o.mult}σ` : ""} on{" "}
+                  {INDICATOR_OVERLAY_LABELS[o.source] || o.source}
+                  <button
+                    onClick={() => removeOverlay(o.id)}
+                    title="Remove overlay"
+                    className="hover:text-foreground"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {availableSources.length > 0 ? (
+            <div className="space-y-1.5">
+              <Select value={source} onValueChange={setSource}>
+                <SelectTrigger className="h-6 text-[10px]" data-testid="overlay-source-select">
+                  <SelectValue placeholder="Source" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableSources.map((s) => (
+                    <SelectItem key={s} value={s} className="text-[10px]">
+                      {INDICATOR_OVERLAY_LABELS[s] || s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={type} onValueChange={setType}>
+                <SelectTrigger className="h-6 text-[10px]" data-testid="overlay-type-select">
+                  <SelectValue placeholder="Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {OVERLAY_TYPES.map((t) => (
+                    <SelectItem key={t.value} value={t.value} className="text-[10px]">
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex items-center gap-1">
+                {[7, 14, 20, 50].map((p) => (
+                  <Button
+                    key={p}
+                    size="sm"
+                    variant={period === p ? "default" : "secondary"}
+                    className="h-5 px-1.5 text-[9px] flex-1"
+                    onClick={() => setPeriod(p)}
+                  >
+                    {p}
+                  </Button>
+                ))}
+                <Input
+                  type="number"
+                  min={2}
+                  value={period}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (v > 1) setPeriod(v);
+                  }}
+                  className="h-5 w-12 text-[9px] px-1"
+                  data-testid="overlay-custom-period"
+                />
+              </div>
+              {type === "bollinger" && (
+                <div className="flex items-center gap-1">
+                  {[1, 1.5, 2, 2.5].map((g) => (
+                    <Button
+                      key={g}
+                      size="sm"
+                      variant={bbMult === g ? "default" : "secondary"}
+                      className="h-5 px-1.5 text-[9px] flex-1"
+                      onClick={() => setBbMult(g)}
+                    >
+                      {g}σ
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <Button
+                variant="outline"
+                className="h-6 w-full text-[10px] gap-1"
+                onClick={addOverlay}
+                data-testid="add-overlay-btn"
+              >
+                <Plus className="w-3 h-3" />
+                Add {type.toUpperCase()}({period}) on{" "}
+                {source ? INDICATOR_OVERLAY_LABELS[source] || source : "..."}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-[10px] text-muted-foreground/60 italic">
+              Enable a sub-chart indicator (RSI, MACD, ATR, etc.) first, then add overlays here.
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

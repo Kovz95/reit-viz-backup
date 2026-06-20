@@ -503,7 +503,7 @@ function computeSetupResult(
 
   const isDisabled = (key: string): boolean => {
     const meta = (featureMeta as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key]
-      ?? (featureKeys as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
+      ?? (featureKeys as unknown as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
     return !!(!meta || (meta.requiresVolume && !hasVolume) || (meta.requiresBench && !hasBench));
   };
 
@@ -591,18 +591,15 @@ function computeSetupResult(
   };
 
   const algoOutput = dispatchAlgo(params.algo, algoInput);
-  const matches: MatchedBar[] = algoOutput.matches.map((m: {
-    date: string; distance: number; weight: number; zVec: number[];
-    fwd1M: number; fwd3M: number; fwd6M: number; fwd1Y: number;
-  }) => ({
+  const matches: MatchedBar[] = algoOutput.matches.map((m) => ({
     date: m.date,
     distance: m.distance,
     weight: m.weight,
-    zVec: m.zVec,
-    fwd1M: m.fwd1M,
-    fwd3M: m.fwd3M,
-    fwd6M: m.fwd6M,
-    fwd1Y: m.fwd1Y,
+    zVec: m.zVec ?? [],
+    fwd1M: m.fwd1M ?? NaN,
+    fwd3M: m.fwd3M ?? NaN,
+    fwd6M: m.fwd6M ?? NaN,
+    fwd1Y: m.fwd1Y ?? NaN,
   }));
 
   if (matches.length === 0) {
@@ -1258,13 +1255,13 @@ export default function SimilarSetups() {
     if (mode !== "pairCombo" || pairComboCtx.pairs.length === 0) return;
     if (
       !pairComboCtx.pairs.some(
-        (p: { a: string; b: string }) =>
+        (p) =>
           (p.a === pairA && p.b === pairB) || (p.a === pairB && p.b === pairA)
       )
     ) {
       const first = pairComboCtx.pairs[0];
-      setPairA(first.a);
-      setPairB(first.b);
+      setPairA(first.a ?? "");
+      setPairB(first.b ?? "");
     }
   }, [mode, pairComboCtx.pairs, pairA, pairB]);
 
@@ -1353,10 +1350,10 @@ export default function SimilarSetups() {
         : [];
     }
     if (mode === "pairCombo") {
-      return pairComboCtx.pairs.map((p: { a: string; b: string }) => ({
+      return pairComboCtx.pairs.map((p) => ({
         kind: "pair" as const,
-        a: p.a,
-        b: p.b,
+        a: p.a ?? "",
+        b: p.b ?? "",
       }));
     }
     return [];
@@ -1432,7 +1429,7 @@ export default function SimilarSetups() {
 
   const isFeatureDisabled = (key: string): boolean => {
     const meta = (featureMeta as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key]
-      ?? (featureKeys as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
+      ?? (featureKeys as unknown as Record<string, { requiresVolume?: boolean; requiresBench?: boolean }>)[key];
     return !!(!meta || (meta.requiresVolume && !hasVolume) || (meta.requiresBench && !hasBench));
   };
 
@@ -1741,7 +1738,7 @@ export default function SimilarSetups() {
   const featureLabelOf = (key: string): string =>
     (
       (featureMeta as Record<string, { label: string }>)[key] ??
-      (featureKeys as Record<string, { label: string }>)[key]
+      (featureKeys as unknown as Record<string, { label: string }>)[key]
     )?.label ?? key;
 
   return (
@@ -1903,14 +1900,14 @@ export default function SimilarSetups() {
                   Anchor
                 </span>
                 {pairComboCtx.pairs.map(
-                  (pair: { a: string; b: string; label: string }) => {
+                  (pair) => {
                     const isActive =
                       (pair.a === pairA && pair.b === pairB) ||
                       (pair.a === pairB && pair.b === pairA);
                     return (
                       <button
                         key={pair.label}
-                        onClick={() => { setPairA(pair.a); setPairB(pair.b); }}
+                        onClick={() => { setPairA(pair.a ?? ""); setPairB(pair.b ?? ""); }}
                         className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
                           isActive
                             ? "bg-amber-500/15 text-amber-300 border-amber-500/40"
@@ -2265,7 +2262,7 @@ export default function SimilarSetups() {
                   const enabled = enabledFeatures.has(key);
                   const disabled = isFeatureDisabled(key);
                   const meta = (featureMeta as Record<string, { label: string; requiresVolume?: boolean; requiresBench?: boolean }>)[key]
-                    ?? (featureKeys as Record<string, { label: string; requiresVolume?: boolean; requiresBench?: boolean }>)[key];
+                    ?? (featureKeys as unknown as Record<string, { label: string; requiresVolume?: boolean; requiresBench?: boolean }>)[key];
                   let tooltip = meta?.label ?? key;
                   if (disabled && meta?.requiresVolume)
                     tooltip += " — needs volume (single-ticker mode only)";
