@@ -13,3 +13,5 @@ stale-source/node_modules/
 
 # One-off diagnostic harness (Playwright diff tool)
 diag/
+# Screenshots emitted by the diag-*.mjs parity-audit harness (binary, throwaway)
+reit-viz/diag-shots/
