@@ -14,6 +14,22 @@ docker run -d --name reit-viz -p 5000:5000 reit-viz
 Upload your REIT workbook from the in-app **Data Management** UI to populate ticker data
 (the server stores it under `reit-viz/data/`).
 
+### Resync ticker data from the live Vultr backend
+
+Fresh local containers have no per-ticker price files, so charts 404. Instead of
+re-uploading the workbook, pull the data straight from production:
+
+```bash
+npm run pull-data --prefix reit-viz
+# or: node reit-viz/scripts/pull-vultr-data.mjs
+```
+
+It fetches all tickers over Vultr's HTTP API, re-encodes them into the on-disk
+format (round-trips losslessly — verified sha256-identical to Vultr), and
+`docker cp`s them into the local container's data volume. Re-run it any time prod
+data drifts. Overrides via env: `VULTR_BASE`, `CONTAINER` (default `reit-viz`),
+`LIMIT`, `CONC`; pass `--no-load` to stage files without loading.
+
 ## Run locally (dev)
 
 ```bash
