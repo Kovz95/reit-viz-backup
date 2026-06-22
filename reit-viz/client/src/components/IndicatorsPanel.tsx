@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, Palette, RotateCcw, Plus } from "lucide-react";
+import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -26,6 +26,45 @@ interface IndicatorsPanelProps {
   onSelectPane: (paneId: number) => void;
   onChangeIndicators: (paneId: number, indicators: ActiveIndicators) => void;
   onClose: () => void;
+}
+
+/** Ordered list of collapsible section titles in the indicators sidebar. */
+const INDICATOR_SECTIONS = [
+  "Moving Averages",
+  "Oscillators",
+  "Volatility",
+  "Overlays",
+  "Volume",
+  "Trend",
+  "Statistical",
+  "Indicator Overlays",
+] as const;
+
+/** Clickable section header — toggles its section open/closed with a rotating chevron. */
+function SectionHeader({
+  title,
+  collapsed,
+  onToggle,
+  className = "",
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className={`flex w-full items-center justify-between gap-2 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider hover:text-foreground transition-colors ${className}`}
+    >
+      <span>{title}</span>
+      <ChevronDown
+        className={`w-3 h-3 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+      />
+    </button>
+  );
 }
 
 /** Compact row for a moving-average indicator with preset buttons + custom input */
@@ -194,7 +233,20 @@ export default function IndicatorsPanel({
   onChangeIndicators,
   onClose,
 }: IndicatorsPanelProps) {
-  const [allCollapsed, setAllCollapsed] = useState(false);
+  // Per-section collapse state — empty set means every section is expanded (default).
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
+  const isCollapsed = (name: string) => collapsedSections.has(name);
+  const toggleSection = (name: string) =>
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  const allCollapsed = INDICATOR_SECTIONS.every((s) => collapsedSections.has(s));
+  const toggleAll = () =>
+    setCollapsedSections(allCollapsed ? new Set() : new Set(INDICATOR_SECTIONS));
+
   const selectedPaneId = activePaneId ?? (panes.length > 0 ? panes[0].id : null);
   const activeIndicators = selectedPaneId !== null ? (indicatorsMap[selectedPaneId] || {}) : {};
 
@@ -251,7 +303,7 @@ export default function IndicatorsPanel({
             variant="ghost"
             size="sm"
             className="h-6 px-1.5 text-[10px] gap-1"
-            onClick={() => setAllCollapsed((c) => !c)}
+            onClick={toggleAll}
             title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
             data-testid="collapse-all-indicators"
           >
@@ -305,11 +357,13 @@ export default function IndicatorsPanel({
         {selectedPaneId !== null && <PatternsPanel paneId={selectedPaneId} />}
 
         {/* ───── Moving Averages ───── */}
-        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">
-          Moving Averages
-        </p>
+        <SectionHeader
+          title="Moving Averages"
+          collapsed={isCollapsed("Moving Averages")}
+          onToggle={() => toggleSection("Moving Averages")}
+        />
 
-        {!allCollapsed && (
+        {!isCollapsed("Moving Averages") && (
           <>
             <MaRow
               label="SMA"
@@ -345,11 +399,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Oscillators ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Oscillators
-          </p>
+          <SectionHeader
+            title="Oscillators"
+            collapsed={isCollapsed("Oscillators")}
+            onToggle={() => toggleSection("Oscillators")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Oscillators") && (<>
           {/* RSI */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -517,11 +574,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Volatility ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Volatility
-          </p>
+          <SectionHeader
+            title="Volatility"
+            collapsed={isCollapsed("Volatility")}
+            onToggle={() => toggleSection("Volatility")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Volatility") && (<>
           {/* Bollinger Bands */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -628,11 +688,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Overlays ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Overlays
-          </p>
+          <SectionHeader
+            title="Overlays"
+            collapsed={isCollapsed("Overlays")}
+            onToggle={() => toggleSection("Overlays")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Overlays") && (<>
           {/* VWAP */}
           <div className="flex items-center justify-between">
             <div>
@@ -652,11 +715,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Volume ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Volume
-          </p>
+          <SectionHeader
+            title="Volume"
+            collapsed={isCollapsed("Volume")}
+            onToggle={() => toggleSection("Volume")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Volume") && (<>
           {/* OBV */}
           <div className="flex items-center justify-between">
             <div>
@@ -676,11 +742,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Trend ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Trend
-          </p>
+          <SectionHeader
+            title="Trend"
+            collapsed={isCollapsed("Trend")}
+            onToggle={() => toggleSection("Trend")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Trend") && (<>
           {/* Heikin-Ashi with smoothing */}
           <HeikinAshiControls
             activeIndicators={activeIndicators}
@@ -708,11 +777,14 @@ export default function IndicatorsPanel({
 
         {/* ───── Statistical ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-            Statistical
-          </p>
+          <SectionHeader
+            title="Statistical"
+            collapsed={isCollapsed("Statistical")}
+            onToggle={() => toggleSection("Statistical")}
+            className="mb-3"
+          />
 
-          {!allCollapsed && (<>
+          {!isCollapsed("Statistical") && (<>
           {/* Mean + Std Bands */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -785,19 +857,18 @@ export default function IndicatorsPanel({
           </>)}
         </div>
 
-        {!allCollapsed && (
-          <div className="border-t border-border pt-3">
-            <p className="text-[10px] text-muted-foreground">
-              MAs, Bollinger, and VWAP overlay the chart. RSI, MACD, ATR, ROC, Stochastic, and OBV render in sub-panes below. Select which pane to apply to above.
-            </p>
-          </div>
-        )}
+        <div className="border-t border-border pt-3">
+          <p className="text-[10px] text-muted-foreground">
+            MAs, Bollinger, and VWAP overlay the chart. RSI, MACD, ATR, ROC, Stochastic, and OBV render in sub-panes below. Select which pane to apply to above.
+          </p>
+        </div>
 
         {/* ───── Indicator Overlays ───── */}
         <IndicatorOverlays
           activeIndicators={activeIndicators}
           onChangeIndicators={setActiveIndicators}
-          allCollapsed={allCollapsed}
+          collapsed={isCollapsed("Indicator Overlays")}
+          onToggle={() => toggleSection("Indicator Overlays")}
         />
 
         {/* ───── Colors ───── */}
@@ -830,11 +901,13 @@ const OVERLAY_TYPES: { value: string; label: string }[] = [
 function IndicatorOverlays({
   activeIndicators,
   onChangeIndicators,
-  allCollapsed,
+  collapsed,
+  onToggle,
 }: {
   activeIndicators: ActiveIndicators;
   onChangeIndicators: (i: ActiveIndicators) => void;
-  allCollapsed: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
   const overlays = activeIndicators.indicatorOverlays || [];
 
@@ -874,10 +947,13 @@ function IndicatorOverlays({
 
   return (
     <div className="border-t border-border pt-3">
-      <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">
-        Indicator Overlays
-      </p>
-      {!allCollapsed && (
+      <SectionHeader
+        title="Indicator Overlays"
+        collapsed={collapsed}
+        onToggle={onToggle}
+        className="mb-3"
+      />
+      {!collapsed && (
         <>
           {overlays.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-2">

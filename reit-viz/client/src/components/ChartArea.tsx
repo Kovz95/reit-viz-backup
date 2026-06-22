@@ -1734,17 +1734,6 @@ export default function ChartArea({
           Indicators
         </Button>
 
-        {/* Correlation */}
-        <Button
-          variant={showCorrelation ? "default" : "ghost"}
-          size="sm"
-          className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowCorrelation(!showCorrelation); setShowIndicators(false); setShowPairs(false); }}
-          data-testid="toggle-correlation"
-        >
-          Correlation
-        </Button>
-
         {/* Pairs */}
         <Button
           variant={showPairs ? "default" : "ghost"}
