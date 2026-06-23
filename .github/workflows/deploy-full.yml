@@ -2,17 +2,23 @@ name: Deploy reit-viz FULL (server + client) to Vultr
 
 # FULL-STACK deploy: ships BOTH the Node server (dist/index.cjs) and the client
 # (dist/public), refreshes prod deps, and restarts pm2. This REPLACES the live
-# backend — riskier than the client-only deploy. It is manual-only and requires
-# typing the confirm phrase, and it ALWAYS backs up the live install first.
+# backend. It ALWAYS backs up the live install first and rolls back if pm2 fails.
 #
-# Prefer the client-only "Deploy reit-viz to Vultr" workflow for routine frontend
-# changes. Use THIS one only when you've changed server code (reit-viz/server).
+# TRIGGERS:
+#   - push to main  → auto-deploys (your push IS the confirmation; backup-first).
+#   - manual run    → still requires typing the DEPLOY-FULL confirm phrase.
 #
-# REQUIRED secret: VULTR_SSH_PASSWORD
+# Because this ships client + server together, a push to main reaches Vultr in one
+# go. The client-only "Deploy reit-viz to Vultr" workflow remains as a manual,
+# faster frontend-only option.
+#
+# REQUIRED secret: VULTR_SSH_PASSWORD   (push deploys FAIL LOUDLY until this is set)
 # OPTIONAL repo variables: VULTR_HOST (45.63.20.126), VULTR_USER (root),
 #                          VULTR_DIR (/opt/reit-viz), PM2_APP (reit-viz)
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm:
@@ -31,8 +37,10 @@ jobs:
       run:
         working-directory: reit-viz
     steps:
-      - name: Guard — require confirm phrase
-        if: ${{ inputs.confirm != 'DEPLOY-FULL' }}
+      # Manual runs must type DEPLOY-FULL. Push-to-main runs skip this guard —
+      # the push itself is the intent to deploy (and the deploy is backup-first).
+      - name: Guard — require confirm phrase (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm != 'DEPLOY-FULL' }}
         run: |
           echo "::error::confirm input must be exactly DEPLOY-FULL (got '${{ inputs.confirm }}'). Aborting."
           exit 1
