@@ -116,7 +116,7 @@ function MaRow({
         <Input
           type="number"
           placeholder="Custom"
-          className="h-6 w-16 text-[10px] px-1.5"
+          className="h-6 w-20 text-[10px] px-1.5"
           value={custom}
           min={1}
           onChange={(e) => {
