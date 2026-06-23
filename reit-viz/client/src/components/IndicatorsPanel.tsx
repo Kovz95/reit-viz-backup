@@ -1,4 +1,6 @@
 import { useState } from "react";
+
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -292,7 +294,7 @@ export default function IndicatorsPanel({
   };
 
   return (
-    <div className="w-[260px] border-l border-border bg-card/50 overflow-y-auto flex-shrink-0">
+    <ResizableSidebar storageKey="charts-indicators-width" defaultWidth={260}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-3.5 h-3.5 text-primary" />
@@ -874,7 +876,7 @@ export default function IndicatorsPanel({
         {/* ───── Colors ───── */}
         <IndicatorColorEditor />
       </div>
-    </div>
+    </ResizableSidebar>
   );
 }
 
@@ -1083,7 +1085,7 @@ function ColorSwatch({ colorKey, label }: { colorKey: IndicatorColorKey; label: 
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
         />
       </label>
-      <span className="text-[9px] text-muted-foreground flex-1 truncate">{label}</span>
+      <span className="text-[9px] text-muted-foreground flex-1 leading-tight break-words" title={label}>{label}</span>
       {isOverridden && (
         <button
           onClick={() => resetColor(colorKey)}

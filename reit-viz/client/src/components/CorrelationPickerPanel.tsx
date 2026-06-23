@@ -3,6 +3,8 @@
  * universe and plot rolling Pearson correlation to a chart pane.
  */
 import { useState, useMemo, useCallback } from "react";
+
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { X, LineChart, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,7 +96,7 @@ export default function CorrelationPickerPanel({
   }, [canPlot, tickerA, metricA, tickerB, metricB, win, plotMode, onPlot]);
 
   return (
-    <div className="w-[280px] border-l border-border bg-card/50 overflow-y-auto flex-shrink-0">
+    <ResizableSidebar storageKey="charts-correlation-picker-width" defaultWidth={280}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2">
           <LineChart className="w-3.5 h-3.5 text-primary" />
@@ -195,7 +197,7 @@ export default function CorrelationPickerPanel({
           The rolling window controls the lookback period in trading days.
         </p>
       </div>
-    </div>
+    </ResizableSidebar>
   );
 }
 
@@ -231,7 +233,7 @@ function TickerPicker({
                   className="text-xs"
                 >
                   <span className="font-mono font-bold mr-1">{t.ticker}</span>
-                  <span className="truncate text-muted-foreground">{t.name}</span>
+                  <span className="truncate text-muted-foreground" title={t.name}>{t.name}</span>
                 </CommandItem>
               ))}
             </CommandGroup>

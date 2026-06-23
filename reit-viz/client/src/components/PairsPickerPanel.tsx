@@ -4,6 +4,8 @@
  */
 import { useState, useMemo, useCallback } from "react";
 import { X, GitBranch, Loader2 } from "lucide-react";
+
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -120,7 +122,7 @@ export default function PairsPickerPanel({
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="w-[280px] border-l border-border bg-card/50 overflow-y-auto flex-shrink-0">
+    <ResizableSidebar storageKey="charts-pairs-picker-width" defaultWidth={280}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2">
           <GitBranch className="w-3.5 h-3.5 text-primary" />
@@ -258,7 +260,7 @@ export default function PairsPickerPanel({
           </p>
         </div>
       </div>
-    </div>
+    </ResizableSidebar>
     </TooltipProvider>
   );
 }
@@ -295,7 +297,7 @@ function TickerPicker({
                   className="text-xs"
                 >
                   <span className="font-mono font-bold mr-1">{t.ticker}</span>
-                  <span className="truncate text-muted-foreground">{t.name}</span>
+                  <span className="truncate text-muted-foreground" title={t.name}>{t.name}</span>
                 </CommandItem>
               ))}
             </CommandGroup>
