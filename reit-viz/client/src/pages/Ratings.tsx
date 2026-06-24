@@ -426,7 +426,7 @@ export default function Ratings() {
             value={groupBy}
             onValueChange={(v) => updateGroupBy(v as GroupByKey)}
           >
-            <SelectTrigger className="h-6 text-[11px] w-[120px] bg-muted border-0">
+            <SelectTrigger className="h-6 text-[11px] w-auto min-w-[155px] bg-muted border-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

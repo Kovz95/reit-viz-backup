@@ -693,8 +693,8 @@ function IndicatorPicker({
         }}
       >
         <SelectTrigger
-          className="h-7 text-[11px] border-border bg-muted/20 focus:ring-0 focus:ring-offset-0"
-          style={{ width: compact ? 80 : 100 }}
+          className="h-7 text-[11px] border-border bg-muted/20 focus:ring-0 focus:ring-offset-0 w-auto shrink-0"
+          style={{ minWidth: 150 }}
           data-testid="select-indicator-type"
         >
           <SelectValue />

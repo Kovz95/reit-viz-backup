@@ -991,7 +991,7 @@ export default function Scatter() {
         <div className="h-5 w-px bg-border mx-0.5" />
         <span className="text-xs font-semibold text-muted-foreground">Color</span>
         <Select value={colorMode} onValueChange={setColorMode}>
-          <SelectTrigger className="h-6 text-[11px] w-[90px]" data-testid="scatter-color-mode">
+          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[120px]" data-testid="scatter-color-mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1038,7 +1038,7 @@ export default function Scatter() {
         </div>
         {showRegression && (
           <Select value={regressionLevel} onValueChange={setRegressionLevel}>
-            <SelectTrigger className="h-6 text-[11px] w-[130px]">
+            <SelectTrigger className="h-6 text-[11px] w-auto min-w-[155px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

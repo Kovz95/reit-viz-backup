@@ -352,7 +352,7 @@ export default function PremiumDiscountScreener() {
           <div className="h-5 w-px bg-border" />
           <span className="text-muted-foreground">Universe</span>
           <Select value={universeMode} onValueChange={v => setUniverseMode(v as any)}>
-            <SelectTrigger className="h-7 w-[150px] text-[11px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[170px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="workbook">Entire workbook</SelectItem>
               <SelectItem value="basket">Basket…</SelectItem>
@@ -361,7 +361,7 @@ export default function PremiumDiscountScreener() {
           </Select>
           {universeMode === "basket" && (
             <Select value={selectedBasket} onValueChange={setSelectedBasket}>
-              <SelectTrigger className="h-7 w-[180px] text-[11px]"><SelectValue placeholder="Pick basket…" /></SelectTrigger>
+              <SelectTrigger className="h-7 w-auto min-w-[210px] text-[11px]"><SelectValue placeholder="Pick basket…" /></SelectTrigger>
               <SelectContent>
                 {baskets.length === 0
                   ? <SelectItem value="__empty" disabled>No baskets saved yet</SelectItem>
@@ -373,13 +373,13 @@ export default function PremiumDiscountScreener() {
           {universeMode === "classification" && (
             <>
               <Select value={classKey} onValueChange={k => { setClassKey(k); setClassValue(""); }}>
-                <SelectTrigger className="h-7 w-[140px] text-[11px]"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-7 w-auto min-w-[165px] text-[11px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {CLASSIFICATION_KEYS.map((k: string) => <SelectItem key={k} value={k}>{CLASSIFICATION_LABELS[k]}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={classValue} onValueChange={setClassValue}>
-                <SelectTrigger className="h-7 w-[200px] text-[11px]"><SelectValue placeholder={`Pick ${CLASSIFICATION_LABELS[classKey]}…`} /></SelectTrigger>
+                <SelectTrigger className="h-7 w-auto min-w-[265px] text-[11px]"><SelectValue placeholder={`Pick ${CLASSIFICATION_LABELS[classKey]}…`} /></SelectTrigger>
                 <SelectContent>
                   {classValues.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
                 </SelectContent>
@@ -389,21 +389,21 @@ export default function PremiumDiscountScreener() {
           <div className="h-5 w-px bg-border" />
           <span className="text-muted-foreground">Valuation</span>
           <Select value={valuationMetricSel} onValueChange={v => { valLockedRef.current = true; setValuationMetricSel(v); }}>
-            <SelectTrigger className="h-7 w-[140px] text-[11px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[165px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               {VALUATION_METRICS.map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
             </SelectContent>
           </Select>
           <span className="text-muted-foreground">Growth</span>
           <Select value={growthMetricSel} onValueChange={v => { growthLockedRef.current = true; setGrowthMetricSel(v); }}>
-            <SelectTrigger className="h-7 w-[200px] text-[11px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[265px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               {GROWTH_METRICS.map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
             </SelectContent>
           </Select>
           <span className="text-muted-foreground">Peers by</span>
           <Select value={peerDimension} onValueChange={setPeerDimension}>
-            <SelectTrigger className="h-7 w-[140px] text-[11px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[165px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               {CLASSIFICATION_KEYS.map((k: string) => <SelectItem key={k} value={k}>{CLASSIFICATION_LABELS[k]}</SelectItem>)}
             </SelectContent>

@@ -651,7 +651,7 @@ export default function FactorBacktest() {
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">Y (Multiple):</span>
           <Select value={metricY} onValueChange={setMetricY}>
-            <SelectTrigger className="h-7 w-44 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[200px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {metricGroups.map(g => (
                 <div key={g.group}>
@@ -665,7 +665,7 @@ export default function FactorBacktest() {
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">X (Growth):</span>
           <Select value={metricX} onValueChange={setMetricX}>
-            <SelectTrigger className="h-7 w-44 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[200px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {metricGroups.map(g => (
                 <div key={g.group}>
@@ -685,7 +685,7 @@ export default function FactorBacktest() {
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">Rebalance:</span>
           <Select value={String(rebalanceDays)} onValueChange={v => setRebalanceDays(parseInt(v))}>
-            <SelectTrigger className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[200px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {REBALANCE_PERIODS.map(p => <SelectItem key={p.days} value={String(p.days)} className="text-xs">{p.label}</SelectItem>)}
             </SelectContent>
@@ -703,7 +703,7 @@ export default function FactorBacktest() {
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">Rank:</span>
           <Select value={rankingMode} onValueChange={v => setRankingMode(v as "peg" | "zscore")}>
-            <SelectTrigger className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-7 w-auto min-w-[200px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="peg" className="text-xs">PEG (mult/grw)</SelectItem>
               <SelectItem value="zscore" className="text-xs">Z-score composite</SelectItem>

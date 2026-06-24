@@ -536,7 +536,7 @@ export default function Valuation() {
           value={LOOKBACK_OPTIONS.find((o) => o.value === lookback) ? String(lookback) : "custom"}
           onValueChange={(v) => { if (v !== "custom") setLookback(parseInt(v)); }}
         >
-          <SelectTrigger className="h-6 text-[11px] w-[90px]" data-testid="val-lookback">
+          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[120px]" data-testid="val-lookback">
             <SelectValue>
               {LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label ?? `${lookback}d`}
             </SelectValue>
@@ -573,7 +573,7 @@ export default function Valuation() {
           onValueChange={(v) => { setGroupByLevel(v); setExpandedGroups(new Set()); }}
         >
           <SelectTrigger
-            className="h-6 text-[11px] w-[120px]"
+            className="h-6 text-[11px] w-auto min-w-[155px]"
             data-testid="val-group-select"
           >
             <SelectValue placeholder="Group by" />

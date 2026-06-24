@@ -3185,7 +3185,7 @@ function MetricPicker({
   const customMetrics = getCustomFundamentalMetrics();
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="h-7 text-xs w-[140px]" data-testid={testId}>
+      <SelectTrigger className="h-7 text-xs w-auto min-w-[180px]" data-testid={testId}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

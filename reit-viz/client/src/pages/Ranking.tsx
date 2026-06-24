@@ -1199,7 +1199,7 @@ export default function Ranking() {
 
         <span className="text-xs font-semibold text-muted-foreground" title="Averaging window for metric values (e.g. 20-day avg of P/FFO)">Metric Avg</span>
         <Select value={avgDays} onValueChange={setAvgDays}>
-          <SelectTrigger className="h-6 text-[11px] w-[110px]" data-testid="rank-avg-days">
+          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[140px]" data-testid="rank-avg-days">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1282,7 +1282,7 @@ export default function Ranking() {
                   }
                 }}
               >
-                <SelectTrigger className="h-6 text-[11px] w-[80px]">
+                <SelectTrigger className="h-6 text-[11px] w-auto min-w-[110px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1406,7 +1406,7 @@ export default function Ranking() {
           testIdPrefix="rank"
         >
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v)}>
-            <SelectTrigger className="h-6 w-auto min-w-[120px] text-[11px] gap-1">
+            <SelectTrigger className="h-6 w-auto min-w-[150px] text-[11px] gap-1">
               <Group className="w-3 h-3 shrink-0" />
               <SelectValue placeholder="Group By" />
             </SelectTrigger>

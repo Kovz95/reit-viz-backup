@@ -879,8 +879,9 @@ export default function ChartArea({
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 gap-1.5 min-w-0 max-w-[260px]"
+              className="h-7 px-2 gap-1.5 min-w-0 max-w-[340px]"
               data-testid="ticker-dropdown"
+              title={currentTicker?.name}
             >
               {isLoadingView && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground flex-shrink-0" />}
               <span className="font-mono font-bold text-sm text-primary" data-testid="current-ticker">
@@ -1437,7 +1438,7 @@ export default function ChartArea({
               value={String(panesVisible)}
               onValueChange={(v) => setPanesVisible(v === "all" ? "all" : parseInt(v))}
             >
-              <SelectTrigger className="h-6 text-[10px] w-[80px]" data-testid="panes-visible">
+              <SelectTrigger className="h-6 text-[10px] w-auto min-w-[110px]" data-testid="panes-visible">
                 <Layers className="w-3 h-3 mr-1" />
                 <SelectValue />
               </SelectTrigger>
@@ -1762,7 +1763,7 @@ export default function ChartArea({
           onValueChange={(v) => setActiveTool(v)}
         >
           <SelectTrigger
-            className={`h-6 text-[11px] w-[100px] ${activeTool !== "none" ? "border-primary text-primary" : ""}`}
+            className={`h-6 text-[11px] w-auto min-w-[120px] ${activeTool !== "none" ? "border-primary text-primary" : ""}`}
             data-testid="draw-menu"
           >
             <SelectValue placeholder="Draw" />

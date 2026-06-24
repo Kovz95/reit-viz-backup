@@ -490,7 +490,7 @@ function ConditionEditor({ cond, onChange, onRemove, canRemove }: {
       <div className="flex flex-col gap-1 min-w-[150px]">
         <Label className="text-xs text-muted-foreground">Type</Label>
         <Select value={cond.type} onValueChange={v => set("type", v)}>
-          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="h-8 min-w-[190px] shrink-0"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="sigma">N-σ daily move</SelectItem>
             <SelectItem value="high52">New 52-week high</SelectItem>

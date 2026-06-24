@@ -612,7 +612,7 @@ export default function Heatmap() {
 
         {/* Group by */}
         <Select value={groupBy} onValueChange={v => setGroupBy(v as GroupLevel)}>
-          <SelectTrigger className="h-6 text-[11px] w-[130px]" data-testid="heatmap-group-select">
+          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[155px]" data-testid="heatmap-group-select">
             <SelectValue placeholder="Group by" />
           </SelectTrigger>
           <SelectContent>

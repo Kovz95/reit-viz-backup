@@ -563,7 +563,7 @@ export default function DividendSpread() {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-wrap">
         <span className="text-xs font-semibold text-muted-foreground">Rate</span>
         <Select value={treasuryId} onValueChange={setTreasuryId}>
-          <SelectTrigger className="h-6 text-[11px] w-[120px]" data-testid="spread-rate-select">
+          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[150px]" data-testid="spread-rate-select">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
