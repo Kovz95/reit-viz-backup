@@ -8,10 +8,25 @@ import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
 import {
   alignSeries,
   computeDerived,
+  computeRollingCorrelation,
   DERIVED_DEFS,
   type DerivedType,
   type TV,
 } from "@/lib/pairMath";
+import { applyTransform, type DataTransform } from "@/lib/transforms";
+import {
+  shiftSeries,
+  alignByTime,
+  computeHorizonGrid,
+  computeLagScan,
+  listPairsCorrPresets,
+  upsertPairsCorrPreset,
+  deletePairsCorrPreset,
+  TRANSFORM_WINDOWS,
+  type LagRow,
+  type PairsCorrPreset,
+} from "@/lib/leadLag";
+import LeadLagChart from "./LeadLagChart";
 import { useUpload } from "@/lib/uploadContext";
 import { getSeriesColor } from "@/lib/chartColors";
 import ChartsComparePanel from "./ChartsComparePanel";
@@ -43,6 +58,9 @@ import {
   GripVertical,
   Palette,
   Minus,
+  Bookmark,
+  Save,
+  Loader2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -2072,6 +2090,57 @@ function PairsFormulaSection({
   const [legAOpen, setLegAOpen] = useState(false);
   const [legBOpen, setLegBOpen] = useState(false);
 
+  // ── Correlation lead-lag tools (shown when Pair Math output = Correlation) ──
+  const isCorr = mode === "pair" && output === "correlation";
+  const [tfA, setTfA] = useState<DataTransform>("raw");
+  const [tfB, setTfB] = useState<DataTransform>("raw");
+  const [tfWinA, setTfWinA] = useState(252);
+  const [tfWinB, setTfWinB] = useState(252);
+  const [lagBars, setLagBars] = useState(0);
+  const [lagMax, setLagMax] = useState(60);
+  const [scanning, setScanning] = useState(false);
+  const [scanData, setScanData] = useState<LagRow[]>([]);
+  // Raw fetched legs, cached by leg/metric key so transform/lag tweaks don't refetch.
+  const [rawA, setRawA] = useState<TV[] | null>(null);
+  const [rawB, setRawB] = useState<TV[] | null>(null);
+  const [loadedKey, setLoadedKey] = useState("");
+  // Presets
+  const [presetsTick, setPresetsTick] = useState(0);
+  const [showSaveForm, setShowSaveForm] = useState(false);
+  const [presetName, setPresetName] = useState("");
+
+  const corrKey = `${legA}|${metricA}|${legB}|${metricB}`;
+  const corrLoaded = !!rawA && !!rawB && loadedKey === corrKey;
+
+  const transformedA = useMemo(
+    () => (rawA ? applyTransform(rawA as any, tfA, tfWinA) : []),
+    [rawA, tfA, tfWinA],
+  );
+  const transformedB = useMemo(
+    () => (rawB ? applyTransform(rawB as any, tfB, tfWinB) : []),
+    [rawB, tfB, tfWinB],
+  );
+  const horizonGrid = useMemo<LagRow[]>(
+    () =>
+      corrLoaded ? computeHorizonGrid(transformedA as any, transformedB as any) : [],
+    [corrLoaded, transformedA, transformedB],
+  );
+  // Re-run the lag sweep locally whenever loaded data / transforms / range change.
+  useEffect(() => {
+    if (!corrLoaded || !transformedA.length || !transformedB.length) {
+      setScanData([]);
+      return;
+    }
+    const { rows } = computeLagScan(transformedA as any, transformedB as any, lagMax);
+    setScanData(rows);
+  }, [corrLoaded, transformedA, transformedB, lagMax]);
+
+  const presets = useMemo(
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    () => listPairsCorrPresets(),
+    [presetsTick],
+  );
+
   const tickerNames = useMemo(() => tickers.map((t) => t.ticker).sort(), [tickers]);
   const nameByTicker = useMemo(() => {
     const m = new Map<string, string>();
@@ -2096,9 +2165,17 @@ function PairsFormulaSection({
     if (!legA || !legB) return "?";
     const a = `${legA}${metricA !== "close" ? ":" + metricA : ""}`;
     const b = `${legB}${metricB !== "close" ? ":" + metricB : ""}`;
+    if (output === "correlation") {
+      const tfMark = (tf: DataTransform, w: number) =>
+        tf === "raw" ? "" : `[${tf === "zscore" ? "Z" : "%"}${w === 0 ? "exp" : w}]`;
+      const aL = `${a}${tfMark(tfA, tfWinA)}`;
+      const bL = `${b}${tfMark(tfB, tfWinB)}`;
+      const lagS = lagBars !== 0 ? ` lag${lagBars > 0 ? "+" : ""}${lagBars}` : "";
+      return `Corr(${aL}, ${bL}) ${zwin}d${lagS}`;
+    }
     const suffix = needsZWin ? ` — ${outputDef?.label} (${zwin}d)` : ` — ${outputDef?.label}`;
     return `${a} / ${b}${suffix}`;
-  }, [mode, operator, legA, legB, metricA, metricB, rightSide, constant, needsZWin, outputDef, zwin]);
+  }, [mode, operator, legA, legB, metricA, metricB, rightSide, constant, needsZWin, outputDef, zwin, output, tfA, tfB, tfWinA, tfWinB, lagBars]);
 
   // Fetch a {time,value} series for a leg (close → fetchCloseSeries, else getMetricSeries)
   const fetchLeg = useCallback(async (ticker: string, metric: string): Promise<TV[]> => {
@@ -2178,6 +2255,35 @@ function PairsFormulaSection({
         const b = await fetchLeg(legB, metricB);
         if (a.length === 0) { setError("No data for Leg A"); setLoading(false); return; }
         if (b.length === 0) { setError("No data for Leg B"); setLoading(false); return; }
+        if (output === "correlation") {
+          // Apply per-leg transform, shift A by lag, inner-join by time, roll Pearson r.
+          const ta = applyTransform(a as any, tfA, tfWinA);
+          const tb = applyTransform(b as any, tfB, tfWinB);
+          const alC = alignByTime(shiftSeries(ta as any, lagBars), tb as any);
+          const win = Math.max(2, zwin);
+          if (alC.length < win + 5) {
+            setError(`Need ≥${win + 5} overlapping bars; have ${alC.length}.`);
+            setLoading(false);
+            return;
+          }
+          const corr = computeRollingCorrelation(alC, win);
+          if (!corr || corr.length === 0) { setError("Not enough overlapping data"); setLoading(false); return; }
+          const lbl = label || autoLabel;
+          const series: PlottedSeries = {
+            id: `pairs:correlation:${legA}:${legB}:${Date.now()}`,
+            ticker: legA,
+            metric: `pairs:correlation`,
+            color: getSeriesColor(plottedSeries.length),
+            paneIndex: 0,
+            data: corr as any,
+            visible: true,
+            label: lbl,
+          };
+          const tgt = paneTarget !== "new" ? parseInt(paneTarget) : undefined;
+          onAddFormulaSeries(series, tgt);
+          setLoading(false);
+          return;
+        }
         const aligned = alignSeries(a as any, b as any);
         const win =
           output === "spreadZ" ? betaLookback :
@@ -2205,7 +2311,83 @@ function PairsFormulaSection({
       setError(e?.message || "Failed to compute series");
     }
     setLoading(false);
-  }, [mode, legA, legB, metricA, metricB, operator, rightSide, constant, label, autoLabel, output, zwin, betaLookback, olsResidWin, spreadZwin, bandMode, paneTarget, plottedSeries.length, onAddFormulaSeries, fetchLeg]);
+  }, [mode, legA, legB, metricA, metricB, operator, rightSide, constant, label, autoLabel, output, zwin, betaLookback, olsResidWin, spreadZwin, bandMode, paneTarget, plottedSeries.length, onAddFormulaSeries, fetchLeg, tfA, tfB, tfWinA, tfWinB, lagBars]);
+
+  // Fetch both legs (cache by key), apply transforms, sweep lags, pin best |r|.
+  const handleScan = useCallback(async () => {
+    setError("");
+    if (!legA || !legB) { setError("Pick both legs"); return; }
+    setScanning(true);
+    try {
+      let a = rawA;
+      let b = rawB;
+      if (!corrLoaded) {
+        a = await fetchLeg(legA, metricA);
+        b = await fetchLeg(legB, metricB);
+        if (!a.length) { setError("No data for Leg A"); setScanning(false); return; }
+        if (!b.length) { setError("No data for Leg B"); setScanning(false); return; }
+        setRawA(a);
+        setRawB(b);
+        setLoadedKey(corrKey);
+      }
+      const ta = applyTransform(a as any, tfA, tfWinA);
+      const tb = applyTransform(b as any, tfB, tfWinB);
+      const { rows, bestK } = computeLagScan(ta as any, tb as any, lagMax);
+      setScanData(rows);
+      setLagBars(bestK);
+    } catch (e: any) {
+      setError(e?.message || "Failed to scan");
+    } finally {
+      setScanning(false);
+    }
+  }, [legA, legB, metricA, metricB, rawA, rawB, corrLoaded, corrKey, tfA, tfB, tfWinA, tfWinB, lagMax, fetchLeg]);
+
+  const applyPreset = useCallback((p: PairsCorrPreset) => {
+    setMode("pair");
+    setOutput("correlation");
+    setLegA(p.legA);
+    setMetricA(p.metricA);
+    setLegB(p.legB);
+    setMetricB(p.metricB);
+    setTfA(p.tfA);
+    setTfB(p.tfB);
+    setTfWinA(p.tfWinA);
+    setTfWinB(p.tfWinB);
+    setLagBars(p.lagBars);
+    setLagMax(p.lagMax);
+    setZwin(p.corrWindow);
+    // Legs may have changed — force a reload before the next scan.
+    setRawA(null);
+    setRawB(null);
+    setLoadedKey("");
+  }, []);
+
+  const handleSavePreset = useCallback(() => {
+    const name = presetName.trim();
+    if (!name || !legA || !legB) return;
+    upsertPairsCorrPreset({
+      name,
+      legA,
+      metricA,
+      legB,
+      metricB,
+      tfA,
+      tfB,
+      tfWinA,
+      tfWinB,
+      lagBars,
+      lagMax,
+      corrWindow: zwin,
+    });
+    setShowSaveForm(false);
+    setPresetName("");
+    setPresetsTick((t) => t + 1);
+  }, [presetName, legA, legB, metricA, metricB, tfA, tfB, tfWinA, tfWinB, lagBars, lagMax, zwin]);
+
+  const handleDeletePreset = useCallback((id: string) => {
+    deletePairsCorrPreset(id);
+    setPresetsTick((t) => t + 1);
+  }, []);
 
   const metricOptions = useMemo(() => {
     const opts = new Set<string>(["close", ...allMetrics]);
@@ -2437,6 +2619,247 @@ function PairsFormulaSection({
               <span className="text-[9px] text-muted-foreground">days</span>
             </div>
           )}
+
+          {/* ── Correlation lead-lag tools (transforms · lead-lag · horizon · presets) ── */}
+          {isCorr && (
+            <div className="space-y-2 border-t border-border pt-2">
+              {/* Presets */}
+              <div className="border border-border rounded p-1.5 bg-background">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                    <Bookmark className="h-3 w-3" /> Presets
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-5 px-1.5 text-[9px]"
+                    onClick={() => setShowSaveForm((v) => !v)}
+                    disabled={!legA || !legB}
+                    title={!legA || !legB ? "Pick both legs first" : "Save current config as preset"}
+                    data-testid="pf-corr-preset-save-toggle"
+                  >
+                    <Save className="h-3 w-3 mr-0.5" /> Save
+                  </Button>
+                </div>
+                {showSaveForm && (
+                  <div className="flex items-center gap-1 mb-1">
+                    <Input
+                      type="text"
+                      placeholder="Preset name…"
+                      value={presetName}
+                      onChange={(e) => setPresetName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); }}
+                      className="h-6 text-[10px] flex-1 bg-background"
+                      autoFocus
+                      data-testid="pf-corr-preset-name"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-6 px-2 text-[10px]"
+                      onClick={handleSavePreset}
+                      disabled={!presetName.trim()}
+                      data-testid="pf-corr-preset-save-confirm"
+                    >
+                      OK
+                    </Button>
+                  </div>
+                )}
+                {presets.length === 0 ? (
+                  <div className="text-[9px] text-muted-foreground italic">No saved presets.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-1" data-testid="pf-corr-preset-list">
+                    {presets.map((p) => (
+                      <div
+                        key={p.id}
+                        className="inline-flex items-center gap-0.5 border border-border rounded bg-card pl-1.5 pr-0.5 py-0.5"
+                      >
+                        <button
+                          className="text-[10px] hover:text-primary truncate max-w-[140px]"
+                          onClick={() => applyPreset(p)}
+                          title={`${p.name} · ${p.legA}/${p.legB} · lag ${p.lagBars >= 0 ? "+" : ""}${p.lagBars}`}
+                          data-testid={`pf-corr-preset-apply-${p.id}`}
+                        >
+                          {p.name}
+                        </button>
+                        <button
+                          className="text-muted-foreground hover:text-rose-400 p-0.5"
+                          onClick={() => handleDeletePreset(p.id)}
+                          title="Delete preset"
+                          data-testid={`pf-corr-preset-delete-${p.id}`}
+                        >
+                          <Trash2 className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Per-leg transforms (Raw / Z / Percentile) */}
+              {([
+                { label: "Leg A transform", tf: tfA, setTf: setTfA, win: tfWinA, setWin: setTfWinA, key: "a" },
+                { label: "Leg B transform", tf: tfB, setTf: setTfB, win: tfWinB, setWin: setTfWinB, key: "b" },
+              ] as const).map((row) => (
+                <div key={row.key}>
+                  <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1">
+                    {row.label}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {(["raw", "zscore", "percentile"] as DataTransform[]).map((tf) => (
+                      <Button
+                        key={tf}
+                        size="sm"
+                        variant={row.tf === tf ? "default" : "outline"}
+                        className="h-5 px-1.5 text-[9px] flex-1"
+                        onClick={() => row.setTf(tf)}
+                        title={tf === "raw" ? "Raw values" : tf === "zscore" ? "Rolling Z-score" : "Rolling percentile"}
+                        data-testid={`pf-corr-tf${row.key}-${tf}`}
+                      >
+                        {tf === "raw" ? "Raw" : tf === "zscore" ? "Z" : "%"}
+                      </Button>
+                    ))}
+                    {row.tf !== "raw" && (
+                      <Select value={String(row.win)} onValueChange={(v) => row.setWin(Number(v))}>
+                        <SelectTrigger className="h-5 w-[58px] text-[9px] px-1.5" data-testid={`pf-corr-tf${row.key}-win`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TRANSFORM_WINDOWS.map((w) => (
+                            <SelectItem key={w} value={String(w)} className="text-[10px]">
+                              {w === 0 ? "Exp." : `${w}d`}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {/* Correlation-window quick presets (sets the Window above) */}
+              <div className="flex gap-1">
+                {[21, 63, 126, 252].map((w) => (
+                  <Button
+                    key={w}
+                    variant={zwin === w ? "default" : "outline"}
+                    size="sm"
+                    className="h-5 px-1.5 text-[10px] flex-1"
+                    onClick={() => setZwin(w)}
+                  >
+                    {w}d
+                  </Button>
+                ))}
+              </div>
+
+              {/* Lead-lag */}
+              <div className="border-t border-border pt-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Lead-lag: A shifted {lagBars >= 0 ? "+" : ""}{lagBars} bars
+                  </span>
+                  <span className="text-[9px] text-muted-foreground">
+                    {lagBars > 0 ? "A leads B" : lagBars < 0 ? "B leads A" : "contemporaneous"}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={-lagMax}
+                  max={lagMax}
+                  step={1}
+                  value={lagBars}
+                  onChange={(e) => setLagBars(Number(e.target.value))}
+                  className="w-full accent-primary"
+                  data-testid="pf-corr-lag-slider"
+                />
+                <div className="flex items-center gap-1 mt-1.5">
+                  <span className="text-[9px] text-muted-foreground">Scan ±</span>
+                  {[20, 60, 120, 252].map((m) => (
+                    <Button
+                      key={m}
+                      variant={lagMax === m ? "default" : "outline"}
+                      size="sm"
+                      className="h-5 px-1.5 text-[9px] flex-1"
+                      onClick={() => setLagMax(m)}
+                    >
+                      {m}
+                    </Button>
+                  ))}
+                  <Button
+                    size="sm"
+                    className="h-5 px-2 text-[9px]"
+                    disabled={scanning || !legA || !legB}
+                    onClick={handleScan}
+                    data-testid="pf-corr-scan"
+                    title="Fetch legs, sweep lags, and pin the bar with max |r|"
+                  >
+                    {scanning ? <Loader2 className="h-3 w-3 animate-spin" /> : (<><Search className="h-3 w-3 mr-0.5" />Find</>)}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-5 px-1.5 text-[9px]"
+                    onClick={() => setLagBars(0)}
+                    title="Reset to contemporaneous"
+                  >
+                    0
+                  </Button>
+                </div>
+                {scanData.length > 0 && (
+                  <LeadLagChart
+                    data={scanData}
+                    lagBars={lagBars}
+                    lagMax={lagMax}
+                    onLagChange={setLagBars}
+                    height={200}
+                    width={480}
+                  />
+                )}
+                {!corrLoaded && (
+                  <div className="text-[9px] text-muted-foreground mt-1 italic">
+                    Press <span className="font-semibold">Find</span> to load both legs and scan lead-lag.
+                  </div>
+                )}
+              </div>
+
+              {/* Horizon r grid (full-sample) */}
+              {horizonGrid.length > 0 && (
+                <div className="border border-border rounded p-1.5 bg-background">
+                  <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">
+                    Horizon r (full-sample, A shifted)
+                  </div>
+                  <div
+                    className="grid gap-0.5 text-[9px] font-mono"
+                    style={{ gridTemplateColumns: "repeat(13, minmax(0, 1fr))" }}
+                  >
+                    {horizonGrid.map((rowH) => {
+                      const r = rowH.r;
+                      const colorClass = Number.isFinite(r)
+                        ? Math.abs(r) > 0.5
+                          ? r > 0 ? "text-emerald-400" : "text-rose-400"
+                          : Math.abs(r) > 0.2
+                            ? r > 0 ? "text-emerald-300/70" : "text-rose-300/70"
+                            : "text-muted-foreground"
+                        : "text-muted-foreground";
+                      return (
+                        <div key={rowH.k} className="flex flex-col items-center">
+                          <span className="text-muted-foreground text-[8px]">
+                            {rowH.k >= 0 ? "+" : ""}{rowH.k}
+                          </span>
+                          <span className={colorClass}>
+                            {Number.isFinite(r) ? r.toFixed(2) : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[9px] text-muted-foreground mt-1 leading-tight">
+                    r &gt; 0 at +k ⇒ A leads B by k bars; r &gt; 0 at -k ⇒ B leads A.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {output === "spreadZ" && (
             <>
               <div className="flex items-center gap-2">
