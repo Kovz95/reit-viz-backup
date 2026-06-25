@@ -33,6 +33,12 @@ const fmtPctile = (v: number) => (Number.isFinite(v) ? v.toFixed(0) : "—");
 const fmtMove = (v: number) =>
   Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(0)}%` : "—";
 const fmtZ = (v: number) => (Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}` : "—");
+const median = (nums: number[]): number => {
+  const v = nums.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!v.length) return NaN;
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+};
 
 // cheap → green, rich → red, depending on the metric's orientation
 function cheapnessColor(pctile: number, lowIsCheap: boolean): string {
@@ -272,7 +278,11 @@ export default function ValuationReRating() {
               <Fragment key={groupName}>
                 <tr className="bg-muted/40 border-y border-border sticky">
                   <td colSpan={11} className="px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
-                    {groupName} <span className="text-muted-foreground font-normal normal-case">· {groupRows.length}</span>
+                    {groupName}
+                    <span className="text-muted-foreground font-normal normal-case"> · {groupRows.length}</span>
+                    <span className="text-muted-foreground font-normal normal-case">
+                      {" "}· median {fmtMult(median(groupRows.map((r) => r.m0)), metric.dir === "inverse")}
+                    </span>
                   </td>
                 </tr>
                 {groupRows.map(renderRow)}
