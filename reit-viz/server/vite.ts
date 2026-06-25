@@ -13,6 +13,14 @@ export async function setupVite(server: Server, app: Express) {
     middlewareMode: true,
     hmr: { server, path: "/vite-hmr" },
     allowedHosts: true as const,
+    // Windows native FS events are unreliable here (atomic-write saves get
+    // missed, so HMR silently stops picking up edits). Polling is the robust
+    // fix; ignore noise dirs to keep the poll cheap.
+    watch: {
+      usePolling: true,
+      interval: 150,
+      ignored: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/uploads/**"],
+    },
   };
 
   const vite = await createViteServer({
