@@ -5085,6 +5085,52 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({});
   });
 
+  // ── Excluded (hidden) tickers — persisted server-side so they're shared
+  // across devices/browsers. Stored per namespace ("workbook", "global") in
+  // DATA_DIR/excluded-tickers.json (the mounted volume → survives recreate).
+  const excludedFile = path.join(DATA_DIR, "excluded-tickers.json");
+  function loadExcluded(): Record<string, string[]> {
+    try {
+      if (!fs.existsSync(excludedFile)) return {};
+      const j = readJSON(excludedFile);
+      return j && typeof j === "object" && !Array.isArray(j) ? j : {};
+    } catch {
+      return {};
+    }
+  }
+  function saveExcluded(map: Record<string, string[]>): void {
+    fs.writeFileSync(excludedFile, JSON.stringify(map, null, 2));
+  }
+
+  app.get("/api/excluded-tickers/:namespace", (req, res) => {
+    const ns = String(req.params.namespace);
+    res.json({ tickers: loadExcluded()[ns] ?? [] });
+  });
+  // Clear all for a namespace. Registered before :ticker so "_clear" isn't read as a ticker.
+  app.post("/api/excluded-tickers/:namespace/_clear", (req, res) => {
+    const ns = String(req.params.namespace);
+    const map = loadExcluded();
+    map[ns] = [];
+    saveExcluded(map);
+    res.json({});
+  });
+  app.post("/api/excluded-tickers/:namespace/:ticker/delete", (req, res) => {
+    const ns = String(req.params.namespace);
+    const t = String(req.params.ticker).toUpperCase();
+    const map = loadExcluded();
+    map[ns] = (map[ns] ?? []).filter((x) => x !== t);
+    saveExcluded(map);
+    res.json({});
+  });
+  app.post("/api/excluded-tickers/:namespace/:ticker", (req, res) => {
+    const ns = String(req.params.namespace);
+    const t = String(req.params.ticker).toUpperCase();
+    const map = loadExcluded();
+    map[ns] = [...new Set([...(map[ns] ?? []), t])];
+    saveExcluded(map);
+    res.json({});
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // Reconstructed endpoints used by the rebuilt client (optimizer / workbook /
   // performance / baskets / peer-relative pages). These read the same data
