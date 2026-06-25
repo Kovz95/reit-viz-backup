@@ -279,7 +279,7 @@ const DECIMAL_TO_PERCENT_METRICS = new Set([
   "FY1 AFFO Growth", "FY2 AFFO Growth",
   // Yields
   "Dividend Yield",
-  "FFO Yield LTM", "FFO Yield FY2",
+  "FFO Yield LTM", "FFO Yield FY2", "FFO Yield FY1",
   "AFFO Yield LTM", "AFFO Yield FY2",
   // Relative to 52-week range
   "% off 52wk High", "% off 52wk Low",
@@ -1311,6 +1311,25 @@ export async function getMultiMetricForAllTickers(
 }
 
 /** Get trailing N values of a metric for a ticker (for sparklines / historical percentile) */
+// Forward (FY1) valuation multiples are not stored in the source workbook — it
+// only carries FY2 and LTM. We derive FY1 the same way the workbook builds the
+// others: price ÷ per-share fundamental (or fundamental ÷ price for a yield),
+// aligned by date index. Values come out ~0.4% off the stored FY2 multiples
+// because the workbook uses a slightly different price stamp, but they're built
+// consistently against `close`, so cross-name comparisons hold.
+const COMPUTED_RATIO_METRICS: Record<string, { num: string; den: string }> = {
+  "P/FFO FY1":     { num: "close", den: "FFO FY1" },
+  "P/AFFO FY1":    { num: "close", den: "AFFO FY1" },
+  "P/E FY1":       { num: "close", den: "EPS FY1" },
+  "EV/EBITDA FY1": { num: "Enterprise Value", den: "EBITDA FY1" },
+  "FFO Yield FY1": { num: "FFO FY1", den: "close" }, // inverse: fundamental ÷ price
+};
+
+/** True for multiples we compute on the fly (FY1) rather than read from storage. */
+export function isComputedRatioMetric(metric: string): boolean {
+  return metric in COMPUTED_RATIO_METRICS;
+}
+
 export async function getMetricTrailing(
   symbol: string,
   metric: string,
@@ -1318,6 +1337,26 @@ export async function getMetricTrailing(
 ): Promise<number[]> {
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
+
+  // Handle computed FY1 ratios (price ÷ fundamental), derived from two stored series.
+  const ratio = COMPUTED_RATIO_METRICS[metric];
+  if (ratio) {
+    const numPairs = rawData[ratio.num];
+    const denPairs = rawData[ratio.den];
+    if (!numPairs || !denPairs) return [];
+    const denMap = new Map<number, number>();
+    for (const [idx, v] of denPairs) denMap.set(idx, v);
+    const mult = metricMultiplier(metric);
+    const out: [number, number][] = [];
+    for (const [idx, numV] of numPairs) {
+      if (idx >= dates.length) continue;
+      const denV = denMap.get(idx);
+      if (denV === undefined || denV === 0 || !Number.isFinite(denV) || !Number.isFinite(numV)) continue;
+      out.push([idx, (numV / denV) * mult]);
+    }
+    out.sort((a, b) => a[0] - b[0]);
+    return out.slice(-trailingDays).map(([, val]) => val);
+  }
 
   // Handle computed SI delta metrics
   if (SI_DELTA_DEFS[metric]) {

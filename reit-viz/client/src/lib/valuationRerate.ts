@@ -20,21 +20,28 @@ export interface RerateMetric {
   approx?: boolean;   // calc is approximate (see note)
 }
 
-// Default first. EV/EBITDA is flagged approximate: an X% *equity* move doesn't
-// move EV proportionally when the company carries debt, so treating EV/EBITDA
-// like a price multiple overstates the re-rate for levered names.
+// Labels match the workbook's own naming (Price to FFO FY1/FY2/LTM, …). FY1
+// multiples aren't stored in the workbook — they're derived on the fly as
+// price ÷ FY1 fundamental (see COMPUTED_RATIO_METRICS in dataService).
+// EV/EBITDA is flagged approximate: an X% *equity* move doesn't move EV
+// proportionally when the company carries debt, so treating EV/EBITDA like a
+// price multiple overstates the re-rate for levered names.
 export const RERATE_METRICS: RerateMetric[] = [
-  { key: "P/FFO FY2",    label: "P/FFO (fwd)",     dir: "direct",  lowIsCheap: true },
-  { key: "P/FFO LTM",    label: "P/FFO (LTM)",     dir: "direct",  lowIsCheap: true },
-  { key: "P/AFFO FY2",   label: "P/AFFO (fwd)",    dir: "direct",  lowIsCheap: true },
-  { key: "P/AFFO LTM",   label: "P/AFFO (LTM)",    dir: "direct",  lowIsCheap: true },
-  { key: "P/E FY2",      label: "P/E (fwd)",       dir: "direct",  lowIsCheap: true },
-  { key: "P/E LTM",      label: "P/E (LTM)",       dir: "direct",  lowIsCheap: true },
-  { key: "EV/EBITDA FY2",label: "EV/EBITDA (fwd)", dir: "direct",  lowIsCheap: true, approx: true },
-  { key: "EV/EBITDA LTM",label: "EV/EBITDA (LTM)", dir: "direct",  lowIsCheap: true, approx: true },
+  { key: "P/FFO FY1",    label: "Price to FFO FY1",      dir: "direct",  lowIsCheap: true },
+  { key: "P/FFO FY2",    label: "Price to FFO FY2",      dir: "direct",  lowIsCheap: true },
+  { key: "P/FFO LTM",    label: "Price to FFO LTM",      dir: "direct",  lowIsCheap: true },
+  { key: "P/AFFO FY1",   label: "Price to AFFO FY1",     dir: "direct",  lowIsCheap: true },
+  { key: "P/AFFO FY2",   label: "Price to AFFO FY2",     dir: "direct",  lowIsCheap: true },
+  { key: "P/AFFO LTM",   label: "Price to AFFO LTM",     dir: "direct",  lowIsCheap: true },
+  { key: "P/E FY1",      label: "Price to Earnings FY1", dir: "direct",  lowIsCheap: true },
+  { key: "P/E FY2",      label: "Price to Earnings FY2", dir: "direct",  lowIsCheap: true },
+  { key: "P/E LTM",      label: "Price to Earnings LTM", dir: "direct",  lowIsCheap: true },
+  { key: "EV/EBITDA FY1",label: "EV/EBITDA FY1",         dir: "direct",  lowIsCheap: true, approx: true },
+  { key: "EV/EBITDA FY2",label: "EV/EBITDA FY2",         dir: "direct",  lowIsCheap: true, approx: true },
+  { key: "EV/EBITDA LTM",label: "EV/EBITDA LTM",         dir: "direct",  lowIsCheap: true, approx: true },
+  { key: "FFO Yield FY1",  label: "FFO Yield FY1",  dir: "inverse", lowIsCheap: false },
+  { key: "FFO Yield FY2",  label: "FFO Yield FY2",  dir: "inverse", lowIsCheap: false },
   { key: "Dividend Yield", label: "Dividend Yield", dir: "inverse", lowIsCheap: false },
-  { key: "FFO Yield FY2",  label: "FFO Yield (fwd)", dir: "inverse", lowIsCheap: false },
-  { key: "Implied Cap Rate", label: "Implied Cap Rate", dir: "inverse", lowIsCheap: false },
 ];
 
 export function getRerateMetric(key: string): RerateMetric {
@@ -124,10 +131,19 @@ export function zScore(value: number, mean: number, std: number): number {
   return std > 0 ? (value - mean) / std : 0;
 }
 
-export interface RerateRow {
+/** The six classification levels each row carries, for group-by. */
+export interface RerateClassification {
+  economy: string;
+  sector: string;
+  subsector: string;
+  industryGroup: string;
+  industry: string;
+  subindustry: string;
+}
+
+export interface RerateRow extends RerateClassification {
   ticker: string;
   name: string;
-  sector: string;
   /** current multiple (latest observation) */
   m0: number;
   stats: DistStats;
@@ -151,7 +167,7 @@ export interface RerateRow {
  * Returns null if there isn't enough history.
  */
 export function buildRerateRow(
-  meta: { ticker: string; name: string; sector: string },
+  meta: { ticker: string; name: string } & Partial<RerateClassification>,
   trailing: number[],
   pctMove: number,
   metric: RerateMetric,
@@ -173,7 +189,12 @@ export function buildRerateRow(
   return {
     ticker: meta.ticker,
     name: meta.name,
-    sector: meta.sector,
+    economy: meta.economy ?? "",
+    sector: meta.sector ?? "",
+    subsector: meta.subsector ?? "",
+    industryGroup: meta.industryGroup ?? "",
+    industry: meta.industry ?? "",
+    subindustry: meta.subindustry ?? "",
     m0,
     stats,
     nowPctile: percentileRank(m0, finite),

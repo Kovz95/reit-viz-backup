@@ -1,6 +1,6 @@
 // Valuation Re-Rating — what a multiple becomes after an X% price move, and where
 // that sits vs the stock's own history, across the universe, for long/short ranking.
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricTrailing } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -10,8 +10,21 @@ import {
 import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info } from "lucide-react";
 import {
-  RERATE_METRICS, LOOKBACKS, getRerateMetric, buildRerateRow, type RerateRow,
+  RERATE_METRICS, LOOKBACKS, getRerateMetric, buildRerateRow,
+  type RerateRow, type RerateClassification,
 } from "@/lib/valuationRerate";
+
+// The six classification levels the table can be grouped by (plus "none").
+const GROUP_LEVELS = [
+  { value: "none", label: "No grouping" },
+  { value: "economy", label: "Economy" },
+  { value: "sector", label: "Sector" },
+  { value: "subsector", label: "Subsector" },
+  { value: "industryGroup", label: "Industry Group" },
+  { value: "industry", label: "Industry" },
+  { value: "subindustry", label: "Subindustry" },
+] as const;
+type GroupLevel = typeof GROUP_LEVELS[number]["value"];
 
 // ── formatting / color helpers ─────────────────────────────────────────────
 const fmtMult = (v: number, inverse: boolean) =>
@@ -55,10 +68,15 @@ export default function ValuationReRating() {
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState<SortCol>("toRich");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [groupBy, setGroupBy] = useState<GroupLevel>("none");
 
   const metric = getRerateMetric(metricKey);
   const tickers = useMemo(
-    () => filteredTickersList.map((t) => ({ ticker: t.ticker, name: t.name, sector: t.sector })),
+    () => filteredTickersList.map((t) => ({
+      ticker: t.ticker, name: t.name,
+      economy: t.economy, sector: t.sector, subsector: t.subsector,
+      industryGroup: t.industryGroup, industry: t.industry, subindustry: t.subindustry,
+    })),
     [filteredTickersList],
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
@@ -105,6 +123,18 @@ export default function ValuationReRating() {
     return r;
   }, [rows, search, sortCol, sortDir]);
 
+  // When grouping, partition the already-sorted rows by the chosen classification
+  // (rows keep their sort order within each group; groups are ordered A→Z).
+  const grouped = useMemo(() => {
+    if (groupBy === "none") return null;
+    const map = new Map<string, RerateRow[]>();
+    for (const r of visible) {
+      const key = (r[groupBy as keyof RerateClassification] as string) || "—";
+      (map.get(key) ?? map.set(key, []).get(key)!).push(r);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [visible, groupBy]);
+
   const toggleSort = (col: SortCol) => {
     if (sortCol === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortCol(col); setSortDir(col === "ticker" ? "asc" : "desc"); }
@@ -123,6 +153,25 @@ export default function ValuationReRating() {
       {label} <SortIcon col={col} />
     </th>
   );
+
+  const renderRow = (r: RerateRow) => {
+    const rr = Math.abs(r.toCheap) > 0 && Number.isFinite(r.toRich) ? r.toRich / Math.abs(r.toCheap) : NaN;
+    return (
+      <tr key={r.ticker} className="border-b border-border/40 hover:bg-muted/30">
+        <td className="px-2 py-1 text-left font-semibold" title={`${r.name} · ${r.sector}`}>{r.ticker}</td>
+        <td className="px-2 py-1 text-right">{fmtMult(r.m0, metric.dir === "inverse")}</td>
+        <td className={`px-2 py-1 text-right ${cheapnessColor(r.nowPctile, metric.lowIsCheap)}`}>{fmtPctile(r.nowPctile)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.nowZ)}</td>
+        <td className="px-2 py-1 text-right">{fmtMult(r.proForma, metric.dir === "inverse")}</td>
+        <td className={`px-2 py-1 text-right ${cheapnessColor(r.proFormaPctile, metric.lowIsCheap)}`}>{fmtPctile(r.proFormaPctile)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.proFormaZ)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(r.toMedian)}`}>{fmtMove(r.toMedian)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(r.toRich)}`}>{fmtMove(r.toRich)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(r.toCheap)}`}>{fmtMove(r.toCheap)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{Number.isFinite(rr) ? rr.toFixed(2) : "—"}</td>
+      </tr>
+    );
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -154,6 +203,17 @@ export default function ValuationReRating() {
             <SelectContent>
               {LOOKBACKS.map((l) => (
                 <SelectItem key={l.days} value={String(l.days)} className="text-xs">{l.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Group by</div>
+          <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupLevel)}>
+            <SelectTrigger className="h-7 w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {GROUP_LEVELS.map((g) => (
+                <SelectItem key={g.value} value={g.value} className="text-xs">{g.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -207,24 +267,17 @@ export default function ValuationReRating() {
             {!isLoading && visible.length === 0 && (
               <tr><td colSpan={11} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiple / universe.</td></tr>
             )}
-            {visible.map((r) => {
-              const rr = Math.abs(r.toCheap) > 0 && Number.isFinite(r.toRich) ? r.toRich / Math.abs(r.toCheap) : NaN;
-              return (
-                <tr key={r.ticker} className="border-b border-border/40 hover:bg-muted/30">
-                  <td className="px-2 py-1 text-left font-semibold" title={`${r.name} · ${r.sector}`}>{r.ticker}</td>
-                  <td className="px-2 py-1 text-right">{fmtMult(r.m0, metric.dir === "inverse")}</td>
-                  <td className={`px-2 py-1 text-right ${cheapnessColor(r.nowPctile, metric.lowIsCheap)}`}>{fmtPctile(r.nowPctile)}</td>
-                  <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.nowZ)}</td>
-                  <td className="px-2 py-1 text-right">{fmtMult(r.proForma, metric.dir === "inverse")}</td>
-                  <td className={`px-2 py-1 text-right ${cheapnessColor(r.proFormaPctile, metric.lowIsCheap)}`}>{fmtPctile(r.proFormaPctile)}</td>
-                  <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.proFormaZ)}</td>
-                  <td className={`px-2 py-1 text-right ${moveColor(r.toMedian)}`}>{fmtMove(r.toMedian)}</td>
-                  <td className={`px-2 py-1 text-right ${moveColor(r.toRich)}`}>{fmtMove(r.toRich)}</td>
-                  <td className={`px-2 py-1 text-right ${moveColor(r.toCheap)}`}>{fmtMove(r.toCheap)}</td>
-                  <td className="px-2 py-1 text-right text-muted-foreground">{Number.isFinite(rr) ? rr.toFixed(2) : "—"}</td>
+            {!isLoading && !grouped && visible.map(renderRow)}
+            {!isLoading && grouped && grouped.map(([groupName, groupRows]) => (
+              <Fragment key={groupName}>
+                <tr className="bg-muted/40 border-y border-border sticky">
+                  <td colSpan={11} className="px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
+                    {groupName} <span className="text-muted-foreground font-normal normal-case">· {groupRows.length}</span>
+                  </td>
                 </tr>
-              );
-            })}
+                {groupRows.map(renderRow)}
+              </Fragment>
+            ))}
           </tbody>
         </table>
       </div>
