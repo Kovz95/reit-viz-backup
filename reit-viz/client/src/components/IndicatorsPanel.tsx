@@ -283,6 +283,26 @@ export default function IndicatorsPanel({
   const [rocPeriod, setRocPeriod] = useState(typeof activeIndicators.roc === "number" ? activeIndicators.roc : 12);
   const [stochK, setStochK] = useState(activeIndicators.stochastic?.kPeriod ?? 14);
   const [stochD, setStochD] = useState(activeIndicators.stochastic?.dPeriod ?? 3);
+  const [fractalN, setFractalN] = useState(activeIndicators.fractalLines?.n ?? 10);
+
+  // Update fractal-lines config. anchorDate: undefined = keep current, null = clear (live), string = set.
+  const updateFractal = (
+    on: boolean,
+    n?: number,
+    anchorDate?: string | null,
+  ) => {
+    if (!on) {
+      setActiveIndicators({ ...activeIndicators, fractalLines: undefined });
+      return;
+    }
+    const cur = activeIndicators.fractalLines;
+    const nextAnchor =
+      anchorDate === undefined ? cur?.anchorDate : anchorDate === null ? undefined : anchorDate;
+    setActiveIndicators({
+      ...activeIndicators,
+      fractalLines: { n: n ?? fractalN, anchorDate: nextAnchor },
+    });
+  };
 
   const updateMean = (on: boolean, rolling?: boolean, period?: number) => {
     const r = rolling ?? meanRolling;
@@ -773,6 +793,88 @@ export default function IndicatorsPanel({
               }
               data-testid="toggle-ha-signals"
             />
+          </div>
+
+          {/* Fractal Lines (DojiEmoji auto-trendline) */}
+          <div className="space-y-2 mt-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Fractal Lines</Label>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  <span className="text-red-400">R</span> /{" "}
+                  <span className="text-green-400">S</span> trendlines from last 2 fractal pivots
+                </p>
+              </div>
+              <Switch
+                checked={activeIndicators.fractalLines !== undefined}
+                onCheckedChange={(on) => updateFractal(on)}
+                data-testid="toggle-fractal-lines"
+              />
+            </div>
+
+            {activeIndicators.fractalLines !== undefined && (<>
+              {/* Fractal period n */}
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">Period</span>
+                {[5, 10, 20].map((p) => (
+                  <Button
+                    key={p}
+                    variant={fractalN === p ? "default" : "secondary"}
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    onClick={() => {
+                      setFractalN(p);
+                      updateFractal(true, p);
+                    }}
+                  >
+                    {p}
+                  </Button>
+                ))}
+                <Input
+                  type="number"
+                  placeholder="#"
+                  className="h-6 w-14 text-[10px] px-1.5"
+                  min={2}
+                  max={100}
+                  value={fractalN}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value);
+                    if (Number.isFinite(n) && n >= 2 && n <= 100) {
+                      setFractalN(n);
+                      updateFractal(true, n);
+                    }
+                  }}
+                  data-testid="custom-fractal-period"
+                />
+              </div>
+
+              {/* As-of anchor date */}
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">As of</span>
+                <Input
+                  type="date"
+                  className="h-6 text-[10px] px-1.5 flex-1"
+                  value={activeIndicators.fractalLines.anchorDate ?? ""}
+                  onChange={(e) => updateFractal(true, undefined, e.target.value || null)}
+                  data-testid="fractal-anchor-date"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => updateFractal(true, undefined, null)}
+                  title="Use the latest bar (live)"
+                  disabled={!activeIndicators.fractalLines.anchorDate}
+                >
+                  Latest
+                </Button>
+              </div>
+
+              <p className="text-[10px] text-muted-foreground">
+                Tip: pick the <span className="font-medium">Fractal Anchor</span> draw tool,
+                then click a candle to set the as-of date.
+              </p>
+            </>)}
           </div>
           </>)}
         </div>

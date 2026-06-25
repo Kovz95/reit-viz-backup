@@ -50,4 +50,7 @@ export const INDICATOR_COLORS = {
   stoch_overbought: 'rgba(239, 68, 68, 0.5)',
   stoch_oversold: 'rgba(34, 197, 94, 0.5)',
   obv: '#8b5cf6',
+  fractal_resistance: '#ef4444',
+  fractal_support: '#22c55e',
+  fractal_pivot: 'rgba(148, 163, 184, 0.9)',
 };

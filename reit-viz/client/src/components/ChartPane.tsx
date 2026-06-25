@@ -31,6 +31,7 @@ import {
 } from "@/lib/indicators";
 import type { HASmoothConfig } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
+import { computeFractalTrendlines } from "@/lib/fractalTrendlines";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
@@ -110,6 +111,8 @@ export interface ActiveIndicators {
   obv?: boolean;
   ad?: boolean;
   cmf?: number;       // period
+  /** DojiEmoji fractal trendlines. n = fractal period; anchorDate = "as-of" replay date (undefined = latest bar). */
+  fractalLines?: { n: number; anchorDate?: string };
   indicatorOverlays?: IndicatorOverlay[];
 }
 
@@ -144,6 +147,8 @@ interface ChartPaneProps {
   onCrosshairMove?: (data: { time: string; values: Record<string, number> } | null) => void;
   onDrawingAdded?: () => void;
   onDrawingDeleted?: () => void;
+  /** Called when the user clicks a candle while the "fractal-anchor" tool is active. */
+  onFractalAnchorPick?: (date: string) => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -619,6 +624,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onCrosshairMove,
   onDrawingAdded,
   onDrawingDeleted,
+  onFractalAnchorPick,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -949,8 +955,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     }
 
     const handleClick = (param: any) => {
-      if (!param.time || !param.point) return;
+      if (!param.time) return;
 
+      // Fractal anchor only needs the clicked bar's time (not a price coordinate).
+      if (activeTool === "fractal-anchor") {
+        onFractalAnchorPick?.(String(param.time));
+        return;
+      }
+
+      if (!param.point) return;
       const anySeries = getAnySeries();
       if (!anySeries) return;
 
@@ -1032,7 +1045,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     chart.subscribeClick(handleClick);
     return () => chart.unsubscribeClick(handleClick);
-  }, [activeTool, drawColor, chartReady, paneSeries, getAnySeries]);
+  }, [activeTool, drawColor, chartReady, paneSeries, getAnySeries, onFractalAnchorPick]);
 
   // Freehand drawing: mousedown → mousemove → mouseup
   useEffect(() => {
@@ -1631,6 +1644,43 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
     }
 
+    // ── Fractal trendlines (DojiEmoji auto-trendline) ──
+    // Operates on raw OHLC highs/lows. Connects the last two confirmed fractal
+    // pivots into resistance/support lines, projected forward to the as-of bar.
+    if (
+      activeIndicators.fractalLines &&
+      Array.isArray(ohlcData) &&
+      ohlcData.length > 0
+    ) {
+      const { n, anchorDate } = activeIndicators.fractalLines;
+      const bars = (ohlcData as any[])
+        .filter((b) => b && typeof b.time === "string")
+        .map((b) => ({ time: b.time as string, high: Number(b.high), low: Number(b.low) }));
+      const fr = computeFractalTrendlines(bars, n, anchorDate);
+      const anchorLabel = anchorDate ? ` @ ${anchorDate}` : "";
+
+      const drawLine = (line: typeof fr.resistance, color: string, label: string) => {
+        if (!line || line.points.length < 2) return;
+        const s = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          title: label,
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          pointMarkersVisible: true,
+          pointMarkersRadius: 3,
+          autoscaleInfoProvider: () => null,
+        });
+        s.setData(line.points.map((p) => ({ time: p.time as Time, value: p.value })));
+        indicatorSeriesRef.current.push(s);
+      };
+
+      drawLine(fr.resistance, IC.fractal_resistance, `Fractal R (n${fr.n})${anchorLabel}`);
+      drawLine(fr.support, IC.fractal_support, `Fractal S (n${fr.n})${anchorLabel}`);
+    }
+
     // ── Clean up previous primitives (quarter shading + vertical lines) ──
     // Detach quarter shading primitive
     if (quarterShadingCleanupRef.current) {
@@ -1677,6 +1727,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
       for (const e of macroEventLines) {
         lineEntries.push(e);
+      }
+      // Fractal "as-of" anchor marker — shows the point in time the lines are drawn at.
+      if (activeIndicators.fractalLines?.anchorDate) {
+        lineEntries.push({
+          time: activeIndicators.fractalLines.anchorDate,
+          color: "rgba(148, 163, 184, 0.7)",
+          label: "⚓",
+        });
       }
 
       if (lineEntries.length > 0 && firstSeries) {

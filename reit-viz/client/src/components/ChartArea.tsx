@@ -847,7 +847,19 @@ export default function ChartArea({
     { id: "trendline", label: "Trendline" },
     { id: "freehand", label: "Freehand" },
     { id: "eraser", label: "Eraser" },
+    { id: "fractal-anchor", label: "Fractal Anchor" },
   ];
+
+  // Click a candle (with the Fractal Anchor tool active) to set the as-of date for
+  // that pane's fractal lines. Auto-enables the indicator if it isn't on yet.
+  const handleFractalAnchorPick = useCallback((paneId: number, date: string) => {
+    setIndicatorsMap((prev) => {
+      const cur = prev[paneId] || {};
+      const fl = cur.fractalLines ?? { n: 10 };
+      return { ...prev, [paneId]: { ...cur, fractalLines: { ...fl, anchorDate: date } } };
+    });
+    setActiveTool("none");
+  }, [setIndicatorsMap]);
 
   // Track drawing count across all panes so we can show "Clear All"
   const [drawingCount, setDrawingCount] = useState(0);
@@ -1953,6 +1965,7 @@ export default function ChartArea({
                   onCrosshairMove={(data) => handleCrosshairMove(pane.id, data)}
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}
+                  onFractalAnchorPick={(date) => handleFractalAnchorPick(pane.id, date)}
                   isActive={false}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}
