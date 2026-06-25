@@ -51,6 +51,10 @@ const richColor = (r: number) =>
 const retColor = (v: number) =>
   !Number.isFinite(v) ? "text-muted-foreground" : v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-muted-foreground";
 
+// Forward-return tails with fewer than this many (overlapping) day-observations
+// are statistically thin — we dim + mark them and sink them in fwd-column sorts.
+const MIN_TAIL_N = 60;
+
 // 6-band occupancy bar, cheap (green) → rich (red)
 const BAND_COLORS = ["#34d399", "#6ee7b7", "#fcd34d", "#fbbf24", "#f87171", "#ef4444"];
 function OccupancyBar({ residence }: { residence: number[] }) {
@@ -118,6 +122,14 @@ export default function ValuationResidence() {
     enabled: tickers.length > 0,
   });
 
+  const FWD_COLS = new Set<SortCol>(["fwdRich", "fwdCheap", "edge"]);
+  // Which tail's sample backs this column (fwdCheap → cheap tail; else rich tail).
+  const tailReliable = (r: Row, col: SortCol): boolean => {
+    const f = r.fwd[horizon];
+    if (!f) return false;
+    return (col === "fwdCheap" ? f.cheap.n : f.rich.n) >= MIN_TAIL_N;
+  };
+
   const sortValue = (r: Row, col: SortCol): number | string => {
     switch (col) {
       case "ticker": return r.ticker;
@@ -135,6 +147,11 @@ export default function ValuationResidence() {
     const q = search.trim().toUpperCase();
     let r = q ? rows.filter((x) => x.ticker.includes(q) || x.name.toUpperCase().includes(q)) : rows;
     r = [...r].sort((a, b) => {
+      // Keep low-sample tails out of the top of a forward-return sort (both directions).
+      if (FWD_COLS.has(sortCol)) {
+        const ra = tailReliable(a, sortCol), rb = tailReliable(b, sortCol);
+        if (ra !== rb) return ra ? -1 : 1;
+      }
       const av = sortValue(a, sortCol), bv = sortValue(b, sortCol);
       const cmp = typeof av === "string" || typeof bv === "string"
         ? String(av).localeCompare(String(bv)) : (av as number) - (bv as number);
@@ -181,6 +198,9 @@ export default function ValuationResidence() {
   const renderRow = (r: Row) => {
     const f = r.fwd[horizon];
     const edge = f ? f.rich.median - f.base.median : NaN;
+    const richLow = !f || f.rich.n < MIN_TAIL_N;
+    const cheapLow = !f || f.cheap.n < MIN_TAIL_N;
+    const lowMark = <span className="text-[8px] align-super text-amber-400/70">*</span>;
     return (
       <tr key={r.ticker} className="border-b border-border/40 hover:bg-muted/30 cursor-pointer" onClick={() => setDetail(r)}>
         <td className="px-1 py-1 text-center">
@@ -201,9 +221,9 @@ export default function ValuationResidence() {
         <td className="px-2 py-1 text-right text-muted-foreground" title="distinct visits to ≥90th richness (median run length, days)">
           {fmtNum(r.richCount)}{Number.isFinite(r.richMedDur) ? <span className="text-muted-foreground/50"> ({fmtNum(r.richMedDur)}d)</span> : null}
         </td>
-        <td className={`px-2 py-1 text-right ${retColor(f?.rich.median ?? NaN)}`} title={f ? `n=${f.rich.n} days` : ""}>{fmtRet(f?.rich.median ?? NaN)}</td>
-        <td className={`px-2 py-1 text-right ${retColor(f?.cheap.median ?? NaN)}`} title={f ? `n=${f.cheap.n} days` : ""}>{fmtRet(f?.cheap.median ?? NaN)}</td>
-        <td className={`px-2 py-1 text-right ${retColor(edge)}`} title="rich-tail median forward return minus the unconditional baseline">{fmtRet(edge)}</td>
+        <td className={`px-2 py-1 text-right ${retColor(f?.rich.median ?? NaN)} ${richLow ? "opacity-40" : ""}`} title={f ? `n=${f.rich.n} days${richLow ? " — low sample" : ""}` : ""}>{fmtRet(f?.rich.median ?? NaN)}{richLow && f ? lowMark : null}</td>
+        <td className={`px-2 py-1 text-right ${retColor(f?.cheap.median ?? NaN)} ${cheapLow ? "opacity-40" : ""}`} title={f ? `n=${f.cheap.n} days${cheapLow ? " — low sample" : ""}` : ""}>{fmtRet(f?.cheap.median ?? NaN)}{cheapLow && f ? lowMark : null}</td>
+        <td className={`px-2 py-1 text-right ${retColor(edge)} ${richLow ? "opacity-40" : ""}`} title="rich-tail median forward return minus the unconditional baseline">{fmtRet(edge)}{richLow && f ? lowMark : null}</td>
         <td className="px-2 py-1"><OccupancyBar residence={r.residence} /></td>
       </tr>
     );
@@ -275,7 +295,7 @@ export default function ValuationResidence() {
         <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
         <span>
           Percentiles are <b>richness</b> (100 = most expensive ever, 0 = cheapest), as-of each date ({basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding / all history"}).
-          {" "}<b>+{pctMove}%</b> = pro-forma richness after the move (<b>ATH</b> = never been this rich). <b>Fwd@90 / Fwd@10</b> = median {hLabel} forward price return on days the multiple was in the rich (≥90) / cheap (≤10) tail; <b>Edge</b> = rich-tail minus the unconditional baseline. Forward returns are price-only and use overlapping windows.
+          {" "}<b>+{pctMove}%</b> = pro-forma richness after the move (<b>ATH</b> = never been this rich). <b>Fwd@90 / Fwd@10</b> = median {hLabel} forward price return on days the multiple was in the rich (≥90) / cheap (≤10) tail; <b>Edge</b> = rich-tail minus the unconditional baseline. Forward returns are price-only and use overlapping windows; <b className="text-amber-400/80">dimmed values (*)</b> have fewer than {MIN_TAIL_N} tail days — low confidence, and they sink to the bottom when you sort by a forward-return column.
         </span>
       </div>
 
@@ -369,19 +389,20 @@ export default function ValuationResidence() {
                     const f = detail.fwd[h.days];
                     if (!f) return null;
                     const edge = f.rich.median - f.base.median;
+                    const rLow = f.rich.n < MIN_TAIL_N, cLow = f.cheap.n < MIN_TAIL_N;
                     return (
                       <tr key={h.days} className="border-b border-border/30">
                         <td className="text-left py-1 text-muted-foreground">{h.label}</td>
-                        <td className={`text-right ${retColor(f.rich.median)}`}>{fmtRet(f.rich.median)} · {fmtPct(f.rich.hitRate)}% · {f.rich.n}</td>
-                        <td className={`text-right ${retColor(f.cheap.median)}`}>{fmtRet(f.cheap.median)} · {fmtPct(f.cheap.hitRate)}% · {f.cheap.n}</td>
+                        <td className={`text-right ${retColor(f.rich.median)} ${rLow ? "opacity-40" : ""}`} title={rLow ? "low sample" : ""}>{fmtRet(f.rich.median)} · {fmtPct(f.rich.hitRate)}% · {f.rich.n}{rLow ? "*" : ""}</td>
+                        <td className={`text-right ${retColor(f.cheap.median)} ${cLow ? "opacity-40" : ""}`} title={cLow ? "low sample" : ""}>{fmtRet(f.cheap.median)} · {fmtPct(f.cheap.hitRate)}% · {f.cheap.n}{cLow ? "*" : ""}</td>
                         <td className={`text-right ${retColor(f.base.median)}`}>{fmtRet(f.base.median)} · {f.base.n}</td>
-                        <td className={`text-right ${retColor(edge)}`}>{fmtRet(edge)}</td>
+                        <td className={`text-right ${retColor(edge)} ${rLow ? "opacity-40" : ""}`}>{fmtRet(edge)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              <div className="text-[10px] text-muted-foreground mt-1.5">Forward returns are price-only and use overlapping windows — read n as days, not independent samples. A negative Edge means being rich preceded under-performance (mean reversion).</div>
+              <div className="text-[10px] text-muted-foreground mt-1.5">Forward returns are price-only and use overlapping windows — read n as days, not independent samples. Dimmed rows (*) have fewer than {MIN_TAIL_N} tail days. A negative Edge means being rich preceded under-performance (mean reversion).</div>
             </div>
           </div>
         </div>
