@@ -18,6 +18,8 @@ import type { Basket } from "@/lib/useBaskets";
 import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
 import { getBasketOhlc, buildBasketOhlc } from "@/lib/basketOhlc";
 import type { BasketOhlcResult } from "@/lib/basketOhlc";
+import { getRerateMetric, LOOKBACKS } from "@/lib/valuationRerate";
+import { buildRerateSeries } from "@/lib/valuationRerateSeries";
 
 export interface CustomChartView {
   id: number;
@@ -793,6 +795,82 @@ export default function Dashboard() {
     [activeView, allViews, resolveBasket]
   );
 
+  // Load the Re-Rating "jump to charts" analysis: 5 stacked panes for one ticker —
+  // Price, the multiple (with rolling median/p10/p90 overlay), and the rolling
+  // percentile / z-score / reward:risk of that multiple. The last three are
+  // computed client-side (no backend metric exists); see valuationRerateSeries.
+  const loadRerateAnalysis = useCallback(
+    async (ticker: string, metricKey: string, lookbackDays: number) => {
+      paneGeneration++;
+      const myGeneration = paneGeneration;
+      setIsLoadingView(true);
+      setActiveTicker(ticker);
+      try {
+        const metricObj = getRerateMetric(metricKey);
+        const [closeData, multipleData] = await Promise.all([
+          getMetricSeries(ticker, "close").catch(() => []),
+          getMetricSeries(ticker, metricKey).catch(() => []),
+        ]);
+        if (paneGeneration !== myGeneration) { setIsLoadingView(false); return; }
+
+        const lbLabel = LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? `${lookbackDays}d`;
+        const d = buildRerateSeries(multipleData, lookbackDays, metricObj);
+
+        nextPaneId = 1;
+        const newPanes: PaneInfo[] = [];
+        const newSeries: PlottedSeries[] = [];
+        const mk = (
+          paneIndex: number, metric: string, data: { time: string; value: number }[],
+          color: string, opts?: { lineWidth?: number; lineStyle?: number },
+        ) => {
+          newSeries.push({
+            id: `rerate:${metric}:${ticker}:${nextSeriesSeq++}`,
+            ticker, metric, color,
+            lineWidth: opts?.lineWidth, lineStyle: opts?.lineStyle,
+            paneIndex, data, visible: true, label: `${ticker} - ${metric}`,
+          });
+        };
+
+        // Pane 1 — Price (renders as candles via the "close" series)
+        const pricePane = nextPaneId++;
+        newPanes.push({ id: pricePane, label: `${ticker} — Price`, ticker });
+        mk(pricePane, "close", closeData, getSeriesColor(0));
+
+        // Pane 2 — the multiple itself, with rolling median / p10 / p90 bands overlaid
+        const multPane = nextPaneId++;
+        newPanes.push({ id: multPane, label: `${ticker} — ${metricKey} (${lbLabel})`, ticker });
+        mk(multPane, metricKey, multipleData, getSeriesColor(1), { lineWidth: 2 });
+        mk(multPane, `${metricKey} median`, d.median, "#9ca3af", { lineWidth: 1, lineStyle: 2 });
+        mk(multPane, `${metricKey} p90`, d.p90, "#6b7280", { lineWidth: 1, lineStyle: 1 });
+        mk(multPane, `${metricKey} p10`, d.p10, "#6b7280", { lineWidth: 1, lineStyle: 1 });
+
+        // Pane 3 — rolling percentile (0–100)
+        const pctPane = nextPaneId++;
+        newPanes.push({ id: pctPane, label: `${ticker} — ${metricKey} %ile (${lbLabel})`, ticker });
+        mk(pctPane, `${metricKey} %ile`, d.percentile, getSeriesColor(2));
+
+        // Pane 4 — rolling z-score
+        const zPane = nextPaneId++;
+        newPanes.push({ id: zPane, label: `${ticker} — ${metricKey} z-score (${lbLabel})`, ticker });
+        mk(zPane, `${metricKey} z`, d.zscore, getSeriesColor(3));
+
+        // Pane 5 — rolling reward:risk
+        const rrPane = nextPaneId++;
+        newPanes.push({ id: rrPane, label: `${ticker} — Reward:Risk (${lbLabel})`, ticker });
+        mk(rrPane, `${metricKey} R:R`, d.rr, getSeriesColor(4));
+
+        if (paneGeneration !== myGeneration) { setIsLoadingView(false); return; }
+        setActiveView("");
+        setPanes(newPanes);
+        setPlottedSeries(newSeries);
+      } catch (e) {
+        console.error("Failed to load re-rate analysis", e);
+      }
+      setIsLoadingView(false);
+    },
+    [],
+  );
+
   // Load a pairs preset: fetches derived data for tickerA/tickerB, builds panes with auto-indicators
   const loadPairsPreset = useCallback(
     async (preset: PairsPresetDef, tickerB: string) => {
@@ -1171,6 +1249,29 @@ export default function Dashboard() {
   // Pending ticker from URL (set before tickerList loads)
   const pendingTickerRef = useRef<string | null>(null);
 
+  // Pending Re-Rating "jump to charts" payload (set on the Re-Rating tab before
+  // this page mounted; drained once the ticker list is available).
+  const pendingRerateRef = useRef<{ ticker: string; metricKey: string; lookbackDays: number } | null>(null);
+
+  // Drain the Re-Rating → Charts hand-off from sessionStorage on mount. Runs
+  // before the auto-load effect below so the default view doesn't load first.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("reit-viz:rerate-to-charts");
+      if (raw) {
+        sessionStorage.removeItem("reit-viz:rerate-to-charts");
+        const p = JSON.parse(raw);
+        if (p && p.ticker) {
+          pendingRerateRef.current = {
+            ticker: String(p.ticker).toUpperCase(),
+            metricKey: String(p.metricKey),
+            lookbackDays: Number(p.lookbackDays) || 1260,
+          };
+        }
+      }
+    } catch {}
+  }, []);
+
   // Read ?ticker= from URL search params (from Ranking tab click-through)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1216,9 +1317,21 @@ export default function Dashboard() {
     return () => window.removeEventListener("reit-viz:goto-symbol", handler);
   }, [tickerList, loadViewForTicker]);
 
+  // Drain a pending Re-Rating analysis once the ticker list is ready. We keep
+  // pendingRerateRef set (so the auto-load-default effect below reliably skips
+  // even within the same render batch) and use a started flag to load once.
+  const rerateStartedRef = useRef(false);
+  useEffect(() => {
+    const p = pendingRerateRef.current;
+    if (p && !rerateStartedRef.current && tickerList.length > 0 && tickerList.some((tk) => tk.ticker === p.ticker)) {
+      rerateStartedRef.current = true;
+      loadRerateAnalysis(p.ticker, p.metricKey, p.lookbackDays);
+    }
+  }, [tickerList, loadRerateAnalysis]);
+
   // Auto-load first ticker (or URL-specified ticker) with default view
   useEffect(() => {
-    if (tickerList.length > 0 && !activeTicker && !isLoadingView) {
+    if (tickerList.length > 0 && !activeTicker && !isLoadingView && !pendingRerateRef.current) {
       const pending = pendingTickerRef.current;
       const startTicker = pending && tickerList.some((tk) => tk.ticker === pending)
         ? pending : tickerList[0].ticker;

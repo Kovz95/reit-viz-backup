@@ -596,6 +596,14 @@ export async function getMetricSeries(symbol: string, metric: string): Promise<T
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
 
+  // Handle computed FY1 ratios (price ÷ fundamental), derived from two stored series.
+  const ratio = COMPUTED_RATIO_METRICS[metric];
+  if (ratio) {
+    return computeRatioSeries(rawData, ratio, metricMultiplier(metric))
+      .filter(([idx]) => idx < dates.length)
+      .map(([idx, val]) => ({ time: dates[idx], value: val }));
+  }
+
   // Handle computed SI delta metrics
   if (SI_DELTA_DEFS[metric]) {
     const siPairs = rawData["Short Interest%"];
@@ -1330,6 +1338,31 @@ export function isComputedRatioMetric(metric: string): boolean {
   return metric in COMPUTED_RATIO_METRICS;
 }
 
+/**
+ * Build the [dateIndex, value] series for a computed ratio (numerator ÷
+ * denominator, aligned by date index), sorted ascending by index. Shared by
+ * getMetricTrailing and getMetricSeries so both expose FY1 multiples.
+ */
+function computeRatioSeries(
+  rawData: RawTickerData,
+  ratio: { num: string; den: string },
+  mult: number,
+): [number, number][] {
+  const numPairs = rawData[ratio.num];
+  const denPairs = rawData[ratio.den];
+  if (!numPairs || !denPairs) return [];
+  const denMap = new Map<number, number>();
+  for (const [idx, v] of denPairs) denMap.set(idx, v);
+  const out: [number, number][] = [];
+  for (const [idx, numV] of numPairs) {
+    const denV = denMap.get(idx);
+    if (denV === undefined || denV === 0 || !Number.isFinite(denV) || !Number.isFinite(numV)) continue;
+    out.push([idx, (numV / denV) * mult]);
+  }
+  out.sort((a, b) => a[0] - b[0]);
+  return out;
+}
+
 export async function getMetricTrailing(
   symbol: string,
   metric: string,
@@ -1341,21 +1374,9 @@ export async function getMetricTrailing(
   // Handle computed FY1 ratios (price ÷ fundamental), derived from two stored series.
   const ratio = COMPUTED_RATIO_METRICS[metric];
   if (ratio) {
-    const numPairs = rawData[ratio.num];
-    const denPairs = rawData[ratio.den];
-    if (!numPairs || !denPairs) return [];
-    const denMap = new Map<number, number>();
-    for (const [idx, v] of denPairs) denMap.set(idx, v);
-    const mult = metricMultiplier(metric);
-    const out: [number, number][] = [];
-    for (const [idx, numV] of numPairs) {
-      if (idx >= dates.length) continue;
-      const denV = denMap.get(idx);
-      if (denV === undefined || denV === 0 || !Number.isFinite(denV) || !Number.isFinite(numV)) continue;
-      out.push([idx, (numV / denV) * mult]);
-    }
-    out.sort((a, b) => a[0] - b[0]);
-    return out.slice(-trailingDays).map(([, val]) => val);
+    const pairs = computeRatioSeries(rawData, ratio, metricMultiplier(metric))
+      .filter(([idx]) => idx < dates.length);
+    return pairs.slice(-trailingDays).map(([, val]) => val);
   }
 
   // Handle computed SI delta metrics

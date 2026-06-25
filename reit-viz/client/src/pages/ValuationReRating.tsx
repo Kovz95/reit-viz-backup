@@ -1,6 +1,7 @@
 // Valuation Re-Rating — what a multiple becomes after an X% price move, and where
 // that sits vs the stock's own history, across the universe, for long/short ranking.
 import { useState, useMemo, Fragment } from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricTrailing } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -8,7 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { ArrowUp, ArrowDown, ArrowUpDown, Info } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart } from "lucide-react";
 import {
   RERATE_METRICS, LOOKBACKS, getRerateMetric, buildRerateRow,
   type RerateRow, type RerateClassification,
@@ -67,6 +68,7 @@ const sortValue = (r: RerateRow, col: SortCol): number | string => {
 };
 
 export default function ValuationReRating() {
+  const [, setLocation] = useLocation();
   const { filteredTickersList } = useUniverse();
   const [metricKey, setMetricKey] = useState("P/FFO FY2");
   const [pctMove, setPctMove] = useState(20);
@@ -160,10 +162,32 @@ export default function ValuationReRating() {
     </th>
   );
 
+  // Stash the row's ticker + current multiple/lookback and jump to the Charts
+  // tab, which builds the 5-pane re-rating analysis on mount.
+  const openInCharts = (ticker: string) => {
+    try {
+      sessionStorage.setItem(
+        "reit-viz:rerate-to-charts",
+        JSON.stringify({ ticker, metricKey, lookbackDays }),
+      );
+    } catch {}
+    setLocation("/");
+  };
+
   const renderRow = (r: RerateRow) => {
     const rr = Math.abs(r.toCheap) > 0 && Number.isFinite(r.toRich) ? r.toRich / Math.abs(r.toCheap) : NaN;
     return (
       <tr key={r.ticker} className="border-b border-border/40 hover:bg-muted/30">
+        <td className="px-1 py-1 text-center">
+          <button
+            type="button"
+            onClick={() => openInCharts(r.ticker)}
+            title={`Chart ${r.ticker} — ${metricKey} with percentile, z-score & reward:risk over time`}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <LineChart className="w-3.5 h-3.5" />
+          </button>
+        </td>
         <td className="px-2 py-1 text-left font-semibold" title={`${r.name} · ${r.sector}`}>{r.ticker}</td>
         <td className="px-2 py-1 text-right">{fmtMult(r.m0, metric.dir === "inverse")}</td>
         <td className={`px-2 py-1 text-right ${cheapnessColor(r.nowPctile, metric.lowIsCheap)}`}>{fmtPctile(r.nowPctile)}</td>
@@ -251,6 +275,7 @@ export default function ValuationReRating() {
         <table className="w-full text-xs font-mono">
           <thead className="sticky top-0 bg-card z-10 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
             <tr>
+              <th className="px-1 py-1 w-7" title="Open in Charts" />
               <th className="px-2 py-1 text-left cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("ticker")}>
                 Ticker <SortIcon col="ticker" />
               </th>
@@ -268,16 +293,16 @@ export default function ValuationReRating() {
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={11} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={12} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {!isLoading && visible.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiple / universe.</td></tr>
+              <tr><td colSpan={12} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiple / universe.</td></tr>
             )}
             {!isLoading && !grouped && visible.map(renderRow)}
             {!isLoading && grouped && grouped.map(([groupName, groupRows]) => (
               <Fragment key={groupName}>
                 <tr className="bg-muted/40 border-y border-border sticky">
-                  <td colSpan={11} className="px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
+                  <td colSpan={12} className="px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
                     {groupName}
                     <span className="text-muted-foreground font-normal normal-case"> · {groupRows.length}</span>
                     <span className="text-muted-foreground font-normal normal-case">
