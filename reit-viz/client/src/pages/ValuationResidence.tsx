@@ -69,7 +69,7 @@ function OccupancyBar({ residence }: { residence: number[] }) {
 
 type SortCol =
   | "ticker" | "currentRich" | "proFormaRich" | "proFormaFreqRicher"
-  | "richPctTime" | "cheapPctTime" | "richCount" | "fwdRich" | "fwdCheap" | "edge";
+  | "richPctTime" | "cheapPctTime" | "richCount" | "cheapCount" | "fwdRich" | "fwdCheap" | "edge";
 
 export default function ValuationResidence() {
   const [, setLocation] = useLocation();
@@ -218,8 +218,11 @@ export default function ValuationResidence() {
         <td className="px-2 py-1 text-right text-muted-foreground" title="% of history at least as rich as the pro-forma level (low = rare)">{fmtPct(r.proFormaFreqRicher)}</td>
         <td className="px-2 py-1 text-right text-red-400/80">{fmtPct(r.richPctTime)}</td>
         <td className="px-2 py-1 text-right text-emerald-400/80">{fmtPct(r.cheapPctTime)}</td>
-        <td className="px-2 py-1 text-right text-muted-foreground" title="distinct visits to ≥90th richness (median run length, days)">
+        <td className="px-2 py-1 text-right text-muted-foreground" title="distinct visits to the rich tail (≥90th richness); median run length in days">
           {fmtNum(r.richCount)}{Number.isFinite(r.richMedDur) ? <span className="text-muted-foreground/50"> ({fmtNum(r.richMedDur)}d)</span> : null}
+        </td>
+        <td className="px-2 py-1 text-right text-muted-foreground" title="distinct visits to the cheap tail (≤10th richness); median run length in days">
+          {fmtNum(r.cheapCount)}{Number.isFinite(r.cheapMedDur) ? <span className="text-muted-foreground/50"> ({fmtNum(r.cheapMedDur)}d)</span> : null}
         </td>
         <td className={`px-2 py-1 text-right ${retColor(f?.rich.median ?? NaN)} ${richLow ? "opacity-40" : ""}`} title={f ? `n=${f.rich.n} days${richLow ? " — low sample" : ""}` : ""}>{fmtRet(f?.rich.median ?? NaN)}{richLow && f ? lowMark : null}</td>
         <td className={`px-2 py-1 text-right ${retColor(f?.cheap.median ?? NaN)} ${cheapLow ? "opacity-40" : ""}`} title={f ? `n=${f.cheap.n} days${cheapLow ? " — low sample" : ""}` : ""}>{fmtRet(f?.cheap.median ?? NaN)}{cheapLow && f ? lowMark : null}</td>
@@ -312,6 +315,7 @@ export default function ValuationResidence() {
               <Th col="richPctTime" label="≥90%" title="% of history spent in the rich tail (≥90th richness)" />
               <Th col="cheapPctTime" label="≤10%" title="% of history spent in the cheap tail (≤10th richness)" />
               <Th col="richCount" label="Runs≥90" title="Distinct visits to the rich tail (median run length)" />
+              <Th col="cheapCount" label="Runs≤10" title="Distinct visits to the cheap tail (median run length)" />
               <Th col="fwdRich" label={`Fwd@90`} title={`Median ${hLabel} forward return when rich (≥90)`} />
               <Th col="fwdCheap" label={`Fwd@10`} title={`Median ${hLabel} forward return when cheap (≤10)`} />
               <Th col="edge" label="Edge" title="Rich-tail forward return minus unconditional baseline" />
