@@ -17,6 +17,7 @@ import {
   applyClassFilters,
   type ClassFilters,
 } from "@/components/ClassificationFilters";
+import { useExcludedTickers } from "@/lib/excludedTickers";
 
 export interface UniverseState {
   filters: ClassFilters;
@@ -70,17 +71,26 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
 
   const allTickers = tickersMeta as ClassifiedBase[];
 
+  // Tickers the user hid via the Universe trash icon are excluded from the
+  // universe everywhere (every tab reads filteredTickersList / universeTickers).
+  // allTickers stays complete so the Universe page can list & restore them.
+  const excludedTickers = useExcludedTickers("workbook");
+
   const filteredTickersList = useMemo(() => {
-    return applyClassFilters(allTickers, filters, search, manualTickers);
-  }, [allTickers, filters, search, manualTickers]);
+    const filtered = applyClassFilters(allTickers, filters, search, manualTickers);
+    return excludedTickers.size > 0
+      ? filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()))
+      : filtered;
+  }, [allTickers, filters, search, manualTickers, excludedTickers]);
 
   const isFiltered = useMemo(() => {
     return (
       Object.values(filters).some((s) => s.size > 0) ||
       search !== "" ||
-      manualTickers.size > 0
+      manualTickers.size > 0 ||
+      excludedTickers.size > 0
     );
-  }, [filters, search, manualTickers]);
+  }, [filters, search, manualTickers, excludedTickers]);
 
   const universeTickers = useMemo(() => {
     if (!isFiltered) return null;
