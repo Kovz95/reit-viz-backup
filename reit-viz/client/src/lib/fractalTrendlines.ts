@@ -7,9 +7,10 @@
 //
 // Supports "as-of" replay: when an anchor date is given, only bars up to (and
 // including) that date are considered, and a pivot at bar i is only "known" once
-// its confirmation bar (i + n) has occurred — matching what the indicator would
-// have drawn live on that historical day. The lines are projected forward to the
-// anchor bar so you see them exactly as they looked at that point in time.
+// its confirmation bar (i + n) has occurred — matching which pivots the indicator
+// would have known on that historical day. The line is then projected forward to
+// the chart's right edge (the last bar), so you can see whether later price
+// respected the level the historical fractals projected.
 
 export interface FractalBar {
   time: string; // YYYY-MM-DD (lexically sortable)
@@ -19,7 +20,7 @@ export interface FractalBar {
 
 export interface FractalLine {
   kind: "resistance" | "support";
-  /** Two points (older pivot → projected end at the as-of bar) for drawing. */
+  /** Draw points: the two pivots then the right-edge projection (colinear). */
   points: { time: string; value: number }[];
   /** The two pivots the line was fit through. */
   pivots: { time: string; value: number }[];
@@ -106,12 +107,20 @@ export function computeFractalTrendlines(
     const v1 = pick === "high" ? bars[i1].high : bars[i1].low;
     const v2 = pick === "high" ? bars[i2].high : bars[i2].low;
     const slope = i2 === i1 ? 0 : (v2 - v1) / (i2 - i1);
-    const endVal = v2 + slope * (cutoff - i2);
+    // Project the line all the way to the chart's right edge (last bar of the
+    // full series), not just the as-of bar. The as-of cutoff only decides which
+    // pivots are "known"; the line itself extends forward past the anchor so you
+    // can see whether later price respected the projected level.
+    const lastIdx = bars.length - 1;
+    const endVal = v2 + slope * (lastIdx - i2);
     return {
       kind,
+      // 3 points: the two real pivots (dot markers land here) then the
+      // right-edge projection. All colinear, so it renders as one straight line.
       points: [
         { time: bars[i1].time, value: v1 },
-        { time: bars[cutoff].time, value: endVal },
+        { time: bars[i2].time, value: v2 },
+        { time: bars[lastIdx].time, value: endVal },
       ],
       pivots: [
         { time: bars[i1].time, value: v1 },

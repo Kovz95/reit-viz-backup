@@ -1663,14 +1663,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (!line || line.points.length < 2) return;
         const s = chart.addSeries(LineSeries, {
           color,
-          lineWidth: 2,
+          lineWidth: 4,
           lineStyle: LineStyle.Solid,
           title: label,
           crosshairMarkerVisible: false,
           lastValueVisible: false,
           priceLineVisible: false,
           pointMarkersVisible: true,
-          pointMarkersRadius: 3,
+          pointMarkersRadius: 4,
           autoscaleInfoProvider: () => null,
         });
         s.setData(line.points.map((p) => ({ time: p.time as Time, value: p.value })));
