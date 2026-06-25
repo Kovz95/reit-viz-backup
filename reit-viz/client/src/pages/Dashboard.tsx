@@ -844,10 +844,13 @@ export default function Dashboard() {
         mk(multPane, `${metricKey} p90`, d.p90, "#6b7280", { lineWidth: 1, lineStyle: 1 });
         mk(multPane, `${metricKey} p10`, d.p10, "#6b7280", { lineWidth: 1, lineStyle: 1 });
 
-        // Pane 3 — rolling percentile (0–100)
+        // Pane 3 — rolling percentile (0–100) with 90/10 tail bands marked
         const pctPane = nextPaneId++;
         newPanes.push({ id: pctPane, label: `${ticker} — ${metricKey} %ile (${lbLabel})`, ticker });
-        mk(pctPane, `${metricKey} %ile`, d.percentile, getSeriesColor(2));
+        mk(pctPane, `${metricKey} %ile`, d.percentile, getSeriesColor(2), { lineWidth: 2 });
+        const flat = (v: number) => d.percentile.map((p) => ({ time: p.time, value: v }));
+        mk(pctPane, "90th (rich)", flat(90), "#ef4444", { lineWidth: 1, lineStyle: 2 });
+        mk(pctPane, "10th (cheap)", flat(10), "#34d399", { lineWidth: 1, lineStyle: 2 });
 
         // Pane 4 — rolling z-score
         const zPane = nextPaneId++;
