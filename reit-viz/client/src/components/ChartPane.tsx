@@ -36,6 +36,7 @@ import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
+import { Info } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import ExportMenu from "@/components/ExportMenu";
 
@@ -2329,6 +2330,21 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               </select>
             </div>
           )}
+          {/* Info: explains the Log (symlog) transform */}
+          <span
+            className="ml-0.5 text-muted-foreground/50 hover:text-muted-foreground cursor-help"
+            data-testid={`chart-pane-${paneId}-transform-info`}
+            title={
+              "Log — symmetric log scale: sign(v) · log10(1 + |v|).\n\n" +
+              "Compresses large spikes while keeping the sign and the zero line, so " +
+              "extreme reward:risk / z-score values stay readable without dropping the " +
+              "negatives a plain log axis can't show (it can't plot values ≤ 0).\n\n" +
+              "The axis is in log units; the crosshair data table still shows raw values.\n" +
+              "Z = z-score vs window, % = percentile (0–100), Raw = unchanged."
+            }
+          >
+            <Info className="w-3 h-3 inline" />
+          </span>
         </div>
         <ExportMenu
           getChart={() => chartRef.current}
