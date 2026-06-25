@@ -69,6 +69,7 @@ const ValuationRegime = lazy(() => import("@/pages/ValuationRegime"));
 const PremiumDiscount = lazy(() => import("@/pages/PremiumDiscount"));
 const PremiumDiscountScreener = lazy(() => import("@/pages/PremiumDiscountScreener"));
 const Distributions = lazy(() => import("@/pages/Distributions"));
+const ValuationReRating = lazy(() => import("@/pages/ValuationReRating"));
 const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
 const Heatmap = lazy(() => import("@/pages/Heatmap"));
 const Performance = lazy(() => import("@/pages/Performance"));
@@ -295,6 +296,7 @@ function NavBar() {
         { path: "/val-regime", label: "Val Regime", icon: Layers },
         { path: "/premium-discount", label: "Premium / Discount", icon: Percent },
         { path: "/distributions", label: "Distributions", icon: BarChart3 },
+        { path: "/val-rerate", label: "Re-Rating", icon: Percent },
       ],
     },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
@@ -649,6 +651,7 @@ const PAGES = [
   { path: "/pd-screener", label: "P/D Screener" },
   { path: "/pattern-screener", label: "Pattern Screener" },
   { path: "/distributions", label: "Distributions" },
+  { path: "/val-rerate", label: "Valuation Re-Rating" },
   { path: "/similar-setups", label: "Similar Setups" },
   { path: "/setups-screener", label: "Setups Screener" },
   { path: "/rates-forward", label: "Rates Forward" },
@@ -740,6 +743,7 @@ function AppShell() {
               <Route path="/premium-discount" component={PremiumDiscount} />
               <Route path="/pd-screener" component={PremiumDiscountScreener} />
               <Route path="/distributions" component={Distributions} />
+              <Route path="/val-rerate" component={ValuationReRating} />
               <Route path="/spread" component={DividendSpread} />
               <Route path="/heatmap" component={Heatmap} />
               <Route path="/performance" component={Performance} />
