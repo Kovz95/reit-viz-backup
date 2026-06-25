@@ -164,7 +164,20 @@ function upperBound(arr: number[], val: number): number {
   return lo;
 }
 
-export type DataTransform = "raw" | "zscore" | "percentile";
+/**
+ * Sign-preserving ("symmetric") log: f(v) = sign(v) · log10(1 + |v|).
+ * Compresses large magnitudes while keeping 0 at 0 and preserving sign, so it
+ * works for series that cross zero (e.g. reward:risk, z-score) where a plain
+ * logarithmic axis can't — it tames spikes without dropping negative values.
+ */
+export function toSymlog(data: DataPoint[]): DataPoint[] {
+  return data.map((d) => ({
+    time: d.time,
+    value: Math.sign(d.value) * Math.log10(1 + Math.abs(d.value)),
+  }));
+}
+
+export type DataTransform = "raw" | "zscore" | "percentile" | "symlog";
 
 /** Window = 0 or undefined means expanding (original behavior). */
 export function applyTransform(
@@ -178,6 +191,8 @@ export function applyTransform(
       return useRolling ? toRollingZScore(data, window) : toZScore(data);
     case "percentile":
       return useRolling ? toRollingPercentile(data, window) : toPercentile(data);
+    case "symlog":
+      return toSymlog(data);
     case "raw":
     default:
       return data;

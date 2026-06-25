@@ -2287,8 +2287,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         </button>
         {/* Per-pane data transform toggle */}
         <div className="flex items-center gap-px ml-0.5">
-          {(["raw", "zscore", "percentile"] as DataTransform[]).map((t) => {
-            const label = t === "raw" ? "Raw" : t === "zscore" ? "Z" : "%";
+          {(["raw", "zscore", "percentile", "symlog"] as DataTransform[]).map((t) => {
+            const label = t === "raw" ? "Raw" : t === "zscore" ? "Z" : t === "percentile" ? "%" : "Log";
+            const title = t === "raw" ? "Raw data"
+              : t === "zscore" ? "Z-Score"
+              : t === "percentile" ? "Percentile"
+              : "Sign-preserving log — compresses spikes, works with negatives";
             return (
               <button
                 key={t}
@@ -2298,15 +2302,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
                     : "bg-background/80 text-muted-foreground/60 hover:text-muted-foreground"
                 }`}
                 onClick={() => setDataTransform(t)}
-                title={t === "raw" ? "Raw data" : t === "zscore" ? "Z-Score" : "Percentile"}
+                title={title}
                 data-testid={`chart-pane-${paneId}-transform-${t}`}
               >
                 {label}
               </button>
             );
           })}
-          {/* Z-Score / Percentile window selector */}
-          {dataTransform !== "raw" && (
+          {/* Z-Score / Percentile window selector (symlog has no window) */}
+          {(dataTransform === "zscore" || dataTransform === "percentile") && (
             <div className="flex items-center gap-0.5 ml-1">
               <select
                 className="text-[9px] font-mono bg-background/80 text-muted-foreground border border-border/50 rounded px-0.5 py-0.5 h-[18px] focus:outline-none focus:ring-1 focus:ring-primary"
