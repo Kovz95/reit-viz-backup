@@ -80,6 +80,7 @@ export default function ValuationResidence() {
   const [pctMove, setPctMove] = useState(20);
   const [horizon, setHorizon] = useState(63);
   const [search, setSearch] = useState("");
+  const [sectorFilter, setSectorFilter] = useState("all");
   const [groupBy, setGroupBy] = useState<GroupLevel>("none");
   const [sortCol, setSortCol] = useState<SortCol>("currentRich");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -95,6 +96,12 @@ export default function ValuationResidence() {
     [filteredTickersList],
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
+
+  // Distinct sectors present in the (universe-filtered) set, for the sector filter.
+  const sectors = useMemo(
+    () => ["all", ...Array.from(new Set(tickers.map((t) => t.sector).filter(Boolean))).sort()],
+    [tickers],
+  );
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["residence", metricKey, basis, lookbackDays, pctMove, tickerKey],
@@ -145,7 +152,8 @@ export default function ValuationResidence() {
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = q ? rows.filter((x) => x.ticker.includes(q) || x.name.toUpperCase().includes(q)) : rows;
+    let r = sectorFilter === "all" ? rows : rows.filter((x) => x.sector === sectorFilter);
+    if (q) r = r.filter((x) => x.ticker.includes(q) || x.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       // Keep low-sample tails out of the top of a forward-return sort (both directions).
       if (FWD_COLS.has(sortCol)) {
@@ -158,7 +166,7 @@ export default function ValuationResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, sortDir, horizon]);
+  }, [rows, search, sortCol, sortDir, horizon, sectorFilter]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -274,6 +282,15 @@ export default function ValuationResidence() {
             <SelectTrigger className="h-7 w-20 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               {HORIZONS.map((h) => <SelectItem key={h.days} value={String(h.days)} className="text-xs">{h.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Sector</div>
+          <Select value={sectorFilter} onValueChange={setSectorFilter}>
+            <SelectTrigger className="h-7 w-40 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {sectors.map((s) => <SelectItem key={s} value={s} className="text-xs">{s === "all" ? "All sectors" : s}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
