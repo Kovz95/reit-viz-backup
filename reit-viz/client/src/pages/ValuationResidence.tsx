@@ -33,6 +33,16 @@ const GROUP_LEVELS = [
 ] as const;
 type GroupLevel = typeof GROUP_LEVELS[number]["value"];
 
+// The six classification levels offered as filter dropdowns, coarse → fine.
+const CLASS_FILTER_DEFS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+
 const CLASS_KEYS = ["economy", "sector", "subsector", "industryGroup", "industry", "subindustry"] as const;
 
 type Row = ResidenceResult & {
@@ -80,7 +90,18 @@ export default function ValuationResidence() {
   const [pctMove, setPctMove] = useState(20);
   const [horizon, setHorizon] = useState(63);
   const [search, setSearch] = useState("");
-  const [sectorFilter, setSectorFilter] = useState("all");
+  const [classFilters, setClassFilters] = useState<Record<string, string>>(
+    () => Object.fromEntries(CLASS_FILTER_DEFS.map((d) => [d.key, "all"])),
+  );
+  // Changing a coarser level resets the finer ones (they may no longer apply).
+  const setClassFilter = (key: string, value: string) => {
+    const idx = CLASS_FILTER_DEFS.findIndex((d) => d.key === key);
+    setClassFilters((prev) => {
+      const next = { ...prev, [key]: value };
+      for (let i = idx + 1; i < CLASS_FILTER_DEFS.length; i++) next[CLASS_FILTER_DEFS[i].key] = "all";
+      return next;
+    });
+  };
   const [groupBy, setGroupBy] = useState<GroupLevel>("none");
   const [sortCol, setSortCol] = useState<SortCol>("currentRich");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -97,11 +118,18 @@ export default function ValuationResidence() {
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
 
-  // Distinct sectors present in the (universe-filtered) set, for the sector filter.
-  const sectors = useMemo(
-    () => ["all", ...Array.from(new Set(tickers.map((t) => t.sector).filter(Boolean))).sort()],
-    [tickers],
-  );
+  // Cascading options for each classification dropdown: each level's choices are
+  // the distinct values present under the coarser selections above it.
+  const classOptions = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    CLASS_FILTER_DEFS.forEach((d, i) => {
+      const coarser = CLASS_FILTER_DEFS.slice(0, i);
+      const pool = tickers.filter((t) =>
+        coarser.every((c) => classFilters[c.key] === "all" || (t as any)[c.key] === classFilters[c.key]));
+      out[d.key] = ["all", ...Array.from(new Set(pool.map((t) => (t as any)[d.key]).filter(Boolean))).sort()];
+    });
+    return out;
+  }, [tickers, classFilters]);
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["residence", metricKey, basis, lookbackDays, pctMove, tickerKey],
@@ -152,7 +180,8 @@ export default function ValuationResidence() {
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = sectorFilter === "all" ? rows : rows.filter((x) => x.sector === sectorFilter);
+    let r = rows.filter((x) =>
+      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x as any)[d.key] === classFilters[d.key]));
     if (q) r = r.filter((x) => x.ticker.includes(q) || x.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       // Keep low-sample tails out of the top of a forward-return sort (both directions).
@@ -166,7 +195,7 @@ export default function ValuationResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, sortDir, horizon, sectorFilter]);
+  }, [rows, search, sortCol, sortDir, horizon, classFilters]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -285,15 +314,17 @@ export default function ValuationResidence() {
             </SelectContent>
           </Select>
         </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Sector</div>
-          <Select value={sectorFilter} onValueChange={setSectorFilter}>
-            <SelectTrigger className="h-7 w-40 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {sectors.map((s) => <SelectItem key={s} value={s} className="text-xs">{s === "all" ? "All sectors" : s}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
+        {CLASS_FILTER_DEFS.map((d) => (
+          <div key={d.key}>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{d.label}</div>
+            <Select value={classFilters[d.key]} onValueChange={(v) => setClassFilter(d.key, v)}>
+              <SelectTrigger className={`h-7 w-32 text-xs ${classFilters[d.key] !== "all" ? "border-primary/60 text-primary" : ""}`}><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-72">
+                {classOptions[d.key].map((s) => <SelectItem key={s} value={s} className="text-xs">{s === "all" ? "All" : s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Group by</div>
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupLevel)}>
