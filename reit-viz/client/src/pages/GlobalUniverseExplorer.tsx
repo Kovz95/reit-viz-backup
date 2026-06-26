@@ -11,7 +11,7 @@ import {
   restoreExcludedTicker,
   excludeTicker,
 } from "@/lib/excludedTickers";
-import { Loader2, AlertCircle, EyeOff, Download, RotateCcw, Trash2 } from "lucide-react";
+import { Loader2, AlertCircle, EyeOff, Download, RotateCcw, Trash2, X, ChevronUp, ChevronDown } from "lucide-react";
 import { Undo2 } from "lucide-react";
 
 const PAGE_SIZE = 200;
@@ -110,6 +110,20 @@ export default function GlobalUniverseExplorer() {
   const { records, loading, error } = useGlobalUniverse();
   const excludedGlobal = useExcludedTickers("global");
   const [showExcluded, setShowExcluded] = useState(false);
+  const [excludeInput, setExcludeInput] = useState("");
+  const [excludeInvalid, setExcludeInvalid] = useState(false);
+
+  const addGlobalExclusion = () => {
+    const sym = excludeInput.trim().toUpperCase();
+    if (!sym) return;
+    if (!records.some((r: any) => String(r.ticker).toUpperCase() === sym)) {
+      setExcludeInvalid(true);
+      return;
+    }
+    if (!excludedGlobal.has(sym)) excludeTicker("global", sym);
+    setExcludeInput("");
+    setExcludeInvalid(false);
+  };
   const [classFilters, setClassFilters] = useState<ClassFilters>(() => emptyClassFilters());
   const [search, setSearch] = useState("");
   const [pastedTickers, setPastedTickers] = useState("");
@@ -322,49 +336,77 @@ export default function GlobalUniverseExplorer() {
             </span>
           )}
         </div>
-        {excludedGlobal.size > 0 && (
-          <div className="flex items-center gap-2 mt-1 text-[10px] font-mono">
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400">
-              <EyeOff className="w-3 h-3" />
-              <span className="font-bold">{excludedGlobal.size}</span>
-              <span className="opacity-80">excluded from global universe</span>
+        {/* Exclusions management panel (global namespace) */}
+        <div className="mt-1 rounded border border-border bg-card/50 text-[10px] font-mono">
+          <button
+            type="button"
+            onClick={() => setShowExcluded((v) => !v)}
+            className="w-full flex items-center gap-2 px-2 py-1 hover:bg-muted/40"
+            title="Manage tickers hidden from the global universe"
+          >
+            <EyeOff className="w-3 h-3 text-red-500/80" />
+            <span className="font-bold">Exclusions</span>
+            {excludedGlobal.size > 0 && (
+              <span className="px-1.5 py-px rounded-full bg-red-500/15 text-red-600 dark:text-red-400">
+                {excludedGlobal.size.toLocaleString()}
+              </span>
+            )}
+            <span className="text-muted-foreground">hidden from global universe</span>
+            {showExcluded ? <ChevronUp className="w-3 h-3 ml-auto" /> : <ChevronDown className="w-3 h-3 ml-auto" />}
+          </button>
+          {showExcluded && (
+            <div className="px-2 py-2 border-t border-border space-y-2">
+              <div className="flex items-center gap-1">
+                <input
+                  list="exclude-global-list"
+                  value={excludeInput}
+                  onChange={(e) => { setExcludeInput(e.target.value); setExcludeInvalid(false); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") addGlobalExclusion(); }}
+                  placeholder="Add ticker to hide…"
+                  className={`h-6 w-44 px-2 rounded bg-background border focus:outline-none focus:ring-1 focus:ring-primary ${excludeInvalid ? "border-red-500" : "border-border"}`}
+                />
+                <button
+                  type="button"
+                  onClick={addGlobalExclusion}
+                  className="h-6 px-2 rounded border border-border text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                >
+                  <EyeOff className="w-3 h-3" /> Hide
+                </button>
+                {excludeInvalid && <span className="text-red-500">Unknown ticker</span>}
+                {excludedGlobal.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { window.confirm(`Restore all ${excludedGlobal.size} excluded global ticker(s)?`) && restoreAllExcluded("global"); }}
+                    className="h-6 px-2 rounded text-muted-foreground hover:text-foreground inline-flex items-center gap-1 ml-auto"
+                  >
+                    <Undo2 className="w-3 h-3" /> Restore all
+                  </button>
+                )}
+              </div>
+              {excludedGlobal.size === 0 ? (
+                <div className="text-muted-foreground italic">No exclusions — the full global universe is visible.</div>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {[...excludedGlobal].sort().map((ticker) => (
+                    <button
+                      key={ticker}
+                      type="button"
+                      onClick={() => restoreExcludedTicker("global", ticker)}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-background border border-border hover:border-primary hover:text-primary"
+                      title={`Click to restore ${ticker}`}
+                    >
+                      {ticker}
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <datalist id="exclude-global-list">
+                {records.map((r: any) => <option key={r.ticker} value={r.ticker} />)}
+              </datalist>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowExcluded((v) => !v)}
-              className="px-2 py-0.5 rounded text-muted-foreground hover:text-foreground"
-            >
-              {showExcluded ? "Hide list" : "Show list"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                window.confirm(
-                  `Restore all ${excludedGlobal.size} excluded global ticker(s)?`
-                ) && restoreAllExcluded("global");
-              }}
-              className="px-2 py-0.5 rounded text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-            >
-              <Undo2 className="w-3 h-3" /> Restore all
-            </button>
-          </div>
-        )}
-        {showExcluded && excludedGlobal.size > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1 px-2 py-1.5 rounded bg-red-500/5 border border-red-500/20">
-            {[...excludedGlobal].sort().map((ticker) => (
-              <button
-                key={ticker}
-                type="button"
-                onClick={() => restoreExcludedTicker("global", ticker)}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-background border border-border text-[10px] font-mono hover:border-primary hover:text-primary"
-                title={`Click to restore ${ticker}`}
-              >
-                {ticker}
-                <Undo2 className="w-2.5 h-2.5" />
-              </button>
-            ))}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Filters */}

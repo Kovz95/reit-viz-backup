@@ -1,7 +1,8 @@
 // Hand-written from call-site inference
 // useGlobalUniverse is used in GlobalUniverseExplorer.tsx, Baskets.tsx, LevelsAndTrendlines.tsx
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useExcludedTickers } from "@/lib/excludedTickers";
 
 export interface GlobalRecord {
   ticker: string;
@@ -100,7 +101,15 @@ export function useGlobalUniverse(): GlobalUniverseState {
     };
   }, []);
 
-  return state;
+  // Tickers hidden via the Global Universe trash / Exclusions panel are filtered
+  // out of the records every consumer reads (explorer grid, pair-combo, optimizer
+  // "Global" mode, screeners) — fulfilling the trash action's promise.
+  const excluded = useExcludedTickers("global");
+  return useMemo(() => {
+    if (excluded.size === 0) return state;
+    const records = state.records.filter((r) => !excluded.has(String(r.ticker).toUpperCase()));
+    return { ...state, records, metas: records };
+  }, [state, excluded]);
 }
 
 // Named export alias for destructured import `{ u as useGlobalUniverse }`
