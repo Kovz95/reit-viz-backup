@@ -3,6 +3,7 @@
 // it visits the rich & cheap extremes, and the forward return that followed.
 import { useState, useMemo, Fragment } from "react";
 import { useLocation } from "wouter";
+import { usePersistedState } from "@/lib/persistedState";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -42,6 +43,7 @@ const CLASS_FILTER_DEFS = [
   { key: "industry", label: "Industry" },
   { key: "subindustry", label: "Subindustry" },
 ] as const;
+const DEFAULT_CLASS_FILTERS: Record<string, string> = Object.fromEntries(CLASS_FILTER_DEFS.map((d) => [d.key, "all"]));
 
 const CLASS_KEYS = ["economy", "sector", "subsector", "industryGroup", "industry", "subindustry"] as const;
 
@@ -84,15 +86,14 @@ type SortCol =
 export default function ValuationResidence() {
   const [, setLocation] = useLocation();
   const { filteredTickersList } = useUniverse();
-  const [metricKey, setMetricKey] = useState("P/FFO FY2");
-  const [basis, setBasis] = useState<PctBasis>("trailing");
-  const [lookbackDays, setLookbackDays] = useState(1260);
-  const [pctMove, setPctMove] = useState(20);
-  const [horizon, setHorizon] = useState(63);
+  // View controls persist across tab switches / reloads (localStorage).
+  const [metricKey, setMetricKey] = usePersistedState("residence:metric", "P/FFO FY2");
+  const [basis, setBasis] = usePersistedState<PctBasis>("residence:basis", "trailing");
+  const [lookbackDays, setLookbackDays] = usePersistedState("residence:lookback", 1260);
+  const [pctMove, setPctMove] = usePersistedState("residence:pctMove", 20);
+  const [horizon, setHorizon] = usePersistedState("residence:horizon", 63);
   const [search, setSearch] = useState("");
-  const [classFilters, setClassFilters] = useState<Record<string, string>>(
-    () => Object.fromEntries(CLASS_FILTER_DEFS.map((d) => [d.key, "all"])),
-  );
+  const [classFilters, setClassFilters] = usePersistedState<Record<string, string>>("residence:classFilters", DEFAULT_CLASS_FILTERS);
   // Changing a coarser level resets the finer ones (they may no longer apply).
   const setClassFilter = (key: string, value: string) => {
     const idx = CLASS_FILTER_DEFS.findIndex((d) => d.key === key);
@@ -102,9 +103,9 @@ export default function ValuationResidence() {
       return next;
     });
   };
-  const [groupBy, setGroupBy] = useState<GroupLevel>("none");
-  const [sortCol, setSortCol] = useState<SortCol>("currentRich");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("residence:groupBy", "none");
+  const [sortCol, setSortCol] = usePersistedState<SortCol>("residence:sortCol", "currentRich");
+  const [sortDir, setSortDir] = usePersistedState<"asc" | "desc">("residence:sortDir", "desc");
   const [detail, setDetail] = useState<Row | null>(null);
 
   const metric = getRerateMetric(metricKey);
