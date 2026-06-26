@@ -10,6 +10,9 @@ reit-viz/node_modules/
 reit-viz/dist/
 reit-viz/.cache/
 stale-source/node_modules/
+# Runtime liquidity caches (Yahoo price bars + computed $ ADV) — best-effort, not source
+reit-viz/data/yahoo-cache/
+reit-viz/data/adv-cache.json
 
 # One-off diagnostic harness (Playwright diff tool)
 diag/

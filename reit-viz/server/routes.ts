@@ -10,6 +10,7 @@ import * as XLSX from "xlsx";
 import { registerChatRoute } from "./chatRoute";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
+import { getAdvBatch } from "./adv";
 import { engleGranger } from "./cointegration";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -4967,6 +4968,33 @@ export async function registerRoutes(server: Server, app: Express) {
     );
 
     res.json({ ok, failed, errors });
+  });
+
+  // ── Liquidity: trailing-window $ ADV from the Yahoo volume feed ──────────
+  // POST /api/liquidity/adv  Body: { tickers: string[], window?: number, refresh?: boolean }
+  // Returns { window, results: { [TICKER]: AdvEntry } }. AdvEntry.advUsdMM is the
+  // trailing-window average daily dollar volume in $ millions (price × volume).
+  // Fresh values are served from cache; stale/missing ones are computed from Yahoo.
+  app.post("/api/liquidity/adv", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as { tickers?: unknown; window?: unknown; refresh?: unknown };
+      const tickers = Array.isArray(body.tickers)
+        ? (body.tickers as unknown[]).map((t) => String(t)).filter(Boolean)
+        : [];
+      if (tickers.length === 0) {
+        return res.status(400).json({ error: "Body must include tickers: string[]" });
+      }
+      // Cap to keep a single request bounded; the workbook universe is ~200 names.
+      const capped = tickers.slice(0, 600);
+      const window = Number.isFinite(Number(body.window)) && Number(body.window) > 0
+        ? Math.min(Math.floor(Number(body.window)), 504)
+        : 90;
+      const refresh = body.refresh === true;
+      const results = await getAdvBatch(capped, window, refresh);
+      res.json({ window, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "failed to compute ADV" });
+    }
   });
 
   // ── Yahoo Finance symbol search ─────────────────────────────────────────

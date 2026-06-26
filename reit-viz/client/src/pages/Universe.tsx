@@ -19,6 +19,8 @@ import {
   EyeOff,
   ChevronUp,
   ChevronDown,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ClassificationFilters } from "@/lib/classificationFilters";
@@ -43,6 +45,8 @@ export default function Universe() {
     advFilter,
     setAdvFilter,
     advMap,
+    advLoading,
+    refreshAdv,
     isFiltered,
     filteredCount,
     totalCount,
@@ -332,6 +336,20 @@ export default function Universe() {
               </button>
             )}
           </div>
+          <button
+            type="button"
+            onClick={refreshAdv}
+            disabled={advLoading}
+            className="inline-flex items-center gap-1 h-6 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground disabled:opacity-50"
+            title="Recompute 90-day $ ADV from the live Yahoo volume feed"
+          >
+            {advLoading ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3 h-3" />
+            )}
+            {advLoading ? "ADV…" : "ADV"}
+          </button>
         </ClassificationFilters>
         <div className="flex items-center gap-3 text-[11px]">
           {isFiltered ? (
@@ -514,7 +532,7 @@ export default function Universe() {
               <th
                 className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
                 onClick={() => handleSort("advUsd")}
-                title="Average daily dollar volume (price × avg daily share volume), from the global universe dataset"
+                title="$ ADV — trailing 90-day average daily dollar volume (close × volume) from the Yahoo feed. Italic '~' values are the static global-dataset estimate (live figure still loading or unavailable)."
               >
                 <span className="inline-flex items-center gap-0.5">
                   $ ADV
@@ -556,22 +574,39 @@ export default function Universe() {
                     const info = advMap.get(String(ticker.ticker).toUpperCase());
                     const dv = info?.dollarVolMM ?? null;
                     const hasDv = dv != null && Number.isFinite(dv);
+                    const isEstimate = info?.source === "global";
+                    const shares =
+                      info?.adv != null && Number.isFinite(info.adv)
+                        ? `${info.adv.toFixed(2)}M sh/day`
+                        : null;
+                    const px =
+                      info?.price != null && Number.isFinite(info.price)
+                        ? `$${info.price.toFixed(2)}`
+                        : null;
+                    const title = !hasDv
+                      ? "No $ ADV data for this ticker"
+                      : info?.source === "yahoo90"
+                        ? `90-day ADV (Yahoo): ${fmtUsdMM(dv)}` +
+                          (shares ? ` · ${shares}` : "") +
+                          (px ? ` × ${px}` : "") +
+                          (info?.asOf ? ` · as of ${info.asOf}` : "") +
+                          (info?.days ? ` · ${info.days} bars` : "")
+                        : `Estimate (global dataset): ${fmtUsdMM(dv)}` +
+                          (shares ? ` · ${shares}` : "") +
+                          (px ? ` × ${px}` : "") +
+                          " · live 90-day figure pending";
                     return (
                       <td
-                        className={`py-1 px-2 text-right font-mono tabular-nums ${hasDv ? "text-foreground" : "text-muted-foreground"}`}
-                        title={
-                          hasDv
-                            ? `Avg daily dollar volume: ${fmtUsdMM(dv)}` +
-                              (info?.adv != null && Number.isFinite(info.adv)
-                                ? ` · ${info.adv.toFixed(2)}M sh/day`
-                                : "") +
-                              (info?.price != null && Number.isFinite(info.price)
-                                ? ` × $${info.price.toFixed(2)}`
-                                : "")
-                            : "No $ ADV data for this ticker"
-                        }
+                        className={`py-1 px-2 text-right font-mono tabular-nums ${
+                          !hasDv
+                            ? "text-muted-foreground"
+                            : isEstimate
+                              ? "text-muted-foreground italic"
+                              : "text-foreground"
+                        }`}
+                        title={title}
                       >
-                        {hasDv ? fmtUsdMM(dv) : "—"}
+                        {hasDv ? (isEstimate ? "~" : "") + fmtUsdMM(dv) : "—"}
                       </td>
                     );
                   })()}

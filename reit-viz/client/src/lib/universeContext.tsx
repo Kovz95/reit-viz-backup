@@ -18,8 +18,28 @@ import {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useExcludedTickers } from "@/lib/excludedTickers";
-import { useGlobalAdvMap, type AdvInfo } from "@/lib/globalUniverse";
+import { useGlobalAdvMap } from "@/lib/globalUniverse";
+import { useWorkbookAdv } from "@/lib/workbookAdv";
 import { parseNumericFilter } from "@/lib/numericFilter";
+
+/** Effective per-ticker liquidity, with real trailing-90d ADV (Yahoo) preferred
+ *  over the static global-universe estimate. */
+export interface UniverseAdvInfo {
+  /** Closing price ($). */
+  price?: number | null;
+  /** Average daily share volume, in millions of shares. */
+  adv?: number | null;
+  /** Average daily dollar volume ($ ADV), in $ millions. */
+  dollarVolMM?: number | null;
+  /** Where dollarVolMM came from. */
+  source: "yahoo90" | "global" | "none";
+  /** ISO date of the most recent bar (yahoo90 only). */
+  asOf?: string | null;
+  /** Bars averaged (yahoo90 only). */
+  days?: number;
+  /** Trading-day window (yahoo90 only). */
+  window?: number;
+}
 
 export interface UniverseState {
   filters: ClassFilters;
@@ -39,8 +59,14 @@ export interface UniverseContextValue {
    *  Values are average daily dollar volume in $ millions, joined from the global universe dataset. */
   advFilter: string;
   setAdvFilter: (s: string) => void;
-  /** Ticker → liquidity info (price / share ADV / $ ADV) keyed by UPPER-cased symbol. */
-  advMap: Map<string, AdvInfo>;
+  /** Ticker → effective liquidity info keyed by UPPER-cased symbol. $ ADV is the
+   *  real trailing-90-day figure from the Yahoo volume feed when available, else
+   *  the static global-universe estimate. */
+  advMap: Map<string, UniverseAdvInfo>;
+  /** Whether the real (Yahoo) ADV batch is still loading. */
+  advLoading: boolean;
+  /** Force a re-pull of the real ADV from Yahoo (bypasses caches). */
+  refreshAdv: () => void;
   /** If any universe filter is active, this is the set of allowed ticker symbols.
    *  If no filter is active, this is null (meaning "all tickers pass").
    *  Note: has both Set methods (.has, .size) and array-compatible .length property. */
@@ -80,9 +106,51 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
 
   const allTickers = tickersMeta as ClassifiedBase[];
 
-  // Workbook tickers carry no volume of their own, so $ ADV is joined in from
-  // the global-universe dataset by symbol (covers ~98% of the REIT workbook).
-  const { advMap } = useGlobalAdvMap();
+  // Workbook tickers carry no volume of their own. Two sources of $ ADV:
+  //  • global-universe dataset (instant, static estimate, ~98% coverage)
+  //  • real trailing-90-day ADV computed from the Yahoo volume feed (current,
+  //    also covers names missing from the global dataset) — loaded async.
+  // The effective map below prefers the real figure and falls back to the estimate.
+  const { advMap: globalAdvMap } = useGlobalAdvMap();
+  const [advRefreshToken, setAdvRefreshToken] = useState(0);
+  const allSymbols = useMemo(() => allTickers.map((t) => t.ticker), [allTickers]);
+  const { advMap: realAdvMap, loading: advLoading } = useWorkbookAdv(
+    allSymbols,
+    90,
+    advRefreshToken,
+  );
+  const refreshAdv = useCallback(() => setAdvRefreshToken(Date.now()), []);
+
+  const advMap = useMemo(() => {
+    const merged = new Map<string, UniverseAdvInfo>();
+    const fin = (v: number | null | undefined): v is number => v != null && Number.isFinite(v);
+    for (const t of allTickers) {
+      const key = t.ticker.toUpperCase();
+      const real = realAdvMap.get(key);
+      const glob = globalAdvMap.get(key);
+      if (real && fin(real.advUsdMM)) {
+        merged.set(key, {
+          price: real.lastClose,
+          adv: real.advShares,
+          dollarVolMM: real.advUsdMM,
+          source: "yahoo90",
+          asOf: real.asOf,
+          days: real.days,
+          window: real.window,
+        });
+      } else if (glob && fin(glob.dollarVolMM)) {
+        merged.set(key, {
+          price: glob.price,
+          adv: glob.adv,
+          dollarVolMM: glob.dollarVolMM,
+          source: "global",
+        });
+      } else {
+        merged.set(key, { dollarVolMM: null, source: "none" });
+      }
+    }
+    return merged;
+  }, [allTickers, realAdvMap, globalAdvMap]);
 
   // Tickers the user hid via the Universe trash icon are excluded from the
   // universe everywhere (every tab reads filteredTickersList / universeTickers).
@@ -171,6 +239,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     advFilter,
     setAdvFilter,
     advMap,
+    advLoading,
+    refreshAdv,
     universeTickers,
     isFiltered,
     filteredCount: filteredTickersList.length,
