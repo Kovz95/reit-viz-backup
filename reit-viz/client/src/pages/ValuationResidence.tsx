@@ -3,7 +3,7 @@
 // it visits the rich & cheap extremes, and the forward return that followed.
 import { useState, useMemo, Fragment } from "react";
 import { useLocation } from "wouter";
-import { usePersistedState } from "@/lib/persistedState";
+import { useSessionState } from "@/lib/sessionState";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -86,14 +86,15 @@ type SortCol =
 export default function ValuationResidence() {
   const [, setLocation] = useLocation();
   const { filteredTickersList } = useUniverse();
-  // View controls persist across tab switches / reloads (localStorage).
-  const [metricKey, setMetricKey] = usePersistedState("residence:metric", "P/FFO FY2");
-  const [basis, setBasis] = usePersistedState<PctBasis>("residence:basis", "trailing");
-  const [lookbackDays, setLookbackDays] = usePersistedState("residence:lookback", 1260);
-  const [pctMove, setPctMove] = usePersistedState("residence:pctMove", 20);
-  const [horizon, setHorizon] = usePersistedState("residence:horizon", 63);
+  // View controls persist across tab switches / reloads within a session
+  // (sessionStorage) — they reset when the browser session ends.
+  const [metricKey, setMetricKey] = useSessionState("residence:metric", "P/FFO FY2");
+  const [basis, setBasis] = useSessionState<PctBasis>("residence:basis", "trailing");
+  const [lookbackDays, setLookbackDays] = useSessionState("residence:lookback", 1260);
+  const [pctMove, setPctMove] = useSessionState("residence:pctMove", 20);
+  const [horizon, setHorizon] = useSessionState("residence:horizon", 63);
   const [search, setSearch] = useState("");
-  const [classFilters, setClassFilters] = usePersistedState<Record<string, string>>("residence:classFilters", DEFAULT_CLASS_FILTERS);
+  const [classFilters, setClassFilters] = useSessionState<Record<string, string>>("residence:classFilters", DEFAULT_CLASS_FILTERS);
   // Changing a coarser level resets the finer ones (they may no longer apply).
   const setClassFilter = (key: string, value: string) => {
     const idx = CLASS_FILTER_DEFS.findIndex((d) => d.key === key);
@@ -103,9 +104,9 @@ export default function ValuationResidence() {
       return next;
     });
   };
-  const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("residence:groupBy", "none");
-  const [sortCol, setSortCol] = usePersistedState<SortCol>("residence:sortCol", "currentRich");
-  const [sortDir, setSortDir] = usePersistedState<"asc" | "desc">("residence:sortDir", "desc");
+  const [groupBy, setGroupBy] = useSessionState<GroupLevel>("residence:groupBy", "none");
+  const [sortCol, setSortCol] = useSessionState<SortCol>("residence:sortCol", "currentRich");
+  const [sortDir, setSortDir] = useSessionState<"asc" | "desc">("residence:sortDir", "desc");
   const [detail, setDetail] = useState<Row | null>(null);
 
   const metric = getRerateMetric(metricKey);
