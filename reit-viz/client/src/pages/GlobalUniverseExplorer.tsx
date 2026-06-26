@@ -13,6 +13,7 @@ import {
 } from "@/lib/excludedTickers";
 import { Loader2, AlertCircle, EyeOff, Download, RotateCcw, Trash2, X, ChevronUp, ChevronDown } from "lucide-react";
 import { Undo2 } from "lucide-react";
+import { parseNumericFilter } from "@/lib/numericFilter";
 
 const PAGE_SIZE = 200;
 const TEXT_COLUMNS = [
@@ -48,41 +49,6 @@ interface GlobalRecord {
   dollarVolMM?: number | null;
   peFy2?: number | null;
   [key: string]: any;
-}
-
-function parseNumericFilter(raw: string): ((val: number | null | undefined) => boolean) | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const noCommas = trimmed.replace(/,/g, "").replace(/\s+/g, "");
-  const rangeMatch = noCommas.match(/^(-?\d+(?:\.\d+)?)(?:-|\.\.)(-?\d+(?:\.\d+)?)$/);
-  if (rangeMatch) {
-    const lo = parseFloat(rangeMatch[1]);
-    const hi = parseFloat(rangeMatch[2]);
-    if (Number.isFinite(lo) && Number.isFinite(hi))
-      return (v) => v != null && Number.isFinite(v) && v >= lo && v <= hi;
-  }
-  const opMatch = noCommas.match(/^(>=|<=|>|<|=)(-?\d+(?:\.\d+)?)$/);
-  if (opMatch) {
-    const op = opMatch[1];
-    const num = parseFloat(opMatch[2]);
-    if (!Number.isFinite(num)) return null;
-    switch (op) {
-      case ">":
-        return (v) => v != null && Number.isFinite(v) && v > num;
-      case ">=":
-        return (v) => v != null && Number.isFinite(v) && v >= num;
-      case "<":
-        return (v) => v != null && Number.isFinite(v) && v < num;
-      case "<=":
-        return (v) => v != null && Number.isFinite(v) && v <= num;
-      case "=":
-        return (v) => v != null && Number.isFinite(v) && v === num;
-    }
-  }
-  const single = parseFloat(noCommas);
-  return Number.isFinite(single)
-    ? (v) => v != null && Number.isFinite(v) && v >= single
-    : null;
 }
 
 function fmtNum(val: number | null | undefined, decimals = 2): string {
@@ -490,8 +456,8 @@ export default function GlobalUniverseExplorer() {
                 {ColHeader("price", "Px", "right")}
                 {ColHeader("marketCapMM", "Mkt Cap", "right")}
                 {ColHeader("salesMM", "Sales", "right")}
-                {ColHeader("adv", "ADV", "right")}
-                {ColHeader("dollarVolMM", "$-Vol", "right")}
+                {ColHeader("adv", "ADV (sh)", "right")}
+                {ColHeader("dollarVolMM", "$ ADV", "right")}
                 {ColHeader("peFy2", "P/E Fy2", "right")}
                 <th className="px-2 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground border-b border-border bg-card sticky top-0 w-10">
                   {" "}

@@ -18,6 +18,8 @@ import {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useExcludedTickers } from "@/lib/excludedTickers";
+import { useGlobalAdvMap, type AdvInfo } from "@/lib/globalUniverse";
+import { parseNumericFilter } from "@/lib/numericFilter";
 
 export interface UniverseState {
   filters: ClassFilters;
@@ -33,6 +35,12 @@ export interface UniverseContextValue {
   setSearch: (s: string) => void;
   manualTickers: Set<string>;
   setManualTickers: (s: Set<string>) => void;
+  /** Liquidity ($ ADV) threshold expression, e.g. ">5", "5-50", "<100". Empty = no liquidity filter.
+   *  Values are average daily dollar volume in $ millions, joined from the global universe dataset. */
+  advFilter: string;
+  setAdvFilter: (s: string) => void;
+  /** Ticker → liquidity info (price / share ADV / $ ADV) keyed by UPPER-cased symbol. */
+  advMap: Map<string, AdvInfo>;
   /** If any universe filter is active, this is the set of allowed ticker symbols.
    *  If no filter is active, this is null (meaning "all tickers pass").
    *  Note: has both Set methods (.has, .size) and array-compatible .length property. */
@@ -63,6 +71,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   const [filters, setFilters] = useState<ClassFilters>(emptyClassFilters);
   const [search, setSearch] = useState("");
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const [advFilter, setAdvFilter] = useState("");
 
   const { data: tickersMeta = [] } = useQuery({
     queryKey: ["/universe-tickers"],
@@ -71,26 +80,42 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
 
   const allTickers = tickersMeta as ClassifiedBase[];
 
+  // Workbook tickers carry no volume of their own, so $ ADV is joined in from
+  // the global-universe dataset by symbol (covers ~98% of the REIT workbook).
+  const { advMap } = useGlobalAdvMap();
+
   // Tickers the user hid via the Universe trash icon are excluded from the
   // universe everywhere (every tab reads filteredTickersList / universeTickers).
   // allTickers stays complete so the Universe page can list & restore them.
   const excludedTickers = useExcludedTickers("workbook");
 
+  // Liquidity predicate over $ ADV (avg daily dollar volume, $ millions). When
+  // active, names with unknown ADV (not in the global dataset) drop out, since
+  // their liquidity can't be confirmed against the threshold.
+  const advPredicate = useMemo(() => parseNumericFilter(advFilter), [advFilter]);
+
   const filteredTickersList = useMemo(() => {
-    const filtered = applyClassFilters(allTickers, filters, search, manualTickers);
-    return excludedTickers.size > 0
-      ? filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()))
-      : filtered;
-  }, [allTickers, filters, search, manualTickers, excludedTickers]);
+    let filtered = applyClassFilters(allTickers, filters, search, manualTickers);
+    if (excludedTickers.size > 0) {
+      filtered = filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()));
+    }
+    if (advPredicate) {
+      filtered = filtered.filter((t) =>
+        advPredicate(advMap.get(t.ticker.toUpperCase())?.dollarVolMM ?? null),
+      );
+    }
+    return filtered;
+  }, [allTickers, filters, search, manualTickers, excludedTickers, advPredicate, advMap]);
 
   const isFiltered = useMemo(() => {
     return (
       Object.values(filters).some((s) => s.size > 0) ||
       search !== "" ||
       manualTickers.size > 0 ||
-      excludedTickers.size > 0
+      excludedTickers.size > 0 ||
+      advPredicate !== null
     );
-  }, [filters, search, manualTickers, excludedTickers]);
+  }, [filters, search, manualTickers, excludedTickers, advPredicate]);
 
   const universeTickers = useMemo(() => {
     if (!isFiltered) return null;
@@ -107,8 +132,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       filters: filtersObj,
       search,
       manualTickers: [...manualTickers],
+      advFilter,
     };
-  }, [filters, search, manualTickers]);
+  }, [filters, search, manualTickers, advFilter]);
 
   const restore = useCallback((data: any) => {
     if (!data) return;
@@ -125,12 +151,14 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     }
     setSearch(data.search || "");
     setManualTickers(new Set(data.manualTickers || []));
+    setAdvFilter(typeof data.advFilter === "string" ? data.advFilter : "");
   }, []);
 
   const clearAll = useCallback(() => {
     setFilters(emptyClassFilters());
     setSearch("");
     setManualTickers(new Set());
+    setAdvFilter("");
   }, []);
 
   const value: UniverseContextValue = {
@@ -140,6 +168,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setSearch,
     manualTickers,
     setManualTickers,
+    advFilter,
+    setAdvFilter,
+    advMap,
     universeTickers,
     isFiltered,
     filteredCount: filteredTickersList.length,

@@ -29,6 +29,7 @@ import {
   revertClassificationOverride,
 } from "@/lib/reclassificationOverrides";
 import { excludeTicker, restoreExcludedTicker, restoreAllExcluded } from "@/lib/excludedTickers";
+import { fmtUsdMM } from "@/lib/numericFilter";
 import { Undo2 } from "lucide-react";
 
 export default function Universe() {
@@ -39,6 +40,9 @@ export default function Universe() {
     setSearch,
     manualTickers,
     setManualTickers,
+    advFilter,
+    setAdvFilter,
+    advMap,
     isFiltered,
     filteredCount,
     totalCount,
@@ -163,8 +167,26 @@ export default function Universe() {
     }
   };
 
+  const advOf = (ticker: string): number | null =>
+    advMap.get(String(ticker).toUpperCase())?.dollarVolMM ?? null;
+
   const sortedRows = useMemo(() => {
     const rows = [...filteredTickersList];
+    if (sortCol === "advUsd") {
+      // Numeric sort; unknown ($ ADV missing) always sinks to the bottom.
+      rows.sort((a: any, b: any) => {
+        const av = advOf(a.ticker);
+        const bv = advOf(b.ticker);
+        const aMissing = av == null || !Number.isFinite(av);
+        const bMissing = bv == null || !Number.isFinite(bv);
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        const cmp = (av as number) - (bv as number);
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+      return rows;
+    }
     rows.sort((a: any, b: any) => {
       const aVal = (a[sortCol] || "").toLowerCase();
       const bVal = (b[sortCol] || "").toLowerCase();
@@ -172,7 +194,7 @@ export default function Universe() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [filteredTickersList, sortCol, sortDir]);
+  }, [filteredTickersList, sortCol, sortDir, advMap]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickersList.map((t: any) => t.ticker)),
@@ -279,7 +301,38 @@ export default function Universe() {
           filteredCount={filteredCount}
           totalCount={totalCount}
           testIdPrefix="universe"
-        />
+        >
+          <div className="h-4 w-px bg-border mx-0.5" />
+          <div
+            className="relative flex items-center"
+            title={
+              "Liquidity filter on $ ADV (average daily dollar volume, in $ millions).\n" +
+              "Examples:  >5  (at least $5M/day) ·  5-50  (range) ·  <100  (below $100M/day).\n" +
+              "Applies to every tab. Names with no $ ADV data are hidden while this filter is active."
+            }
+          >
+            <span className="text-[10px] font-mono text-muted-foreground mr-1 whitespace-nowrap">
+              $ ADV
+            </span>
+            <input
+              value={advFilter}
+              onChange={(e) => setAdvFilter(e.target.value)}
+              placeholder=">5, 5-50, <100"
+              className="h-6 px-2 w-32 text-[11px] font-mono bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
+              data-testid="universe-adv-filter"
+            />
+            {advFilter && (
+              <button
+                type="button"
+                onClick={() => setAdvFilter("")}
+                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-[11px] leading-none px-0.5"
+                title="Clear $ ADV filter"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </ClassificationFilters>
         <div className="flex items-center gap-3 text-[11px]">
           {isFiltered ? (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-primary/10 border border-primary/20 text-primary">
@@ -458,6 +511,21 @@ export default function Universe() {
               <th className="w-8 py-1.5 px-2" />
               <SortableHeader col="ticker" label="Ticker" className="w-20" />
               <SortableHeader col="name" label="Name" />
+              <th
+                className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
+                onClick={() => handleSort("advUsd")}
+                title="Average daily dollar volume (price × avg daily share volume), from the global universe dataset"
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  $ ADV
+                  {sortCol === "advUsd" &&
+                    (sortDir === "asc" ? (
+                      <ChevronUp className="w-2.5 h-2.5" />
+                    ) : (
+                      <ChevronDown className="w-2.5 h-2.5" />
+                    ))}
+                </span>
+              </th>
               {classColumns.map(({ key, label }) => (
                 <SortableHeader key={key} col={key} label={label} />
               ))}
@@ -484,6 +552,29 @@ export default function Universe() {
                   <td className="py-1 px-2 truncate max-w-[200px]" title={ticker.name}>
                     {ticker.name}
                   </td>
+                  {(() => {
+                    const info = advMap.get(String(ticker.ticker).toUpperCase());
+                    const dv = info?.dollarVolMM ?? null;
+                    const hasDv = dv != null && Number.isFinite(dv);
+                    return (
+                      <td
+                        className={`py-1 px-2 text-right font-mono tabular-nums ${hasDv ? "text-foreground" : "text-muted-foreground"}`}
+                        title={
+                          hasDv
+                            ? `Avg daily dollar volume: ${fmtUsdMM(dv)}` +
+                              (info?.adv != null && Number.isFinite(info.adv)
+                                ? ` · ${info.adv.toFixed(2)}M sh/day`
+                                : "") +
+                              (info?.price != null && Number.isFinite(info.price)
+                                ? ` × $${info.price.toFixed(2)}`
+                                : "")
+                            : "No $ ADV data for this ticker"
+                        }
+                      >
+                        {hasDv ? fmtUsdMM(dv) : "—"}
+                      </td>
+                    );
+                  })()}
                   {classColumns.map(({ key }) => {
                     const cellValue = ticker[key] || "";
                     const isEditing =
@@ -571,7 +662,7 @@ export default function Universe() {
             {sortedRows.length === 0 && (
               <tr>
                 <td
-                  colSpan={4 + classColumns.length}
+                  colSpan={5 + classColumns.length}
                   className="py-8 text-center text-muted-foreground"
                 >
                   No tickers match the current filters

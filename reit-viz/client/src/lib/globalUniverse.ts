@@ -112,5 +112,54 @@ export function useGlobalUniverse(): GlobalUniverseState {
   }, [state, excluded]);
 }
 
+// Per-ticker liquidity info ($ ADV) looked up by symbol. Sourced from the same
+// global-universe dataset, which carries price / avg-daily share volume (adv) /
+// avg-daily dollar volume (dollarVolMM) for ~9.4k names.
+export interface AdvInfo {
+  price?: number | null;
+  /** Average daily share volume, in millions of shares. */
+  adv?: number | null;
+  /** Average daily dollar volume (= price × adv), in $ millions. This is "$ ADV". */
+  dollarVolMM?: number | null;
+}
+
+/**
+ * Returns a ticker → liquidity map keyed by UPPER-cased symbol, built from the
+ * global-universe dataset. Used to enrich the workbook universe (which has no
+ * volume of its own) with $ ADV. Reads the raw cache directly — deliberately
+ * NOT filtered by global exclusions, since this is a metadata lookup, not a
+ * universe.
+ */
+export function useGlobalAdvMap(): { advMap: Map<string, AdvInfo>; loading: boolean } {
+  const [advMap, setAdvMap] = useState<Map<string, AdvInfo>>(() => new Map());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadGlobalRecords()
+      .then((records) => {
+        if (cancelled) return;
+        const m = new Map<string, AdvInfo>();
+        for (const r of records) {
+          const k = String(r.ticker).toUpperCase();
+          // First record wins (records are de-duped enough for a liquidity lookup).
+          if (!m.has(k)) {
+            m.set(k, { price: r.price, adv: r.adv, dollarVolMM: r.dollarVolMM });
+          }
+        }
+        setAdvMap(m);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { advMap, loading };
+}
+
 // Named export alias for destructured import `{ u as useGlobalUniverse }`
 export { useGlobalUniverse as u };
