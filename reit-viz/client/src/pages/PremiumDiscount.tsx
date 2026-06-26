@@ -33,6 +33,7 @@ import { TrendingDown } from "lucide-react";
 import { X, Calendar } from "lucide-react";
 const XIcon = X;
 import { useUniverseDefaults } from "@/lib/universeDefaults";
+import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 
 const MapPin = createLucideIcon("MapPin", [
@@ -432,10 +433,16 @@ export default function PremiumDiscount() {
     return () => { alive = false; };
   }, [target]);
 
-  // Peer tickers (filtered by dimension+label)
+  // Peer tickers (filtered by dimension+label). Drop trash-excluded tickers so
+  // the peer group / median band don't include hidden names.
+  const { universeTickers } = useUniverse();
   const peerTickers = useMemo(
-    () => (!peerLabel || tickers.length === 0 ? [] : filterTickersByDimension(tickers, dimension, peerLabel)),
-    [tickers, dimension, peerLabel]
+    () => {
+      if (!peerLabel || tickers.length === 0) return [];
+      const base = universeTickers ? tickers.filter((t: any) => universeTickers.has(t.ticker)) : tickers;
+      return filterTickersByDimension(base, dimension, peerLabel);
+    },
+    [tickers, dimension, peerLabel, universeTickers]
   );
 
   // Unique dimension values map

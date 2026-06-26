@@ -335,10 +335,10 @@ export default function PairsScreener() {
   const pairComboTickers = useMemo(() => {
     const totalFilters = classFilters.economy.size + classFilters.sector.size + classFilters.subsector.size + classFilters.industryGroup.size + classFilters.industry.size + classFilters.subindustry.size + manualTickers.size + (classSearch.trim().length > 0 ? 1 : 0);
     if (totalFilters === 0) return [];
-    return (filterTickersByClassification as any)(source === "global" ? metas : allTickers, classFilters, classSearch, manualTickers)
+    return (filterTickersByClassification as any)(source === "global" ? metas : filteredTickersList, classFilters, classSearch, manualTickers)
       .map((t: any) => t.ticker.toUpperCase())
       .filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
-  }, [allTickers, metas, source, classFilters, classSearch, manualTickers]);
+  }, [filteredTickersList, metas, source, classFilters, classSearch, manualTickers]);
 
   const tickerList = useMemo(() =>
     scope === "pairCombo" ? pairComboTickers : filteredTickersList.map((t: any) => t.ticker),

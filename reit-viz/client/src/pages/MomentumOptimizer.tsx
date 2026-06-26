@@ -233,18 +233,19 @@ export default function MomentumOptimizer() {
   const [evalRevMetric, setEvalRevMetric] = useState("FFO FY2");
   const [evalRevLookback, setEvalRevLookback] = useState(63);
   const { universeTickers, isFiltered } = useUniverse();
-  const classFilter = useOptimizerClassFilter(tickers, runMode === "universe", "mom-clf");
-  const pairComboPicker = usePairComboPicker(tickers, runMode === "pairCombo", "mom-pc");
+  // Universe-filtered base (drops trash-excluded tickers) seeds both the
+  // universe-scan class filter and the pair-combo picker.
+  const filteredByUniverse = useMemo(
+    () => universeTickers ? tickers.filter(t => universeTickers.has(t.ticker)) : tickers,
+    [tickers, universeTickers]
+  );
+  const classFilter = useOptimizerClassFilter(filteredByUniverse, runMode === "universe", "mom-clf");
+  const pairComboPicker = usePairComboPicker(filteredByUniverse, runMode === "pairCombo", "mom-pc");
   const filteredTickers = classFilter.filteredTickers;
   const { frequency, setFrequency, frequencyUI } = useFrequency("mom", "daily", running);
   const [inputSelection, setInputSelection] = usePersistedState<any>("momentum-input-selection", { kind: "ohlcv", series: "close" });
   const freqKey = frequency === "weekly" ? "weekly" : "daily";
   const [availableRevMetrics, setAvailableRevMetrics] = useState<string[]>(DEFAULT_REVISION_METRICS);
-
-  const filteredByUniverse = useMemo(
-    () => universeTickers ? tickers.filter(t => universeTickers.has(t.ticker)) : tickers,
-    [tickers, universeTickers]
-  );
 
   useEffect(() => {
     getTickers().then(ts => {
