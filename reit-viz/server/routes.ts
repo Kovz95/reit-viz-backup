@@ -5142,6 +5142,20 @@ export async function registerRoutes(server: Server, app: Express) {
     saveExcluded(map);
     res.json({});
   });
+  // Bulk add — one write for many tickers (used by the Universe "Hide off-filter"
+  // action). Body: { tickers: string[] }. Returns the full updated list. MUST be
+  // registered before the "/:namespace/:ticker" catch-all or "_bulk" is captured
+  // as a ticker name.
+  app.post("/api/excluded-tickers/:namespace/_bulk", (req, res) => {
+    const ns = String(req.params.namespace);
+    const incoming = Array.isArray((req.body as any)?.tickers)
+      ? ((req.body as any).tickers as unknown[]).map((t) => String(t).toUpperCase()).filter(Boolean)
+      : [];
+    const map = loadExcluded();
+    map[ns] = [...new Set([...(map[ns] ?? []), ...incoming])];
+    saveExcluded(map);
+    res.json({ tickers: map[ns] });
+  });
   app.post("/api/excluded-tickers/:namespace/:ticker/delete", (req, res) => {
     const ns = String(req.params.namespace);
     const t = String(req.params.ticker).toUpperCase();

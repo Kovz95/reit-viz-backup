@@ -30,8 +30,8 @@ import {
   resetAllClassificationOverrides,
   revertClassificationOverride,
 } from "@/lib/reclassificationOverrides";
-import { excludeTicker, restoreExcludedTicker, restoreAllExcluded } from "@/lib/excludedTickers";
-import { fmtUsdMM } from "@/lib/numericFilter";
+import { excludeTicker, excludeTickersBulk, restoreExcludedTicker, restoreAllExcluded } from "@/lib/excludedTickers";
+import { fmtUsdMM, parseNumericFilter } from "@/lib/numericFilter";
 import { Undo2 } from "lucide-react";
 
 export default function Universe() {
@@ -86,6 +86,30 @@ export default function Universe() {
     if (!excludedTickers.has(sym)) excludeTicker("workbook", sym);
     setExcludeInput("");
     setExcludeInvalid(false);
+  };
+
+  // Workbook tickers (not already hidden) whose 90-day $ ADV does NOT match the
+  // active liquidity filter — the candidates for a one-click bulk exclude.
+  const advFilterPredicate = useMemo(() => parseNumericFilter(advFilter), [advFilter]);
+  const offFilterTickers = useMemo(() => {
+    if (!advFilterPredicate) return [] as typeof allTickers;
+    return allTickers.filter((t: any) => {
+      const sym = String(t.ticker).toUpperCase();
+      if (excludedTickers.has(sym)) return false;
+      const dv = advMap.get(sym)?.dollarVolMM ?? null;
+      return !advFilterPredicate(dv);
+    });
+  }, [advFilterPredicate, allTickers, advMap, excludedTickers]);
+
+  const excludeOffFilter = () => {
+    if (offFilterTickers.length === 0) return;
+    const ok = window.confirm(
+      `Hide ${offFilterTickers.length} ticker(s) whose $ ADV does not match "${advFilter.trim()}"?\n\n` +
+        `They will be excluded from EVERY tab (Ranking, Scatter, Valuation, etc.).\n` +
+        `Restorable any time from the Exclusions panel above.`,
+    );
+    if (!ok) return;
+    excludeTickersBulk("workbook", offFilterTickers.map((t: any) => t.ticker));
   };
 
   const effectiveClassMap = useMemo(() => {
@@ -354,6 +378,18 @@ export default function Universe() {
             )}
             {advLoading ? "ADV…" : "ADV"}
           </button>
+          {advFilterPredicate && offFilterTickers.length > 0 && (
+            <button
+              type="button"
+              onClick={excludeOffFilter}
+              className="inline-flex items-center gap-1 h-6 px-2 text-[10px] font-mono rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+              title={`Hide the ${offFilterTickers.length} ticker(s) whose $ ADV doesn't match "${advFilter.trim()}" from every tab (restorable from the Exclusions panel)`}
+              data-testid="universe-exclude-offfilter"
+            >
+              <EyeOff className="w-3 h-3" />
+              Hide {offFilterTickers.length} off-filter
+            </button>
+          )}
         </ClassificationFilters>
         <div className="flex items-center gap-3 text-[11px]">
           {isFiltered ? (

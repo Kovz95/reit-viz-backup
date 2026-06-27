@@ -95,6 +95,17 @@ export function excludeTicker(namespace: string, ticker: string): void {
     apiRequest("POST", `/api/excluded-tickers/${encodeURIComponent(namespace)}/${encodeURIComponent(t)}`));
 }
 
+/** Exclude many tickers at once via a single bulk request (one server write). */
+export function excludeTickersBulk(namespace: string, tickers: string[]): void {
+  const ts = tickers.map((t) => t.toUpperCase()).filter(Boolean);
+  if (ts.length === 0) return;
+  void mutate(
+    namespace,
+    (s) => { for (const t of ts) s.add(t); },
+    apiRequest("POST", `/api/excluded-tickers/${encodeURIComponent(namespace)}/_bulk`, { tickers: ts }),
+  );
+}
+
 export function restoreExcludedTicker(namespace: string, ticker: string): void {
   const t = ticker.toUpperCase();
   void mutate(namespace, (s) => s.delete(t),
