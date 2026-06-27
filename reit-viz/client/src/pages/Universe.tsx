@@ -44,6 +44,9 @@ export default function Universe() {
     setManualTickers,
     advFilter,
     setAdvFilter,
+    advWindow,
+    setAdvWindow,
+    advValueOf,
     advMap,
     adv30Map,
     advLoading,
@@ -96,15 +99,14 @@ export default function Universe() {
     return allTickers.filter((t: any) => {
       const sym = String(t.ticker).toUpperCase();
       if (excludedTickers.has(sym)) return false;
-      const dv = advMap.get(sym)?.dollarVolMM ?? null;
-      return !advFilterPredicate(dv);
+      return !advFilterPredicate(advValueOf(sym));
     });
-  }, [advFilterPredicate, allTickers, advMap, excludedTickers]);
+  }, [advFilterPredicate, allTickers, advValueOf, excludedTickers]);
 
   const excludeOffFilter = () => {
     if (offFilterTickers.length === 0) return;
     const ok = window.confirm(
-      `Hide ${offFilterTickers.length} ticker(s) whose $ ADV does not match "${advFilter.trim()}"?\n\n` +
+      `Hide ${offFilterTickers.length} ticker(s) whose ${advWindow}-day $ ADV does not match "${advFilter.trim()}"?\n\n` +
         `They will be excluded from EVERY tab (Ranking, Scatter, Valuation, etc.).\n` +
         `Restorable any time from the Exclusions panel above.`,
     );
@@ -340,6 +342,7 @@ export default function Universe() {
             title={
               "Liquidity filter on $ ADV (average daily dollar volume, in $ millions).\n" +
               "Examples:  >5  (at least $5M/day) ·  5-50  (range) ·  <100  (below $100M/day).\n" +
+              "Use the 90d/30d toggle to pick which window the filter (and bulk-exclude) targets.\n" +
               "Applies to every tab. Names with no $ ADV data are hidden while this filter is active."
             }
           >
@@ -364,12 +367,33 @@ export default function Universe() {
               </button>
             )}
           </div>
+          <div
+            className="inline-flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
+            title="Which ADV window the filter and bulk-exclude target"
+          >
+            {([90, 30] as const).map((w) => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => setAdvWindow(w)}
+                className={`px-1.5 h-6 ${
+                  advWindow === w
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid={`universe-adv-window-${w}`}
+                title={`Filter on the ${w}-day $ ADV`}
+              >
+                {w}d
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={refreshAdv}
             disabled={advLoading}
             className="inline-flex items-center gap-1 h-6 px-1.5 text-[10px] font-mono text-muted-foreground hover:text-foreground disabled:opacity-50"
-            title="Recompute 90-day $ ADV from the live Yahoo volume feed"
+            title="Recompute $ ADV (30 & 90 day) from the live Yahoo volume feed"
           >
             {advLoading ? (
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -383,7 +407,7 @@ export default function Universe() {
               type="button"
               onClick={excludeOffFilter}
               className="inline-flex items-center gap-1 h-6 px-2 text-[10px] font-mono rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
-              title={`Hide the ${offFilterTickers.length} ticker(s) whose $ ADV doesn't match "${advFilter.trim()}" from every tab (restorable from the Exclusions panel)`}
+              title={`Hide the ${offFilterTickers.length} ticker(s) whose ${advWindow}-day $ ADV doesn't match "${advFilter.trim()}" from every tab (restorable from the Exclusions panel)`}
               data-testid="universe-exclude-offfilter"
             >
               <EyeOff className="w-3 h-3" />
@@ -572,7 +596,7 @@ export default function Universe() {
               <th
                 className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
                 onClick={() => handleSort("advUsd")}
-                title="$ ADV — trailing 90-day average daily dollar volume (close × volume) from the Yahoo feed. Italic '~' values are the static global-dataset estimate (live figure still loading or unavailable). The liquidity filter applies to this 90-day column."
+                title="$ ADV — trailing 90-day average daily dollar volume (close × volume) from the Yahoo feed. Italic '~' values are the static global-dataset estimate (live figure still loading or unavailable). The liquidity filter targets this column when the 90d toggle is selected."
               >
                 <span className="inline-flex items-center gap-0.5">
                   $ ADV (90d)

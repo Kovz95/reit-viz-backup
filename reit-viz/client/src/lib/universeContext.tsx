@@ -59,6 +59,11 @@ export interface UniverseContextValue {
    *  Values are average daily dollar volume in $ millions, joined from the global universe dataset. */
   advFilter: string;
   setAdvFilter: (s: string) => void;
+  /** Which ADV window the liquidity filter (and its bulk-exclude) targets. */
+  advWindow: 30 | 90;
+  setAdvWindow: (w: 30 | 90) => void;
+  /** The selected-window $ ADV ($MM) for a ticker — what the filter compares against. */
+  advValueOf: (ticker: string) => number | null;
   /** Ticker → effective liquidity info keyed by UPPER-cased symbol. $ ADV is the
    *  real trailing-90-day figure from the Yahoo volume feed when available, else
    *  the static global-universe estimate. */
@@ -101,6 +106,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   const [search, setSearch] = useState("");
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const [advFilter, setAdvFilter] = useState("");
+  // Which ADV window the liquidity filter (and its bulk-exclude) targets.
+  const [advWindow, setAdvWindow] = useState<30 | 90>(90);
 
   const { data: tickersMeta = [] } = useQuery({
     queryKey: ["/universe-tickers"],
@@ -161,14 +168,26 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     return merged;
   }, [allTickers, realAdvMap, globalAdvMap]);
 
+  // The selected-window $ ADV for a ticker ($ millions): 30-day uses the real
+  // Yahoo figure only; 90-day uses the effective map (real, else global estimate).
+  const advValueOf = useCallback(
+    (ticker: string): number | null => {
+      const key = String(ticker).toUpperCase();
+      return advWindow === 30
+        ? adv30Map.get(key)?.advUsdMM ?? null
+        : advMap.get(key)?.dollarVolMM ?? null;
+    },
+    [advWindow, adv30Map, advMap],
+  );
+
   // Tickers the user hid via the Universe trash icon are excluded from the
   // universe everywhere (every tab reads filteredTickersList / universeTickers).
   // allTickers stays complete so the Universe page can list & restore them.
   const excludedTickers = useExcludedTickers("workbook");
 
-  // Liquidity predicate over $ ADV (avg daily dollar volume, $ millions). When
-  // active, names with unknown ADV (not in the global dataset) drop out, since
-  // their liquidity can't be confirmed against the threshold.
+  // Liquidity predicate over $ ADV (avg daily dollar volume, $ millions) for the
+  // selected window. When active, names with unknown ADV drop out, since their
+  // liquidity can't be confirmed against the threshold.
   const advPredicate = useMemo(() => parseNumericFilter(advFilter), [advFilter]);
 
   const filteredTickersList = useMemo(() => {
@@ -177,12 +196,10 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       filtered = filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()));
     }
     if (advPredicate) {
-      filtered = filtered.filter((t) =>
-        advPredicate(advMap.get(t.ticker.toUpperCase())?.dollarVolMM ?? null),
-      );
+      filtered = filtered.filter((t) => advPredicate(advValueOf(t.ticker)));
     }
     return filtered;
-  }, [allTickers, filters, search, manualTickers, excludedTickers, advPredicate, advMap]);
+  }, [allTickers, filters, search, manualTickers, excludedTickers, advPredicate, advValueOf]);
 
   const isFiltered = useMemo(() => {
     return (
@@ -210,8 +227,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       search,
       manualTickers: [...manualTickers],
       advFilter,
+      advWindow,
     };
-  }, [filters, search, manualTickers, advFilter]);
+  }, [filters, search, manualTickers, advFilter, advWindow]);
 
   const restore = useCallback((data: any) => {
     if (!data) return;
@@ -229,6 +247,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setSearch(data.search || "");
     setManualTickers(new Set(data.manualTickers || []));
     setAdvFilter(typeof data.advFilter === "string" ? data.advFilter : "");
+    setAdvWindow(data.advWindow === 30 ? 30 : 90);
   }, []);
 
   const clearAll = useCallback(() => {
@@ -247,6 +266,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setManualTickers,
     advFilter,
     setAdvFilter,
+    advWindow,
+    setAdvWindow,
+    advValueOf,
     advMap,
     adv30Map,
     advLoading,
