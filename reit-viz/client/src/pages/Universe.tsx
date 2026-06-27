@@ -45,6 +45,7 @@ export default function Universe() {
     advFilter,
     setAdvFilter,
     advMap,
+    adv30Map,
     advLoading,
     refreshAdv,
     isFiltered,
@@ -173,14 +174,17 @@ export default function Universe() {
 
   const advOf = (ticker: string): number | null =>
     advMap.get(String(ticker).toUpperCase())?.dollarVolMM ?? null;
+  const adv30Of = (ticker: string): number | null =>
+    adv30Map.get(String(ticker).toUpperCase())?.advUsdMM ?? null;
 
   const sortedRows = useMemo(() => {
     const rows = [...filteredTickersList];
-    if (sortCol === "advUsd") {
+    if (sortCol === "advUsd" || sortCol === "advUsd30") {
       // Numeric sort; unknown ($ ADV missing) always sinks to the bottom.
+      const valOf = sortCol === "advUsd30" ? adv30Of : advOf;
       rows.sort((a: any, b: any) => {
-        const av = advOf(a.ticker);
-        const bv = advOf(b.ticker);
+        const av = valOf(a.ticker);
+        const bv = valOf(b.ticker);
         const aMissing = av == null || !Number.isFinite(av);
         const bMissing = bv == null || !Number.isFinite(bv);
         if (aMissing && bMissing) return 0;
@@ -198,7 +202,7 @@ export default function Universe() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [filteredTickersList, sortCol, sortDir, advMap]);
+  }, [filteredTickersList, sortCol, sortDir, advMap, adv30Map]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickersList.map((t: any) => t.ticker)),
@@ -532,11 +536,26 @@ export default function Universe() {
               <th
                 className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
                 onClick={() => handleSort("advUsd")}
-                title="$ ADV — trailing 90-day average daily dollar volume (close × volume) from the Yahoo feed. Italic '~' values are the static global-dataset estimate (live figure still loading or unavailable)."
+                title="$ ADV — trailing 90-day average daily dollar volume (close × volume) from the Yahoo feed. Italic '~' values are the static global-dataset estimate (live figure still loading or unavailable). The liquidity filter applies to this 90-day column."
               >
                 <span className="inline-flex items-center gap-0.5">
-                  $ ADV
+                  $ ADV (90d)
                   {sortCol === "advUsd" &&
+                    (sortDir === "asc" ? (
+                      <ChevronUp className="w-2.5 h-2.5" />
+                    ) : (
+                      <ChevronDown className="w-2.5 h-2.5" />
+                    ))}
+                </span>
+              </th>
+              <th
+                className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
+                onClick={() => handleSort("advUsd30")}
+                title="$ ADV — trailing 30-day average daily dollar volume (close × volume) from the Yahoo feed. Real values only (no global-dataset fallback); '—' means no live data."
+              >
+                <span className="inline-flex items-center gap-0.5">
+                  $ ADV (30d)
+                  {sortCol === "advUsd30" &&
                     (sortDir === "asc" ? (
                       <ChevronUp className="w-2.5 h-2.5" />
                     ) : (
@@ -607,6 +626,35 @@ export default function Universe() {
                         title={title}
                       >
                         {hasDv ? (isEstimate ? "~" : "") + fmtUsdMM(dv) : "—"}
+                      </td>
+                    );
+                  })()}
+                  {(() => {
+                    const e30 = adv30Map.get(String(ticker.ticker).toUpperCase());
+                    const dv30 = e30?.advUsdMM ?? null;
+                    const has30 = dv30 != null && Number.isFinite(dv30);
+                    const sh30 =
+                      e30?.advShares != null && Number.isFinite(e30.advShares)
+                        ? `${e30.advShares.toFixed(2)}M sh/day`
+                        : null;
+                    const px30 =
+                      e30?.lastClose != null && Number.isFinite(e30.lastClose)
+                        ? `$${e30.lastClose.toFixed(2)}`
+                        : null;
+                    return (
+                      <td
+                        className={`py-1 px-2 text-right font-mono tabular-nums ${has30 ? "text-foreground" : "text-muted-foreground"}`}
+                        title={
+                          has30
+                            ? `30-day ADV (Yahoo): ${fmtUsdMM(dv30)}` +
+                              (sh30 ? ` · ${sh30}` : "") +
+                              (px30 ? ` × ${px30}` : "") +
+                              (e30?.asOf ? ` · as of ${e30.asOf}` : "") +
+                              (e30?.days ? ` · ${e30.days} bars` : "")
+                            : "No live 30-day ADV for this ticker"
+                        }
+                      >
+                        {has30 ? fmtUsdMM(dv30) : "—"}
                       </td>
                     );
                   })()}
@@ -697,7 +745,7 @@ export default function Universe() {
             {sortedRows.length === 0 && (
               <tr>
                 <td
-                  colSpan={5 + classColumns.length}
+                  colSpan={6 + classColumns.length}
                   className="py-8 text-center text-muted-foreground"
                 >
                   No tickers match the current filters

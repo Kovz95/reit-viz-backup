@@ -19,7 +19,7 @@ import {
 } from "@/components/ClassificationFilters";
 import { useExcludedTickers } from "@/lib/excludedTickers";
 import { useGlobalAdvMap } from "@/lib/globalUniverse";
-import { useWorkbookAdv } from "@/lib/workbookAdv";
+import { useWorkbookAdv, type AdvEntry as RawAdvEntry } from "@/lib/workbookAdv";
 import { parseNumericFilter } from "@/lib/numericFilter";
 
 /** Effective per-ticker liquidity, with real trailing-90d ADV (Yahoo) preferred
@@ -63,9 +63,12 @@ export interface UniverseContextValue {
    *  real trailing-90-day figure from the Yahoo volume feed when available, else
    *  the static global-universe estimate. */
   advMap: Map<string, UniverseAdvInfo>;
-  /** Whether the real (Yahoo) ADV batch is still loading. */
+  /** Ticker → real trailing-30-day ADV from the Yahoo feed (display-only; no
+   *  global-estimate fallback since the global dataset isn't a 30-day window). */
+  adv30Map: Map<string, RawAdvEntry>;
+  /** Whether the real (Yahoo) ADV batches are still loading. */
   advLoading: boolean;
-  /** Force a re-pull of the real ADV from Yahoo (bypasses caches). */
+  /** Force a re-pull of the real ADV (both windows) from Yahoo (bypasses caches). */
   refreshAdv: () => void;
   /** If any universe filter is active, this is the set of allowed ticker symbols.
    *  If no filter is active, this is null (meaning "all tickers pass").
@@ -114,11 +117,17 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   const { advMap: globalAdvMap } = useGlobalAdvMap();
   const [advRefreshToken, setAdvRefreshToken] = useState(0);
   const allSymbols = useMemo(() => allTickers.map((t) => t.ticker), [allTickers]);
-  const { advMap: realAdvMap, loading: advLoading } = useWorkbookAdv(
+  const { advMap: realAdvMap, loading: adv90Loading } = useWorkbookAdv(
     allSymbols,
     90,
     advRefreshToken,
   );
+  const { advMap: adv30Map, loading: adv30Loading } = useWorkbookAdv(
+    allSymbols,
+    30,
+    advRefreshToken,
+  );
+  const advLoading = adv90Loading || adv30Loading;
   const refreshAdv = useCallback(() => setAdvRefreshToken(Date.now()), []);
 
   const advMap = useMemo(() => {
@@ -239,6 +248,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     advFilter,
     setAdvFilter,
     advMap,
+    adv30Map,
     advLoading,
     refreshAdv,
     universeTickers,

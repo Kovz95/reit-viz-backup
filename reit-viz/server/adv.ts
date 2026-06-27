@@ -133,8 +133,11 @@ export async function getAdvBatch(
   const wanted = Array.from(
     new Set(tickers.map((t) => String(t).toUpperCase()).filter(Boolean)),
   );
+  // Cache is keyed by ticker + window so different windows (e.g. 30d and 90d)
+  // coexist instead of evicting each other on every request.
+  const ck = (t: string) => `${t}@${window}`;
 
-  const stale = wanted.filter((t) => forceRefresh || !isFresh(cache[t], window));
+  const stale = wanted.filter((t) => forceRefresh || !isFresh(cache[ck(t)], window));
 
   if (stale.length > 0) {
     const computed = await mapLimit(stale, MAX_CONCURRENCY, async (ticker) => {
@@ -148,11 +151,11 @@ export async function getAdvBatch(
         return [ticker, empty] as const;
       }
     });
-    for (const [ticker, entry] of computed) cache[ticker] = entry;
+    for (const [ticker, entry] of computed) cache[ck(ticker)] = entry;
     saveCache(cache);
   }
 
   const results: Record<string, AdvEntry> = {};
-  for (const t of wanted) results[t] = cache[t];
+  for (const t of wanted) results[t] = cache[ck(t)];
   return results;
 }
