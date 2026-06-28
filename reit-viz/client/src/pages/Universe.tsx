@@ -123,6 +123,56 @@ export default function Universe() {
     excludeTickersBulk("workbook", offFilterTickers.map((t: any) => t.ticker));
   };
 
+  // Workbook tickers (not already hidden) whose nation is NOT in the active
+  // nation whitelist (includes names with unknown nation) — candidates for a
+  // one-click bulk exclude, mirroring the $ ADV off-filter button.
+  const offFilterNationTickers = useMemo(() => {
+    if (nationFilter.size === 0) return [] as typeof allTickers;
+    return allTickers.filter((t: any) => {
+      const sym = String(t.ticker).toUpperCase();
+      if (excludedTickers.has(sym)) return false;
+      const n = nationOf(sym);
+      return !(n != null && nationFilter.has(n));
+    });
+  }, [nationFilter, allTickers, nationOf, excludedTickers]);
+
+  const excludeOffFilterNations = () => {
+    if (offFilterNationTickers.length === 0) return;
+    const sel = [...nationFilter].join(", ");
+    const ok = window.confirm(
+      `Hide ${offFilterNationTickers.length} ticker(s) whose nation is not ${sel}?\n\n` +
+        `They will be excluded from EVERY tab (Ranking, Scatter, Valuation, etc.).\n` +
+        `Restorable any time from the Exclusions panel above.`,
+    );
+    if (!ok) return;
+    excludeTickersBulk("workbook", offFilterNationTickers.map((t: any) => t.ticker));
+  };
+
+  // Workbook tickers (not already hidden) whose exchange is NOT in the active
+  // exchange whitelist (includes names with unknown exchange) — candidates for a
+  // one-click bulk exclude, mirroring the nation off-filter button.
+  const offFilterExchangeTickers = useMemo(() => {
+    if (exchangeFilter.size === 0) return [] as typeof allTickers;
+    return allTickers.filter((t: any) => {
+      const sym = String(t.ticker).toUpperCase();
+      if (excludedTickers.has(sym)) return false;
+      const x = exchangeOf(sym);
+      return !(x != null && exchangeFilter.has(x));
+    });
+  }, [exchangeFilter, allTickers, exchangeOf, excludedTickers]);
+
+  const excludeOffFilterExchanges = () => {
+    if (offFilterExchangeTickers.length === 0) return;
+    const sel = [...exchangeFilter].join(", ");
+    const ok = window.confirm(
+      `Hide ${offFilterExchangeTickers.length} ticker(s) whose exchange is not ${sel}?\n\n` +
+        `They will be excluded from EVERY tab (Ranking, Scatter, Valuation, etc.).\n` +
+        `Restorable any time from the Exclusions panel above.`,
+    );
+    if (!ok) return;
+    excludeTickersBulk("workbook", offFilterExchangeTickers.map((t: any) => t.ticker));
+  };
+
   const effectiveClassMap = useMemo(() => {
     const map = new Map<string, any>();
     for (const ticker of allTickers) {
@@ -367,6 +417,30 @@ export default function Universe() {
             onChange={setExchangeFilter}
             testId="universe-filter-exchange"
           />
+          {nationFilter.size > 0 && offFilterNationTickers.length > 0 && (
+            <button
+              type="button"
+              onClick={excludeOffFilterNations}
+              className="inline-flex items-center gap-1 h-6 px-2 text-[10px] font-mono rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+              title={`Hide the ${offFilterNationTickers.length} ticker(s) whose nation is not ${[...nationFilter].join(", ")} from every tab (restorable from the Exclusions panel)`}
+              data-testid="universe-exclude-offfilter-nation"
+            >
+              <EyeOff className="w-3 h-3" />
+              Hide {offFilterNationTickers.length} off-nation
+            </button>
+          )}
+          {exchangeFilter.size > 0 && offFilterExchangeTickers.length > 0 && (
+            <button
+              type="button"
+              onClick={excludeOffFilterExchanges}
+              className="inline-flex items-center gap-1 h-6 px-2 text-[10px] font-mono rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+              title={`Hide the ${offFilterExchangeTickers.length} ticker(s) whose exchange is not ${[...exchangeFilter].join(", ")} from every tab (restorable from the Exclusions panel)`}
+              data-testid="universe-exclude-offfilter-exchange"
+            >
+              <EyeOff className="w-3 h-3" />
+              Hide {offFilterExchangeTickers.length} off-exchange
+            </button>
+          )}
           <div className="h-4 w-px bg-border mx-0.5" />
           <div
             className="relative flex items-center"
