@@ -161,5 +161,51 @@ export function useGlobalAdvMap(): { advMap: Map<string, AdvInfo>; loading: bool
   return { advMap, loading };
 }
 
+// Per-ticker geography / listing info (nation + stock exchange) looked up by
+// symbol. Sourced from the same global-universe dataset, which carries `nation`
+// and `exchange` for ~9.4k names. Used to enrich the workbook universe (which
+// has no nation/exchange of its own).
+export interface GeoInfo {
+  nation?: string | null;
+  exchange?: string | null;
+}
+
+/**
+ * Returns a ticker → geo (nation + exchange) map keyed by UPPER-cased symbol,
+ * built from the global-universe dataset. Reads the raw cache directly —
+ * deliberately NOT filtered by global exclusions, since this is a metadata
+ * lookup, not a universe (mirrors useGlobalAdvMap).
+ */
+export function useGlobalGeoMap(): { geoMap: Map<string, GeoInfo>; loading: boolean } {
+  const [geoMap, setGeoMap] = useState<Map<string, GeoInfo>>(() => new Map());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadGlobalRecords()
+      .then((records) => {
+        if (cancelled) return;
+        const m = new Map<string, GeoInfo>();
+        for (const r of records) {
+          const k = String(r.ticker).toUpperCase();
+          // First record wins (records are de-duped enough for a metadata lookup).
+          if (!m.has(k)) {
+            m.set(k, { nation: r.nation ?? null, exchange: r.exchange ?? null });
+          }
+        }
+        setGeoMap(m);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return { geoMap, loading };
+}
+
 // Named export alias for destructured import `{ u as useGlobalUniverse }`
 export { useGlobalUniverse as u };

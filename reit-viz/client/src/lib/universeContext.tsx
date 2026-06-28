@@ -18,7 +18,7 @@ import {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useExcludedTickers } from "@/lib/excludedTickers";
-import { useGlobalAdvMap } from "@/lib/globalUniverse";
+import { useGlobalAdvMap, useGlobalGeoMap, type GeoInfo } from "@/lib/globalUniverse";
 import { useWorkbookAdv, type AdvEntry as RawAdvEntry } from "@/lib/workbookAdv";
 import { parseNumericFilter } from "@/lib/numericFilter";
 
@@ -55,6 +55,24 @@ export interface UniverseContextValue {
   setSearch: (s: string) => void;
   manualTickers: Set<string>;
   setManualTickers: (s: Set<string>) => void;
+  /** Whitelist of nations (countries) to keep. Empty = no nation filter.
+   *  Joined from the global universe dataset. */
+  nationFilter: Set<string>;
+  setNationFilter: (s: Set<string>) => void;
+  /** Whitelist of stock exchanges to keep. Empty = no exchange filter.
+   *  Joined from the global universe dataset. */
+  exchangeFilter: Set<string>;
+  setExchangeFilter: (s: Set<string>) => void;
+  /** Ticker → { nation, exchange } keyed by UPPER-cased symbol, from the global dataset. */
+  geoMap: Map<string, GeoInfo>;
+  /** The nation (country) for a ticker, or null if unknown. */
+  nationOf: (ticker: string) => string | null;
+  /** The listing stock exchange for a ticker, or null if unknown. */
+  exchangeOf: (ticker: string) => string | null;
+  /** Sorted unique nations present in the workbook universe (filter options). */
+  nationOptions: string[];
+  /** Sorted unique exchanges present in the workbook universe (filter options). */
+  exchangeOptions: string[];
   /** Liquidity ($ ADV) threshold expression, e.g. ">5", "5-50", "<100". Empty = no liquidity filter.
    *  Values are average daily dollar volume in $ millions, joined from the global universe dataset. */
   advFilter: string;
@@ -108,6 +126,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   const [advFilter, setAdvFilter] = useState("");
   // Which ADV window the liquidity filter (and its bulk-exclude) targets.
   const [advWindow, setAdvWindow] = useState<30 | 90>(90);
+  // Nation / exchange whitelists (joined from the global universe dataset).
+  const [nationFilter, setNationFilter] = useState<Set<string>>(new Set());
+  const [exchangeFilter, setExchangeFilter] = useState<Set<string>>(new Set());
 
   const { data: tickersMeta = [] } = useQuery({
     queryKey: ["/universe-tickers"],
@@ -122,6 +143,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   //    also covers names missing from the global dataset) — loaded async.
   // The effective map below prefers the real figure and falls back to the estimate.
   const { advMap: globalAdvMap } = useGlobalAdvMap();
+  // Nation + stock exchange per ticker, joined from the global universe dataset.
+  const { geoMap } = useGlobalGeoMap();
   const [advRefreshToken, setAdvRefreshToken] = useState(0);
   const allSymbols = useMemo(() => allTickers.map((t) => t.ticker), [allTickers]);
   const { advMap: realAdvMap, loading: adv90Loading } = useWorkbookAdv(
@@ -180,6 +203,33 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     [advWindow, adv30Map, advMap],
   );
 
+  const nationOf = useCallback(
+    (ticker: string): string | null =>
+      geoMap.get(String(ticker).toUpperCase())?.nation ?? null,
+    [geoMap],
+  );
+  const exchangeOf = useCallback(
+    (ticker: string): string | null =>
+      geoMap.get(String(ticker).toUpperCase())?.exchange ?? null,
+    [geoMap],
+  );
+
+  // Unique nation / exchange values present in the workbook universe — the
+  // options offered in the Universe tab's filter dropdowns.
+  const { nationOptions, exchangeOptions } = useMemo(() => {
+    const nations = new Set<string>();
+    const exchanges = new Set<string>();
+    for (const t of allTickers) {
+      const geo = geoMap.get(t.ticker.toUpperCase());
+      if (geo?.nation) nations.add(geo.nation);
+      if (geo?.exchange) exchanges.add(geo.exchange);
+    }
+    return {
+      nationOptions: [...nations].sort((a, b) => a.localeCompare(b)),
+      exchangeOptions: [...exchanges].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [allTickers, geoMap]);
+
   // Tickers the user hid via the Universe trash icon are excluded from the
   // universe everywhere (every tab reads filteredTickersList / universeTickers).
   // allTickers stays complete so the Universe page can list & restore them.
@@ -195,11 +245,23 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     if (excludedTickers.size > 0) {
       filtered = filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()));
     }
+    if (nationFilter.size > 0) {
+      filtered = filtered.filter((t) => {
+        const n = geoMap.get(t.ticker.toUpperCase())?.nation;
+        return n != null && nationFilter.has(n);
+      });
+    }
+    if (exchangeFilter.size > 0) {
+      filtered = filtered.filter((t) => {
+        const x = geoMap.get(t.ticker.toUpperCase())?.exchange;
+        return x != null && exchangeFilter.has(x);
+      });
+    }
     if (advPredicate) {
       filtered = filtered.filter((t) => advPredicate(advValueOf(t.ticker)));
     }
     return filtered;
-  }, [allTickers, filters, search, manualTickers, excludedTickers, advPredicate, advValueOf]);
+  }, [allTickers, filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, geoMap, advPredicate, advValueOf]);
 
   const isFiltered = useMemo(() => {
     return (
@@ -207,9 +269,11 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       search !== "" ||
       manualTickers.size > 0 ||
       excludedTickers.size > 0 ||
+      nationFilter.size > 0 ||
+      exchangeFilter.size > 0 ||
       advPredicate !== null
     );
-  }, [filters, search, manualTickers, excludedTickers, advPredicate]);
+  }, [filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, advPredicate]);
 
   const universeTickers = useMemo(() => {
     if (!isFiltered) return null;
@@ -226,10 +290,12 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       filters: filtersObj,
       search,
       manualTickers: [...manualTickers],
+      nationFilter: [...nationFilter],
+      exchangeFilter: [...exchangeFilter],
       advFilter,
       advWindow,
     };
-  }, [filters, search, manualTickers, advFilter, advWindow]);
+  }, [filters, search, manualTickers, nationFilter, exchangeFilter, advFilter, advWindow]);
 
   const restore = useCallback((data: any) => {
     if (!data) return;
@@ -246,6 +312,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     }
     setSearch(data.search || "");
     setManualTickers(new Set(data.manualTickers || []));
+    setNationFilter(new Set(Array.isArray(data.nationFilter) ? data.nationFilter : []));
+    setExchangeFilter(new Set(Array.isArray(data.exchangeFilter) ? data.exchangeFilter : []));
     setAdvFilter(typeof data.advFilter === "string" ? data.advFilter : "");
     setAdvWindow(data.advWindow === 30 ? 30 : 90);
   }, []);
@@ -254,6 +322,8 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setFilters(emptyClassFilters());
     setSearch("");
     setManualTickers(new Set());
+    setNationFilter(new Set());
+    setExchangeFilter(new Set());
     setAdvFilter("");
   }, []);
 
@@ -264,6 +334,15 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setSearch,
     manualTickers,
     setManualTickers,
+    nationFilter,
+    setNationFilter,
+    exchangeFilter,
+    setExchangeFilter,
+    geoMap,
+    nationOf,
+    exchangeOf,
+    nationOptions,
+    exchangeOptions,
     advFilter,
     setAdvFilter,
     advWindow,

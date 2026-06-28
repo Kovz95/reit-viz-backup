@@ -118,7 +118,9 @@ export function applyClassFilters<T extends ClassifiedBase>(
 }
 
 // ---- Multi-select dropdown with search ----
-function FilterDropdown({
+// Exported so other filter bars (e.g. the Universe tab's Nation / Exchange
+// filters) can reuse the exact same multi-select idiom.
+export function FilterDropdown({
   label,
   options,
   selected,

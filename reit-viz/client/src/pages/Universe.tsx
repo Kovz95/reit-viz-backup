@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ClassificationFilters } from "@/lib/classificationFilters";
+import { FilterDropdown } from "@/components/ClassificationFilters";
 import { commitClassificationOverride } from "@/lib/reclassificationOverrides";
 import {
   importClassificationOverrides,
@@ -42,6 +43,14 @@ export default function Universe() {
     setSearch,
     manualTickers,
     setManualTickers,
+    nationFilter,
+    setNationFilter,
+    exchangeFilter,
+    setExchangeFilter,
+    nationOf,
+    exchangeOf,
+    nationOptions,
+    exchangeOptions,
     advFilter,
     setAdvFilter,
     advWindow,
@@ -221,14 +230,21 @@ export default function Universe() {
       });
       return rows;
     }
+    // Nation / Exchange live in the geo map (not on the row), so read via accessor.
+    const strOf =
+      sortCol === "nation"
+        ? (r: any) => nationOf(r.ticker) || ""
+        : sortCol === "exchange"
+          ? (r: any) => exchangeOf(r.ticker) || ""
+          : (r: any) => r[sortCol] || "";
     rows.sort((a: any, b: any) => {
-      const aVal = (a[sortCol] || "").toLowerCase();
-      const bVal = (b[sortCol] || "").toLowerCase();
+      const aVal = strOf(a).toLowerCase();
+      const bVal = strOf(b).toLowerCase();
       const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [filteredTickersList, sortCol, sortDir, advMap, adv30Map]);
+  }, [filteredTickersList, sortCol, sortDir, advMap, adv30Map, nationOf, exchangeOf]);
 
   const filteredSet = useMemo(
     () => new Set(filteredTickersList.map((t: any) => t.ticker)),
@@ -336,6 +352,21 @@ export default function Universe() {
           totalCount={totalCount}
           testIdPrefix="universe"
         >
+          <div className="h-4 w-px bg-border mx-0.5" />
+          <FilterDropdown
+            label="Nation"
+            options={nationOptions}
+            selected={nationFilter}
+            onChange={setNationFilter}
+            testId="universe-filter-nation"
+          />
+          <FilterDropdown
+            label="Exchange"
+            options={exchangeOptions}
+            selected={exchangeFilter}
+            onChange={setExchangeFilter}
+            testId="universe-filter-exchange"
+          />
           <div className="h-4 w-px bg-border mx-0.5" />
           <div
             className="relative flex items-center"
@@ -593,6 +624,8 @@ export default function Universe() {
               <th className="w-8 py-1.5 px-2" />
               <SortableHeader col="ticker" label="Ticker" className="w-20" />
               <SortableHeader col="name" label="Name" />
+              <SortableHeader col="nation" label="Nation" className="w-24" />
+              <SortableHeader col="exchange" label="Exchange" className="w-24" />
               <th
                 className="text-right py-1.5 px-2 font-medium cursor-pointer hover:text-foreground select-none w-24"
                 onClick={() => handleSort("advUsd")}
@@ -649,6 +682,22 @@ export default function Universe() {
                   <td className="py-1 px-2 truncate max-w-[200px]" title={ticker.name}>
                     {ticker.name}
                   </td>
+                  {(() => {
+                    const nation = nationOf(ticker.ticker);
+                    return (
+                      <td className="py-1 px-2 text-muted-foreground truncate max-w-[120px]" title={nation || ""}>
+                        {nation || <span className="opacity-50 italic">—</span>}
+                      </td>
+                    );
+                  })()}
+                  {(() => {
+                    const exch = exchangeOf(ticker.ticker);
+                    return (
+                      <td className="py-1 px-2 text-muted-foreground truncate max-w-[120px]" title={exch || ""}>
+                        {exch || <span className="opacity-50 italic">—</span>}
+                      </td>
+                    );
+                  })()}
                   {(() => {
                     const info = advMap.get(String(ticker.ticker).toUpperCase());
                     const dv = info?.dollarVolMM ?? null;
@@ -805,7 +854,7 @@ export default function Universe() {
             {sortedRows.length === 0 && (
               <tr>
                 <td
-                  colSpan={6 + classColumns.length}
+                  colSpan={8 + classColumns.length}
                   className="py-8 text-center text-muted-foreground"
                 >
                   No tickers match the current filters
