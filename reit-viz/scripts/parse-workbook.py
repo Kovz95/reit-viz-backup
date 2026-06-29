@@ -89,12 +89,18 @@ METRIC_LABEL_RULES = [
     ("Sell Ratings",           ("sell", "ratings")),
     ("Bull%",                  ("bull",)),
     ("Bear%",                  ("bear",)),
-    ("FY1 EPS Growth",         ("fy1", "growth", "eps")),
-    ("FY2 EPS Growth",         ("fy2", "growth", "eps")),
-    ("FY1 FFO Growth",         ("fy1", "growth", "ffo")),
-    ("FY2 FFO Growth",         ("fy2", "growth", "ffo")),
-    ("FY1 AFFO Growth",        ("fy1", "growth", "affo")),
-    ("FY2 AFFO Growth",        ("fy2", "growth", "affo")),
+    # Growth labels are metric-first in the workbook ("EPS growth FY1"); the
+    # canonical output names stay period-first ("FY1 EPS Growth") because the
+    # client references those spellings. Token-exact matching keeps "ffo" from
+    # matching inside "affo".
+    ("FY1 EPS Growth",         ("eps", "growth", "fy1")),
+    ("FY2 EPS Growth",         ("eps", "growth", "fy2")),
+    ("FY1 FFO Growth",         ("ffo", "growth", "fy1")),
+    ("FY2 FFO Growth",         ("ffo", "growth", "fy2")),
+    ("FY1 AFFO Growth",        ("affo", "growth", "fy1")),
+    ("FY2 AFFO Growth",        ("affo", "growth", "fy2")),
+    ("FY1 EBITDA Growth",      ("ebitda", "growth", "fy1")),
+    ("FY2 EBITDA Growth",      ("ebitda", "growth", "fy2")),
     ("% off 52wk High",        ("off", "52", "week", "high")),
     ("% off 52wk Low",         ("off", "52", "week", "low")),
     ("P/E LTM",                ("p", "e", "ltm")),
@@ -115,6 +121,20 @@ METRIC_LABEL_RULES = [
 ]
 
 _TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+# Date row of every mktdata sheet (1-based). Rows at or above it are structural
+# (ticker, start/end date, the date axis itself) and are never metric series.
+DATE_ROW = 8
+
+# Labels that sit BELOW the date row but still aren't metrics. The fiscal-period
+# helper rows (FY0/FY1/FY2/Next fiscal quarter) hold Excel date serials, so they
+# carry numbers and would survive as bogus metrics unless skipped explicitly.
+# (Section-divider rows like "EUROPEAN REITs" carry no data and are dropped
+# automatically downstream, so they don't need to be listed here.)
+NON_METRIC_LABELS = {
+    "fy0", "fy1", "fy2", "next fiscal quarter",
+    "ticker", "start date", "end date", "daily", "date",
+}
 
 def _tokenize_label(raw):
     """Lowercase, split on non-alphanumerics, drop empty tokens."""
@@ -138,16 +158,28 @@ def _tokens_match_in_order(tokens, patterns):
             return False
     return True
 
-def build_row_map_from_labels(rows):
+def build_row_map_from_labels(rows, date_row=DATE_ROW):
     """Scan column A of each row and build {row_index_1based: metric_name}.
-    Returns the row map plus a list of metrics that couldn't be found (for logging).
-    Token-aware: "p", "s" patterns only match standalone tokens, never substrings.
+    Returns the row map plus a list of canonical metrics that couldn't be found
+    (for logging). Token-aware: "p", "s" patterns only match standalone tokens,
+    never substrings.
+
+    Two passes:
+      1. Canonical rules (METRIC_LABEL_RULES) map a curated set of rows to stable,
+         client-facing short names ("close", "EPS FY1", "P/E LTM", ...). These names
+         are depended on across the client, so they must not drift.
+      2. Generic capture — every OTHER labeled row below the date row becomes a
+         metric under its raw column-A label. This means metrics newly added to the
+         workbook are picked up automatically, with no edits to this file. Rows that
+         turn out to carry no data are dropped by the caller.
     """
     # Pre-tokenize column A for each row
     tokens_by_row = []
     for r in rows:
         a = r[0] if r and len(r) > 0 else None
         tokens_by_row.append(_tokenize_label(a))
+
+    # ── Pass 1: canonical rules → stable short names ──
     found = {}
     found_metrics = set()
     for metric_name, patterns in METRIC_LABEL_RULES:
@@ -160,6 +192,21 @@ def build_row_map_from_labels(rows):
                     found_metrics.add(metric_name)
                 break
     missing = [m for m, _ in METRIC_LABEL_RULES if m not in found_metrics]
+
+    # ── Pass 2: generic capture of every other labeled metric row ──
+    used_names = set(found_metrics)
+    for idx, toks in enumerate(tokens_by_row, start=1):
+        if idx <= date_row or idx in found or not toks:
+            continue
+        if " ".join(toks) in NON_METRIC_LABELS:
+            continue
+        raw = rows[idx - 1][0]
+        name = " ".join(str(raw).split())  # trim + collapse internal whitespace
+        if not name or name in used_names:
+            continue
+        found[idx] = name
+        used_names.add(name)
+
     return found, missing
 
 # Excel epoch for serial date conversion (pyxlsb returns dates as serial numbers)
