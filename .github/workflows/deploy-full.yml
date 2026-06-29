@@ -61,9 +61,13 @@ jobs:
       - name: Build server + client
         run: npm run build   # script/build.ts -> dist/index.cjs (server) + dist/public (client)
 
-      - name: Package release (dist + manifests)
+      - name: Package release (dist + scripts + manifests)
         run: |
-          tar -czf /tmp/reit-viz-full.tar.gz dist package.json package-lock.json
+          # Ship the Python parser/runtime scripts too — the server invokes
+          # scripts/*.py at runtime (e.g. parse-workbook.py). Only .py sources are
+          # bundled; the server's prebuilt .so artifacts in scripts/ are preserved
+          # by overlaying (not replacing) the dir on the remote.
+          tar -czf /tmp/reit-viz-full.tar.gz dist scripts/*.py package.json package-lock.json
           ls -lh /tmp/reit-viz-full.tar.gz
 
       - name: Deploy to Vultr (backup-first)
@@ -87,8 +91,8 @@ jobs:
             # 1) Backup current dist + data + DBs (data/DBs live outside dist and are preserved as-is).
             mkdir -p "$VDIR/backups"
             tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" \
-              --exclude='./backups' dist package.json package-lock.json data.db* data 2>/dev/null || \
-            tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" --exclude='./backups' dist package.json package-lock.json 2>/dev/null || true
+              --exclude='./backups' dist scripts package.json package-lock.json data.db* data 2>/dev/null || \
+            tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" --exclude='./backups' dist scripts package.json package-lock.json 2>/dev/null || true
             echo "Backed up to $VDIR/backups/reit-viz-$TS.tar.gz"
             # 2) Swap in the new dist (replace server bundle + client assets; data/ and data.db untouched).
             rm -rf "$VDIR/dist.new" && mkdir -p "$VDIR/dist.new"
@@ -96,6 +100,10 @@ jobs:
             rm -rf "$VDIR/dist.prev"
             [ -d "$VDIR/dist" ] && mv "$VDIR/dist" "$VDIR/dist.prev" || true
             mv "$VDIR/dist.new/dist" "$VDIR/dist"
+            # Overlay updated Python scripts onto the existing scripts/ dir so the
+            # server's prebuilt .so artifacts and any runtime data there survive.
+            mkdir -p "$VDIR/scripts"
+            cp "$VDIR/dist.new/scripts/"*.py "$VDIR/scripts/"
             cp "$VDIR/dist.new/package.json" "$VDIR/package.json"
             cp "$VDIR/dist.new/package-lock.json" "$VDIR/package-lock.json"
             rm -rf "$VDIR/dist.new"
