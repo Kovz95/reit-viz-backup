@@ -278,6 +278,24 @@ def rle(values):
         encoded.append(f"~{null_count}")
     return encoded
 
+def rle_decode(encoded, length):
+    """Expand an RLE array (values + '~N' null-run tokens) to a dense list of `length`
+    (null-padded/truncated). Inverse of rle()."""
+    out = []
+    for item in encoded:
+        if isinstance(item, str) and item.startswith("~"):
+            try:
+                out.extend([None] * int(item[1:]))
+            except ValueError:
+                pass
+        else:
+            out.append(item)
+    if len(out) < length:
+        out.extend([None] * (length - len(out)))
+    elif len(out) > length:
+        out = out[:length]
+    return out
+
 
 # ─── Calamine parsing (xlsx/xlsm) — fast Rust-based engine ───
 
@@ -571,21 +589,23 @@ def parse_workbook(file_path, output_dir=None):
     global_len = len(all_dates)
     print(f"  Global date axis: {global_len} unique dates (union of {len(pending_tickers)} tickers)", file=sys.stderr)
     
-    # Realign each ticker's metric arrays to the global axis, then write
+    # Realign each ticker's metric arrays to the global axis, then write.
+    # The per-metric arrays are RLE-encoded, so they must be decoded to a dense
+    # series (one slot per local date) before remapping by date — indexing the
+    # RLE array positionally would scatter the "~N" tokens. Re-encode after.
     for ticker, local_dates, data in pending_tickers:
         # Map local index -> global index for this ticker
         local_to_global = [global_index[d] for d in local_dates]
         local_len = len(local_dates)
         realigned = {}
         for metric_name, values in data.items():
-            # Some metric arrays may be shorter than local_dates if trailing data was missing;
-            # treat missing trailing positions as None.
+            dense = rle_decode(values, local_len)  # align to local_dates
             new_arr = [None] * global_len
-            n = min(len(values), local_len)
-            for li in range(n):
-                gi = local_to_global[li]
-                new_arr[gi] = values[li]
-            realigned[metric_name] = new_arr
+            for li in range(local_len):
+                v = dense[li]
+                if v is not None:
+                    new_arr[local_to_global[li]] = v
+            realigned[metric_name] = rle(new_arr)
         
         if ticker_out_dir:
             with open(os.path.join(ticker_out_dir, f"{ticker}.json"), "w") as f:
