@@ -28,6 +28,7 @@ import {
 } from "@/lib/leadLag";
 import LeadLagChart from "./LeadLagChart";
 import { useUpload } from "@/lib/uploadContext";
+import { groupMetricsRecord, DERIVED_METRICS } from "@/lib/metricCategories";
 import { getSeriesColor } from "@/lib/chartColors";
 import ChartsComparePanel from "./ChartsComparePanel";
 import BasketMetricInspector, { type InspectableBasket } from "./BasketMetricInspector";
@@ -145,47 +146,11 @@ function groupByClassification(tickers: TickerMeta[], field: ClassificationKey) 
   return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-const METRIC_CATEGORIES: Record<string, string[]> = {
-  Price: ["close", "open", "high", "low"],
-  Volume: ["Volume"],
-  Valuation: [
-    "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
-    "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
-    "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate",
-  ],
-  Yields: [
-    "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
-    "Dividend Yield",
-  ],
-  Estimates: [
-    "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2",
-    "AFFO FY1", "AFFO FY2", "EBITDA FY1", "EBITDA FY2",
-    "Sales FY1", "Sales FY2",
-  ],
-  LTM: ["EPS LTM", "FFO LTM", "AFFO LTM", "EBITDA LTM", "Sales LTM"],
-  Growth: [
-    "FY1 EPS Growth", "FY2 EPS Growth",
-    "FY1 FFO Growth", "FY2 FFO Growth",
-    "FY1 AFFO Growth", "FY2 AFFO Growth",
-    "FY2 EBITDA Growth",
-  ],
-  Performance: [
-    "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
-    "% off 52wk High", "% off 52wk Low",
-  ],
-  "Short Interest": [
-    "Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
-  ],
-  Volatility: [
-    "HV 30D", "HV 60D", "HV 90D", "HV 180D",
-    "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
-  ],
-  Other: [
-    "Enterprise Value", "52wk High", "52wk Low", "Dividend",
-    "Buy Ratings", "Hold Ratings", "Sell Ratings",
-    "Bull%", "Bear%", "EPS FY0", "FFO FY0", "AFFO FY0",
-  ],
-};
+// Metric categories are derived dynamically from whatever metrics the loaded
+// data actually exposes (see buildMetricCategories below), using the shared
+// rule-based categorizer in @/lib/metricCategories. This replaces the old
+// hardcoded map so newly added workbook metrics (EPRA, NAV, bank/insurance, …)
+// appear automatically, grouped by category.
 
 export default function Sidebar({
   tickers,
@@ -523,25 +488,32 @@ export default function Sidebar({
     }
   };
 
+  // Union of every metric the loaded universe exposes, plus the client-derived
+  // ones (Volume, SI Δ, HV…). This is the single source for all metric pickers.
+  const availableMetrics = useMemo(() => {
+    const s = new Set<string>(DERIVED_METRICS);
+    for (const t of tickers) {
+      for (const m of t.metrics || []) s.add(m);
+    }
+    return [...s];
+  }, [tickers]);
+
+  // Grouped by category for the categorized picker.
+  const metricCategories = useMemo(() => groupMetricsRecord(availableMetrics), [availableMetrics]);
+
   const filteredMetrics = useMemo(() => {
-    if (!metricSearch) return METRIC_CATEGORIES;
+    if (!metricSearch) return metricCategories;
     const q = metricSearch.toLowerCase();
     const result: Record<string, string[]> = {};
-    for (const [cat, metrics] of Object.entries(METRIC_CATEGORIES)) {
+    for (const [cat, metrics] of Object.entries(metricCategories)) {
       const filtered = metrics.filter((m) => m.toLowerCase().includes(q));
       if (filtered.length > 0) result[cat] = filtered;
     }
     return result;
-  }, [metricSearch]);
+  }, [metricSearch, metricCategories]);
 
   // Flat list of all metrics for formula pickers
-  const allMetrics = useMemo(() => {
-    const flat: string[] = [];
-    for (const metrics of Object.values(METRIC_CATEGORIES)) {
-      flat.push(...metrics);
-    }
-    return flat;
-  }, []);
+  const allMetrics = useMemo(() => [...availableMetrics].sort((a, b) => a.localeCompare(b)), [availableMetrics]);
 
   // Ticker list for formula pickers
   const tickerNames = useMemo(() => tickers.map(t => t.ticker).sort(), [tickers]);
@@ -2394,6 +2366,9 @@ function PairsFormulaSection({
     return Array.from(opts);
   }, [allMetrics]);
 
+  // Categorized grouping of the available metrics for the picker dropdown.
+  const metricCategories = useMemo(() => groupMetricsRecord(metricOptions), [metricOptions]);
+
   const LegPicker = ({
     value, onChange, testId, open, setOpen,
   }: {
@@ -2449,7 +2424,7 @@ function PairsFormulaSection({
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-[420px]">
-        {Object.entries(METRIC_CATEGORIES).map(([cat, metrics]) => (
+        {Object.entries(metricCategories).map(([cat, metrics]) => (
           <div key={cat}>
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               {cat}

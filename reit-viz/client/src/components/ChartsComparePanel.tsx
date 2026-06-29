@@ -5,6 +5,7 @@
  */
 import { useState, useMemo, useCallback } from "react";
 import { Check, ChevronsUpDown, X } from "lucide-react";
+import { groupMetricsRecord, DERIVED_METRICS } from "@/lib/metricCategories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,42 +26,6 @@ const COMPARE_COLORS = [
   "#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#a855f7",
   "#ec4899", "#06b6d4", "#f97316", "#14b8a6", "#84cc16",
 ];
-
-// Metric groups (bundle: R1)
-const METRIC_GROUPS: Record<string, string[]> = {
-  Price: ["close", "open", "high", "low"],
-  Volume: ["Volume"],
-  Valuation: [
-    "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
-    "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate",
-  ],
-  Yields: [
-    "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
-    "Dividend Yield",
-  ],
-  Estimates: [
-    "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2", "AFFO FY1", "AFFO FY2",
-    "EBITDA FY1", "EBITDA FY2", "Sales FY1", "Sales FY2",
-  ],
-  LTM: ["EPS LTM", "FFO LTM", "AFFO LTM", "EBITDA LTM", "Sales LTM"],
-  Growth: [
-    "FY1 EPS Growth", "FY2 EPS Growth", "FY1 FFO Growth", "FY2 FFO Growth",
-    "FY1 AFFO Growth", "FY2 AFFO Growth", "FY2 EBITDA Growth",
-  ],
-  Performance: [
-    "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
-    "% off 52wk High", "% off 52wk Low",
-  ],
-  "Short Interest": ["Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M"],
-  Volatility: [
-    "HV 30D", "HV 60D", "HV 90D", "HV 180D",
-    "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
-  ],
-  Other: [
-    "Enterprise Value", "52wk High", "52wk Low", "Dividend", "Buy Ratings",
-    "Hold Ratings", "Sell Ratings", "Bull%", "Bear%", "EPS FY0", "FFO FY0", "AFFO FY0",
-  ],
-};
 
 type AnchorMode = "earliest-common" | "first-visible" | "custom" | "latest";
 
@@ -90,16 +55,24 @@ export default function ChartsComparePanel({
   const [metricSearch, setMetricSearch] = useState("");
   const [metricPickerOpen, setMetricPickerOpen] = useState(false);
 
+  // Available metrics = whatever the loaded universe exposes + client-derived ones,
+  // grouped by the shared categorizer (so new workbook metrics appear automatically).
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>(DERIVED_METRICS);
+    for (const t of tickers) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsRecord([...s]);
+  }, [tickers]);
+
   const filteredMetrics = useMemo(() => {
     const query = metricSearch.trim().toLowerCase();
-    if (!query) return METRIC_GROUPS;
+    if (!query) return metricGroups;
     const result: Record<string, string[]> = {};
-    for (const [group, metrics] of Object.entries(METRIC_GROUPS)) {
+    for (const [group, metrics] of Object.entries(metricGroups)) {
       const matched = metrics.filter((m) => m.toLowerCase().includes(query));
       if (matched.length) result[group] = matched;
     }
     return result;
-  }, [metricSearch]);
+  }, [metricSearch, metricGroups]);
 
   const handleAddTicker = useCallback(
     (ticker: string) => {
