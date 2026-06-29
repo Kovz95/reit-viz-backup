@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
-import { getTickers, getPairsData, getCustomFundamentalMetrics } from "@/lib/dataService";
+import { getTickers, getPairsData, getCustomFundamentalMetrics, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import {
   createChart,
   ColorType,
@@ -3183,16 +3184,22 @@ function MetricPicker({
   testId: string;
 }) {
   const customMetrics = getCustomFundamentalMetrics();
+  // Union curated metrics + the loaded universe's metrics + derived, grouped.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...Object.values(METRIC_OPTIONS).flat(), ...DERIVED_METRICS]);
+    for (const t of getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, []);
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-7 text-xs w-auto min-w-[180px]" data-testid={testId}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {Object.entries(METRIC_OPTIONS).map(([cat, metrics]) => (
-          <div key={cat}>
+        {metricGroups.map(({ category, metrics }) => (
+          <div key={category}>
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {cat}
+              {category}
             </div>
             {metrics.map((m) => (
               <SelectItem key={m} value={m}>

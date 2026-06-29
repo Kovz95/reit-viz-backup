@@ -8,6 +8,7 @@ import { fetchTradingDates } from "@/lib/fetchTradingDates";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { isPercentMetric } from "@/lib/metricUtils";
 import { getWorkbookMetrics } from "@/lib/workbookMetrics";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -86,7 +87,7 @@ const HORIZONS = [
 
 const HORIZON_LABELS = HORIZONS.map(h => h.label);
 
-const METRIC_GROUPS: Record<string, string[]> = {
+const METRIC_GROUPS_BASE: Record<string, string[]> = {
   Valuation:   ["P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2"],
   Yields:      ["FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2", "Dividend Yield"],
   Growth:      ["FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth", "FY1 EPS Growth", "FY2 EPS Growth"],
@@ -428,14 +429,16 @@ export default function FactorBacktest() {
   const workbookMetrics = useMemo<string[]>(() => { try { const m = getWorkbookMetrics(); return Array.isArray(m) ? (m as Array<{ key?: string } | string>).map(x => typeof x === "string" ? x : (x.key ?? "")).filter(Boolean) : []; } catch { return []; } }, [tickersQuery.dataUpdatedAt]);
 
   const metricGroups = useMemo(() => {
-    const groups = Object.entries(METRIC_GROUPS).map(([group, metrics]) => ({ group, metrics }));
-    if (workbookMetrics.length) {
-      const existingSet = new Set(Object.values(METRIC_GROUPS).flat());
-      const extra = workbookMetrics.filter((m) => !existingSet.has(m));
-      if (extra.length) groups.push({ group: "Workbook", metrics: extra });
-    }
-    return groups;
-  }, [workbookMetrics]);
+    // Union curated metrics + the loaded universe's metrics + workbook + derived,
+    // grouped by the shared categorizer.
+    const s = new Set<string>([
+      ...Object.values(METRIC_GROUPS_BASE).flat(),
+      ...workbookMetrics,
+      ...DERIVED_METRICS,
+    ]);
+    for (const t of allTickersMeta) for (const m of ((t as any).metrics || [])) s.add(m);
+    return groupMetricsByCategory([...s]).map(({ category, metrics }) => ({ group: category, metrics }));
+  }, [workbookMetrics, allTickersMeta]);
 
   const universeTickers = useMemo(() => {
     let tickers = allTickersMeta;

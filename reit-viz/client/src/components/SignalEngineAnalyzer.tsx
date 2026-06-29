@@ -20,7 +20,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { getMetricSeries } from "@/lib/dataService";
+import { getMetricSeries, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, categorizeMetric } from "@/lib/metricCategories";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -281,7 +282,11 @@ const SIGNAL_THRESHOLDS: Record<string, { longBelow: number; shortAbove: number 
 };
 
 // Workbook metrics probed for availability (bundle `eq`)
-const WORKBOOK_METRICS = [
+// Curated valuation/yield metrics used for workbook signals. Extended at runtime
+// with any Valuation/Yields metrics the loaded universe exposes (see probe below)
+// — kept to those categories since this analyzer is a valuation-signal feature
+// (and each candidate costs a per-ticker data probe).
+const WORKBOOK_METRICS_BASE = [
   "P/FFO FY2",
   "P/FFO LTM",
   "P/AFFO FY2",
@@ -295,6 +300,18 @@ const WORKBOOK_METRICS = [
   "Dividend Yield",
   "Implied Cap Rate",
 ];
+
+// Base + any Valuation/Yields metrics present in the loaded universe.
+function workbookMetricCandidates(): string[] {
+  const s = new Set<string>(WORKBOOK_METRICS_BASE);
+  for (const t of getTickersCacheSync() || []) {
+    for (const m of t.metrics || []) {
+      const c = categorizeMetric(m);
+      if (c === "Valuation" || c === "Yields") s.add(m);
+    }
+  }
+  return [...s];
+}
 
 // Category order (bundle `tq`) + colors (bundle `dqe`)
 const CATEGORIES = [
@@ -1182,8 +1199,9 @@ export default function SignalEngineAnalyzer({
     let cancelled = false;
     (async () => {
       const found: string[] = [];
+      const candidates = workbookMetricCandidates();
       await Promise.all(
-        WORKBOOK_METRICS.map(async (metric) => {
+        candidates.map(async (metric) => {
           try {
             const series = await getMetricSeries(ticker, metric);
             if (series && series.length >= 60) found.push(metric);
@@ -1192,7 +1210,7 @@ export default function SignalEngineAnalyzer({
           }
         })
       );
-      if (!cancelled) setAvailableWbMetrics(WORKBOOK_METRICS.filter((m) => found.includes(m)));
+      if (!cancelled) setAvailableWbMetrics(candidates.filter((m) => found.includes(m)));
     })();
     return () => {
       cancelled = true;
@@ -1484,10 +1502,14 @@ function ResultView({
           data-testid="signal-engine-wb-metric"
         >
           <option value="">— none —</option>
-          {availableWbMetrics.map((metric) => (
-            <option value={metric} key={metric}>
-              {metric}
-            </option>
+          {groupMetricsByCategory(availableWbMetrics).map(({ category, metrics }) => (
+            <optgroup label={category} key={category}>
+              {metrics.map((metric) => (
+                <option value={metric} key={metric}>
+                  {metric}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
         {workbookMetric && (

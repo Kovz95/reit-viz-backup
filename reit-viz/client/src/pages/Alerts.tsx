@@ -5,6 +5,7 @@ import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
 import { createLucideIcon } from "@/lib/createLucideIcon";
 import { apiRequest } from "@/lib/apiRequest";
 import { getTickers, type TickerMeta } from "@/lib/dataService";
+import { groupMetricsRecord, DERIVED_METRICS } from "@/lib/metricCategories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -62,7 +63,7 @@ const OPERATOR_LABELS: Record<string, string> = {
   ">=": "≥",
 };
 
-const METRIC_GROUPS: Record<string, string[]> = {
+const METRIC_GROUPS_BASE: Record<string, string[]> = {
   Volume: ["Volume"],
   Valuation: [
     "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
@@ -90,8 +91,6 @@ const METRIC_GROUPS: Record<string, string[]> = {
     "Hold Ratings", "Sell Ratings",
   ],
 };
-
-Object.values(METRIC_GROUPS).flat();
 
 interface Alert {
   id: number;
@@ -241,6 +240,14 @@ export default function Alerts() {
       return result;
     },
   });
+
+  // Union curated metric groups + the loaded universe's metrics + derived,
+  // grouped by the shared categorizer so new metrics are alertable.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...Object.values(METRIC_GROUPS_BASE).flat(), ...DERIVED_METRICS]);
+    for (const t of tickerMetas) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsRecord([...s]);
+  }, [tickerMetas]);
 
   const { data: alerts = [], isLoading } = useQuery<Alert[]>({
     queryKey: ["/api/alerts"],
@@ -445,7 +452,7 @@ export default function Alerts() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
+                  {Object.entries(metricGroups).map(([group, metrics]) => (
                     <div key={group}>
                       <div className="px-2 py-1 text-[10px] text-muted-foreground font-semibold uppercase">
                         {group}

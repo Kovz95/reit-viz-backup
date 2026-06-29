@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics } from "@/lib/dataService";
+import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import type { RevisionData, ClassifiedBase } from "@/lib/dataService";
 import ClassificationFilters, {
   emptyClassFilters,
@@ -455,6 +456,12 @@ export default function Ranking() {
   const { universeTickers } = useUniverse();
   const [metrics, setMetrics] = useState<string[]>(["P/FFO FY2"]);
   const [pendingMetric, setPendingMetric] = useState("");
+  // Curated metrics + the loaded universe's metrics + derived, grouped by category.
+  const metricCategoriesDyn = useMemo(() => {
+    const s = new Set<string>([...Object.values(METRIC_OPTIONS).flat(), ...DERIVED_METRICS]);
+    for (const t of getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, []);
   const [newTemplateName, setNewTemplateName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
 
@@ -1101,10 +1108,10 @@ export default function Ranking() {
                 <SelectValue placeholder="Add metric..." />
               </SelectTrigger>
               <SelectContent>
-                {Object.entries(METRIC_OPTIONS).map(([cat, ms]) => (
-                  <div key={cat}>
+                {metricCategoriesDyn.map(({ category, metrics: ms }) => (
+                  <div key={category}>
                     <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      {cat}
+                      {category}
                     </div>
                     {ms.filter((m) => !metrics.includes(m)).map((m) => (
                       <SelectItem key={m} value={m}>{m}</SelectItem>

@@ -16,13 +16,17 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
+import { getTickers, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,7 +125,9 @@ function isSumMetric(metric: string): boolean {
 }
 
 // Metric list shown in the picker (bundle nke).
-const METRIC_OPTIONS = [
+// Curated metrics that should always be offered even if absent from the data;
+// unioned at runtime with the loaded universe's metrics + derived ones.
+const METRIC_OPTIONS_BASE = [
   "close",
   "Volume",
   "P/E LTM",
@@ -395,6 +401,25 @@ export function BasketMetricInspector({
   const [asOfInput, setAsOfInput] = useState("");
   const [snapshotDate, setSnapshotDate] = useState<string | null>(null);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [dataMetrics, setDataMetrics] = useState<string[]>(() => {
+    const c = getTickersCacheSync();
+    return c ? [...new Set(c.flatMap((t) => t.metrics || []))] : [];
+  });
+
+  // Load the loaded universe's metric set so newly added metrics are selectable.
+  useEffect(() => {
+    let cancelled = false;
+    getTickers()
+      .then((ts) => { if (!cancelled) setDataMetrics([...new Set(ts.flatMap((t) => t.metrics || []))]); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Union curated + data + derived metrics, grouped by category for the picker.
+  const metricGroups = useMemo(
+    () => groupMetricsByCategory([...new Set([...METRIC_OPTIONS_BASE, ...DERIVED_METRICS, ...dataMetrics])]),
+    [dataMetrics],
+  );
 
   const aggregationKind = getAggregationKind(metric);
 
@@ -667,16 +692,21 @@ export function BasketMetricInspector({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {METRIC_OPTIONS.map((option) => (
-                <SelectItem key={option} value={option} className="text-xs">
-                  {option}
-                  {isHarmonicMetric(option) && (
-                    <span className="ml-2 text-[9px] text-amber-400">harmonic</span>
-                  )}
-                  {isSumMetric(option) && (
-                    <span className="ml-2 text-[9px] text-sky-400">sum</span>
-                  )}
-                </SelectItem>
+              {metricGroups.map(({ category, metrics }) => (
+                <SelectGroup key={category}>
+                  <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">{category}</SelectLabel>
+                  {metrics.map((option) => (
+                    <SelectItem key={option} value={option} className="text-xs">
+                      {option}
+                      {isHarmonicMetric(option) && (
+                        <span className="ml-2 text-[9px] text-amber-400">harmonic</span>
+                      )}
+                      {isSumMetric(option) && (
+                        <span className="ml-2 text-[9px] text-sky-400">sum</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>

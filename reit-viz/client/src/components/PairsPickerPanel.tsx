@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -29,8 +29,10 @@ import {
   DERIVED_DEFS, DERIVED_GROUPS,
   type DerivedType, type Aligned,
 } from "@/lib/pairMath";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 
-const METRIC_OPTIONS = [
+// Curated metrics that should always be offered even if absent from the data.
+const METRIC_OPTIONS_BASE = [
   "close",
   "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2",
   "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
@@ -61,6 +63,14 @@ export default function PairsPickerPanel({
   const [loading, setLoading] = useState<DerivedType | null>(null);
   const [popA, setPopA] = useState(false);
   const [popB, setPopB] = useState(false);
+
+  // Union curated metrics + everything the loaded universe exposes + derived,
+  // grouped by category for the picker.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...METRIC_OPTIONS_BASE, ...DERIVED_METRICS]);
+    for (const t of tickerList) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, [tickerList]);
 
   // Cache fetched data so multiple derived clicks don't re-fetch
   const [cachedAligned, setCachedAligned] = useState<{
@@ -145,7 +155,7 @@ export default function PairsPickerPanel({
               open={popA}
               onOpenChange={setPopA}
             />
-            <MetricPicker value={metricA} onChange={(v) => { setMetricA(v); setCachedAligned(null); }} />
+            <MetricPicker value={metricA} onChange={(v) => { setMetricA(v); setCachedAligned(null); }} groups={metricGroups} />
           </div>
         </div>
 
@@ -160,7 +170,7 @@ export default function PairsPickerPanel({
               open={popB}
               onOpenChange={setPopB}
             />
-            <MetricPicker value={metricB} onChange={(v) => { setMetricB(v); setCachedAligned(null); }} />
+            <MetricPicker value={metricB} onChange={(v) => { setMetricB(v); setCachedAligned(null); }} groups={metricGroups} />
           </div>
         </div>
 
@@ -308,15 +318,25 @@ function TickerPicker({
   );
 }
 
-function MetricPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function MetricPicker({
+  value, onChange, groups,
+}: {
+  value: string; onChange: (v: string) => void;
+  groups: Array<{ category: string; metrics: string[] }>;
+}) {
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        {METRIC_OPTIONS.map((m) => (
-          <SelectItem key={m} value={m} className="text-xs">{m}</SelectItem>
+        {groups.map(({ category, metrics }) => (
+          <SelectGroup key={category}>
+            <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">{category}</SelectLabel>
+            {metrics.map((m) => (
+              <SelectItem key={m} value={m} className="text-xs">{m}</SelectItem>
+            ))}
+          </SelectGroup>
         ))}
       </SelectContent>
     </Select>

@@ -86,6 +86,7 @@ import {
 import { getTickers } from "@/lib/dataService";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 
 // Legacy LayoutMode replaced by GridLayout from GridLayoutPicker
 
@@ -761,33 +762,15 @@ export default function ChartArea({
     });
   }, [colorByMap]);
 
-  // Build the metric list for color-by picker (same as sidebar METRIC_CATEGORIES)
-  const colorByMetricOptions = useMemo(() => {
-    // Get metrics from the first ticker's data as a representative list
-    const uniqueMetrics = new Set<string>();
-    for (const s of plottedSeries) {
-      uniqueMetrics.add(s.metric);
-    }
-    // Also add common metrics
-    const common = [
-      "close", "P/FFO FY2", "P/FFO LTM", "P/E FY2", "P/E LTM",
-      "P/AFFO FY2", "P/AFFO LTM", "EV/EBITDA FY2", "EV/EBITDA LTM",
-      "Dividend Yield", "FFO Yield FY2", "FFO Yield LTM", "AFFO Yield FY2",
-      "FFO FY1", "FFO FY2", "AFFO FY1", "AFFO FY2", "EPS FY1", "EPS FY2",
-      "Implied Cap Rate", "Short Interest%", "Enterprise Value",
-      "FY1 FFO Growth", "FY2 FFO Growth", "FY1 EPS Growth", "FY2 EPS Growth",
-      "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
-      "% off 52wk High", "% off 52wk Low",
-      "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
-      "FFO LTM", "AFFO LTM", "EPS LTM", "EBITDA LTM", "Sales LTM",
-      "P/S LTM", "P/S FY2", "Dividend", "52wk High", "52wk Low",
-      "Buy Ratings", "Hold Ratings", "Sell Ratings", "Bull%", "Bear%",
-      "EBITDA FY1", "EBITDA FY2", "Sales FY1", "Sales FY2",
-      "EPS FY0",
-    ];
-    for (const m of common) uniqueMetrics.add(m);
-    return [...uniqueMetrics].sort();
-  }, [plottedSeries]);
+  // Build the metric list for the color-by picker: union of currently-plotted
+  // metrics, every metric the loaded universe exposes, and the client-derived
+  // ones — grouped by the shared categorizer so new metrics appear automatically.
+  const colorByMetricGroups = useMemo(() => {
+    const uniqueMetrics = new Set<string>(DERIVED_METRICS);
+    for (const s of plottedSeries) uniqueMetrics.add(s.metric);
+    for (const t of tickerList) for (const m of t.metrics || []) uniqueMetrics.add(m);
+    return groupMetricsByCategory([...uniqueMetrics]);
+  }, [plottedSeries, tickerList]);
 
   // Reset pane offset when panes change or visibility changes
   useEffect(() => {
@@ -2007,8 +1990,8 @@ export default function ChartArea({
                       <CommandInput placeholder="Search metric..." className="h-8" />
                       <CommandList className="max-h-[200px]">
                         <CommandEmpty>No metric found.</CommandEmpty>
-                        <CommandGroup>
-                          {colorByMap[pane.id] && (
+                        {colorByMap[pane.id] && (
+                          <CommandGroup>
                             <CommandItem
                               onSelect={() => {
                                 setColorByMap(prev => {
@@ -2023,20 +2006,24 @@ export default function ChartArea({
                               <X className="w-3 h-3 mr-1.5" />
                               Clear color-by
                             </CommandItem>
-                          )}
-                          {colorByMetricOptions.map(m => (
-                            <CommandItem
-                              key={m}
-                              onSelect={() => {
-                                setColorByMap(prev => ({ ...prev, [pane.id]: m }));
-                                setColorByPopoverOpen(null);
-                              }}
-                            >
-                              {colorByMap[pane.id] === m && <Check className="w-3 h-3 mr-1.5" />}
-                              <span className="text-xs">{m}</span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
+                          </CommandGroup>
+                        )}
+                        {colorByMetricGroups.map(({ category, metrics }) => (
+                          <CommandGroup key={category} heading={category}>
+                            {metrics.map(m => (
+                              <CommandItem
+                                key={m}
+                                onSelect={() => {
+                                  setColorByMap(prev => ({ ...prev, [pane.id]: m }));
+                                  setColorByPopoverOpen(null);
+                                }}
+                              >
+                                {colorByMap[pane.id] === m && <Check className="w-3 h-3 mr-1.5" />}
+                                <span className="text-xs">{m}</span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        ))}
                       </CommandList>
                     </Command>
                   </PopoverContent>

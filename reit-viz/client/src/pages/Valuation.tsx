@@ -9,7 +9,10 @@ import {
   deserializeClassFilters,
   getCustomFundamentalMetrics,
   getMetricTrailingAllTickers,
+  getTickers,
+  getTickersCacheSync,
 } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { usePageState } from "@/lib/pageState";
 import { useQuery } from "@tanstack/react-query";
 import { applyClassFilters } from "@/lib/classificationFilters";
@@ -26,7 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Download, ChevronDown, ChevronRight, ArrowUpDown, ExternalLink } from "lucide-react";
 
-const METRIC_GROUPS: Record<string, string[]> = {
+const METRIC_GROUPS_BASE: Record<string, string[]> = {
   Valuation: [
     "P/FFO FY2", "P/FFO LTM", "P/AFFO FY2", "P/AFFO LTM", "P/E FY2", "P/E LTM",
     "P/S FY2", "P/S LTM", "EV/EBITDA FY2", "EV/EBITDA LTM", "Implied Cap Rate",
@@ -40,7 +43,6 @@ const METRIC_GROUPS: Record<string, string[]> = {
   ],
 };
 
-Object.values(METRIC_GROUPS).flat();
 
 const LOOKBACK_OPTIONS = [
   { label: "1 Year", value: 252 },
@@ -252,6 +254,24 @@ export default function Valuation() {
   }, []);
 
   usePageState("valuation", getState, restoreState);
+
+  // Built-in metrics (curated + universe + derived) grouped by category.
+  // Uploaded fundamental columns remain a separate group in the picker.
+  const [dataMetrics, setDataMetrics] = useState<string[]>(() => {
+    const c = getTickersCacheSync();
+    return c ? [...new Set(c.flatMap((t) => t.metrics || []))] : [];
+  });
+  useEffect(() => {
+    let cancelled = false;
+    getTickers()
+      .then((ts) => { if (!cancelled) setDataMetrics([...new Set(ts.flatMap((t) => t.metrics || []))]); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const metricGroups = useMemo(
+    () => groupMetricsByCategory([...new Set([...Object.values(METRIC_GROUPS_BASE).flat(), ...DERIVED_METRICS, ...dataMetrics])]),
+    [dataMetrics],
+  );
 
   const { data: rawData = [], isLoading } = useQuery<any[]>({
     queryKey: ["valuation-trailing", metric, lookback],
@@ -499,10 +519,10 @@ export default function Valuation() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="max-h-[420px]">
-            {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
-              <div key={group}>
+            {metricGroups.map(({ category, metrics }) => (
+              <div key={category}>
                 <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {group}
+                  {category}
                 </div>
                 {metrics.map((m) => (
                   <SelectItem key={m} value={m}>

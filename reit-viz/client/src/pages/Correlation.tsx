@@ -3,6 +3,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
 import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlationEngine";
 import { useUniverse } from "@/lib/universeContext";
@@ -141,7 +142,7 @@ const CHART_OPTIONS = {
   handleScale: true,
 };
 
-const STOCK_METRICS = [
+const STOCK_METRICS_BASE = [
   "close", "open", "high", "low",
   "EPS FY1", "EPS FY2", "EPS LTM",
   "FFO FY1", "FFO FY2", "FFO LTM",
@@ -166,6 +167,7 @@ const STOCK_METRICS = [
   "% off 52wk High", "% off 52wk Low",
   "Bull%", "Bear%",
 ];
+const STOCK_METRICS_SET = new Set(STOCK_METRICS_BASE);
 
 function formatSpec(spec: string): string {
   if (spec.startsWith("MACRO:")) return spec.replace("MACRO:", "");
@@ -1303,11 +1305,18 @@ function SeriesPicker({
     return map;
   }, [macroCatalog]);
 
+  // Union curated metrics + the loaded universe's metrics + derived, grouped.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...STOCK_METRICS_BASE, ...DERIVED_METRICS]);
+    for (const t of tickers) for (const m of ((t as any).metrics || [])) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, [tickers]);
+
   const handleApply = useCallback(() => {
     if (sourceType === "macro") {
       if (metric) onChange(`MACRO:${metric}`);
     } else {
-      const resolvedMetric = (STOCK_METRICS.includes(metric) || getCustomFundamentalMetrics().includes(metric)) ? metric : "close";
+      const resolvedMetric = (STOCK_METRICS_SET.has(metric) || tickers.some(t => ((t as any).metrics || []).includes(metric)) || getCustomFundamentalMetrics().includes(metric)) ? metric : "close";
       if (ticker) onChange(`${ticker}:${resolvedMetric}`);
     }
     setOpen(false);
@@ -1388,8 +1397,11 @@ function SeriesPicker({
                   <SelectValue placeholder="Metric" />
                 </SelectTrigger>
                 <SelectContent className="max-h-[200px]">
-                  {STOCK_METRICS.map(m => (
-                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  {metricGroups.map(({ category, metrics }) => (
+                    <div key={category}>
+                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
+                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </div>
                   ))}
                   {(() => { const cm = getCustomFundamentalMetrics(); return cm.length > 0 ? (
                     <>
@@ -1528,6 +1540,13 @@ export default function Correlation() {
     return getTickers();
   } });
   const { data: macroCatalog = [] } = useQuery<MacroSeriesMeta[]>({ queryKey: ["macro-catalog"], queryFn: fetchMacroCatalog });
+
+  // Grouped metric list for the univariate-correlation picker.
+  const uniMetricGroups = useMemo(() => {
+    const s = new Set<string>([...STOCK_METRICS_BASE, ...DERIVED_METRICS]);
+    for (const t of tickers) for (const m of ((t as any).metrics || [])) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, [tickers]);
 
   // Build specs from universe tickers
   const universeSpecs = useMemo(() => {
@@ -1856,12 +1875,13 @@ export default function Correlation() {
                 <SelectTrigger className="h-6 text-[11px]" data-testid="uni-corr-metric">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="close">Close Price</SelectItem>
-                  <SelectItem value="Dividend Yield">Div Yield</SelectItem>
-                  <SelectItem value="P/FFO FY2">P/FFO FY2</SelectItem>
-                  <SelectItem value="P/AFFO FY2">P/AFFO FY2</SelectItem>
-                  <SelectItem value="FFO Yield FY2">FFO Yield FY2</SelectItem>
+                <SelectContent className="max-h-[260px]">
+                  {uniMetricGroups.map(({ category, metrics }) => (
+                    <div key={category}>
+                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
+                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </div>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

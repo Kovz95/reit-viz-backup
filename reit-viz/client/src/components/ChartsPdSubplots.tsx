@@ -30,9 +30,13 @@ import {
   computePremiumDiffAbs,
 } from "@/lib/premiumDiscount";
 import { getCapWeightedBasketSeries } from "@/lib/basketAggregation";
+import { categorizeMetric } from "@/lib/metricCategories";
 
 // ── Constants (jqe / Mqe / MT / K2 / nR / colors / thresholds) ───────────────
-const VAL_METRICS = [
+// Curated base entries — kept verbatim (incl. computed-series ids like
+// "EBITDA Fwd Growth%" that aren't raw data metrics). The component unions these
+// with any Valuation/Growth metrics present in the loaded data (see below).
+const VAL_METRICS_BASE = [
   { id: "P/FFO FY2", label: "P/FFO FY2" },
   { id: "P/FFO LTM", label: "P/FFO LTM" },
   { id: "P/AFFO FY2", label: "P/AFFO FY2" },
@@ -47,7 +51,7 @@ const VAL_METRICS = [
   { id: "AFFO Yield FY2", label: "AFFO Yield FY2" },
 ];
 
-const GROWTH_METRICS = [
+const GROWTH_METRICS_BASE = [
   { id: "FY1 EPS Growth", label: "FY1 EPS Growth" },
   { id: "FY2 EPS Growth", label: "FY2 EPS Growth" },
   { id: "FY1 FFO Growth", label: "FY1 FFO Growth" },
@@ -57,6 +61,21 @@ const GROWTH_METRICS = [
   { id: "EBITDA FY2 Growth%", label: "EBITDA FY2 Growth (FY2/FY1)" },
   { id: "Sales LTM YoY%", label: "Sales LTM YoY %" },
 ];
+
+// Union the curated base with data metrics whose category matches (Valuation /
+// Yields for "Val", Growth for "Growth"), so new workbook metrics show up.
+function unionMetricOptions(
+  base: { id: string; label: string }[],
+  dataMetrics: string[],
+  categories: string[],
+): { id: string; label: string }[] {
+  const seen = new Set(base.map((b) => b.id));
+  const extra = dataMetrics
+    .filter((m) => !seen.has(m) && categories.includes(categorizeMetric(m)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((m) => ({ id: m, label: m }));
+  return [...base, ...extra];
+}
 
 const DIMENSION_KEYS = CLASSIFICATION_DIMENSIONS;
 const DIMENSION_LABELS: Record<string, string> = {
@@ -272,6 +291,24 @@ export default function ChartsPdSubplots({
   const basketAggregation = state.basketAggregation ?? "capWeighted";
 
   const patchState = useCallback((patch: Partial<PdSubplotsState>) => onStateChange(patch), [onStateChange]);
+
+  // Metrics present across the loaded universe, used to extend the curated lists.
+  const dataMetrics = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of allTickers) {
+      const ms = (t as any).metrics;
+      if (Array.isArray(ms)) for (const m of ms) s.add(m);
+    }
+    return [...s];
+  }, [allTickers]);
+  const valMetricOptions = useMemo(
+    () => unionMetricOptions(VAL_METRICS_BASE, dataMetrics, ["Valuation", "Yields"]),
+    [dataMetrics],
+  );
+  const growthMetricOptions = useMemo(
+    () => unionMetricOptions(GROWTH_METRICS_BASE, dataMetrics, ["Growth"]),
+    [dataMetrics],
+  );
 
   // Basket-metric fetcher honoring the aggregation toggle (cap-weighted vs median).
   const fetchBasketMetric = useCallback(
@@ -869,7 +906,7 @@ export default function ChartsPdSubplots({
             onChange={(e) => patchState({ valMetric: e.target.value })}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5 text-foreground"
           >
-            {VAL_METRICS.map((m) => (
+            {valMetricOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>
@@ -883,7 +920,7 @@ export default function ChartsPdSubplots({
             onChange={(e) => patchState({ growthMetric: e.target.value })}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5 text-foreground"
           >
-            {GROWTH_METRICS.map((m) => (
+            {growthMetricOptions.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>

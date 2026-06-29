@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getTickers, getMetricSeries, isPercentMetric, getCustomFundamentalMetrics, getTradingDates } from "@/lib/dataService";
+import { getTickers, getMetricSeries, isPercentMetric, getCustomFundamentalMetrics, getTradingDates, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import type { TickerMeta } from "@/lib/dataService";
 import {
   computeSMA,
@@ -746,6 +747,12 @@ function MetricSelect({
   width?: number;
 }) {
   const customMetrics = getCustomFundamentalMetrics();
+  // Union curated metrics + the loaded universe's metrics + derived, grouped.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...Object.values(METRIC_OPTIONS).flat(), ...DERIVED_METRICS]);
+    for (const t of getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, []);
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger
@@ -756,10 +763,10 @@ function MetricSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="text-xs max-h-72">
-        {Object.entries(METRIC_OPTIONS).map(([group, metrics]) => (
-          <div key={group}>
+        {metricGroups.map(({ category, metrics }) => (
+          <div key={category}>
             <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-              {group}
+              {category}
             </div>
             {metrics.map((m) => (
               <SelectItem key={m} value={m} className="text-xs py-1 pl-4">

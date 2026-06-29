@@ -7,8 +7,10 @@ import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
 import { Loader2 } from "lucide-react";
 import { useUniverseDefaults } from "@/lib/universeDefaults";
 import { P as PlayIcon } from "@/lib/play";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 
-const ALL_METRICS = [
+// Curated metrics always offered; unioned at runtime with the loaded universe.
+const ALL_METRICS_BASE = [
   "close", "open", "high", "low",
   "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
   "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
@@ -420,6 +422,11 @@ export default function Distributions() {
   const [sortKey, setSortKey] = useState("ticker");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [allTickers, setAllTickers] = useState<any[]>([]);
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...ALL_METRICS_BASE, ...DERIVED_METRICS]);
+    for (const t of allTickers) for (const m of (t.metrics || [])) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, [allTickers]);
   const { baskets } = useBaskets();
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, current: "" });
@@ -543,7 +550,11 @@ export default function Distributions() {
               className="bg-background border border-border/40 rounded px-2 py-0.5 font-mono text-foreground"
               data-testid="dist-metric"
             >
-              {ALL_METRICS.map(m => <option key={m} value={m}>{m}</option>)}
+              {metricGroups.map(({ category, metrics }) => (
+                <optgroup key={category} label={category}>
+                  {metrics.map(m => <option key={m} value={m}>{m}</option>)}
+                </optgroup>
+              ))}
             </select>
           </label>
           <div className="flex items-center gap-1 border-l border-border/30 pl-2 ml-1">

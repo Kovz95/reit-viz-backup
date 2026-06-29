@@ -12,8 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
 } from "@/components/ui/select";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { SlidersHorizontal, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Download, Loader2, ExternalLink } from "lucide-react";
@@ -51,7 +54,9 @@ interface ValueFilter {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const METRIC_OPTIONS = [
+// Curated base (with friendly labels); unioned at runtime with the loaded
+// universe's metrics. METRIC_LABELS resolves a value to its display label.
+const METRIC_OPTIONS_BASE = [
   { value: "close", label: "Stock Price" },
   { value: "P/FFO FY2", label: "P/FFO FY2" },
   { value: "P/AFFO FY2", label: "P/AFFO FY2" },
@@ -65,6 +70,9 @@ const METRIC_OPTIONS = [
   { value: "AFFO FY2", label: "AFFO FY2" },
   { value: "Enterprise Value", label: "Enterprise Value" },
 ];
+const METRIC_LABELS: Record<string, string> = Object.fromEntries(
+  METRIC_OPTIONS_BASE.map((o) => [o.value, o.label]),
+);
 
 const LOOKBACK_OPTIONS = [
   { value: "60", label: "60d" },
@@ -503,6 +511,14 @@ export default function PairRatios() {
     totalCount,
   } = useAppContext();
 
+  // Union curated metrics + the loaded universe's metrics + derived, grouped.
+  const metricGroups = useMemo(() => {
+    const s = new Set<string>([...METRIC_OPTIONS_BASE.map((o) => o.value), ...DERIVED_METRICS]);
+    for (const t of (allTickers as any[]) || []) for (const m of (t.metrics || [])) s.add(m);
+    return groupMetricsByCategory([...s]);
+  }, [allTickers]);
+  const metricLabel = useCallback((v: string) => METRIC_LABELS[v] ?? v, []);
+
   const getState = useCallback(
     () => ({
       metric,
@@ -806,7 +822,7 @@ export default function PairRatios() {
               {selectedPair.tickerA} / {selectedPair.tickerB}
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Metric: {METRIC_OPTIONS.find((o) => o.value === metric)?.label}
+              Metric: {metricLabel(metric)}
             </div>
             <Button
               variant="outline"
@@ -854,7 +870,7 @@ export default function PairRatios() {
             <PairRatioChart
               ratioSeries={detailChartData.fullRatio}
               zScoreSeries={detailChartData.fullZ}
-              ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${METRIC_OPTIONS.find((o) => o.value === metric)?.label} (${detailChartData.fullRatio.length} pts)`}
+              ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${metricLabel(metric)} (${detailChartData.fullRatio.length} pts)`}
               zScoreTitle={`Z-Score (±2σ bands — mean/σ from ${LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label} window)`}
             />
           ) : (
@@ -889,8 +905,13 @@ export default function PairRatios() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {METRIC_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                {metricGroups.map(({ category, metrics }) => (
+                  <SelectGroup key={category}>
+                    <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">{category}</SelectLabel>
+                    {metrics.map((m) => (
+                      <SelectItem key={m} value={m}>{metricLabel(m)}</SelectItem>
+                    ))}
+                  </SelectGroup>
                 ))}
               </SelectContent>
             </Select>

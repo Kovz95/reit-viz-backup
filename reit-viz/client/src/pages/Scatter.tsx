@@ -31,6 +31,8 @@ import {
 } from "lucide-react";
 import { navigateToTicker } from "@/lib/navigateToPairs";
 import { isPercentMetric } from "@/lib/metricHelpers";
+import { getTickers, getTickersCacheSync } from "@/lib/dataService";
+import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { filterScatterPoints } from "@/lib/filterHelpers";
 import { defaultClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/filterHelpers";
 import { ClassificationFiltersWithSource } from "@/lib/filterHelpers";
@@ -82,7 +84,7 @@ interface RegressionResult {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const METRIC_GROUPS: Record<string, string[]> = {
+const METRIC_GROUPS_BASE: Record<string, string[]> = {
   Valuation: ["P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
     "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2"],
   Yields: ["FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2", "Dividend Yield"],
@@ -193,6 +195,23 @@ export default function Scatter() {
   const [metricX, setMetricX] = useState("P/FFO FY2");
   const [metricY, setMetricY] = useState("Dividend Yield");
   const [metricZ, setMetricZ] = useState("none");
+  const [dataMetrics, setDataMetrics] = useState<string[]>(() => {
+    const c = getTickersCacheSync();
+    return c ? [...new Set(c.flatMap((t) => t.metrics || []))] : [];
+  });
+  useEffect(() => {
+    let cancelled = false;
+    getTickers()
+      .then((ts) => { if (!cancelled) setDataMetrics([...new Set(ts.flatMap((t) => t.metrics || []))]); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  // Built-in metrics (curated + universe + derived), grouped by category.
+  // Uploaded fundamental columns are kept as a separate group in the picker.
+  const metricGroups = useMemo(
+    () => groupMetricsByCategory([...new Set([...Object.values(METRIC_GROUPS_BASE).flat(), ...DERIVED_METRICS, ...dataMetrics])]),
+    [dataMetrics],
+  );
   const [searchText, setSearchText] = useState("");
   const [hoveredTicker, setHoveredTicker] = useState<string | null>(null);
   const [classFilters, setClassFilters] = useState(defaultClassFilters);
@@ -961,9 +980,9 @@ export default function Scatter() {
         </DropdownMenu>
         <div className="h-5 w-px bg-border" />
         <span className="text-xs font-semibold text-muted-foreground">X</span>
-        <MetricPicker value={metricX} onChange={setMetricX} testId="scatter-x" uploadedColumns={uploadedColumns} />
+        <MetricPicker value={metricX} onChange={setMetricX} testId="scatter-x" uploadedColumns={uploadedColumns} groups={metricGroups} />
         <span className="text-xs font-semibold text-muted-foreground">Y</span>
-        <MetricPicker value={metricY} onChange={setMetricY} testId="scatter-y" uploadedColumns={uploadedColumns} />
+        <MetricPicker value={metricY} onChange={setMetricY} testId="scatter-y" uploadedColumns={uploadedColumns} groups={metricGroups} />
         <span className="text-xs font-semibold text-muted-foreground">Size</span>
         <Select value={metricZ} onValueChange={setMetricZ}>
           <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid="scatter-z">
@@ -971,9 +990,9 @@ export default function Scatter() {
           </SelectTrigger>
           <SelectContent className="max-h-[420px]">
             <SelectItem value="none">None (uniform)</SelectItem>
-            {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
-              <div key={group}>
-                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group}</div>
+            {metricGroups.map(({ category, metrics }) => (
+              <div key={category}>
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
                 {metrics.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
               </div>
             ))}
@@ -1011,7 +1030,7 @@ export default function Scatter() {
             </SelectContent>
           </Select>
         ) : (
-          <MetricPicker value={colorMetric} onChange={setColorMetric} testId="scatter-color-metric" uploadedColumns={uploadedColumns} />
+          <MetricPicker value={colorMetric} onChange={setColorMetric} testId="scatter-color-metric" uploadedColumns={uploadedColumns} groups={metricGroups} />
         )}
         <div className="h-5 w-px bg-border mx-0.5" />
         <span className="text-xs font-semibold text-muted-foreground">Date</span>
@@ -1248,18 +1267,19 @@ interface MetricPickerProps {
   onChange: (v: string) => void;
   testId?: string;
   uploadedColumns: string[];
+  groups: Array<{ category: string; metrics: string[] }>;
 }
 
-function MetricPicker({ value, onChange, testId, uploadedColumns }: MetricPickerProps) {
+function MetricPicker({ value, onChange, testId, uploadedColumns, groups }: MetricPickerProps) {
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid={testId}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-[420px]">
-        {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
-          <div key={group}>
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group}</div>
+        {groups.map(({ category, metrics }) => (
+          <div key={category}>
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
             {metrics.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
           </div>
         ))}
