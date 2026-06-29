@@ -898,7 +898,7 @@ export default function ChartArea({
               <ChevronsUpDown className="w-3 h-3 text-muted-foreground/50 flex-shrink-0" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[280px] p-0" align="start">
+          <PopoverContent className="w-auto min-w-[280px] max-w-[520px] p-0" align="start">
             <Command>
               <CommandInput placeholder="Search ticker or name..." className="h-8 text-xs" />
               <CommandList className="max-h-[300px]">
@@ -920,7 +920,7 @@ export default function ChartArea({
                         }`}
                       />
                       <span className="font-mono font-semibold mr-2">{t.ticker}</span>
-                      <span className="text-muted-foreground truncate">{t.name}</span>
+                      <span className="text-muted-foreground whitespace-nowrap">{t.name}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -957,7 +957,7 @@ export default function ChartArea({
               <span className="truncate">{activeView}</span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72 max-h-[420px] overflow-y-auto">
+          <DropdownMenuContent align="start" className="w-auto min-w-[18rem] max-w-[34rem] max-h-[420px] overflow-y-auto">
             {viewGroups && viewGroups.length > 0 ? (
               viewGroups.map((group, gi) => (
                 <div key={`group-${group.label}`}>
@@ -972,7 +972,7 @@ export default function ChartArea({
                       data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                     >
                       {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                      <span className="truncate" title={v}>{v}</span>
+                      <span className="whitespace-nowrap" title={v}>{v}</span>
                     </DropdownMenuItem>
                   ))}
                 </div>
@@ -989,7 +989,7 @@ export default function ChartArea({
                     data-testid={`view-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                   >
                     {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                    <span className="truncate">{v}</span>
+                    <span className="whitespace-nowrap">{v}</span>
                   </DropdownMenuItem>
                 ))}
                 {fundamentalViews && fundamentalViews.length > 0 && (
@@ -1004,7 +1004,7 @@ export default function ChartArea({
                         data-testid={`view-fund-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                       >
                         {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                        <span className="truncate">{v}</span>
+                        <span className="whitespace-nowrap">{v}</span>
                       </DropdownMenuItem>
                     ))}
                   </>
@@ -1021,7 +1021,7 @@ export default function ChartArea({
                         data-testid={`view-intv-${v.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                       >
                         {v === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                        <span className="truncate">{v}</span>
+                        <span className="whitespace-nowrap">{v}</span>
                       </DropdownMenuItem>
                     ))}
                   </>
@@ -1039,9 +1039,9 @@ export default function ChartArea({
                     onClick={() => onChangeView(cv.label)}
                     data-testid={`custom-view-${cv.id}`}
                   >
-                    <span className="flex items-center gap-1 truncate">
+                    <span className="flex items-center gap-1">
                       {cv.label === activeView && <Check className="w-3 h-3 flex-shrink-0" />}
-                      <span className="truncate">{cv.label}</span>
+                      <span className="whitespace-nowrap">{cv.label}</span>
                     </span>
                     <button
                       className="opacity-0 group-hover/item:opacity-100 p-0.5 rounded hover:bg-destructive/20 hover:text-destructive transition-opacity flex-shrink-0"
@@ -1069,7 +1069,7 @@ export default function ChartArea({
                     data-testid={`pairs-preset-${p.label.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                   >
                     {p.label === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                    <span className="truncate">{p.label}</span>
+                    <span className="whitespace-nowrap">{p.label}</span>
                   </DropdownMenuItem>
                 ))}
               </>
@@ -1086,7 +1086,7 @@ export default function ChartArea({
                     data-testid={`relval-preset-${p.label.replace(/[\s|/]+/g, "-").toLowerCase()}`}
                   >
                     {p.label === activeView && <Check className="w-3 h-3 mr-1 flex-shrink-0" />}
-                    <span className="truncate" title={p.label}>{p.label}</span>
+                    <span className="whitespace-nowrap" title={p.label}>{p.label}</span>
                   </DropdownMenuItem>
                 ))}
               </>
@@ -1161,7 +1161,7 @@ export default function ChartArea({
                   <ChevronsUpDown className="w-3 h-3 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-[320px]">
+              <DropdownMenuContent align="start" className="w-auto min-w-[320px] max-w-[34rem]">
                 {activeCustomChartId && (
                   <div className="px-2 py-1.5 text-[10px] text-muted-foreground border-b border-border/40 mb-1 space-y-1">
                     <div>
@@ -1249,7 +1249,7 @@ export default function ChartArea({
                       >
                         <span className="flex items-center gap-2 flex-1 min-w-0">
                           {activeCustomChartId === c.id && <Check className="w-3 h-3 shrink-0" />}
-                          <span className="truncate" title={c.name}>{c.name}</span>
+                          <span className="whitespace-nowrap" title={c.name}>{c.name}</span>
                         </span>
                         <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
                           <button
@@ -1988,7 +1988,7 @@ export default function ChartArea({
                       <Palette className="w-3 h-3" />
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-52 p-0" align="end">
+                  <PopoverContent className="w-auto min-w-[13rem] max-w-[28rem] p-0" align="end">
                     <Command>
                       <CommandInput placeholder="Search metric..." className="h-8" />
                       <CommandList className="max-h-[200px]">
@@ -2022,7 +2022,7 @@ export default function ChartArea({
                                 }}
                               >
                                 {colorByMap[pane.id] === m && <Check className="w-3 h-3 mr-1.5" />}
-                                <span className="text-xs">{m}</span>
+                                <span className="text-xs whitespace-nowrap">{m}</span>
                               </CommandItem>
                             ))}
                           </CommandGroup>

@@ -992,7 +992,7 @@ export default function Sidebar({
                     <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-[260px] p-0" align="start">
+                <PopoverContent className="w-auto min-w-[260px] max-w-[480px] p-0" align="start">
                   <Command>
                     <CommandInput placeholder="Search ticker..." className="h-8 text-xs" />
                     <CommandList className="max-h-[250px]">
@@ -1010,7 +1010,7 @@ export default function Sidebar({
                           >
                             <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${seriesTicker === t.ticker ? "opacity-100" : "opacity-0"}`} />
                             <span className="font-mono font-semibold mr-2">{t.ticker}</span>
-                            <span className="text-muted-foreground truncate">{t.name}</span>
+                            <span className="text-muted-foreground whitespace-nowrap">{t.name}</span>
                           </CommandItem>
                         ))}
                       </CommandGroup>
@@ -1112,6 +1112,7 @@ export default function Sidebar({
                                 addMetricForTicker(seriesTicker, m);
                               }}
                               data-testid={`metric-${m}`}
+                              title={m}
                             >
                               {plottedCount > 0 ? (
                                 <span
