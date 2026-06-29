@@ -545,10 +545,13 @@ export default function ChartArea({
   const paneRefs = useRef<Map<number, ChartPaneHandle>>(new Map());
 
   /**
-   * After any pane loads/changes data, schedule a coordinated time-range sync.
-   * This reads the visible TIME range (not logical range) from the first chart
-   * that has data and applies it to all others. This prevents misalignment
-   * when panes have different data lengths (logical range indices would differ).
+   * After any pane loads/changes data, schedule a coordinated range sync.
+   * Reads the visible logical range from the first chart that has data and
+   * applies it to all others. This aligns the panes by date because every
+   * ChartPane carries an invisible spacer series spanning the full global date
+   * axis, so all panes share one identical time scale and logical indices map
+   * to the same dates across panes (otherwise differing data lengths would
+   * misalign them).
    */
   const scheduleCoordinatedSync = useCallback(() => {
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);

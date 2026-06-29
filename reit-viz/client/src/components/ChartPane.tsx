@@ -11,6 +11,7 @@ import {
 } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, Time, SeriesMarker } from "lightweight-charts";
 import type { PlottedSeries, ChartConfig } from "@/pages/Dashboard";
+import { getDates } from "@/lib/dataService";
 import { computeMaByType, type MaType } from "@/lib/maEngine";
 import {
   computeSMA,
@@ -644,6 +645,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
   const { colors: IC } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
+  // Invisible whitespace series spanning the full global date axis. It forces
+  // every pane's time scale to be identical so that stacked panes (e.g. price
+  // over premium-to-NTA) line up by date even when their real series cover
+  // different/sparser date ranges. Without it, lightweight-charts assigns
+  // per-chart logical indices and the logical-range sync misaligns the panes.
+  const spacerSeriesRef = useRef<ISeriesApi<any> | null>(null);
+  const [fullDates, setFullDates] = useState<string[]>([]);
   // Stores latest values from sub-indicator charts (RSI, MACD, etc.) for crosshair readout
   const subIndicatorValuesRef = useRef<Record<string, number>>({});
   const drawingsRef = useRef<Drawing[]>([]);
@@ -708,6 +716,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       chartRef.current = null;
       seriesMapRef.current.clear();
       indicatorSeriesRef.current = [];
+      spacerSeriesRef.current = null;
       setChartReady(false);
     }
 
@@ -809,9 +818,48 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         setChartReady(false);
         seriesMapRef.current.clear();
         indicatorSeriesRef.current = [];
+        spacerSeriesRef.current = null;
       }
     };
   }, []);
+
+  // Load the global date axis once (cached in dataService) for the spacer series.
+  useEffect(() => {
+    let cancelled = false;
+    getDates()
+      .then((d) => { if (!cancelled) setFullDates(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Maintain the invisible spacer series so every pane shares one global time
+  // axis. Whitespace points ({ time } with no value) extend the time scale
+  // without drawing anything or affecting the price scale, giving all stacked
+  // panes identical logical indexing — the precondition for the logical-range
+  // sync in ChartArea to keep them aligned by date.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady || fullDates.length === 0) return;
+    if (!spacerSeriesRef.current) {
+      try {
+        spacerSeriesRef.current = chart.addSeries(LineSeries, {
+          visible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          // Never let the spacer influence the visible price scale.
+          autoscaleInfoProvider: () => null,
+        });
+      } catch {}
+    }
+    if (spacerSeriesRef.current) {
+      try {
+        spacerSeriesRef.current.setData(
+          fullDates.map((t) => ({ time: t as unknown as Time }))
+        );
+      } catch {}
+    }
+  }, [chartReady, fullDates]);
 
   // Store last known pointer position so we can re-extract values after scroll/zoom
   const lastPointerXRef = useRef<number | null>(null);
@@ -1756,7 +1804,32 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const dataFingerprint = paneSeries.map(s => `${s.id}:${s.data.length}:${s.visible}`).join("|") + `|ohlc:${ohlcData?.length ?? 0}|transform:${dataTransform}|win:${zScoreWindow}`;
     if (dataFingerprint !== prevDataFingerprintRef.current) {
       prevDataFingerprintRef.current = dataFingerprint;
-      try { chart.timeScale().fitContent(); } catch {}
+      // Fit to this pane's REAL data extent rather than chart.fitContent(), which
+      // would zoom out to the full spacer axis. This keeps a single pane framed on
+      // its own data; multi-pane alignment is handled by ChartArea's coordinated
+      // sync, which copies the reference pane's range onto the shared time axis.
+      try {
+        const realTimes: string[] = [];
+        for (const s of transformedPaneSeries) {
+          if (s.visible && s.data.length) {
+            realTimes.push(s.data[0].time, s.data[s.data.length - 1].time);
+          }
+        }
+        if (ohlcData?.length) {
+          realTimes.push(ohlcData[0].time, ohlcData[ohlcData.length - 1].time);
+        }
+        if (spacerSeriesRef.current && realTimes.length) {
+          realTimes.sort();
+          chart.timeScale().setVisibleRange({
+            from: realTimes[0] as Time,
+            to: realTimes[realTimes.length - 1] as Time,
+          });
+        } else {
+          chart.timeScale().fitContent();
+        }
+      } catch {
+        try { chart.timeScale().fitContent(); } catch {}
+      }
     }
 
     // Notify parent about current series map for crosshair sync
