@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { registerChatRoute } from "./chatRoute";
+import { realignTickerFiles } from "./realign";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
 import { getAdvBatch } from "./adv";
@@ -3755,13 +3756,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
           job.status = "writing";
 
-          // Copy all ticker files from temp to data/tickers/ (merge = add all new)
+          // Copy all ticker files from temp to data/tickers/ (merge = add all new).
+          // These files are aligned to the incoming workbook's axis (result.dates).
           const tempTickerDir = path.join(tempDir, "tickers");
+          const workbookTickerSet = new Set<string>();
           for (const t of result.tickers) {
             const src = path.join(tempTickerDir, `${t.ticker}.json`);
             const dst = path.join(tickerDir, `${t.ticker}.json`);
             if (fs.existsSync(src)) {
               fs.copyFileSync(src, dst);
+              workbookTickerSet.add(t.ticker);
             }
           }
 
@@ -3788,6 +3792,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
           const dateSet = new Set([...existingDates, ...result.dates]);
           const mergedDates = Array.from(dateSet).sort();
+
+          // Realign every per-ticker RLE array to the merged axis. A date union can
+          // insert dates mid-array; without this, position-indexed values for both
+          // the pre-existing tickers (aligned to existingDates) and the freshly
+          // copied ones (aligned to result.dates) would shift out of alignment.
+          const realigned = realignTickerFiles(tickerDir, mergedDates, (ticker) => {
+            const from = workbookTickerSet.has(ticker) ? result.dates : existingDates;
+            return from.length ? from : null;
+          });
+          console.log(`[async-job ${jobId}] Realigned ${realigned} ticker files to merged axis (${mergedDates.length} dates)`);
 
           for (const [ticker, evts] of Object.entries(result.events) as [string, any][]) {
             if (!existingEvents[ticker]) existingEvents[ticker] = {};
@@ -4215,12 +4229,16 @@ export async function registerRoutes(server: Server, app: Express) {
       // parsed file rather than leave the chart permanently blank.
       const tickerDir = path.join(dataDir, "tickers");
       if (!fs.existsSync(tickerDir)) fs.mkdirSync(tickerDir, { recursive: true });
+      // Tickers whose on-disk file now comes from the incoming workbook (aligned
+      // to parsedDates). "keep" tickers retain their existing file (existingDates).
+      const workbookTickerSet = new Set<string>();
       for (const t of parsedTickers) {
         const dst = path.join(tickerDir, `${t.ticker}.json`);
         if (keepSet.has(t.ticker) && fs.existsSync(dst)) continue;
         const src = path.join(tempTickerDir, `${t.ticker}.json`);
         if (fs.existsSync(src)) {
           fs.copyFileSync(src, dst);
+          workbookTickerSet.add(t.ticker);
         }
       }
 
@@ -4250,6 +4268,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
       const dateSet = new Set([...existingDates, ...parsedDates]);
       const mergedDates = Array.from(dateSet).sort();
+
+      // Realign every per-ticker RLE array to the merged axis. A date union can
+      // insert dates mid-array; without this, position-indexed values for both
+      // the untouched/"keep" tickers (aligned to existingDates) and the freshly
+      // written ones (aligned to parsedDates) would shift out of alignment.
+      const realignedCount = realignTickerFiles(tickerDir, mergedDates, (ticker) => {
+        const from = workbookTickerSet.has(ticker) ? parsedDates : existingDates;
+        return from.length ? from : null;
+      });
+      console.log(`[server-merge-apply] Realigned ${realignedCount} ticker files to merged axis (${mergedDates.length} dates)`);
 
       for (const [ticker, evts] of Object.entries(parsedEvents) as [string, any][]) {
         if (!existingEvents[ticker]) existingEvents[ticker] = {};
