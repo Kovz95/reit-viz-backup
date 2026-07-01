@@ -42,6 +42,7 @@ import {
   Eye,
   Sparkles,
   StickyNote,
+  Search,
 } from "lucide-react";
 import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
@@ -254,6 +255,60 @@ export default function ChartArea({
   const [saveAsNewChartName, setSaveAsNewChartName] = useState("");
   const [renameChartId, setRenameChartId] = useState<number | null>(null);
   const [renameChartName, setRenameChartName] = useState("");
+  // My Charts: search + "current ticker only" filter, with charts grouped by ticker
+  const [chartSearch, setChartSearch] = useState("");
+  const [chartCurrentTickerOnly, setChartCurrentTickerOnly] = useState(false);
+
+  // Each saved chart embeds its ticker inside the state JSON blob (activeTicker).
+  // Derive it once so we can group/search saved charts by ticker on the client.
+  const chartTickerById = useMemo(() => {
+    const map = new Map<number, string | null>();
+    (savedCustomCharts || []).forEach((c) => {
+      let t: string | null = null;
+      try {
+        const s = typeof c.state === "string" ? JSON.parse(c.state) : (c.state as any);
+        t = s?.activeTicker || null;
+      } catch {}
+      map.set(c.id, t);
+    });
+    return map;
+  }, [savedCustomCharts]);
+
+  // Filter by search text (name or ticker) + optional "current ticker only",
+  // then group the results by ticker with the active ticker's group pinned first.
+  const groupedSavedCharts = useMemo(() => {
+    const q = chartSearch.trim().toLowerCase();
+    const at = (activeTicker || "").toUpperCase();
+    const filtered = (savedCustomCharts || []).filter((c) => {
+      const t = chartTickerById.get(c.id) || "";
+      if (chartCurrentTickerOnly && at && t.toUpperCase() !== at) return false;
+      if (q) {
+        const hay = `${c.name} ${t}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const groups = new Map<string, SavedCustomChart[]>();
+    filtered.forEach((c) => {
+      const key = chartTickerById.get(c.id) || "";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(c);
+    });
+    const keys = Array.from(groups.keys()).sort((a, b) => {
+      // Active ticker's group first, then alphabetical, "no ticker" last.
+      const aActive = !!a && a.toUpperCase() === at;
+      const bActive = !!b && b.toUpperCase() === at;
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      if ((a === "") !== (b === "")) return a === "" ? 1 : -1;
+      return a.localeCompare(b);
+    });
+    return keys.map((k) => ({ ticker: k, charts: groups.get(k)! }));
+  }, [savedCustomCharts, chartTickerById, chartSearch, chartCurrentTickerOnly, activeTicker]);
+
+  const totalFilteredCharts = useMemo(
+    () => groupedSavedCharts.reduce((n, g) => n + g.charts.length, 0),
+    [groupedSavedCharts],
+  );
 
   // Fetch ticker list for pairs picker
   useEffect(() => {
@@ -1233,51 +1288,114 @@ export default function ChartArea({
                 {savedCustomCharts && savedCustomCharts.length > 0 && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground">
-                      Saved Charts
+                    <DropdownMenuLabel className="text-[10px] font-medium text-muted-foreground flex items-center justify-between">
+                      <span>Saved Charts</span>
+                      <span className="font-normal text-muted-foreground/70">
+                        {totalFilteredCharts}
+                        {totalFilteredCharts !== savedCustomCharts.length && ` / ${savedCustomCharts.length}`}
+                      </span>
                     </DropdownMenuLabel>
-                    {savedCustomCharts.map((c) => (
-                      <DropdownMenuItem
-                        key={c.id}
-                        className={`flex items-center justify-between group ${activeCustomChartId === c.id ? "bg-accent" : ""}`}
-                        onClick={(e) => {
-                          if (!(e.target as HTMLElement).closest("[data-action]")) {
-                            onLoadCustomChart?.(c.id);
-                          }
-                        }}
-                        data-testid={`saved-chart-${c.id}`}
-                      >
-                        <span className="flex items-center gap-2 flex-1 min-w-0">
-                          {activeCustomChartId === c.id && <Check className="w-3 h-3 shrink-0" />}
-                          <span className="whitespace-nowrap" title={c.name}>{c.name}</span>
-                        </span>
-                        <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
+
+                    {/* Search + current-ticker filter (not menu items, so keys don't
+                        trigger the dropdown's built-in typeahead) */}
+                    <div className="px-2 pb-1.5 space-y-1.5" onKeyDown={(e) => e.stopPropagation()}>
+                      <div className="relative">
+                        <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                        <Input
+                          value={chartSearch}
+                          onChange={(e) => setChartSearch(e.target.value)}
+                          placeholder="Search by name or ticker…"
+                          className="h-7 text-[11px] pl-7 pr-6"
+                          data-testid="saved-charts-search"
+                        />
+                        {chartSearch && (
                           <button
-                            data-action="rename"
-                            className="p-0.5 rounded hover:bg-muted"
-                            title="Rename"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRenameChartId(c.id);
-                              setRenameChartName(c.name);
-                            }}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted text-muted-foreground"
+                            title="Clear search"
+                            onClick={() => setChartSearch("")}
                           >
-                            <Pencil className="w-3 h-3" />
+                            <X className="w-3 h-3" />
                           </button>
-                          <button
-                            data-action="delete"
-                            className="p-0.5 rounded hover:bg-destructive/20 text-destructive"
-                            title="Delete"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteCustomChart?.(c.id);
-                            }}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </span>
-                      </DropdownMenuItem>
-                    ))}
+                        )}
+                      </div>
+                      {activeTicker && (
+                        <label
+                          className="flex items-center gap-2 cursor-pointer select-none text-[10px] text-muted-foreground py-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-3 w-3 accent-primary cursor-pointer"
+                            checked={chartCurrentTickerOnly}
+                            onChange={(e) => setChartCurrentTickerOnly(e.target.checked)}
+                            data-testid="saved-charts-current-ticker-only"
+                          />
+                          <span>
+                            {activeTicker} only
+                            <span className="text-muted-foreground/70"> · charts saved on this ticker</span>
+                          </span>
+                        </label>
+                      )}
+                    </div>
+
+                    {totalFilteredCharts === 0 ? (
+                      <div className="px-2 py-2 text-[10px] text-muted-foreground italic">
+                        No charts match.
+                      </div>
+                    ) : (
+                      groupedSavedCharts.map((grp) => (
+                        <div key={grp.ticker || "__none__"}>
+                          <div className="px-2 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/80 flex items-center gap-1.5">
+                            <span className="truncate">{grp.ticker || "No ticker"}</span>
+                            {!!grp.ticker && activeTicker && grp.ticker.toUpperCase() === activeTicker.toUpperCase() && (
+                              <span className="text-[8px] font-normal normal-case text-primary/80">current</span>
+                            )}
+                          </div>
+                          {grp.charts.map((c) => (
+                            <DropdownMenuItem
+                              key={c.id}
+                              className={`flex items-center justify-between group ${activeCustomChartId === c.id ? "bg-accent" : ""}`}
+                              onClick={(e) => {
+                                if (!(e.target as HTMLElement).closest("[data-action]")) {
+                                  onLoadCustomChart?.(c.id);
+                                }
+                              }}
+                              data-testid={`saved-chart-${c.id}`}
+                            >
+                              <span className="flex items-center gap-2 flex-1 min-w-0">
+                                {activeCustomChartId === c.id && <Check className="w-3 h-3 shrink-0" />}
+                                <span className="whitespace-nowrap" title={c.name}>{c.name}</span>
+                              </span>
+                              <span className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0 ml-2">
+                                <button
+                                  data-action="rename"
+                                  className="p-0.5 rounded hover:bg-muted"
+                                  title="Rename"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenameChartId(c.id);
+                                    setRenameChartName(c.name);
+                                  }}
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                                <button
+                                  data-action="delete"
+                                  className="p-0.5 rounded hover:bg-destructive/20 text-destructive"
+                                  title="Delete"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDeleteCustomChart?.(c.id);
+                                  }}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </span>
+                            </DropdownMenuItem>
+                          ))}
+                        </div>
+                      ))
+                    )}
                   </>
                 )}
               </DropdownMenuContent>
