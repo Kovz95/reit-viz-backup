@@ -24,6 +24,13 @@ RUN npm run build
 
 ENV NODE_ENV=production
 ENV PORT=5000
+
+# Persist the SQLite DB outside the ephemeral container layer. Mount a volume at
+# /app/dbdata (e.g. -v reit-viz-db:/app/dbdata) so saved charts/workspaces
+# survive image rebuilds. The dir is created here so it also works unmounted.
+ENV DB_PATH=/app/dbdata/data.db
+RUN mkdir -p /app/dbdata
+
 EXPOSE 5000
 
 CMD ["node", "dist/index.cjs"]

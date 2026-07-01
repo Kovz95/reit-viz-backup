@@ -8,7 +8,10 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
 import { eq, desc, asc } from "drizzle-orm";
 
-const sqlite = new Database("data.db");
+// DB path is configurable so the file can live on a persistent volume in
+// containers (e.g. DB_PATH=/app/dbdata/data.db). Defaults to the repo-local
+// data.db for dev, keeping existing behavior unchanged.
+const sqlite = new Database(process.env.DB_PATH || "data.db");
 sqlite.pragma("journal_mode = WAL");
 
 export const db = drizzle(sqlite);
