@@ -74,6 +74,20 @@ for (const col of ["metric_weights", "metric_directions"]) {
   }
 }
 
+// Custom charts (persistent blank canvases). Without this the custom_charts
+// queries throw "no such table", which the try/catch in the CRUD methods
+// swallows — so writes silently no-op (create returns a fake Date.now() id)
+// and the list always comes back empty.
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS custom_charts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL,
+    state      TEXT    NOT NULL,
+    created_at TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL
+  );
+`);
+
 export interface IStorage {
   listWorkspaces(): Workspace[];
   getWorkspace(id: number): Workspace | undefined;
