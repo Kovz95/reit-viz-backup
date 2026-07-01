@@ -140,12 +140,19 @@ export function useGlobalAdvMap(): { advMap: Map<string, AdvInfo>; loading: bool
       .then((records) => {
         if (cancelled) return;
         const m = new Map<string, AdvInfo>();
+        // Pass 1: index by primary ticker (first record wins). Pass 2: fill in
+        // FactSet regional tickers (fdsTicker, e.g. "SGRO-GB") as a fallback, so
+        // workbooks that carry the -GB/-XX FactSet symbol still resolve — those
+        // names' primary `ticker` is an opaque SEDOL-like code. Plain-ticker
+        // matches keep priority.
         for (const r of records) {
           const k = String(r.ticker).toUpperCase();
-          // First record wins (records are de-duped enough for a liquidity lookup).
-          if (!m.has(k)) {
-            m.set(k, { price: r.price, adv: r.adv, dollarVolMM: r.dollarVolMM });
-          }
+          if (!m.has(k)) m.set(k, { price: r.price, adv: r.adv, dollarVolMM: r.dollarVolMM });
+        }
+        for (const r of records) {
+          if (!r.fdsTicker) continue;
+          const k = String(r.fdsTicker).toUpperCase();
+          if (!m.has(k)) m.set(k, { price: r.price, adv: r.adv, dollarVolMM: r.dollarVolMM });
         }
         setAdvMap(m);
         setLoading(false);
@@ -186,12 +193,19 @@ export function useGlobalGeoMap(): { geoMap: Map<string, GeoInfo>; loading: bool
       .then((records) => {
         if (cancelled) return;
         const m = new Map<string, GeoInfo>();
+        // Pass 1: index by primary ticker (first record wins). Pass 2: fill in
+        // FactSet regional tickers (fdsTicker, e.g. "SGRO-GB") as a fallback, so
+        // workbooks that carry the -GB/-XX FactSet symbol still resolve nation +
+        // exchange — those names' primary `ticker` is an opaque SEDOL-like code.
+        // Plain-ticker matches keep priority.
         for (const r of records) {
           const k = String(r.ticker).toUpperCase();
-          // First record wins (records are de-duped enough for a metadata lookup).
-          if (!m.has(k)) {
-            m.set(k, { nation: r.nation ?? null, exchange: r.exchange ?? null });
-          }
+          if (!m.has(k)) m.set(k, { nation: r.nation ?? null, exchange: r.exchange ?? null });
+        }
+        for (const r of records) {
+          if (!r.fdsTicker) continue;
+          const k = String(r.fdsTicker).toUpperCase();
+          if (!m.has(k)) m.set(k, { nation: r.nation ?? null, exchange: r.exchange ?? null });
         }
         setGeoMap(m);
         setLoading(false);
