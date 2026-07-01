@@ -35,6 +35,34 @@ const COLS = {
   __EMPTY_18: { key: "peFy2", num: true },
 };
 
+// Names that belong in the served universe but aren't in the FactSet export
+// (e.g. small/newer listings a workbook references). Appended after the xlsx
+// rows so a fresh FactSet re-export never drops them. Keyed for the geo/ADV
+// join by `fdsTicker` (see globalUniverse.ts). Financials left null — we only
+// carry the metadata needed for nation/exchange/classification, not fabricated
+// price/liquidity figures.
+const MANUAL_ADDITIONS = [
+  {
+    ticker: "LABS-GB",
+    name: "Life Science REIT plc",
+    fdsTicker: "LABS-GB",
+    exchange: "LONDON",
+    nation: "UNITED KINGDOM",
+    price: null,
+    marketCapMM: null,
+    salesMM: null,
+    adv: null,
+    dollarVolMM: null,
+    economy: "Finance",
+    sector: "Real Estate",
+    subsector: "Real Estate Investment Trusts (REITs)",
+    industryGroup: "Equity REITs",
+    industry: "Equity REITs",
+    subindustry: "Healthcare and Life Sciences Equity REITs",
+    peFy2: null,
+  },
+];
+
 function toNum(v) {
   if (v == null || v === "") return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -59,6 +87,20 @@ for (const row of rows) {
   records.push(rec);
 }
 
+// Append manual additions, skipping any FactSet already provides (match on
+// fdsTicker, else ticker) so a future export of the name wins over the stub.
+const present = new Set(
+  records.flatMap((r) => [r.fdsTicker, r.ticker].filter(Boolean).map((s) => String(s).toUpperCase())),
+);
+let added = 0;
+for (const rec of MANUAL_ADDITIONS) {
+  const key = String(rec.fdsTicker || rec.ticker).toUpperCase();
+  if (present.has(key)) continue;
+  records.push(rec);
+  present.add(key);
+  added++;
+}
+
 const out = {
   schemaVersion: 1,
   builtAt: new Date().toISOString(),
@@ -69,4 +111,4 @@ const out = {
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(out));
-console.log(`Wrote ${records.length} records -> ${path.relative(path.join(__dirname, ".."), OUT)}`);
+console.log(`Wrote ${records.length} records (${added} manual addition${added === 1 ? "" : "s"}) -> ${path.relative(path.join(__dirname, ".."), OUT)}`);
