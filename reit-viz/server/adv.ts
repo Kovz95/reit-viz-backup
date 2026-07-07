@@ -67,9 +67,49 @@ function isFresh(entry: AdvEntry | undefined, window: number): boolean {
   return age < ttl;
 }
 
+// ── FX: convert a listing currency to USD so $ ADV is comparable across markets ──
+// Non-US names are priced in their local currency (UK closes are in GBp = pence),
+// so close × volume is a *local-currency* turnover; without this it would be
+// mislabeled as USD (off ~80× for pence). Rates come from Yahoo's FX chart
+// (e.g. "GBPUSD=X"), cached in-memory. Returns null when a rate can't be
+// resolved, so we show nothing rather than a wrong (unconverted) number.
+const fxCache = new Map<string, { usd: number; at: number }>();
+
+async function majorToUsd(major: string): Promise<number | null> {
+  if (major === "USD") return 1;
+  const now = Date.now();
+  const cached = fxCache.get(major);
+  if (cached && now - cached.at < CACHE_TTL_MS) return cached.usd;
+  try {
+    const bars = await fetchYahooPrices(`${major}USD=X`);
+    const last = bars.closes[bars.closes.length - 1];
+    if (!Number.isFinite(last) || last <= 0) return null;
+    fxCache.set(major, { usd: last, at: now });
+    return last;
+  } catch {
+    return null;
+  }
+}
+
+/** USD value of one price unit quoted in `currency`. Handles pence minor units
+ *  (Yahoo writes UK pence as "GBp" / "GBX" = 1/100 GBP). */
+async function currencyToUsd(currency: string | undefined): Promise<number | null> {
+  const raw = (currency ?? "USD").trim();
+  if (!raw || raw.toUpperCase() === "USD") return 1;
+  const upper = raw.toUpperCase();
+  // Minor units carry a lowercase last letter (pence "GBp") — 1/100 of the major.
+  const isMinor = raw !== upper || upper === "GBX";
+  const major = upper === "GBX" ? "GBP" : upper;
+  const rate = await majorToUsd(major);
+  if (rate == null) return null;
+  return isMinor ? rate / 100 : rate;
+}
+
 /** Compute the trailing-window ADV for one ticker from its (cached) Yahoo bars. */
 async function computeOne(ticker: string, window: number, forceRefresh: boolean): Promise<AdvEntry> {
   const bars = await fetchYahooPrices(ticker, forceRefresh);
+  // USD-per-price-unit for this listing (1 for US; GBPUSD/100 for UK pence; …).
+  const usdFactor = await currencyToUsd(bars.currency);
   // Pair up close × volume for valid bars only, then take the last `window`.
   const valid: { close: number; vol: number; date: string }[] = [];
   for (let i = 0; i < bars.closes.length; i++) {
@@ -87,14 +127,16 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
       days: 0, asOf: null, window, computedAt: new Date().toISOString(),
     };
   }
-  let sumUsd = 0;
+  let sumLocal = 0;
   let sumSh = 0;
   for (const b of slice) {
-    sumUsd += b.close * b.vol;
+    sumLocal += b.close * b.vol; // turnover in the listing currency
     sumSh += b.vol;
   }
   return {
-    advUsdMM: sumUsd / days / 1e6,
+    // Convert local-currency turnover to USD. If the FX rate is unavailable for a
+    // non-USD name, leave $ ADV null (blank) rather than show an unconverted figure.
+    advUsdMM: usdFactor == null ? null : (sumLocal / days / 1e6) * usdFactor,
     advShares: sumSh / days / 1e6,
     lastClose: slice[slice.length - 1].close,
     days,

@@ -22,6 +22,9 @@ export interface YahooPriceData {
   adjCloses: number[];
   volumes: number[];
   fetchedAt: string; // ISO timestamp of the fetch
+  /** Listing currency from Yahoo (e.g. "USD", "GBP", "GBp" for pence). Needed to
+   *  convert price-based figures ($ ADV) to USD for non-US names. */
+  currency?: string;
 }
 
 const CACHE_DIR = path.join(process.cwd(), "data", "yahoo-cache");
@@ -52,6 +55,27 @@ function writeCache(data: YahooPriceData): void {
   }
 }
 
+// The app's internal symbols use FactSet regional suffixes for non-US listings
+// (e.g. "BLND-GB" for a UK/London name). Yahoo Finance uses its own exchange
+// suffixes (e.g. "BLND.L"), so an unmapped "-GB" symbol is unknown to Yahoo and
+// returns no data — which is why non-US names had no $ ADV / price history.
+// Translate to the Yahoo form for the request only; the cache key, the returned
+// `ticker`, and error messages stay the internal symbol so callers are
+// unaffected. Only GB/London exists in the current universe; add more
+// FactSet-region → Yahoo-suffix entries here as other listings are onboarded.
+const YAHOO_EXCHANGE_SUFFIX: Record<string, string> = {
+  GB: "L", // London Stock Exchange
+};
+
+export function toYahooSymbol(sym: string): string {
+  const m = sym.match(/^(.+)-([A-Z]{2})$/);
+  if (m) {
+    const yx = YAHOO_EXCHANGE_SUFFIX[m[2]];
+    if (yx) return `${m[1]}.${yx}`;
+  }
+  return sym;
+}
+
 /**
  * Fetch daily OHLCV + adjusted close history for a ticker from Yahoo Finance.
  * Results are cached on disk for CACHE_TTL_MS unless `forceRefresh` is set.
@@ -70,8 +94,11 @@ export async function fetchYahooPrices(
 
   const period1 = Math.floor(new Date(HISTORY_START).getTime() / 1000);
   const period2 = Math.floor(Date.now() / 1000);
+  // Request Yahoo with its own exchange-suffix form (e.g. BLND-GB → BLND.L);
+  // the cache and returned data stay keyed on the internal `sym`.
+  const yahooSym = toYahooSymbol(sym);
   const url =
-    `${CHART_BASE}/${encodeURIComponent(sym)}` +
+    `${CHART_BASE}/${encodeURIComponent(yahooSym)}` +
     `?period1=${period1}&period2=${period2}` +
     `&interval=1d&includePrePost=false&events=div%2Csplit&includeAdjustedClose=true`;
 
@@ -92,6 +119,7 @@ export async function fetchYahooPrices(
     throw new Error(json.chart.error?.description || `Yahoo error for ${sym}`);
   }
   const result = json?.chart?.result?.[0];
+  const currency: string | undefined = result?.meta?.currency ?? undefined;
   const timestamps: number[] = result?.timestamp ?? [];
   const quote = result?.indicators?.quote?.[0] ?? {};
   const adj = result?.indicators?.adjclose?.[0]?.adjclose ?? [];
@@ -130,6 +158,7 @@ export async function fetchYahooPrices(
     adjCloses,
     volumes,
     fetchedAt: new Date().toISOString(),
+    currency,
   };
   writeCache(data);
   return data;
