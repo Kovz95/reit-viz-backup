@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, useImperativeHandle, forwardRef } from "react";
+import { useRef, useEffect, useState, useCallback, useMemo, useImperativeHandle, forwardRef } from "react";
 import {
   createChart,
   ColorType,
@@ -40,6 +40,8 @@ import type { DataTransform } from "@/lib/transforms";
 import { Info, Maximize2, Minimize2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
+import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
+import { d as detectSRLevels, D as DEFAULT_SR_CFG } from "@/components/SupportResistance";
 import ExportMenu from "@/components/ExportMenu";
 
 // ── Gradient color helper for color-by-variable ──
@@ -116,6 +118,12 @@ export interface ActiveIndicators {
   cmf?: number;       // period
   /** DojiEmoji fractal trendlines. n = fractal period; anchorDate = "as-of" replay date (undefined = latest bar). */
   fractalLines?: { n: number; anchorDate?: string };
+  /** Auto-detected diagonal support/resistance trendlines (pivot-pair RANSAC). */
+  autoTrendlines?: boolean;
+  /** Auto-detected horizontal support/resistance levels. */
+  srLevels?: boolean;
+  /** Fibonacci retracement levels from the recent swing. */
+  fibLevels?: boolean;
   indicatorOverlays?: IndicatorOverlay[];
 }
 
@@ -826,6 +834,55 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const first = seriesMapRef.current.values().next();
     return first.done ? null : first.value;
   }, []);
+
+  // ── Auto-detection overlays (trendlines / S-R / Fibonacci) ──
+  // OHLC arrays for the detectors, rebuilt only when the pane's OHLC changes.
+  const detectorOhlc = useMemo(() => {
+    if (!Array.isArray(ohlcData) || ohlcData.length === 0) return null;
+    const bars = (ohlcData as any[]).filter((b) => b && typeof b.time === "string");
+    if (bars.length === 0) return null;
+    return {
+      dates: bars.map((b) => b.time as string),
+      closes: bars.map((b) => Number(b.close)),
+      highs: bars.map((b) => Number(b.high)),
+      lows: bars.map((b) => Number(b.low)),
+    };
+  }, [ohlcData]);
+
+  // Diagonal support/resistance trendlines (top few by score).
+  const autoTrendlineResults = useMemo(() => {
+    if (!activeIndicators.autoTrendlines || !detectorOhlc || detectorOhlc.closes.length < 40) return [];
+    try { return detectTrendlines(detectorOhlc, TRENDLINE_CFG).slice(0, 6); } catch { return []; }
+  }, [activeIndicators.autoTrendlines, detectorOhlc]);
+
+  // Horizontal support/resistance levels (top few by composite score).
+  const srLevelResults = useMemo(() => {
+    if (!activeIndicators.srLevels || !detectorOhlc) return [];
+    try {
+      return detectSRLevels(detectorOhlc, { ...DEFAULT_SR_CFG, enableHorizontal: true, enableMA: false, enableFib: false }).slice(0, 6);
+    } catch { return []; }
+  }, [activeIndicators.srLevels, detectorOhlc]);
+
+  // Fibonacci retracement of the most recent swing (same swing logic as the
+  // standalone S/R tool, but showing every ratio rather than only touched ones).
+  const fibLevelResults = useMemo(() => {
+    if (!activeIndicators.fibLevels || !detectorOhlc) return [];
+    const { highs, lows, closes } = detectorOhlc;
+    const lookback = Math.min(252, closes.length);
+    const start = closes.length - lookback;
+    let hi = start, lo = start;
+    for (let i = start; i < closes.length; i++) {
+      if (highs[i] > highs[hi]) hi = i;
+      if (lows[i] < lows[lo]) lo = i;
+    }
+    const H = highs[hi], L = lows[lo], range = H - L;
+    if (!(range > 0)) return [];
+    const highFirst = hi >= lo;
+    return [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].map((r) => ({
+      ratio: r,
+      price: highFirst ? H - range * r : L + range * r,
+    }));
+  }, [activeIndicators.fibLevels, detectorOhlc]);
 
   // Detach this pane's measure overlay (line/rect primitive + info box).
   const clearMeasureOverlay = useCallback(() => {
@@ -2165,6 +2222,80 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       drawLine(fr.support, IC.fractal_support, `Fractal S (n${fr.n})${anchorLabel}`);
     }
 
+    // ── Auto trendlines (pivot-pair RANSAC) ──
+    if (activeIndicators.autoTrendlines && detectorOhlc && autoTrendlineResults.length) {
+      const lastDate = detectorOhlc.dates[detectorOhlc.dates.length - 1];
+      for (const tl of autoTrendlineResults) {
+        if (!(tl.date1 <= lastDate)) continue;
+        const color = tl.kind === "resistance" ? "#ef5350" : "#26a69a";
+        const s = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 2,
+          lineStyle: tl.broken ? LineStyle.Dashed : LineStyle.Solid,
+          title: "",
+          crosshairMarkerVisible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        s.setData([
+          { time: tl.date1 as Time, value: tl.price1 },
+          { time: lastDate as Time, value: tl.currentProjection },
+        ]);
+        indicatorSeriesRef.current.push(s);
+      }
+    }
+
+    // ── Horizontal support / resistance levels ──
+    if (activeIndicators.srLevels && detectorOhlc && srLevelResults.length) {
+      const firstDate = detectorOhlc.dates[0];
+      const lastDate = detectorOhlc.dates[detectorOhlc.dates.length - 1];
+      for (const lv of srLevelResults) {
+        const s = chart.addSeries(LineSeries, {
+          color: "#60a5fa",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          title: "",
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        s.setData([
+          { time: firstDate as Time, value: lv.price },
+          { time: lastDate as Time, value: lv.price },
+        ]);
+        indicatorSeriesRef.current.push(s);
+      }
+    }
+
+    // ── Fibonacci retracement levels ──
+    if (activeIndicators.fibLevels && detectorOhlc && fibLevelResults.length) {
+      const firstDate = detectorOhlc.dates[0];
+      const lastDate = detectorOhlc.dates[detectorOhlc.dates.length - 1];
+      const FIB_COLORS: Record<string, string> = {
+        "0": "#94a3b8", "0.236": "#22c55e", "0.382": "#84cc16",
+        "0.5": "#eab308", "0.618": "#f59e0b", "0.786": "#f97316", "1": "#94a3b8",
+      };
+      for (const f of fibLevelResults) {
+        const s = chart.addSeries(LineSeries, {
+          color: FIB_COLORS[String(f.ratio)] || "#eab308",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          title: "",
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        s.setData([
+          { time: firstDate as Time, value: f.price },
+          { time: lastDate as Time, value: f.price },
+        ]);
+        indicatorSeriesRef.current.push(s);
+      }
+    }
+
     // ── Clean up previous primitives (quarter shading + vertical lines) ──
     // Detach quarter shading primitive
     if (quarterShadingCleanupRef.current) {
@@ -2272,7 +2403,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else

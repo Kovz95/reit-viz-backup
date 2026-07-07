@@ -876,6 +876,51 @@ export default function IndicatorsPanel({
               </p>
             </>)}
           </div>
+
+          {/* Auto Trendlines (pivot-pair RANSAC detection) */}
+          <div className="flex items-center justify-between mt-3">
+            <div>
+              <Label className="text-xs font-medium">Auto Trendlines</Label>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Diagonal <span className="text-red-400">R</span> / <span className="text-green-400">S</span> lines from pivot pairs
+              </p>
+            </div>
+            <Switch
+              checked={!!activeIndicators.autoTrendlines}
+              onCheckedChange={(on) => setActiveIndicators({ ...activeIndicators, autoTrendlines: on || undefined })}
+              data-testid="toggle-auto-trendlines"
+            />
+          </div>
+
+          {/* Horizontal Support / Resistance levels */}
+          <div className="flex items-center justify-between mt-3">
+            <div>
+              <Label className="text-xs font-medium">S/R Levels</Label>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Horizontal support / resistance zones
+              </p>
+            </div>
+            <Switch
+              checked={!!activeIndicators.srLevels}
+              onCheckedChange={(on) => setActiveIndicators({ ...activeIndicators, srLevels: on || undefined })}
+              data-testid="toggle-sr-levels"
+            />
+          </div>
+
+          {/* Fibonacci retracement levels */}
+          <div className="flex items-center justify-between mt-3">
+            <div>
+              <Label className="text-xs font-medium">Fibonacci Levels</Label>
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Retracement of the recent swing (23.6–78.6%)
+              </p>
+            </div>
+            <Switch
+              checked={!!activeIndicators.fibLevels}
+              onCheckedChange={(on) => setActiveIndicators({ ...activeIndicators, fibLevels: on || undefined })}
+              data-testid="toggle-fib-levels"
+            />
+          </div>
           </>)}
         </div>
 
