@@ -3236,9 +3236,24 @@ export async function registerRoutes(server: Server, app: Express) {
       if (aoa.length <= dateRowIdx) continue;
       const dateRow = aoa[dateRowIdx];
       const dates: string[] = [];
+      const dateCols: number[] = [];
+      // Tolerate stray blank cells in the header date row instead of breaking on
+      // the first one (which silently truncated the series, e.g. dropping the
+      // newest week when a boundary column is blank). Stop only on a non-empty
+      // non-date cell or a long empty tail (the real end of the used range).
+      let blankRun = 0;
+      const MAX_BLANK_RUN = 5;
       for (let c = 1; c < dateRow.length; c++) {
-        const d = serverParseDate(dateRow[c]);
-        if (d) dates.push(d); else break;
+        const raw = dateRow[c];
+        const d = serverParseDate(raw);
+        if (d) { dates.push(d); dateCols.push(c); blankRun = 0; continue; }
+        const isBlank = raw == null || String(raw).trim() === "";
+        if (isBlank) {
+          if (dates.length === 0) continue;
+          if (++blankRun > MAX_BLANK_RUN) break;
+          continue;
+        }
+        break;
       }
       if (dates.length === 0) continue;
       if (dates.length > allDates.length) allDates = dates;
@@ -3250,10 +3265,9 @@ export async function registerRoutes(server: Server, app: Express) {
         if (rowIdx >= aoa.length) continue;
         const row = aoa[rowIdx];
         if (!row) continue;
-        const values: (number | null)[] = [];
-        for (let c = 1; c <= dates.length; c++) {
-          values.push(serverCleanNumeric(c < row.length ? row[c] : null));
-        }
+        const values: (number | null)[] = dateCols.map((col) =>
+          serverCleanNumeric(col < row.length ? row[col] : null)
+        );
         if (values.some(v => v !== null)) {
           data[metricName] = serverRunLengthEncode(values);
           metrics.push(metricName);

@@ -296,14 +296,33 @@ function extractMktdataFromAoa(aoa: unknown[][]): {
 
   const dateRow = aoa[dateRowIdx];
   const dates: string[] = [];
+  const dateCols: number[] = []; // actual column index of each parsed date
+  // Read the header date row. A single stray blank/non-date cell used to `break`
+  // here, silently truncating the WHOLE series at that point (e.g. dropping the
+  // newest week when a boundary column is blank). Instead: tolerate short gaps
+  // of empty cells (skip them, keep scanning), and stop only on a non-empty
+  // non-date cell (a label/total) or a long empty tail (the real end of data).
+  let blankRun = 0;
+  const MAX_BLANK_RUN = 5;
   for (let c = 1; c < dateRow.length; c++) {
-    const d = parseDate(dateRow[c]);
-    if (d) dates.push(d);
-    else break;
+    const raw = dateRow[c];
+    const d = parseDate(raw);
+    if (d) {
+      dates.push(d);
+      dateCols.push(c);
+      blankRun = 0;
+      continue;
+    }
+    const isBlank = raw == null || String(raw).trim() === "";
+    if (isBlank) {
+      if (dates.length === 0) continue; // skip any leading blanks before dates start
+      if (++blankRun > MAX_BLANK_RUN) break; // long empty tail → end of the used range
+      continue;
+    }
+    break; // non-empty, non-date (e.g. a label/total) → end of the date range
   }
   if (dates.length === 0) return null;
 
-  const numDates = dates.length;
   const data: Record<string, (number | string)[]> = {};
   const metrics: string[] = [];
 
@@ -316,10 +335,11 @@ function extractMktdataFromAoa(aoa: unknown[][]): {
     const row = aoa[rowIdx];
     if (!row) continue;
 
-    const values: (number | null)[] = [];
-    for (let c = 1; c <= numDates; c++) {
-      values.push(cleanNumeric(c < row.length ? row[c] : null));
-    }
+    // Pull each value from its date's actual column so tolerated gaps in the
+    // date row can't misalign values against dates.
+    const values: (number | null)[] = dateCols.map((col) =>
+      cleanNumeric(col < row.length ? row[col] : null)
+    );
     if (values.some((v) => v !== null)) {
       data[metricName] = runLengthEncode(values);
       metrics.push(metricName);
