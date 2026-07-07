@@ -37,7 +37,7 @@ import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info } from "lucide-react";
+import { Info, Maximize2, Minimize2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import ExportMenu from "@/components/ExportMenu";
@@ -190,12 +190,20 @@ function SubIndicatorChart({
   activeIndicators,
   parentChart,
   baseLabel,
+  isMaximized = false,
+  onToggleMaximize,
+  height,
+  onResizeStart,
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   baseLabel: string;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
+  height?: number;
+  onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -610,12 +618,38 @@ function SubIndicatorChart({
     : type === "obv" ? "OBV" : type;
 
   return (
-    <div className="relative w-full border-t border-border/30 flex-shrink-0" style={{ height: type === "ha" ? 100 : 80 }}>
+    <div
+      className={`relative w-full border-t border-border/30 ${isMaximized ? "flex-1 min-h-0" : "flex-shrink-0"}`}
+      style={isMaximized ? undefined : { height: height ?? (type === "ha" ? 100 : 80) }}
+      onDoubleClick={(e) => { e.stopPropagation(); onToggleMaximize?.(); }}
+      data-testid={`sub-indicator-${type}`}
+    >
+      {/* Drag the top border to resize this subplot (hidden while expanded). */}
+      {!isMaximized && onResizeStart && (
+        <div
+          className="absolute -top-1 left-0 right-0 h-2 z-20 group"
+          style={{ cursor: "row-resize" }}
+          onMouseDown={(e) => onResizeStart(type === "ha" ? 100 : 80, e)}
+          data-testid={`sub-indicator-${type}-resize`}
+        >
+          <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+        </div>
+      )}
       <div className="absolute left-2 z-10 mt-0.5">
         <span className="text-[9px] font-mono text-muted-foreground/50 bg-background/80 px-1 py-0.5 rounded">
           {label}
         </span>
       </div>
+      {onToggleMaximize && (
+        <button
+          className="absolute right-1.5 top-0.5 z-10 text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+          onClick={(e) => { e.stopPropagation(); onToggleMaximize(); }}
+          title={isMaximized ? "Restore" : "Expand full pane"}
+          data-testid={`sub-indicator-${type}-maximize`}
+        >
+          {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+        </button>
+      )}
       <div ref={containerRef} className="w-full h-full" />
     </div>
   );
@@ -749,6 +783,38 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     pctChange: number;
     up: boolean;
   } | null>(null);
+
+  // Which sub-indicator subplot (RSI/MACD/…) is expanded to fill the pane (null = none).
+  const [maxSub, setMaxSub] = useState<SubChartType | null>(null);
+  // Per-subplot custom heights (drag the top border to resize). Empty = defaults.
+  const [subHeights, setSubHeights] = useState<Partial<Record<SubChartType, number>>>({});
+  // Auto-size resets the expanded subplot and custom heights back to defaults.
+  useEffect(() => {
+    const reset = () => { setMaxSub(null); setSubHeights({}); };
+    window.addEventListener("reit-viz-reset-subcharts", reset);
+    return () => window.removeEventListener("reit-viz-reset-subcharts", reset);
+  }, []);
+
+  // Drag a subplot's top border to resize its height (main chart absorbs the delta).
+  const startSubResize = useCallback((type: SubChartType, defaultH: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startH = subHeights[type] ?? defaultH;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging up (smaller clientY) grows the subplot.
+      const next = Math.max(48, Math.min(600, startH + (startY - ev.clientY)));
+      setSubHeights((prev) => ({ ...prev, [type]: next }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [subHeights]);
 
   // Helper: find any usable series for coordinate conversion (not limited to :close/:ohlc)
   const getAnySeries = useCallback((): ISeriesApi<any> | null => {
@@ -2846,8 +2912,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           )}
         </div>
       )}
-      {/* Main chart area — flex-1 takes remaining space after sub-charts */}
-      <div ref={containerRef} className="w-full flex-1 min-h-0" data-testid={`chart-pane-${paneId}`} />
+      {/* Main chart area — flex-1 takes remaining space after sub-charts.
+          Hidden while a sub-indicator subplot is expanded to fill the pane. */}
+      <div ref={containerRef} className={maxSub ? "hidden" : "w-full flex-1 min-h-0"} data-testid={`chart-pane-${paneId}`} />
       {/* Measure tool readout (TradingView-style) — follows the cursor while dragging */}
       {measureBox && (
         <div
@@ -2875,17 +2942,27 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           <div className="opacity-90">Angle {measureBox.angle.toFixed(1)}°</div>
         </div>
       )}
-      {/* Sub-indicator charts (RSI, MACD, HA) stacked below */}
-      {subCloseData.length > 0 && subCharts.map((st) => (
-        <SubIndicatorChart
-          key={st}
-          type={st}
-          closeData={subCloseData}
-          activeIndicators={activeIndicators}
-          parentChart={chartRef.current}
-          baseLabel={subBaseLabel}
-        />
-      ))}
+      {/* Sub-indicator charts (RSI, MACD, HA) stacked below. Double-click one
+          (or its expand button) to fill the pane; others hide while expanded. */}
+      {subCloseData.length > 0 && subCharts.map((st) => {
+        const isMax = maxSub === st;
+        const hidden = maxSub !== null && !isMax;
+        return (
+          <div key={st} className={hidden ? "hidden" : "contents"}>
+            <SubIndicatorChart
+              type={st}
+              closeData={subCloseData}
+              activeIndicators={activeIndicators}
+              parentChart={chartRef.current}
+              baseLabel={subBaseLabel}
+              isMaximized={isMax}
+              onToggleMaximize={() => setMaxSub((cur) => (cur === st ? null : st))}
+              height={subHeights[st]}
+              onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}
+            />
+          </div>
+        );
+      })}
       {paneSeries.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="text-xs text-muted-foreground/40">Empty pane — add series</span>

@@ -47,7 +47,7 @@ import {
   Search,
 } from "lucide-react";
 import BasketTickerPill from "./BasketTickerPill";
-import GridLayoutPicker, { gridContainerStyle, gridSlots } from "./GridLayoutPicker";
+import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "./GridLayoutPicker";
 import type { GridLayout } from "./GridLayoutPicker";
 import {
   Select,
@@ -438,6 +438,11 @@ export default function ChartArea({
     else setLocalLayoutMode(mode);
   }, [onLayoutModeChange]);
   const [panesVisible, setPanesVisible] = useState<number | "all">("all");
+  // Per-track size fractions for the pane grid (drag dividers to resize).
+  // Reset to equal on layout/pane-count change or via Auto-size.
+  const [rowFracs, setRowFracs] = useState<number[]>([]);
+  const [colFracs, setColFracs] = useState<number[]>([]);
+  const gridRef = useRef<HTMLDivElement>(null);
   const [activeTool, setActiveTool] = useState("none");
   const [drawColor, setDrawColor] = useState("#0ea5e9");
   // Measure tool: whether to fill the shaded rectangle (vs. line + box only)
@@ -906,13 +911,85 @@ export default function ChartArea({
     return map;
   }, [plottedSeries, panes]);
 
-  // Layout grid style (inline) — handles all grid sizes via gridContainerStyle
+  // Grid dimensions (mirrors gridContainerStyle): cols from layout, rows to fit.
+  const gridDims = useMemo(() => {
+    const { cols } = parseGrid(layoutMode);
+    const actualRows = Math.max(1, Math.ceil(visiblePanes.length / cols));
+    return { cols, rows: actualRows };
+  }, [layoutMode, visiblePanes.length]);
+
+  // Reset the drag-resize fractions to equal whenever the grid dimensions change.
+  useEffect(() => {
+    setColFracs(Array(gridDims.cols).fill(1));
+    setRowFracs(Array(gridDims.rows).fill(1));
+  }, [gridDims.cols, gridDims.rows]);
+
+  const resetPaneSizes = useCallback(() => {
+    setColFracs(Array(gridDims.cols).fill(1));
+    setRowFracs(Array(gridDims.rows).fill(1));
+  }, [gridDims.cols, gridDims.rows]);
+
+  // Layout grid style (inline) — drives track sizes from the resize fractions.
   const computedGridStyle = useMemo((): React.CSSProperties => {
     if (maximizedPaneId !== null) {
-      return { display: "grid", gridTemplateColumns: "1fr", gridTemplateRows: "1fr" };
+      return { display: "grid", gridTemplateColumns: "1fr", gridTemplateRows: "1fr", height: "100%" };
     }
-    return gridContainerStyle(layoutMode, visiblePanes.length);
-  }, [layoutMode, visiblePanes.length, maximizedPaneId]);
+    const cols = colFracs.length === gridDims.cols ? colFracs : Array(gridDims.cols).fill(1);
+    const rows = rowFracs.length === gridDims.rows ? rowFracs : Array(gridDims.rows).fill(1);
+    return {
+      display: "grid",
+      gridTemplateColumns: cols.map((f) => `${f}fr`).join(" "),
+      gridTemplateRows: rows.map((f) => `${f}fr`).join(" "),
+      height: "100%",
+    };
+  }, [colFracs, rowFracs, gridDims.cols, gridDims.rows, maximizedPaneId]);
+
+  // Drag a grid divider to resize adjacent rows/columns (fraction-based).
+  const startDividerDrag = useCallback((
+    e: React.MouseEvent,
+    axis: "row" | "col",
+    index: number,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = gridRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const isRow = axis === "row";
+    const startPos = isRow ? e.clientY : e.clientX;
+    const total = isRow ? rect.height : rect.width;
+    const fracs = isRow ? rowFracs : colFracs;
+    const setFracs = isRow ? setRowFracs : setColFracs;
+    const a0 = fracs[index] ?? 1;
+    const b0 = fracs[index + 1] ?? 1;
+    const sumFr = fracs.reduce((s, f) => s + f, 0);
+    const MIN = 0.12 * sumFr; // don't let a track collapse below ~12%
+
+    const onMove = (ev: MouseEvent) => {
+      const cur = isRow ? ev.clientY : ev.clientX;
+      const deltaFr = ((cur - startPos) / total) * sumFr;
+      let a = a0 + deltaFr;
+      let b = b0 - deltaFr;
+      if (a < MIN) { b -= MIN - a; a = MIN; }
+      if (b < MIN) { a -= MIN - b; b = MIN; }
+      setFracs((prev) => {
+        const next = [...prev];
+        next[index] = a;
+        next[index + 1] = b;
+        return next;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      // Nudge charts to re-fit their new box.
+      paneRefs.current.forEach((r) => r?.fitContent?.());
+    };
+    document.body.style.cursor = isRow ? "row-resize" : "col-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [rowFracs, colFracs]);
 
   // Drawing tools
   const drawTools = [
@@ -2090,6 +2167,8 @@ export default function ChartArea({
           size="sm"
           className="h-7 px-2 text-[10px] font-mono font-semibold"
           onClick={() => {
+            resetPaneSizes();
+            window.dispatchEvent(new CustomEvent("reit-viz-reset-subcharts"));
             paneRefs.current.forEach(r => r?.fitContent?.());
           }}
           title="Reset all pane sizes (grid panes + sub-indicators) to defaults"
@@ -2107,10 +2186,50 @@ export default function ChartArea({
       {/* Chart panes + side panels */}
       <div className="flex flex-1 overflow-hidden relative">
         <div
-          className="flex-1 min-w-0 overflow-hidden"
+          ref={gridRef}
+          className="flex-1 min-w-0 overflow-hidden relative"
           style={computedGridStyle}
           data-testid="chart-grid"
         >
+          {/* Draggable dividers to resize grid rows / columns */}
+          {maximizedPaneId === null && (() => {
+            const rows = rowFracs.length === gridDims.rows ? rowFracs : Array(gridDims.rows).fill(1);
+            const cols = colFracs.length === gridDims.cols ? colFracs : Array(gridDims.cols).fill(1);
+            const rowSum = rows.reduce((s, f) => s + f, 0);
+            const colSum = cols.reduce((s, f) => s + f, 0);
+            const handles: React.ReactNode[] = [];
+            let acc = 0;
+            for (let i = 0; i < rows.length - 1; i++) {
+              acc += rows[i];
+              handles.push(
+                <div
+                  key={`rowdiv-${i}`}
+                  className="absolute left-0 right-0 z-30 group"
+                  style={{ top: `${(acc / rowSum) * 100}%`, height: 9, transform: "translateY(-50%)", cursor: "row-resize" }}
+                  onMouseDown={(e) => startDividerDrag(e, "row", i)}
+                  data-testid={`pane-divider-row-${i}`}
+                >
+                  <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+                </div>
+              );
+            }
+            acc = 0;
+            for (let i = 0; i < cols.length - 1; i++) {
+              acc += cols[i];
+              handles.push(
+                <div
+                  key={`coldiv-${i}`}
+                  className="absolute top-0 bottom-0 z-30 group"
+                  style={{ left: `${(acc / colSum) * 100}%`, width: 9, transform: "translateX(-50%)", cursor: "col-resize" }}
+                  onMouseDown={(e) => startDividerDrag(e, "col", i)}
+                  data-testid={`pane-divider-col-${i}`}
+                >
+                  <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+                </div>
+              );
+            }
+            return handles;
+          })()}
           {visiblePanes.length === 0 && (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-muted-foreground">
