@@ -30,6 +30,7 @@ import {
   Globe,
   Megaphone,
   CircleDollarSign,
+  Magnet,
   Save,
   Trash2,
   X,
@@ -440,6 +441,8 @@ export default function ChartArea({
   const [drawColor, setDrawColor] = useState("#0ea5e9");
   // Measure tool: whether to fill the shaded rectangle (vs. line + box only)
   const [measureShade, setMeasureShade] = useState(true);
+  // Measure tool: snap endpoints to nearest data point (magnet mode)
+  const [measureMagnet, setMeasureMagnet] = useState(false);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
@@ -1944,6 +1947,20 @@ export default function ChartArea({
           </Button>
         )}
 
+        {activeTool === "measure" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-6 px-2 text-[11px] gap-1 ${measureMagnet ? "border border-primary text-primary" : "text-muted-foreground"}`}
+            onClick={() => setMeasureMagnet((v) => !v)}
+            title={measureMagnet ? "Magnet on — snapping to data points" : "Magnet off — free placement"}
+            data-testid="measure-magnet-toggle"
+          >
+            <Magnet className="w-3 h-3" />
+            Magnet
+          </Button>
+        )}
+
         {drawingCount > 0 && (
           <Button
             variant="ghost"
@@ -2109,6 +2126,7 @@ export default function ChartArea({
                   activeTool={activeTool}
                   drawColor={drawColor}
                   measureShade={measureShade}
+                  measureMagnet={measureMagnet}
                   onCrosshairMove={(data) => handleCrosshairMove(pane.id, data)}
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}

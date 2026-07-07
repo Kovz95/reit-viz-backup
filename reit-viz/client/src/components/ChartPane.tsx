@@ -149,6 +149,8 @@ interface ChartPaneProps {
   drawColor: string;
   /** Measure tool: fill the shaded rectangle (vs. line + box only). */
   measureShade?: boolean;
+  /** Measure tool: snap endpoints to the nearest data point (magnet mode). */
+  measureMagnet?: boolean;
   onCrosshairMove?: (data: { time: string; values: Record<string, number> } | null) => void;
   onDrawingAdded?: () => void;
   onDrawingDeleted?: () => void;
@@ -629,6 +631,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   activeTool,
   drawColor,
   measureShade = true,
+  measureMagnet = false,
   onCrosshairMove,
   onDrawingAdded,
   onDrawingDeleted,
@@ -727,6 +730,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Latest shade-toggle value, read by the drag handler without re-running its effect.
   const measureShadeRef = useRef(measureShade);
   measureShadeRef.current = measureShade;
+  // Latest magnet-toggle value, read by the drag handler.
+  const measureMagnetRef = useRef(measureMagnet);
+  measureMagnetRef.current = measureMagnet;
   const [measureBox, setMeasureBox] = useState<{
     clientX: number;
     clientY: number;
@@ -1290,71 +1296,106 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       return;
     }
 
-    // Sorted, de-duped bar times for bars-passed / days computation.
-    const sortedTimes = [...new Set(paneSeries.flatMap((s) => s.data.map((d) => d.time)))].sort();
-    const snapIdx = (logical: number) =>
-      Math.max(0, Math.min(sortedTimes.length - 1, Math.round(logical)));
+    const ts = chart.timeScale();
+    // Logical index → axis date. The logical space is defined by the spacer
+    // series (fullDates), NOT this pane's own series data, so snap against that
+    // axis; only fall back to the pane's dates if the spacer isn't set yet.
+    const axisDates = fullDates.length
+      ? fullDates
+      : [...new Set(paneSeries.flatMap((s) => s.data.map((d) => d.time)))].sort();
     const daysBetween = (a: string, b: string) => {
       const ta = Date.parse(a), tb = Date.parse(b);
       if (!isFinite(ta) || !isFinite(tb)) return NaN;
       return Math.round(Math.abs(tb - ta) / 86400000);
     };
+    // Magnet: nearest actual data value (OHLC or line value) at a bar to the
+    // cursor price, so the endpoint sticks to the data point.
+    const snapPriceAt = (logical: number, cursorPrice: number): number | null => {
+      const idx = Math.round(logical);
+      let best: number | null = null, bestDist = Infinity;
+      for (const s of seriesMapRef.current.values()) {
+        try {
+          const d: any = (s as any).dataByIndex(idx);
+          if (!d) continue;
+          const cands: number[] = [];
+          if ("close" in d) cands.push(d.open, d.high, d.low, d.close);
+          else if ("value" in d && d.value != null) cands.push(d.value);
+          for (const c of cands) {
+            if (c == null) continue;
+            const dist = Math.abs(c - cursorPrice);
+            if (dist < bestDist) { bestDist = dist; best = c; }
+          }
+        } catch {}
+      }
+      return best;
+    };
 
-    let isMeasuring = false;
-    let startPx: { x: number; y: number } | null = null;
-    let startLogical = 0;
-    let startPrice = 0;
-
-    const readPoint = (e: MouseEvent) => {
+    type MPoint = { x: number; y: number; logical: number; time: string; price: number; series: ISeriesApi<any> };
+    const resolvePoint = (e: MouseEvent): MPoint | null => {
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const logical = chart.timeScale().coordinateToLogical(x);
+      const logical = ts.coordinateToLogical(x);
       if (logical === null) return null;
-      // Find a series whose price scale yields a valid price at y. getAnySeries
-      // may return a close-line series that reports null (not the price-scale
-      // owner), so fall back to any series that resolves a real price.
-      let price = getAnySeries()?.coordinateToPrice(y) ?? null;
-      if (price === null || price === undefined) {
+      // Find a series whose price scale yields a valid price at y (getAnySeries
+      // may return a close-line series that reports null — not the scale owner).
+      let series = getAnySeries();
+      let raw = series?.coordinateToPrice(y) ?? null;
+      if (raw === null || raw === undefined) {
         for (const s of seriesMapRef.current.values()) {
           const pr = s.coordinateToPrice(y);
-          if (pr !== null && pr !== undefined) { price = pr; break; }
+          if (pr !== null && pr !== undefined) { series = s; raw = pr; break; }
         }
       }
-      if (price === null || price === undefined) return null;
-      return { x, y, price, logical: logical as number };
+      if (raw === null || raw === undefined || !series) return null;
+      // Snapped bar time under the cursor — use the chart's own axis mapping so
+      // the drawn point lines up exactly with the cursor.
+      const t = ts.coordinateToTime(x);
+      let time = t != null ? String(t) : null;
+      if (time === null && axisDates.length) {
+        const idx = Math.max(0, Math.min(axisDates.length - 1, Math.round(logical as number)));
+        time = axisDates[idx];
+      }
+      if (time === null) return null;
+      let price: number = raw;
+      if (measureMagnetRef.current) {
+        const snapped = snapPriceAt(logical as number, raw);
+        if (snapped != null) price = snapped;
+      }
+      return { x, y, logical: logical as number, time, price, series };
     };
+
+    let isMeasuring = false;
+    let start: MPoint | null = null;
 
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return; // left click only
-      const pt = readPoint(e);
+      const pt = resolvePoint(e);
       if (!pt) return;
       clearOverlay();
       isMeasuring = true;
-      startPx = { x: pt.x, y: pt.y };
-      startLogical = pt.logical;
-      startPrice = pt.price;
+      start = pt;
       // Disable all chart interaction while measuring so the drag is ours.
       chart.applyOptions({ handleScroll: false, handleScale: false });
       e.preventDefault();
     };
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isMeasuring || !startPx) return;
-      const pt = readPoint(e);
-      if (!pt) return;
+      if (!isMeasuring || !start) return;
+      const end = resolvePoint(e);
+      if (!end) return;
 
-      const startI = snapIdx(startLogical);
-      const endI = snapIdx(pt.logical);
-      const startTime = sortedTimes[startI];
-      const endTime = sortedTimes[endI];
-
-      const bars = Math.abs(endI - startI);
-      const days = daysBetween(startTime, endTime);
-      const angle = (Math.atan2(-(pt.y - startPx.y), pt.x - startPx.x) * 180) / Math.PI;
-      const absChange = pt.price - startPrice;
-      const pctChange = startPrice !== 0 ? (absChange / startPrice) * 100 : 0;
+      const bars = Math.abs(Math.round(end.logical) - Math.round(start.logical));
+      const days = daysBetween(start.time, end.time);
+      const absChange = end.price - start.price;
+      const pctChange = start.price !== 0 ? (absChange / start.price) * 100 : 0;
       const up = absChange >= 0;
+      // Angle from the actual drawn endpoints (matches the line, incl. magnet snap).
+      const x1 = ts.timeToCoordinate(start.time as Time) ?? start.x;
+      const x2 = ts.timeToCoordinate(end.time as Time) ?? end.x;
+      const y1 = start.series.priceToCoordinate(start.price as any) ?? start.y;
+      const y2 = end.series.priceToCoordinate(end.price as any) ?? end.y;
+      const angle = (Math.atan2(-(y2 - y1), x2 - x1) * 180) / Math.PI;
 
       setMeasureBox({
         clientX: e.clientX,
@@ -1378,10 +1419,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           }
         }
         measurePrimRef.current?.prim.setMeasure({
-          startTime,
-          startPrice,
-          endTime,
-          endPrice: pt.price,
+          startTime: start.time,
+          startPrice: start.price,
+          endTime: end.time,
+          endPrice: end.price,
           up,
           showRect: measureShadeRef.current,
         });
@@ -1414,7 +1455,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
       } catch {}
     };
-  }, [activeTool, chartReady, paneSeries, getAnySeries]);
+  }, [activeTool, chartReady, paneSeries, getAnySeries, fullDates]);
 
   // Live-update an already-drawn measurement when the shade toggle flips.
   useEffect(() => {
@@ -2659,8 +2700,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           readout in the top toolbar). */}
       {hoverReadout && hoverReadout.items.length > 0 && (
         <div
-          className="absolute left-2 z-20 flex items-center gap-2 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-1rem)] overflow-hidden"
-          style={{ top: colorByMetric ? 44 : 24 }}
+          className="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-1rem)] overflow-hidden"
+          style={{ top: colorByMetric ? 44 : 6 }}
           data-testid={`chart-pane-${paneId}-readout`}
         >
           <span className="text-muted-foreground/70">{hoverReadout.time}</span>
