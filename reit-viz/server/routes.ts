@@ -4477,6 +4477,11 @@ export async function registerRoutes(server: Server, app: Express) {
         const existingDatesFile = path.join(DATA_DIR, "dates.json");
         const existingEventsFile = path.join(DATA_DIR, "events.json");
 
+        let existingDates: string[] = [];
+        if (fs.existsSync(existingDatesFile)) {
+          try { existingDates = readJSON(existingDatesFile); } catch (_) {}
+        }
+
         if (fs.existsSync(existingTickersFile)) {
           try {
             const existingTickers = readJSON(existingTickersFile);
@@ -4489,21 +4494,26 @@ export async function registerRoutes(server: Server, app: Express) {
           } catch (_) {}
         }
 
-        if (fs.existsSync(existingDatesFile)) {
-          try {
-            const existingDates = readJSON(existingDatesFile);
-            if (existingDates.length > finalDates.length) {
-              finalDates = existingDates;
-            }
-          } catch (_) {}
-        }
-
         if (fs.existsSync(existingEventsFile)) {
           try {
             const existingEvents = readJSON(existingEventsFile);
             finalEvents = { ...existingEvents, ...finalEvents };
           } catch (_) {}
         }
+
+        // UNION the date axes (don't just keep the longer one), then realign every
+        // ticker file to the union BY DATE. The chunk handler wrote the new tickers
+        // aligned to `dates` and left the kept tickers aligned to `existingDates`;
+        // without this remap, position-indexed values shift out of alignment and
+        // the newest week (e.g. July) reads as null against the merged axis.
+        const dateSet = new Set([...existingDates, ...dates]);
+        finalDates = Array.from(dateSet).sort();
+        const newTickerSet = new Set(tickers.map((t: any) => t.ticker));
+        const realigned = realignTickerFiles(tickersDir, finalDates, (ticker) => {
+          const from = newTickerSet.has(ticker) ? dates : existingDates;
+          return from.length ? from : null;
+        });
+        console.log(`[ingest/finish] Realigned ${realigned} ticker files to union axis (${finalDates.length} dates)`);
       }
 
       finalTickers.sort((a: any, b: any) => a.ticker.localeCompare(b.ticker));
