@@ -438,10 +438,14 @@ export default function ChartArea({
   const [panesVisible, setPanesVisible] = useState<number | "all">("all");
   const [activeTool, setActiveTool] = useState("none");
   const [drawColor, setDrawColor] = useState("#0ea5e9");
+  // Measure tool: whether to fill the shaded rectangle (vs. line + box only)
+  const [measureShade, setMeasureShade] = useState(true);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
+  // Fiscal-year boundary lines: first earnings report of each calendar year
+  const [showFyBoundaries, setShowFyBoundaries] = useState(false);
   const [showExDiv, setShowExDiv] = useState(false);
   // ── Chart-feature toggles (local UI state; deeper wiring tracked in needsMore) ──
   const [showHoverReadout, setShowHoverReadout] = useState(false);
@@ -763,6 +767,23 @@ export default function ChartArea({
     }
     return entries;
   }, [activeMacroEvents, macroEventDates]);
+
+  // Fiscal-year boundary lines: the first (earliest) earnings report of each
+  // calendar year — marks when the fiscal year switches (FY1 → FY0). Labeled
+  // "FY{year}" with the report's own calendar year. earningsDates is sorted
+  // ascending, so the first date seen per year is the earliest.
+  const fyBoundaryLines = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { time: string; color: string; label: string }[] = [];
+    for (const d of earningsDates) {
+      const year = d.slice(0, 4);
+      if (!seen.has(year)) {
+        seen.add(year);
+        out.push({ time: d, color: "#22d3ee", label: `FY${year}` });
+      }
+    }
+    return out;
+  }, [earningsDates]);
 
   // ── Color-by: fetch metric data when colorByMap changes ──
   useEffect(() => {
@@ -1642,6 +1663,18 @@ export default function ChartArea({
           <Megaphone className="w-3.5 h-3.5" />
         </Button>
 
+        {/* Fiscal-year boundary toggle (first earnings of each year) */}
+        <Button
+          variant={showFyBoundaries ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-1.5 text-[11px] font-semibold"
+          onClick={() => setShowFyBoundaries(!showFyBoundaries)}
+          data-testid="toggle-fy-boundaries"
+          title="Toggle fiscal-year boundary lines — first earnings report of each year (FY1 → FY0)"
+        >
+          FY
+        </Button>
+
         {/* Ex-div markers toggle */}
         <Button
           variant={showExDiv ? "default" : "ghost"}
@@ -1903,6 +1936,26 @@ export default function ChartArea({
           />
         )}
 
+        {activeTool === "measure" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-6 px-2 text-[11px] gap-1 ${measureShade ? "border border-primary text-primary" : "text-muted-foreground"}`}
+            onClick={() => setMeasureShade((v) => !v)}
+            title={measureShade ? "Hide shaded rectangle" : "Show shaded rectangle"}
+            data-testid="measure-shade-toggle"
+          >
+            <span
+              className="inline-block w-3 h-3 rounded-sm border"
+              style={{
+                borderColor: "currentColor",
+                background: measureShade ? "rgba(8,153,129,0.35)" : "transparent",
+              }}
+            />
+            Shade
+          </Button>
+        )}
+
         {drawingCount > 0 && (
           <Button
             variant="ghost"
@@ -2067,6 +2120,7 @@ export default function ChartArea({
                   timeRange={timeRange}
                   activeTool={activeTool}
                   drawColor={drawColor}
+                  measureShade={measureShade}
                   onCrosshairMove={(data) => handleCrosshairMove(pane.id, data)}
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}
@@ -2077,6 +2131,7 @@ export default function ChartArea({
                   onSeriesMapUpdate={handleSeriesMapUpdate}
                   showQuarterShading={showQuarterShading}
                   earningsDates={showEarnings ? earningsDates : []}
+                  fyBoundaryLines={showFyBoundaries ? fyBoundaryLines : []}
                   exDivDates={showExDiv ? exDivDates : []}
                   macroEventLines={macroEventLines}
                   colorByData={colorByDataMap[pane.id]?.data ?? null}

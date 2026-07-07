@@ -15,6 +15,8 @@ export interface MeasureSpec {
   endTime: string;
   endPrice: number;
   up: boolean;
+  /** Fill the shaded rectangle behind the line (default true). */
+  showRect?: boolean;
 }
 
 interface AttachedParams {
@@ -59,15 +61,17 @@ class MeasureRenderer {
 
       ctx.save();
 
-      // Shaded rectangle spanning the measured region
-      ctx.fillStyle = fill;
-      ctx.fillRect(left, top, Math.max(w, 1), Math.max(h, 1));
+      if (s.showRect !== false) {
+        // Shaded rectangle spanning the measured region
+        ctx.fillStyle = fill;
+        ctx.fillRect(left, top, Math.max(w, 1), Math.max(h, 1));
 
-      // Subtle border on the rectangle
-      ctx.strokeStyle = line;
-      ctx.globalAlpha = 0.35;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(left, top, Math.max(w, 1), Math.max(h, 1));
+        // Subtle border on the rectangle
+        ctx.strokeStyle = line;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(left, top, Math.max(w, 1), Math.max(h, 1));
+      }
 
       // Diagonal connecting line
       ctx.globalAlpha = 1;
@@ -138,5 +142,13 @@ export class MeasurePrimitive {
   setMeasure(spec: MeasureSpec | null): void {
     this._spec = spec;
     this._requestUpdate?.();
+  }
+
+  /** Toggle the shaded rectangle on an existing measurement and redraw. */
+  setShowRect(showRect: boolean): void {
+    if (this._spec) {
+      this._spec = { ...this._spec, showRect };
+      this._requestUpdate?.();
+    }
   }
 }

@@ -147,6 +147,8 @@ interface ChartPaneProps {
   timeRange: string;
   activeTool: string;
   drawColor: string;
+  /** Measure tool: fill the shaded rectangle (vs. line + box only). */
+  measureShade?: boolean;
   onCrosshairMove?: (data: { time: string; values: Record<string, number> } | null) => void;
   onDrawingAdded?: () => void;
   onDrawingDeleted?: () => void;
@@ -163,6 +165,8 @@ interface ChartPaneProps {
   exDivDates?: string[];
   /** Macro event vertical lines (CPI, NFP, FOMC, GDP) */
   macroEventLines?: { time: string; color: string; label?: string }[];
+  /** Fiscal-year boundary lines (first earnings of each year), labeled FY{year} */
+  fyBoundaryLines?: { time: string; color: string; label?: string }[];
   /** Color-by-variable: map of time → normalised [0,1] value for gradient coloring */
   colorByData?: Map<string, number> | null;
   /** Name of the color-by metric (for legend display) */
@@ -624,6 +628,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   timeRange,
   activeTool,
   drawColor,
+  measureShade = true,
   onCrosshairMove,
   onDrawingAdded,
   onDrawingDeleted,
@@ -634,6 +639,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onSeriesMapUpdate,
   showQuarterShading = false,
   earningsDates = [],
+  fyBoundaryLines = [],
   exDivDates = [],
   macroEventLines = [],
   colorByData = null,
@@ -681,6 +687,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   }>({ pending: false });
   // Measure tool (TradingView-style ruler): transient primitive overlay + info box.
   const measurePrimRef = useRef<{ prim: MeasurePrimitive; series: ISeriesApi<any> } | null>(null);
+  // Latest shade-toggle value, read by the drag handler without re-running its effect.
+  const measureShadeRef = useRef(measureShade);
+  measureShadeRef.current = measureShade;
   const [measureBox, setMeasureBox] = useState<{
     clientX: number;
     clientY: number;
@@ -1249,11 +1258,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const anySeries = getAnySeries();
-      if (!anySeries) return null;
-      const price = anySeries.coordinateToPrice(y);
       const logical = chart.timeScale().coordinateToLogical(x);
-      if (price === null || price === undefined || logical === null) return null;
+      if (logical === null) return null;
+      // Find a series whose price scale yields a valid price at y. getAnySeries
+      // may return a close-line series that reports null (not the price-scale
+      // owner), so fall back to any series that resolves a real price.
+      let price = getAnySeries()?.coordinateToPrice(y) ?? null;
+      if (price === null || price === undefined) {
+        for (const s of seriesMapRef.current.values()) {
+          const pr = s.coordinateToPrice(y);
+          if (pr !== null && pr !== undefined) { price = pr; break; }
+        }
+      }
+      if (price === null || price === undefined) return null;
       return { x, y, price, logical: logical as number };
     };
 
@@ -1315,6 +1332,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           endTime,
           endPrice: pt.price,
           up,
+          showRect: measureShadeRef.current,
         });
       } catch {}
     };
@@ -1346,6 +1364,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       } catch {}
     };
   }, [activeTool, chartReady, paneSeries, getAnySeries]);
+
+  // Live-update an already-drawn measurement when the shade toggle flips.
+  useEffect(() => {
+    measurePrimRef.current?.prim.setShowRect(measureShade);
+  }, [measureShade]);
 
   // Eraser tool: click to delete nearest drawing
   useEffect(() => {
@@ -1929,6 +1952,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       for (const e of macroEventLines) {
         lineEntries.push(e);
       }
+      for (const e of fyBoundaryLines) {
+        lineEntries.push(e);
+      }
       // Fractal "as-of" anchor marker — shows the point in time the lines are drawn at.
       if (activeIndicators.fractalLines?.anchorDate) {
         lineEntries.push({
@@ -1986,7 +2012,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else
