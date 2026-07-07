@@ -8,7 +8,7 @@ import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { registerChatRoute } from "./chatRoute";
-import { realignTickerFiles } from "./realign";
+import { realignTickerFiles, rleDecode, rleEncode, type RleArray } from "./realign";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
 import { getAdvBatch } from "./adv";
@@ -4538,6 +4538,50 @@ export async function registerRoutes(server: Server, app: Express) {
     } catch (e: any) {
       console.error("[ingest/finish] Error:", e);
       ingestSession = null;
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Remove a single date from the global axis + every ticker's arrays ──
+  // Used to prune a stray/empty date (e.g. a market holiday that leaked into the
+  // axis from a prior merge). Drops that position from dates.json and splices it
+  // out of every ticker's RLE metric arrays so everything stays aligned.
+  app.post("/api/data/remove-date", (req, res) => {
+    try {
+      const { date } = req.body as { date?: string };
+      if (!date) return res.status(400).json({ error: "Missing 'date'" });
+      const datesFile = path.join(DATA_DIR, "dates.json");
+      const dates: string[] = readJSON(datesFile);
+      const idx = dates.indexOf(date);
+      if (idx < 0) return res.status(404).json({ error: `Date ${date} not in axis` });
+
+      const oldLen = dates.length;
+      const newDates = dates.slice(0, idx).concat(dates.slice(idx + 1));
+      const tickersDir = path.join(DATA_DIR, "tickers");
+      let changed = 0, nonNullDropped = 0;
+      if (fs.existsSync(tickersDir)) {
+        for (const f of fs.readdirSync(tickersDir)) {
+          if (!f.endsWith(".json")) continue;
+          const full = path.join(tickersDir, f);
+          let data: Record<string, RleArray>;
+          try { data = JSON.parse(fs.readFileSync(full, "utf8")); } catch { continue; }
+          const out: Record<string, RleArray> = {};
+          for (const [metric, rle] of Object.entries(data)) {
+            const dense = rleDecode(rle, oldLen);
+            if (dense[idx] != null) nonNullDropped++;
+            dense.splice(idx, 1);
+            out[metric] = rleEncode(dense);
+          }
+          fs.writeFileSync(full, JSON.stringify(out));
+          changed++;
+        }
+      }
+      fs.writeFileSync(datesFile, JSON.stringify(newDates));
+      datesCache = null;
+      console.log(`[remove-date] Removed ${date} (idx ${idx}); rewrote ${changed} tickers; dropped ${nonNullDropped} non-null values`);
+      res.json({ ok: true, removed: date, index: idx, tickers: changed, nonNullValuesDropped: nonNullDropped, dates: newDates.length });
+    } catch (e: any) {
+      console.error("[remove-date] Error:", e);
       res.status(500).json({ error: e.message });
     }
   });
