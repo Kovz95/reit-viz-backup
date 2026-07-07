@@ -251,8 +251,8 @@ function SubIndicatorChart({
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(14, 165, 233, 0.3)", width: 1, style: LineStyle.Dashed, labelBackgroundColor: "#0ea5e9" },
-        horzLine: { color: "rgba(14, 165, 233, 0.3)", width: 1, style: LineStyle.Dashed, labelBackgroundColor: "#0ea5e9" },
+        vertLine: { color: "rgba(125, 211, 252, 0.9)", width: 1, style: LineStyle.LargeDashed, labelBackgroundColor: "#0ea5e9" },
+        horzLine: { color: "rgba(125, 211, 252, 0.9)", width: 1, style: LineStyle.LargeDashed, labelBackgroundColor: "#0ea5e9" },
       },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.06)", minimumWidth: 70 },
       timeScale: { borderColor: "rgba(255,255,255,0.06)", visible: false, rightOffset: 5, barSpacing: 3, minBarSpacing: 1 },
@@ -1110,15 +1110,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         crosshair: {
           mode: CrosshairMode.Normal,
           vertLine: {
-            color: "rgba(14, 165, 233, 0.3)",
+            color: "rgba(125, 211, 252, 0.9)",
             width: 1,
-            style: LineStyle.Dashed,
+            style: LineStyle.LargeDashed,
             labelBackgroundColor: "#0ea5e9",
           },
           horzLine: {
-            color: "rgba(14, 165, 233, 0.3)",
+            color: "rgba(125, 211, 252, 0.9)",
             width: 1,
-            style: LineStyle.Dashed,
+            style: LineStyle.LargeDashed,
             labelBackgroundColor: "#0ea5e9",
           },
         },

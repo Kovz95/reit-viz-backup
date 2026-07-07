@@ -608,6 +608,13 @@ export default function ChartArea({
   // Chart sync state
   const chartsRef = useRef<Map<number, IChartApi>>(new Map());
   const syncingRef = useRef(false); // guard against recursive sync
+  // Which pane the pointer is currently over. Only this "master" pane propagates
+  // its crosshair to the others; without this, the synced (NaN-price) crosshair
+  // we set on the other panes echoes its own crosshairMove back and overwrites
+  // the master's NATIVE crosshair, dropping its horizontal line. (Sub-indicator
+  // panes live inside their parent pane's wrapper, so hovering one still marks
+  // the parent as master and cross-pane sync keeps working.)
+  const hoveredPaneRef = useRef<number | null>(null);
   // Store handler references so we can unsubscribe them (LWC v5 uses separate unsub methods)
   const syncHandlersRef = useRef<Map<number, { rangeHandler: (range: any) => void; crosshairHandler: (param: any) => void }>>(new Map());
   // Debounce timer for coordinated sync after data loads
@@ -679,6 +686,10 @@ export default function ChartArea({
     // Subscribe to crosshair move sync
     const crosshairHandler = (param: any) => {
       if (syncingRef.current) return;
+      // Only the pane under the pointer propagates. This stops the synced crosshair
+      // we set on other panes from echoing back and clobbering the hovered pane's
+      // native crosshair (which is what makes its horizontal line vanish).
+      if (hoveredPaneRef.current !== null && hoveredPaneRef.current !== paneId) return;
       syncingRef.current = true;
       chartsRef.current.forEach((otherChart, otherId) => {
         if (otherId !== paneId) {
@@ -2264,6 +2275,8 @@ export default function ChartArea({
                 key={pane.id}
                 className="relative min-w-0 min-h-0 overflow-hidden"
                 style={{ width: '100%', height: '100%' }}
+                onMouseEnter={() => { hoveredPaneRef.current = pane.id; }}
+                onMouseLeave={() => { if (hoveredPaneRef.current === pane.id) hoveredPaneRef.current = null; }}
                 onDoubleClick={() => setMaximizedPaneId(isPaneMaximized ? null : pane.id)}
               >
                 <ChartPane
