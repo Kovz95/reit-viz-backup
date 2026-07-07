@@ -61,10 +61,13 @@ function writeCache(data: YahooPriceData): void {
 // returns no data — which is why non-US names had no $ ADV / price history.
 // Translate to the Yahoo form for the request only; the cache key, the returned
 // `ticker`, and error messages stay the internal symbol so callers are
-// unaffected. Only GB/London exists in the current universe; add more
-// FactSet-region → Yahoo-suffix entries here as other listings are onboarded.
+// unaffected. Covers the FactSet-region suffixes present in the universe; add
+// more entries here as other listings are onboarded.
 const YAHOO_EXCHANGE_SUFFIX: Record<string, string> = {
-  GB: "L", // London Stock Exchange
+  GB: "L",  // London Stock Exchange
+  FR: "PA", // Euronext Paris
+  ES: "MC", // Bolsa de Madrid
+  NL: "AS", // Euronext Amsterdam
 };
 
 export function toYahooSymbol(sym: string): string {
