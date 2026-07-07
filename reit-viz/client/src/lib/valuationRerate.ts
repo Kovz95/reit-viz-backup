@@ -1,3 +1,5 @@
+import { categorizeMetric } from "@/lib/metricCategories";
+
 // Valuation re-rating math for the Re-Rating tab.
 //
 // Idea: a valuation multiple = Price / Fundamental (or Fundamental / Price for a
@@ -44,8 +46,65 @@ export const RERATE_METRICS: RerateMetric[] = [
   { key: "Dividend Yield", label: "Dividend Yield", dir: "inverse", lowIsCheap: false },
 ];
 
+// Map of curated metrics by key for O(1) override lookups.
+const CURATED_BY_KEY = new Map(RERATE_METRICS.map((m) => [m.key, m]));
+
+/**
+ * Orientation for a valuation metric key. Curated entries win; anything else is
+ * inferred from the name so the dropdown can be data-driven (every valuation
+ * metric in the workbook is offered, not just the hardcoded 15) while the
+ * re-rate math still gets a correct `dir` / `lowIsCheap`.
+ *
+ * A metric is "inverse" (price in the denominator → price up lowers it, and a
+ * HIGHER reading is cheaper) when it is a yield, a cap rate, or a fundamental
+ * over price/EV (FCF/P, FCF/EV, …). Everything else is a price multiple
+ * (P/…, EV/…, …/FCF, PEG): price up raises it and a LOWER reading is cheaper.
+ * EV-based multiples are flagged `approx` — an equity move doesn't move EV
+ * proportionally for levered names (same caveat as EV/EBITDA).
+ */
+export function inferRerateMetric(key: string, label?: string): RerateMetric {
+  const curated = CURATED_BY_KEY.get(key);
+  if (curated) return curated;
+  const k = key.toLowerCase();
+  const inverse =
+    /yield/.test(k) ||
+    /cap\s*rate/.test(k) ||
+    /^\s*fcf\s*\//.test(k) || // FCF/P, FCF/EV → FCF yield
+    /\/\s*ev\b/.test(k);      // …/EV yield (e.g. FCF/EV)
+  const approx = /\bev\b/.test(k); // any EV-based multiple ignores leverage
+  return {
+    key,
+    label: label ?? key,
+    dir: inverse ? "inverse" : "direct",
+    lowIsCheap: !inverse,
+    ...(approx ? { approx: true } : {}),
+  };
+}
+
 export function getRerateMetric(key: string): RerateMetric {
-  return RERATE_METRICS.find((m) => m.key === key) ?? RERATE_METRICS[0];
+  return inferRerateMetric(key);
+}
+
+/**
+ * Full re-rating metric list: the curated set (nice labels + FY1 derived
+ * variants + yields) unioned with every valuation/yield metric present in the
+ * ticker data, so the dropdown offers ALL valuation multiples, not just 15.
+ * Data-only metrics (P/S, P/B, EV/S, P/FCF, FCF/EV, Implied cap rate, …) are
+ * added with inferred orientation. Curated entries win on key collisions.
+ */
+export function buildRerateMetrics(availableKeys: string[]): RerateMetric[] {
+  const out: RerateMetric[] = [...RERATE_METRICS];
+  const seen = new Set(out.map((m) => m.key));
+  for (const key of availableKeys) {
+    if (seen.has(key)) continue;
+    // Only valuation-family metrics belong here. categorizeMetric puts price
+    // multiples under "Valuation" and yields/cap-rate under "Yields".
+    const cat = categorizeMetric(key);
+    if (cat !== "Valuation" && cat !== "Yields") continue;
+    seen.add(key);
+    out.push(inferRerateMetric(key));
+  }
+  return out;
 }
 
 /** Lookback presets in trailing trading days (~250/yr). */

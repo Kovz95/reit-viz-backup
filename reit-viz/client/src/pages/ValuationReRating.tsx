@@ -1,17 +1,19 @@
 // Valuation Re-Rating — what a multiple becomes after an X% price move, and where
 // that sits vs the stock's own history, across the universe, for long/short ranking.
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { getMetricTrailing } from "@/lib/dataService";
+import { getMetricTrailing, getTickers, getTickersCacheSync } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
+import { usePersistedState } from "@/lib/persistedState";
+import { categorizeMetric } from "@/lib/metricCategories";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart } from "lucide-react";
 import {
-  RERATE_METRICS, LOOKBACKS, getRerateMetric, buildRerateRow,
+  LOOKBACKS, getRerateMetric, buildRerateMetrics, buildRerateRow,
   type RerateRow, type RerateClassification,
 } from "@/lib/valuationRerate";
 
@@ -70,13 +72,43 @@ const sortValue = (r: RerateRow, col: SortCol): number | string => {
 export default function ValuationReRating() {
   const [, setLocation] = useLocation();
   const { filteredTickersList } = useUniverse();
-  const [metricKey, setMetricKey] = useState("P/FFO FY2");
-  const [pctMove, setPctMove] = useState(20);
-  const [lookbackDays, setLookbackDays] = useState(1260);
+  // View-defining controls persist across reloads (localStorage).
+  const [metricKey, setMetricKey] = usePersistedState("reit-viz:rerate:metricKey", "P/FFO FY2");
+  const [pctMove, setPctMove] = usePersistedState("reit-viz:rerate:pctMove", 20);
+  const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:rerate:lookbackDays", 1260);
+  const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("reit-viz:rerate:groupBy", "none");
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState<SortCol>("toRich");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [groupBy, setGroupBy] = useState<GroupLevel>("none");
+
+  // All valuation metrics present in the data → dropdown options (curated set
+  // unioned with every workbook valuation/yield metric). Seeded from the sync
+  // cache so options are populated on first paint, then refreshed.
+  const [dataMetrics, setDataMetrics] = useState<string[]>(() => {
+    const c = getTickersCacheSync();
+    return c ? [...new Set(c.flatMap((t) => t.metrics || []))] : [];
+  });
+  useEffect(() => {
+    let cancelled = false;
+    getTickers()
+      .then((ts) => { if (!cancelled) setDataMetrics([...new Set(ts.flatMap((t) => t.metrics || []))]); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const metricGroups = useMemo(() => {
+    const all = buildRerateMetrics(dataMetrics);
+    const groups = new Map<string, typeof all>();
+    for (const m of all) {
+      const cat = categorizeMetric(m.key); // "Valuation" | "Yields"
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(m);
+    }
+    // Valuation first, then Yields, then anything else.
+    const order = ["Valuation", "Yields"];
+    return [...groups.entries()].sort(
+      (a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99),
+    );
+  }, [dataMetrics]);
 
   const metric = getRerateMetric(metricKey);
   const tickers = useMemo(
@@ -212,8 +244,13 @@ export default function ValuationReRating() {
           <Select value={metricKey} onValueChange={setMetricKey}>
             <SelectTrigger className="h-7 w-44 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {RERATE_METRICS.map((m) => (
-                <SelectItem key={m.key} value={m.key} className="text-xs">{m.label}</SelectItem>
+              {metricGroups.map(([category, metrics]) => (
+                <SelectGroup key={category}>
+                  <SelectLabel className="text-[10px] uppercase tracking-wider">{category}</SelectLabel>
+                  {metrics.map((m) => (
+                    <SelectItem key={m.key} value={m.key} className="text-xs">{m.label}</SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>
@@ -266,7 +303,7 @@ export default function ValuationReRating() {
         <span>
           <b>Pro-forma</b> = the multiple if price moves {fmtMove(pctMove)}, with its percentile/z vs the stock's own {LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? ""} history.
           {" "}<b>→Median / ↑Rich / ↓Cheap</b> = implied % price move to re-rate to that historical level — your upside/downside room.
-          {metric.approx && <em className="text-amber-400"> EV/EBITDA assumes EV moves with equity (ignores leverage) — approximate.</em>}
+          {metric.approx && <em className="text-amber-400"> {metric.label} assumes EV moves with equity (ignores leverage) — approximate.</em>}
         </span>
       </div>
 
