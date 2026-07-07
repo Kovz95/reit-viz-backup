@@ -76,8 +76,10 @@ function saveBaskets(baskets: Basket[]): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(baskets));
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
-  } catch {
-    // storage quota or SSR — ignore
+  } catch (e) {
+    // storage quota exceeded / serialization failure — the write was dropped, so
+    // surface it (the in-memory state will still show the basket until reload).
+    console.warn("[baskets] failed to persist baskets to localStorage:", e);
   }
 }
 
@@ -183,9 +185,13 @@ export function useBaskets(): UseBasketsReturn {
     });
   }, []);
 
+  // Resolve by id first, then fall back to name. Basket tokens ("BASKET:<x>") are
+  // emitted as the id on some pages and as the name on others; matching either
+  // keeps a saved basket resolvable no matter which page produced the reference.
+  // (Names are unique — addBasket upserts by name — and never collide with UUIDs.)
   const getBasket = useCallback(
-    (id: string): Basket | undefined => {
-      return baskets.find((b) => b.id === id);
+    (idOrName: string): Basket | undefined => {
+      return baskets.find((b) => b.id === idOrName) ?? baskets.find((b) => b.name === idOrName);
     },
     [baskets]
   );
