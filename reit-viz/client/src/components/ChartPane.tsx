@@ -3054,7 +3054,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         {/* Per-pane data transform toggle */}
         <div className="flex items-center gap-px ml-0.5">
           {(["raw", "zscore", "percentile", "symlog"] as DataTransform[]).map((t) => {
-            const label = t === "raw" ? "Raw" : t === "zscore" ? "Z" : t === "percentile" ? "%" : "Log";
+            const label = t === "raw" ? "Raw" : t === "zscore" ? "Z" : t === "percentile" ? "%" : "SymLog";
             const title = t === "raw" ? "Raw data"
               : t === "zscore" ? "Z-Score"
               : t === "percentile" ? "Percentile"
