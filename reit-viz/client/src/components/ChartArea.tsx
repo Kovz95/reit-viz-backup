@@ -1552,20 +1552,8 @@ export default function ChartArea({
 
         <div className="flex-1" />
 
-        {/* Crosshair data */}
-        {crosshairData && (
-          <div className="flex items-center gap-3 text-[11px] font-mono tabular-nums overflow-hidden">
-            <span className="text-muted-foreground">{crosshairData.time}</span>
-            {Object.entries(crosshairData.values).map(([key, val]) => (
-              <span key={key} className="whitespace-nowrap">
-                <span className="text-muted-foreground">{key}: </span>
-                <span className="text-foreground font-semibold">
-                  {typeof val === "number" ? val.toFixed(2) : val}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
+        {/* Crosshair values now render per-pane (top-left of each plot) instead of
+            here in the toolbar. The aggregation still drives data-table time sync. */}
 
         <div className="flex-1" />
 

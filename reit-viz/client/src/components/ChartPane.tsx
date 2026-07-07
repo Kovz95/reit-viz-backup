@@ -674,6 +674,43 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Keep a stable ref to onCrosshairMove so the subscription closure never goes stale
   const onCrosshairMoveRef = useRef(onCrosshairMove);
   onCrosshairMoveRef.current = onCrosshairMove;
+
+  // Per-pane hover readout (TradingView-style): each pane shows its own series
+  // names + values at the crosshair time, rendered in this pane's legend.
+  const [hoverReadout, setHoverReadout] = useState<{
+    time: string;
+    items: { label: string; value: number; color: string }[];
+  } | null>(null);
+
+  // Clear this pane's readout when any pane broadcasts a pointer-leave.
+  useEffect(() => {
+    const clear = () => setHoverReadout(null);
+    window.addEventListener("reit-viz-crosshair-leave", clear);
+    return () => window.removeEventListener("reit-viz-crosshair-leave", clear);
+  }, []);
+
+  // Map a pane's crosshair `values` (title → number) to labelled, colored items
+  // by looking up each series' color from the pane's series map.
+  const applyLocalReadout = useCallback((time: string | null, values: Record<string, number> | null) => {
+    if (!time || !values || Object.keys(values).length === 0) {
+      setHoverReadout(null);
+      return;
+    }
+    const colorByTitle: Record<string, string> = {};
+    for (const s of seriesMapRef.current.values()) {
+      try {
+        const o: any = s.options();
+        if (o.title) colorByTitle[o.title] = o.color || o.upColor || "#94a3b8";
+        if (o.upColor) colorByTitle["Price"] = o.upColor; // candlestick main series
+      } catch {}
+    }
+    const items = Object.entries(values).map(([label, value]) => ({
+      label,
+      value,
+      color: colorByTitle[label] || "#94a3b8",
+    }));
+    setHoverReadout({ time, items });
+  }, []);
   const [chartReady, setChartReady] = useState(false);
   const [logScale, setLogScale] = useState(false);
   const [dataTransform, setDataTransform] = useState<DataTransform>("raw");
@@ -800,6 +837,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       chart.subscribeCrosshairMove((param: any) => {
         if (!param.time || !param.seriesData) {
           onCrosshairMoveRef.current?.(null);
+          applyLocalReadout(null, null);
           return;
         }
         const values: Record<string, number> = {};
@@ -818,6 +856,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           if (v != null) values[k] = v;
         }
         onCrosshairMoveRef.current?.({ time: String(param.time), values });
+        applyLocalReadout(String(param.time), values);
       });
 
       const ro = new ResizeObserver((entries) => {
@@ -922,8 +961,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     }
     if (Object.keys(values).length > 0) {
       onCrosshairMoveRef.current?.({ time: String(time), values });
+      applyLocalReadout(String(time), values);
     }
-  }, []);
+  }, [applyLocalReadout]);
 
   // Fallback: native pointermove handler extracts crosshair data when
   // LWC's subscribeCrosshairMove doesn't fire (e.g. during hover without click).
@@ -939,6 +979,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       extractCrosshairAt(x);
     };
 
+    const handlePointerLeave = () => {
+      lastPointerXRef.current = null;
+      // Clear every pane's readout: synced panes get their crosshair set via
+      // setCrosshairPosition (fires the move event) but cleared via
+      // clearCrosshairPosition (does NOT), so they'd keep a stale value. A
+      // window broadcast clears them all reliably.
+      window.dispatchEvent(new CustomEvent("reit-viz-crosshair-leave"));
+    };
+
     // When the user scrolls (wheel) the chart pans/zooms, so re-extract at the
     // last known pointer position after a short delay for the chart to settle.
     const handleWheel = () => {
@@ -948,12 +997,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     };
 
     container.addEventListener("pointermove", handlePointerMove);
+    container.addEventListener("pointerleave", handlePointerLeave);
     container.addEventListener("wheel", handleWheel, { passive: true });
     return () => {
       container.removeEventListener("pointermove", handlePointerMove);
+      container.removeEventListener("pointerleave", handlePointerLeave);
       container.removeEventListener("wheel", handleWheel);
     };
-  }, [chartReady, extractCrosshairAt]);
+  }, [chartReady, extractCrosshairAt, applyLocalReadout]);
 
   // Listen for sub-chart crosshair events (sub → parent sync).
   // When the user hovers over a sub-indicator chart (ROC, RSI, etc.),
@@ -2603,6 +2654,24 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           className="ml-0.5"
         />
       </div>
+      {/* Per-pane crosshair readout — this pane's own series names + values at
+          the hovered time (TradingView-style, in each plot instead of one shared
+          readout in the top toolbar). */}
+      {hoverReadout && hoverReadout.items.length > 0 && (
+        <div
+          className="absolute left-2 z-20 flex items-center gap-2 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-1rem)] overflow-hidden"
+          style={{ top: colorByMetric ? 44 : 24 }}
+          data-testid={`chart-pane-${paneId}-readout`}
+        >
+          <span className="text-muted-foreground/70">{hoverReadout.time}</span>
+          {hoverReadout.items.map((it, i) => (
+            <span key={i} className="whitespace-nowrap">
+              <span style={{ color: it.color }}>{it.label}</span>{" "}
+              <span className="text-foreground font-semibold">{it.value.toFixed(2)}</span>
+            </span>
+          ))}
+        </div>
+      )}
       {/* Color-by gradient legend — separate row to avoid overlapping right-side buttons */}
       {colorByMetric && colorByRange && (
         <div className="absolute top-6 left-2 z-10 flex items-center gap-1.5 bg-background/90 px-1.5 py-0.5 rounded">
