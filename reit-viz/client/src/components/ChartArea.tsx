@@ -886,6 +886,7 @@ export default function ChartArea({
   const drawTools = [
     { id: "hline", label: "H-Line" },
     { id: "trendline", label: "Trendline" },
+    { id: "measure", label: "Measure" },
     { id: "freehand", label: "Freehand" },
     { id: "eraser", label: "Eraser" },
     { id: "fractal-anchor", label: "Fractal Anchor" },
@@ -1892,7 +1893,7 @@ export default function ChartArea({
           </SelectContent>
         </Select>
 
-        {activeTool !== "none" && activeTool !== "eraser" && (
+        {activeTool !== "none" && activeTool !== "eraser" && activeTool !== "measure" && (
           <input
             type="color"
             value={drawColor}

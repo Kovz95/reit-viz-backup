@@ -39,6 +39,7 @@ import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
 import { Info } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
+import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import ExportMenu from "@/components/ExportMenu";
 
 // ── Gradient color helper for color-by-variable ──
@@ -678,6 +679,18 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     pending: boolean;
     startPoint?: { time: string; price: number };
   }>({ pending: false });
+  // Measure tool (TradingView-style ruler): transient primitive overlay + info box.
+  const measurePrimRef = useRef<{ prim: MeasurePrimitive; series: ISeriesApi<any> } | null>(null);
+  const [measureBox, setMeasureBox] = useState<{
+    clientX: number;
+    clientY: number;
+    bars: number;
+    days: number;
+    angle: number;
+    absChange: number;
+    pctChange: number;
+    up: boolean;
+  } | null>(null);
 
   // Helper: find any usable series for coordinate conversion (not limited to :close/:ohlc)
   const getAnySeries = useCallback((): ISeriesApi<any> | null => {
@@ -998,7 +1011,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
-    if (activeTool === "none" || activeTool === "freehand" || activeTool === "eraser") {
+    if (activeTool === "none" || activeTool === "freehand" || activeTool === "eraser" || activeTool === "measure") {
       drawStateRef.current = { pending: false };
       return;
     }
@@ -1194,6 +1207,145 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       try { chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: true }, handleScale: { mouseWheel: true, pinch: true } }); } catch {}
     };
   }, [activeTool, drawColor, chartReady, paneSeries, onDrawingAdded, getAnySeries]);
+
+  // Measure tool (TradingView-style ruler): press → drag → release.
+  // While dragging, draws a live line and a floating box with bars / days /
+  // angle / absolute + % price change. Result stays until the next drag or
+  // until the tool is switched off. Nothing is persisted to drawingsRef.
+  useEffect(() => {
+    const container = containerRef.current;
+    const chart = chartRef.current;
+    if (!container || !chart || !chartReady) return;
+
+    const clearOverlay = () => {
+      if (measurePrimRef.current) {
+        try { measurePrimRef.current.series.detachPrimitive(measurePrimRef.current.prim); } catch {}
+        measurePrimRef.current = null;
+      }
+      setMeasureBox(null);
+    };
+
+    if (activeTool !== "measure") {
+      clearOverlay();
+      return;
+    }
+
+    // Sorted, de-duped bar times for bars-passed / days computation.
+    const sortedTimes = [...new Set(paneSeries.flatMap((s) => s.data.map((d) => d.time)))].sort();
+    const snapIdx = (logical: number) =>
+      Math.max(0, Math.min(sortedTimes.length - 1, Math.round(logical)));
+    const daysBetween = (a: string, b: string) => {
+      const ta = Date.parse(a), tb = Date.parse(b);
+      if (!isFinite(ta) || !isFinite(tb)) return NaN;
+      return Math.round(Math.abs(tb - ta) / 86400000);
+    };
+
+    let isMeasuring = false;
+    let startPx: { x: number; y: number } | null = null;
+    let startLogical = 0;
+    let startPrice = 0;
+
+    const readPoint = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const anySeries = getAnySeries();
+      if (!anySeries) return null;
+      const price = anySeries.coordinateToPrice(y);
+      const logical = chart.timeScale().coordinateToLogical(x);
+      if (price === null || price === undefined || logical === null) return null;
+      return { x, y, price, logical: logical as number };
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return; // left click only
+      const pt = readPoint(e);
+      if (!pt) return;
+      clearOverlay();
+      isMeasuring = true;
+      startPx = { x: pt.x, y: pt.y };
+      startLogical = pt.logical;
+      startPrice = pt.price;
+      // Disable all chart interaction while measuring so the drag is ours.
+      chart.applyOptions({ handleScroll: false, handleScale: false });
+      e.preventDefault();
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isMeasuring || !startPx) return;
+      const pt = readPoint(e);
+      if (!pt) return;
+
+      const startI = snapIdx(startLogical);
+      const endI = snapIdx(pt.logical);
+      const startTime = sortedTimes[startI];
+      const endTime = sortedTimes[endI];
+
+      const bars = Math.abs(endI - startI);
+      const days = daysBetween(startTime, endTime);
+      const angle = (Math.atan2(-(pt.y - startPx.y), pt.x - startPx.x) * 180) / Math.PI;
+      const absChange = pt.price - startPrice;
+      const pctChange = startPrice !== 0 ? (absChange / startPrice) * 100 : 0;
+      const up = absChange >= 0;
+
+      setMeasureBox({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        bars,
+        days,
+        angle,
+        absChange,
+        pctChange,
+        up,
+      });
+
+      // Live overlay: shaded rectangle + diagonal line via the measure primitive.
+      try {
+        if (!measurePrimRef.current) {
+          const series = getAnySeries();
+          if (series) {
+            const prim = new MeasurePrimitive();
+            series.attachPrimitive(prim);
+            measurePrimRef.current = { prim, series };
+          }
+        }
+        measurePrimRef.current?.prim.setMeasure({
+          startTime,
+          startPrice,
+          endTime,
+          endPrice: pt.price,
+          up,
+        });
+      } catch {}
+    };
+
+    const handleMouseUp = () => {
+      if (!isMeasuring) return;
+      isMeasuring = false;
+      // Re-enable chart interaction (pressedMouseMove stays off — tool is still active).
+      chart.applyOptions({
+        handleScroll: { mouseWheel: true, pressedMouseMove: false },
+        handleScale: { mouseWheel: true, pinch: true },
+      });
+      // Leave the line + box on screen until the next drag or tool switch.
+    };
+
+    container.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      container.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      try {
+        chart.applyOptions({
+          handleScroll: { mouseWheel: true, pressedMouseMove: true },
+          handleScale: { mouseWheel: true, pinch: true },
+        });
+      } catch {}
+    };
+  }, [activeTool, chartReady, paneSeries, getAnySeries]);
 
   // Eraser tool: click to delete nearest drawing
   useEffect(() => {
@@ -2458,6 +2610,33 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       )}
       {/* Main chart area — flex-1 takes remaining space after sub-charts */}
       <div ref={containerRef} className="w-full flex-1 min-h-0" data-testid={`chart-pane-${paneId}`} />
+      {/* Measure tool readout (TradingView-style) — follows the cursor while dragging */}
+      {measureBox && (
+        <div
+          className="rounded shadow-lg text-white text-[11px] leading-tight px-2 py-1.5 whitespace-nowrap"
+          style={{
+            position: "fixed",
+            left: measureBox.clientX + 16,
+            top: measureBox.clientY + 16,
+            zIndex: 60,
+            pointerEvents: "none",
+            background: measureBox.up ? "rgba(8,153,129,0.92)" : "rgba(242,54,69,0.92)",
+          }}
+          data-testid={`measure-box-${paneId}`}
+        >
+          <div className="font-semibold text-[13px]">
+            {measureBox.absChange >= 0 ? "+" : ""}
+            {measureBox.absChange.toFixed(2)}{"  "}
+            ({measureBox.pctChange >= 0 ? "+" : ""}
+            {measureBox.pctChange.toFixed(2)}%)
+          </div>
+          <div className="opacity-90">
+            {measureBox.bars} bar{measureBox.bars === 1 ? "" : "s"}
+            {Number.isFinite(measureBox.days) ? `, ${measureBox.days} day${measureBox.days === 1 ? "" : "s"}` : ""}
+          </div>
+          <div className="opacity-90">Angle {measureBox.angle.toFixed(1)}°</div>
+        </div>
+      )}
       {/* Sub-indicator charts (RSI, MACD, HA) stacked below */}
       {subCloseData.length > 0 && subCharts.map((st) => (
         <SubIndicatorChart
