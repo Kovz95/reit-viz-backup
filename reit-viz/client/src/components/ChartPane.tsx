@@ -197,6 +197,7 @@ type SubChartType = "rsi" | "macd" | "ha" | "atr" | "roc" | "stochastic" | "obv"
 function SubIndicatorChart({
   type,
   closeData,
+  fullDates,
   activeIndicators,
   parentChart,
   baseLabel,
@@ -207,6 +208,9 @@ function SubIndicatorChart({
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
+  /** Global trading-date axis — used for the invisible spacer so the sub-chart
+   *  shares identical logical indices with the parent pane (see below). */
+  fullDates: string[];
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   baseLabel: string;
@@ -259,6 +263,27 @@ function SubIndicatorChart({
     let firstSubSeries: any = null;
     // Collect all named series in this sub-chart for value extraction
     const subSeriesList: any[] = [];
+
+    // Invisible spacer spanning the full global date axis — identical to the one
+    // the main panes carry (see the `spacerSeriesRef` effect below). Without it,
+    // this sub-chart's logical index 0 would be its first indicator bar (RSI is
+    // trimmed by its warmup period, ~14 bars in), so the logical-range sync with
+    // the parent (see "Sync time scale with parent" below) would slide the
+    // oscillator horizontally off the price bars it is derived from. Giving the
+    // sub-chart the same full-axis spacer makes logical index i map to the same
+    // date here as in the parent, so RSI/MACD/etc. stay aligned by date.
+    if (fullDates.length > 0) {
+      try {
+        const spacer = chart.addSeries(LineSeries, {
+          visible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        spacer.setData(fullDates.map((t) => ({ time: t as unknown as Time })));
+      } catch {}
+    }
 
     if (type === "rsi" && typeof activeIndicators.rsi === "number") {
       const rsiData = computeRSI(closeData, activeIndicators.rsi);
@@ -608,7 +633,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, activeIndicators, type, baseLabel, parentChart, IC]);
+  }, [closeData, fullDates, activeIndicators, type, baseLabel, parentChart, IC]);
 
   // Resize
   useEffect(() => {
@@ -3181,6 +3206,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             <SubIndicatorChart
               type={st}
               closeData={subCloseData}
+              fullDates={fullDates}
               activeIndicators={activeIndicators}
               parentChart={chartRef.current}
               baseLabel={subBaseLabel}
