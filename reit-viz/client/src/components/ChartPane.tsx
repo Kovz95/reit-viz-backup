@@ -42,6 +42,8 @@ import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
 import { d as detectSRLevels, D as DEFAULT_SR_CFG } from "@/components/SupportResistance";
+import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
+import { getPatternSettings } from "@/lib/patternSettings";
 import ExportMenu from "@/components/ExportMenu";
 
 // ── Gradient color helper for color-by-variable ──
@@ -883,6 +885,57 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       price: highFirst ? H - range * r : L + range * r,
     }));
   }, [activeIndicators.fibLevels, detectorOhlc]);
+
+  // ── Pattern Recognition ──
+  // Settings live in localStorage (per pane) and change via window events, so a
+  // nonce forces recomputation on settings-changed / rescan for this pane.
+  const [patternNonce, setPatternNonce] = useState(0);
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent).detail?.paneId === paneId) setPatternNonce((x) => x + 1);
+    };
+    window.addEventListener("reit-viz:patterns-settings-changed", onChange);
+    window.addEventListener("reit-viz:patterns-rescan", onChange);
+    return () => {
+      window.removeEventListener("reit-viz:patterns-settings-changed", onChange);
+      window.removeEventListener("reit-viz:patterns-rescan", onChange);
+    };
+  }, [paneId]);
+
+  const patternBars = useMemo(() => {
+    if (!Array.isArray(ohlcData)) return [];
+    return (ohlcData as any[])
+      .filter((b) => b && typeof b.time === "string")
+      .map((b) => ({ time: b.time as string, open: Number(b.open), high: Number(b.high), low: Number(b.low), close: Number(b.close) }));
+  }, [ohlcData]);
+
+  const patternResults = useMemo(() => {
+    const s = getPatternSettings(paneId);
+    if (!s.enabled || patternBars.length < 40) return { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[] };
+    let patterns: ReturnType<typeof detectChartPatterns> = [];
+    try {
+      patterns = detectChartPatterns(patternBars, {
+        sensitivity: s.sensitivity, lookbackBars: s.lookbackBars, maxPatterns: s.maxPatterns, perPattern: s.perPattern,
+      });
+    } catch { patterns = []; }
+    const relevant = s.showMostRelevant
+      ? rankRelevance(patterns, patternBars, s.lookbackBars).slice(0, 5).map((p) => ({
+          id: `${p.key}-${p.endIdx}`,
+          label: p.label,
+          direction: p.direction,
+          relevance: p.relevance ?? 0,
+          components: p.components ?? { confidence: 0, recency: 0, proximity: 0 },
+        }))
+      : [];
+    return { patterns, relevant };
+    // patternNonce forces re-read of localStorage settings.
+  }, [patternBars, paneId, patternNonce]);
+
+  // Publish results to the PatternsPanel (badge count + most-relevant list).
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-detected", { detail: { paneId, patterns: patternResults.patterns } }));
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-most-relevant", { detail: { paneId, relevant: patternResults.relevant } }));
+  }, [patternResults, paneId]);
 
   // Detach this pane's measure overlay (line/rect primitive + info box).
   const clearMeasureOverlay = useCallback(() => {
@@ -2296,6 +2349,51 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
     }
 
+    // ── Chart patterns (Pattern Recognition) ──
+    if (patternResults.patterns.length && patternBars.length) {
+      const timeAt = (idx: number) => patternBars[idx]?.time;
+      for (const pat of patternResults.patterns) {
+        const color = pat.direction > 0 ? "#26a69a" : pat.direction < 0 ? "#ef5350" : "#3b82f6";
+        let labelSeries: ISeriesApi<any> | null = null;
+        for (const ln of pat.lines) {
+          const data = ln.points
+            .map((p) => ({ time: timeAt(p.idx) as Time, value: p.price }))
+            .filter((d) => d.time != null)
+            .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+          if (data.length < 2) continue;
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 2,
+            lineStyle: ln.dashed ? LineStyle.Dashed : LineStyle.Solid,
+            title: "",
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 3,
+            autoscaleInfoProvider: () => null,
+          });
+          s.setData(data);
+          indicatorSeriesRef.current.push(s);
+          if (!labelSeries) labelSeries = s;
+        }
+        if (labelSeries) {
+          const endTime = timeAt(pat.endIdx);
+          if (endTime) {
+            try {
+              createSeriesMarkers(labelSeries, [{
+                time: endTime as Time,
+                position: pat.direction < 0 ? "aboveBar" : "belowBar",
+                color,
+                shape: pat.direction > 0 ? "arrowUp" : pat.direction < 0 ? "arrowDown" : "circle",
+                text: pat.label,
+              }] as SeriesMarker<Time>[]);
+            } catch {}
+          }
+        }
+      }
+    }
+
     // ── Clean up previous primitives (quarter shading + vertical lines) ──
     // Detach quarter shading primitive
     if (quarterShadingCleanupRef.current) {
@@ -2403,7 +2501,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else
