@@ -1,20 +1,20 @@
 // Valuation Re-Rating — what a multiple becomes after an X% price move, and where
 // that sits vs the stock's own history, across the universe, for long/short ranking.
-import { useState, useMemo, useEffect, Fragment } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { getMetricTrailing, getTickers, getTickersCacheSync } from "@/lib/dataService";
+import { getMetricTrailing } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
-import { categorizeMetric } from "@/lib/metricCategories";
+import RerateMetricPicker from "@/components/RerateMetricPicker";
 import {
-  Select, SelectContent, SelectGroup, SelectLabel, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart } from "lucide-react";
 import {
-  LOOKBACKS, getRerateMetric, buildRerateMetrics, buildRerateRow,
-  type RerateRow, type RerateClassification,
+  LOOKBACKS, getRerateMetric, buildRerateRow,
+  type RerateRow, type RerateClassification, type RerateMetric,
 } from "@/lib/valuationRerate";
 
 // The six classification levels the table can be grouped by (plus "none").
@@ -58,59 +58,34 @@ type SortCol =
   | "ticker" | "m0" | "nowPctile" | "nowZ" | "proForma" | "proFormaPctile"
   | "proFormaZ" | "toMedian" | "toRich" | "toCheap" | "rr";
 
-const sortValue = (r: RerateRow, col: SortCol): number | string => {
-  switch (col) {
-    case "ticker": return r.ticker;
-    case "rr": {
-      const up = r.toRich, dn = Math.abs(r.toCheap);
-      return dn > 0 && Number.isFinite(up) ? up / dn : -Infinity;
-    }
-    default: return (r as any)[col] ?? -Infinity;
-  }
-};
+type TickerMetaLite = { ticker: string; name: string } & RerateClassification;
+// One table row per ticker, holding a computed RerateRow per selected metric.
+type MultiRow = { meta: TickerMetaLite; byMetric: Record<string, RerateRow> };
+
+// Reward:risk = upside ÷ |downside|.
+const rrOf = (rr: RerateRow): number =>
+  Math.abs(rr.toCheap) > 0 && Number.isFinite(rr.toRich) ? rr.toRich / Math.abs(rr.toCheap) : NaN;
 
 export default function ValuationReRating() {
   const [, setLocation] = useLocation();
   const { filteredTickersList } = useUniverse();
-  // View-defining controls persist across reloads (localStorage).
-  const [metricKey, setMetricKey] = usePersistedState("reit-viz:rerate:metricKey", "P/FFO FY2");
+  // View-defining controls persist across reloads (localStorage). The metric is
+  // a MULTI-select: the table shows a full stat group per selected multiple.
+  const [metricKeys, setMetricKeys] = usePersistedState<string[]>("reit-viz:rerate:metricKeys", ["P/FFO FY2"]);
   const [pctMove, setPctMove] = usePersistedState("reit-viz:rerate:pctMove", 20);
   const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:rerate:lookbackDays", 1260);
   const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("reit-viz:rerate:groupBy", "none");
   const [search, setSearch] = useState("");
+  // Sort = one metric's one stat (sortMetric null → sort by Ticker).
   const [sortCol, setSortCol] = useState<SortCol>("toRich");
+  const [sortMetric, setSortMetric] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  // All valuation metrics present in the data → dropdown options (curated set
-  // unioned with every workbook valuation/yield metric). Seeded from the sync
-  // cache so options are populated on first paint, then refreshed.
-  const [dataMetrics, setDataMetrics] = useState<string[]>(() => {
-    const c = getTickersCacheSync();
-    return c ? [...new Set(c.flatMap((t) => t.metrics || []))] : [];
-  });
-  useEffect(() => {
-    let cancelled = false;
-    getTickers()
-      .then((ts) => { if (!cancelled) setDataMetrics([...new Set(ts.flatMap((t) => t.metrics || []))]); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-  const metricGroups = useMemo(() => {
-    const all = buildRerateMetrics(dataMetrics);
-    const groups = new Map<string, typeof all>();
-    for (const m of all) {
-      const cat = categorizeMetric(m.key); // "Valuation" | "Yields"
-      if (!groups.has(cat)) groups.set(cat, []);
-      groups.get(cat)!.push(m);
-    }
-    // Valuation first, then Yields, then anything else.
-    const order = ["Valuation", "Yields"];
-    return [...groups.entries()].sort(
-      (a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99),
-    );
-  }, [dataMetrics]);
-
-  const metric = getRerateMetric(metricKey);
+  const setMetrics = (keys: string[]) => setMetricKeys(keys.length ? keys : metricKeys);
+  const removeMetric = (key: string) =>
+    setMetricKeys(metricKeys.length > 1 ? metricKeys.filter((k) => k !== key) : metricKeys);
+  const metrics = useMemo(() => metricKeys.map((k) => getRerateMetric(k)), [metricKeys]);
+  const effSortMetric = sortMetric && metricKeys.includes(sortMetric) ? sortMetric : metricKeys[0];
   const tickers = useMemo(
     () => filteredTickersList.map((t) => ({
       ticker: t.ticker, name: t.name,
@@ -121,77 +96,119 @@ export default function ValuationReRating() {
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
 
-  // Fetch each ticker's trailing multiple history (batched), keyed on metric+lookback+set.
-  const { data: trailingMap = {}, isLoading } = useQuery({
-    queryKey: ["rerate-trailing", metricKey, lookbackDays, tickerKey],
+  // Fetch each ticker's trailing history for EVERY selected metric (batched),
+  // keyed on the metric set + lookback + universe. Shape: metricKey → ticker → vals.
+  const metricsSig = metricKeys.join("|");
+  const { data: trailingByMetric = {}, isLoading } = useQuery({
+    queryKey: ["rerate-trailing-multi", metricsSig, lookbackDays, tickerKey],
     queryFn: async () => {
-      const map: Record<string, number[]> = {};
+      const out: Record<string, Record<string, number[]>> = {};
       const batchSize = 15;
-      for (let b = 0; b < tickers.length; b += batchSize) {
-        const batch = tickers.slice(b, b + batchSize);
-        const results = await Promise.all(
-          batch.map(async (t) => ({ ticker: t.ticker, vals: await getMetricTrailing(t.ticker, metricKey, lookbackDays) })),
-        );
-        for (const r of results) map[r.ticker] = r.vals;
+      for (const mk of metricKeys) {
+        const map: Record<string, number[]> = {};
+        for (let b = 0; b < tickers.length; b += batchSize) {
+          const batch = tickers.slice(b, b + batchSize);
+          const results = await Promise.all(
+            batch.map(async (t) => ({ ticker: t.ticker, vals: await getMetricTrailing(t.ticker, mk, lookbackDays) })),
+          );
+          for (const r of results) map[r.ticker] = r.vals;
+        }
+        out[mk] = map;
       }
-      return map;
+      return out;
     },
-    enabled: tickers.length > 0,
+    enabled: tickers.length > 0 && metricKeys.length > 0,
   });
 
-  const rows = useMemo(() => {
-    const out: RerateRow[] = [];
+  // One row per ticker; each carries a RerateRow per selected metric (present
+  // only where that ticker has enough history for that multiple).
+  const rows = useMemo<MultiRow[]>(() => {
+    const out: MultiRow[] = [];
     for (const t of tickers) {
-      const trailing = trailingMap[t.ticker];
-      if (!trailing) continue;
-      const row = buildRerateRow(t, trailing, pctMove, metric);
-      if (row) out.push(row);
+      const byMetric: Record<string, RerateRow> = {};
+      for (const mk of metricKeys) {
+        const trailing = trailingByMetric[mk]?.[t.ticker];
+        if (!trailing) continue;
+        const row = buildRerateRow(t, trailing, pctMove, getRerateMetric(mk));
+        if (row) byMetric[mk] = row;
+      }
+      if (Object.keys(byMetric).length) out.push({ meta: t, byMetric });
     }
     return out;
-  }, [tickers, trailingMap, pctMove, metric]);
+  }, [tickers, trailingByMetric, pctMove, metricKeys]);
+
+  const sortValueOf = (row: MultiRow): number | string => {
+    if (sortCol === "ticker") return row.meta.ticker;
+    const rr = row.byMetric[effSortMetric];
+    if (!rr) return -Infinity;
+    const v = sortCol === "rr" ? rrOf(rr) : (rr as any)[sortCol];
+    return Number.isFinite(v) ? v : -Infinity;
+  };
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = q ? rows.filter((x) => x.ticker.includes(q) || x.name.toUpperCase().includes(q)) : rows;
+    let r = q ? rows.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q)) : rows;
     r = [...r].sort((a, b) => {
-      const av = sortValue(a, sortCol), bv = sortValue(b, sortCol);
-      let cmp = typeof av === "string" || typeof bv === "string"
+      const av = sortValueOf(a), bv = sortValueOf(b);
+      const cmp = typeof av === "string" || typeof bv === "string"
         ? String(av).localeCompare(String(bv))
         : (av as number) - (bv as number);
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, sortDir]);
+  }, [rows, search, sortCol, effSortMetric, sortDir]);
 
   // When grouping, partition the already-sorted rows by the chosen classification
   // (rows keep their sort order within each group; groups are ordered A→Z).
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
-    const map = new Map<string, RerateRow[]>();
+    const map = new Map<string, MultiRow[]>();
     for (const r of visible) {
-      const key = (r[groupBy as keyof RerateClassification] as string) || "—";
+      const key = (r.meta[groupBy as keyof RerateClassification] as string) || "—";
       (map.get(key) ?? map.set(key, []).get(key)!).push(r);
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [visible, groupBy]);
 
-  const toggleSort = (col: SortCol) => {
-    if (sortCol === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortCol(col); setSortDir(col === "ticker" ? "asc" : "desc"); }
+  const totalCols = 2 + metrics.length * 10;
+
+  // Sort targets a (metric, stat) pair; metricKey null → the shared Ticker column.
+  const isActiveSort = (col: SortCol, metricKey: string | null) =>
+    sortCol === col && (col === "ticker" || (metricKey ?? metricKeys[0]) === effSortMetric);
+
+  const toggleSort = (col: SortCol, metricKey: string | null) => {
+    if (isActiveSort(col, metricKey)) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortCol(col); setSortMetric(metricKey); setSortDir(col === "ticker" ? "asc" : "desc"); }
   };
 
-  const SortIcon = ({ col }: { col: SortCol }) =>
-    sortCol !== col ? <ArrowUpDown className="w-3 h-3 inline opacity-40" />
+  const SortIcon = ({ col, metricKey }: { col: SortCol; metricKey: string | null }) =>
+    !isActiveSort(col, metricKey) ? <ArrowUpDown className="w-3 h-3 inline opacity-40" />
       : sortDir === "asc" ? <ArrowUp className="w-3 h-3 inline" /> : <ArrowDown className="w-3 h-3 inline" />;
 
-  const Th = ({ col, label, title }: { col: SortCol; label: string; title?: string }) => (
+  const Th = ({ col, label, title, metricKey, sep }: { col: SortCol; label: string; title?: string; metricKey: string; sep?: boolean }) => (
     <th
-      className="px-2 py-1 text-right whitespace-nowrap cursor-pointer hover:text-foreground select-none"
-      onClick={() => toggleSort(col)}
+      className={`px-2 py-1 text-right whitespace-nowrap cursor-pointer hover:text-foreground select-none ${sep ? "border-l border-border/60" : ""}`}
+      onClick={() => toggleSort(col, metricKey)}
       title={title}
     >
-      {label} <SortIcon col={col} />
+      {label} <SortIcon col={col} metricKey={metricKey} />
     </th>
+  );
+
+  // The 10 stat headers for one metric's column group.
+  const metricHeaderCells = (m: RerateMetric) => (
+    <>
+      <Th col="m0" label="Now" title="Current multiple" metricKey={m.key} sep />
+      <Th col="nowPctile" label="%ile" title="Where the current multiple sits in its history (0=low, 100=high)" metricKey={m.key} />
+      <Th col="nowZ" label="z" title="Current multiple z-score vs history" metricKey={m.key} />
+      <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma multiple after a ${fmtMove(pctMove)} price move`} metricKey={m.key} />
+      <Th col="proFormaPctile" label="%ile" title="Pro-forma multiple's historical percentile" metricKey={m.key} />
+      <Th col="proFormaZ" label="z" title="Pro-forma multiple z-score" metricKey={m.key} />
+      <Th col="toMedian" label="→Med" title="Implied % price move to re-rate to the historical median multiple" metricKey={m.key} />
+      <Th col="toRich" label="↑Rich" title="Implied % move to the rich end of history (upside room)" metricKey={m.key} />
+      <Th col="toCheap" label="↓Cheap" title="Implied % move to the cheap end of history (downside risk)" metricKey={m.key} />
+      <Th col="rr" label="R:R" title="Reward/risk = upside ÷ |downside|" metricKey={m.key} />
+    </>
   );
 
   // Stash the row's ticker + current multiple/lookback and jump to the Charts
@@ -200,60 +217,70 @@ export default function ValuationReRating() {
     try {
       sessionStorage.setItem(
         "reit-viz:rerate-to-charts",
-        JSON.stringify({ ticker, metricKey, lookbackDays }),
+        JSON.stringify({ ticker, metricKey: effSortMetric, lookbackDays }),
       );
     } catch {}
     setLocation("/");
   };
 
-  const renderRow = (r: RerateRow) => {
-    const rr = Math.abs(r.toCheap) > 0 && Number.isFinite(r.toRich) ? r.toRich / Math.abs(r.toCheap) : NaN;
+  // Frozen left columns so the ticker stays visible while scrolling metrics.
+  const STICKY0 = "sticky left-0 bg-card z-10";
+  const STICKY1 = "sticky left-7 bg-card z-10";
+
+  // The 10 data cells for one metric's column group (blank when the ticker
+  // lacks history for that multiple).
+  const renderMetricCells = (rr: RerateRow | undefined, m: RerateMetric) => {
+    if (!rr) return (
+      <>
+        {Array.from({ length: 10 }).map((_, i) => (
+          <td key={i} className={`px-2 py-1 text-right text-muted-foreground/40 ${i === 0 ? "border-l border-border/60" : ""}`}>—</td>
+        ))}
+      </>
+    );
+    const inv = m.dir === "inverse";
+    const rr2 = rrOf(rr);
     return (
-      <tr key={r.ticker} className="border-b border-border/40 hover:bg-muted/30">
-        <td className="px-1 py-1 text-center">
-          <button
-            type="button"
-            onClick={() => openInCharts(r.ticker)}
-            title={`Chart ${r.ticker} — ${metricKey} with percentile, z-score & reward:risk over time`}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <LineChart className="w-3.5 h-3.5" />
-          </button>
-        </td>
-        <td className="px-2 py-1 text-left font-semibold" title={`${r.name} · ${r.sector}`}>{r.ticker}</td>
-        <td className="px-2 py-1 text-right">{fmtMult(r.m0, metric.dir === "inverse")}</td>
-        <td className={`px-2 py-1 text-right ${cheapnessColor(r.nowPctile, metric.lowIsCheap)}`}>{fmtPctile(r.nowPctile)}</td>
-        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.nowZ)}</td>
-        <td className="px-2 py-1 text-right">{fmtMult(r.proForma, metric.dir === "inverse")}</td>
-        <td className={`px-2 py-1 text-right ${cheapnessColor(r.proFormaPctile, metric.lowIsCheap)}`}>{fmtPctile(r.proFormaPctile)}</td>
-        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(r.proFormaZ)}</td>
-        <td className={`px-2 py-1 text-right ${moveColor(r.toMedian)}`}>{fmtMove(r.toMedian)}</td>
-        <td className={`px-2 py-1 text-right ${moveColor(r.toRich)}`}>{fmtMove(r.toRich)}</td>
-        <td className={`px-2 py-1 text-right ${moveColor(r.toCheap)}`}>{fmtMove(r.toCheap)}</td>
-        <td className="px-2 py-1 text-right text-muted-foreground">{Number.isFinite(rr) ? rr.toFixed(2) : "—"}</td>
-      </tr>
+      <>
+        <td className="px-2 py-1 text-right border-l border-border/60">{fmtMult(rr.m0, inv)}</td>
+        <td className={`px-2 py-1 text-right ${cheapnessColor(rr.nowPctile, m.lowIsCheap)}`}>{fmtPctile(rr.nowPctile)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(rr.nowZ)}</td>
+        <td className="px-2 py-1 text-right">{fmtMult(rr.proForma, inv)}</td>
+        <td className={`px-2 py-1 text-right ${cheapnessColor(rr.proFormaPctile, m.lowIsCheap)}`}>{fmtPctile(rr.proFormaPctile)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{fmtZ(rr.proFormaZ)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(rr.toMedian)}`}>{fmtMove(rr.toMedian)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(rr.toRich)}`}>{fmtMove(rr.toRich)}</td>
+        <td className={`px-2 py-1 text-right ${moveColor(rr.toCheap)}`}>{fmtMove(rr.toCheap)}</td>
+        <td className="px-2 py-1 text-right text-muted-foreground">{Number.isFinite(rr2) ? rr2.toFixed(2) : "—"}</td>
+      </>
     );
   };
+
+  const renderRow = (r: MultiRow) => (
+    <tr key={r.meta.ticker} className="border-b border-border/40 hover:bg-muted/30">
+      <td className={`px-1 py-1 text-center ${STICKY0}`}>
+        <button
+          type="button"
+          onClick={() => openInCharts(r.meta.ticker)}
+          title={`Chart ${r.meta.ticker} — ${effSortMetric} with percentile, z-score & reward:risk over time`}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <LineChart className="w-3.5 h-3.5" />
+        </button>
+      </td>
+      <td className={`px-2 py-1 text-left font-semibold ${STICKY1}`} title={`${r.meta.name} · ${r.meta.sector}`}>{r.meta.ticker}</td>
+      {metricKeys.map((mk, i) => (
+        <Fragment key={mk}>{renderMetricCells(r.byMetric[mk], metrics[i])}</Fragment>
+      ))}
+    </tr>
+  );
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Controls */}
       <div className="flex items-end gap-3 flex-wrap px-3 py-2 border-b border-border bg-card flex-shrink-0">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Multiple</div>
-          <Select value={metricKey} onValueChange={setMetricKey}>
-            <SelectTrigger className="h-7 w-44 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {metricGroups.map(([category, metrics]) => (
-                <SelectGroup key={category}>
-                  <SelectLabel className="text-[10px] uppercase tracking-wider">{category}</SelectLabel>
-                  {metrics.map((m) => (
-                    <SelectItem key={m.key} value={m.key} className="text-xs">{m.label}</SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Multiples</div>
+          <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Price move %</div>
@@ -303,48 +330,57 @@ export default function ValuationReRating() {
         <span>
           <b>Pro-forma</b> = the multiple if price moves {fmtMove(pctMove)}, with its percentile/z vs the stock's own {LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? ""} history.
           {" "}<b>→Median / ↑Rich / ↓Cheap</b> = implied % price move to re-rate to that historical level — your upside/downside room.
-          {metric.approx && <em className="text-amber-400"> {metric.label} assumes EV moves with equity (ignores leverage) — approximate.</em>}
+          {metrics.some((m) => m.approx) && <em className="text-amber-400"> EV-based multiples assume EV moves with equity (ignores leverage) — approximate.</em>}
         </span>
       </div>
 
-      {/* Table */}
+      {/* Table — one full stat group per selected metric, horizontally scrollable */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full text-xs font-mono">
+        <table className="min-w-full text-xs font-mono">
           <thead className="sticky top-0 bg-card z-10 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
             <tr>
-              <th className="px-1 py-1 w-7" title="Open in Charts" />
-              <th className="px-2 py-1 text-left cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("ticker")}>
-                Ticker <SortIcon col="ticker" />
+              <th className={`px-1 py-1 w-7 ${STICKY0} z-20`} title="Open in Charts" rowSpan={2} />
+              <th
+                className={`px-2 py-1 text-left cursor-pointer hover:text-foreground select-none ${STICKY1} z-20`}
+                onClick={() => toggleSort("ticker", null)}
+                rowSpan={2}
+              >
+                Ticker <SortIcon col="ticker" metricKey={null} />
               </th>
-              <Th col="m0" label="Now" title="Current multiple" />
-              <Th col="nowPctile" label="%ile" title="Where the current multiple sits in its history (0=low, 100=high)" />
-              <Th col="nowZ" label="z" title="Current multiple z-score vs history" />
-              <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma multiple after a ${fmtMove(pctMove)} price move`} />
-              <Th col="proFormaPctile" label="%ile" title="Pro-forma multiple's historical percentile" />
-              <Th col="proFormaZ" label="z" title="Pro-forma multiple z-score" />
-              <Th col="toMedian" label="→Med" title="Implied % price move to re-rate to the historical median multiple" />
-              <Th col="toRich" label="↑Rich" title="Implied % move to re-rate to the rich end of history (upside room)" />
-              <Th col="toCheap" label="↓Cheap" title="Implied % move to re-rate to the cheap end of history (downside risk)" />
-              <Th col="rr" label="R:R" title="Reward/risk = upside ÷ |downside|" />
+              {metrics.map((m, i) => (
+                <th key={m.key} colSpan={10} className={`px-2 py-1 text-center normal-case ${i > 0 ? "border-l border-border/60" : ""}`}>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-foreground/80">
+                    {m.label}
+                    {metricKeys.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeMetric(m.key)}
+                        title={`Remove ${m.label}`}
+                        className="opacity-40 hover:opacity-100 hover:text-red-400 leading-none"
+                      >×</button>
+                    )}
+                  </span>
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {metrics.map((m) => <Fragment key={m.key}>{metricHeaderCells(m)}</Fragment>)}
             </tr>
           </thead>
           <tbody>
             {isLoading && (
-              <tr><td colSpan={12} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {!isLoading && visible.length === 0 && (
-              <tr><td colSpan={12} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiple / universe.</td></tr>
+              <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiples / universe.</td></tr>
             )}
             {!isLoading && !grouped && visible.map(renderRow)}
             {!isLoading && grouped && grouped.map(([groupName, groupRows]) => (
               <Fragment key={groupName}>
-                <tr className="bg-muted/40 border-y border-border sticky">
-                  <td colSpan={12} className="px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">
+                <tr className="bg-muted/40 border-y border-border">
+                  <td colSpan={totalCols} className={`px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider ${STICKY0}`}>
                     {groupName}
                     <span className="text-muted-foreground font-normal normal-case"> · {groupRows.length}</span>
-                    <span className="text-muted-foreground font-normal normal-case">
-                      {" "}· median {fmtMult(median(groupRows.map((r) => r.m0)), metric.dir === "inverse")}
-                    </span>
                   </td>
                 </tr>
                 {groupRows.map(renderRow)}
