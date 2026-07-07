@@ -822,9 +822,24 @@ export default function ChartArea({
           if (cancelled) return;
           if (seriesData.length === 0) continue;
 
-          // Compute min/max
+          // Derive the color scale (min/max) from data AFTER the first ~1 year.
+          // Early history is often noisy/wonky (thin coverage, outliers) and, when
+          // included, blows out the min/max and washes the gradient flat. We still
+          // COLOR the first year — those points just clamp to the scale extremes
+          // (gradientColorHex clamps to [0,1]) — but they don't define the scale.
+          const firstDate = seriesData[0].time; // YYYY-MM-DD, chronological
+          const [fy, fm, fd] = firstDate.split("-").map(Number);
+          const cutoff = Number.isFinite(fy)
+            ? `${String(fy + 1).padStart(4, "0")}-${String(fm).padStart(2, "0")}-${String(fd).padStart(2, "0")}`
+            : firstDate;
+          const scaleData = seriesData.filter(d => d.time >= cutoff);
+          // Fall back to the full series if excluding the first year leaves too
+          // little to build a stable scale from.
+          const basis = scaleData.length >= 2 ? scaleData : seriesData;
+
+          // Compute min/max over the scale basis (post-first-year).
           let min = Infinity, max = -Infinity;
-          for (const d of seriesData) {
+          for (const d of basis) {
             if (d.value < min) min = d.value;
             if (d.value > max) max = d.value;
           }
@@ -2310,10 +2325,10 @@ export default function ChartArea({
                       <Palette className="w-3 h-3" />
                     </button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto min-w-[13rem] max-w-[28rem] p-0" align="end">
+                  <PopoverContent className="w-auto min-w-[16rem] max-w-[30rem] p-0" align="end">
                     <Command>
                       <CommandInput placeholder="Search metric..." className="h-8" />
-                      <CommandList className="max-h-[200px]">
+                      <CommandList className="max-h-[min(70vh,560px)]">
                         <CommandEmpty>No metric found.</CommandEmpty>
                         {colorByMap[pane.id] && (
                           <CommandGroup>
