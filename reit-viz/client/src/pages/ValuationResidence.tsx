@@ -162,6 +162,7 @@ export default function ValuationResidence() {
               basis, window: lookbackDays, pctMove,
               dir: m.dir, lowIsCheap: m.lowIsCheap,
               horizons: HORIZONS.map((h) => h.days),
+              skipFirstYear: true,
             });
             if (res) byMetric[mk] = { ...res, ...t } as Row;
           }

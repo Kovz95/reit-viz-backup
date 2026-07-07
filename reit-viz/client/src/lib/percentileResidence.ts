@@ -117,6 +117,19 @@ export interface ResidenceOpts {
   dir: MultipleDir;
   lowIsCheap: boolean;
   horizons: number[];    // forward-return horizons (trading days)
+  /** Drop the first ~1 calendar year of history before analysing. Early data is
+   *  often noisy/thin and distorts the percentile scale (and thus the richness
+   *  coloring); excluding it keeps the coding smooth. */
+  skipFirstYear?: boolean;
+}
+
+/** Drop points within one calendar year of the series start (dates are YYYY-MM-DD). */
+function dropFirstYear<T extends { time: string }>(pts: T[]): T[] {
+  if (pts.length === 0) return pts;
+  const [y, m, d] = pts[0].time.split("-").map(Number);
+  if (!Number.isFinite(y)) return pts;
+  const cutoff = `${String(y + 1).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  return pts.filter((p) => p.time >= cutoff);
 }
 
 /**
@@ -128,7 +141,11 @@ export function buildResidence(
   close: TimeValue[],
   opts: ResidenceOpts,
 ): ResidenceResult | null {
-  const pts = multiple.filter((p) => Number.isFinite(p.value));
+  const allPts = multiple.filter((p) => Number.isFinite(p.value));
+  // Optionally exclude the first ~1 year so early/wonky values don't distort the
+  // percentile scale — but keep the full series if trimming leaves too little.
+  const trimmed = opts.skipFirstYear ? dropFirstYear(allPts) : allPts;
+  const pts = trimmed.length >= 30 ? trimmed : allPts;
   const n = pts.length;
   if (n < 30) return null;
   const values = pts.map((p) => p.value);
