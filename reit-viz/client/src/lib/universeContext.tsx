@@ -25,8 +25,10 @@ import { parseNumericFilter } from "@/lib/numericFilter";
 /** Effective per-ticker liquidity, with real trailing-90d ADV (Yahoo) preferred
  *  over the static global-universe estimate. */
 export interface UniverseAdvInfo {
-  /** Closing price ($). */
+  /** Closing price (in the listing currency). */
   price?: number | null;
+  /** Listing currency the price is quoted in (e.g. "USD", "GBp", "EUR"). */
+  currency?: string | null;
   /** Average daily share volume, in millions of shares. */
   adv?: number | null;
   /** Average daily dollar volume ($ ADV), in $ millions. */
@@ -170,6 +172,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       if (real && fin(real.advUsdMM)) {
         merged.set(key, {
           price: real.lastClose,
+          currency: real.currency ?? null,
           adv: real.advShares,
           dollarVolMM: real.advUsdMM,
           source: "yahoo90",

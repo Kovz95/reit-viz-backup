@@ -781,16 +781,20 @@ export default function Universe() {
                       info?.adv != null && Number.isFinite(info.adv)
                         ? `${info.adv.toFixed(2)}M sh/day`
                         : null;
+                    const cur = info?.currency ?? null;
                     const px =
                       info?.price != null && Number.isFinite(info.price)
-                        ? `$${info.price.toFixed(2)}`
+                        ? (cur && cur !== "USD" ? `${info.price.toFixed(2)} ${cur}` : `$${info.price.toFixed(2)}`)
                         : null;
+                    // Non-US names are quoted in a local currency and converted to USD.
+                    const curNote = cur && cur !== "USD" ? ` · quoted in ${cur} → USD` : "";
                     const title = !hasDv
                       ? "No $ ADV data for this ticker"
                       : info?.source === "yahoo90"
                         ? `90-day ADV (Yahoo): ${fmtUsdMM(dv)}` +
                           (shares ? ` · ${shares}` : "") +
                           (px ? ` × ${px}` : "") +
+                          curNote +
                           (info?.asOf ? ` · as of ${info.asOf}` : "") +
                           (info?.days ? ` · ${info.days} bars` : "")
                         : `Estimate (global dataset): ${fmtUsdMM(dv)}` +
@@ -820,10 +824,12 @@ export default function Universe() {
                       e30?.advShares != null && Number.isFinite(e30.advShares)
                         ? `${e30.advShares.toFixed(2)}M sh/day`
                         : null;
+                    const cur30 = e30?.currency ?? null;
                     const px30 =
                       e30?.lastClose != null && Number.isFinite(e30.lastClose)
-                        ? `$${e30.lastClose.toFixed(2)}`
+                        ? (cur30 && cur30 !== "USD" ? `${e30.lastClose.toFixed(2)} ${cur30}` : `$${e30.lastClose.toFixed(2)}`)
                         : null;
+                    const curNote30 = cur30 && cur30 !== "USD" ? ` · quoted in ${cur30} → USD` : "";
                     return (
                       <td
                         className={`py-1 px-2 text-right font-mono tabular-nums ${has30 ? "text-foreground" : "text-muted-foreground"}`}
@@ -832,6 +838,7 @@ export default function Universe() {
                             ? `30-day ADV (Yahoo): ${fmtUsdMM(dv30)}` +
                               (sh30 ? ` · ${sh30}` : "") +
                               (px30 ? ` × ${px30}` : "") +
+                              curNote30 +
                               (e30?.asOf ? ` · as of ${e30.asOf}` : "") +
                               (e30?.days ? ` · ${e30.days} bars` : "")
                             : "No live 30-day ADV for this ticker"

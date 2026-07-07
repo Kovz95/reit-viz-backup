@@ -22,8 +22,10 @@ export interface AdvEntry {
   advUsdMM: number | null;
   /** Trailing-window average daily share volume, in millions of shares. */
   advShares: number | null;
-  /** Most recent close used in the window. */
+  /** Most recent close used in the window (in the listing currency). */
   lastClose: number | null;
+  /** Listing currency the price is quoted in (e.g. "USD", "GBp", "EUR"). */
+  currency: string | null;
   /** Number of bars actually averaged (≤ window). */
   days: number;
   /** ISO date of the most recent bar, or null. */
@@ -123,7 +125,7 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
   const days = slice.length;
   if (days === 0) {
     return {
-      advUsdMM: null, advShares: null, lastClose: null,
+      advUsdMM: null, advShares: null, lastClose: null, currency: bars.currency ?? null,
       days: 0, asOf: null, window, computedAt: new Date().toISOString(),
     };
   }
@@ -139,6 +141,7 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
     advUsdMM: usdFactor == null ? null : (sumLocal / days / 1e6) * usdFactor,
     advShares: sumSh / days / 1e6,
     lastClose: slice[slice.length - 1].close,
+    currency: bars.currency ?? null,
     days,
     asOf: slice[slice.length - 1].date,
     window,
@@ -187,7 +190,7 @@ export async function getAdvBatch(
         return [ticker, await computeOne(ticker, window, forceRefresh)] as const;
       } catch {
         const empty: AdvEntry = {
-          advUsdMM: null, advShares: null, lastClose: null,
+          advUsdMM: null, advShares: null, lastClose: null, currency: null,
           days: 0, asOf: null, window, computedAt: new Date().toISOString(),
         };
         return [ticker, empty] as const;

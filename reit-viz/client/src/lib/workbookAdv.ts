@@ -12,6 +12,8 @@ export interface AdvEntry {
   advUsdMM: number | null;
   advShares: number | null;
   lastClose: number | null;
+  /** Listing currency of the price (e.g. "USD", "GBp", "EUR"). */
+  currency?: string | null;
   days: number;
   asOf: string | null;
   window: number;
