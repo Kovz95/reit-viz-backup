@@ -581,8 +581,8 @@ export default function ChartArea({
   const [pdSubplotsState, setPdSubplotsState] = useState<PdSubplotsState>({
     showPDRatio: false,
     showCorrChart: false,
-    valMetric: "premium_discount",
-    growthMetric: "ffo_growth",
+    valMetric: "P/FFO FY2",
+    growthMetric: "FY1 FFO Growth",
     compareMode: "ticker",
     dimension: "",
     classValue: "",
@@ -2184,7 +2184,7 @@ export default function ChartArea({
       </div>
 
       {/* Chart panes + side panels */}
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className={`flex flex-1 overflow-hidden relative ${maximizedSidePanel ? "hidden" : ""}`}>
         <div
           ref={gridRef}
           className="flex-1 min-w-0 overflow-hidden relative"
@@ -2420,18 +2420,22 @@ export default function ChartArea({
           />
         )}
 
-        {showSimilarSetups && activeTicker &&
-          (maximizedSidePanel === null || maximizedSidePanel === "similar") && (
-            <ChartsSimilarSetupsPanel
-              ticker={activeTicker}
-              ohlcData={activeTicker ? ohlcCache[activeTicker] : undefined}
-              maximized={maximizedSidePanel === "similar"}
-              onMaximizeChange={(m) => setMaximizedSidePanel(m ? "similar" : null)}
-            />
-          )}
+      </div>
 
-        {(showPDRatio || showPremCorr) &&
-          maximizedSidePanel !== "similar" && (
+      {/* Full-width bottom strip: PD/Correlation subplots + Similar Setups.
+          These panels are authored as full-width strips (border-t, no width),
+          so they live below the charts, not inside the horizontal panes row.
+          When one is maximized, the charts row above is hidden and this fills. */}
+      {((showPDRatio || showPremCorr || showSimilarSetups) && activeTicker) && (
+        <div
+          className={
+            maximizedSidePanel
+              ? "flex-1 min-h-0 flex flex-col overflow-hidden"
+              : "flex-shrink-0 flex flex-col overflow-auto max-h-[52%]"
+          }
+          data-testid="charts-bottom-strip"
+        >
+          {(showPDRatio || showPremCorr) && maximizedSidePanel !== "similar" && (
             <ChartsPdSubplots
               mode="single"
               symbol={activeTicker ?? ""}
@@ -2443,7 +2447,16 @@ export default function ChartArea({
               fillContainer={maximizedSidePanel === "pd"}
             />
           )}
-      </div>
+          {showSimilarSetups && maximizedSidePanel !== "pd" && (
+            <ChartsSimilarSetupsPanel
+              ticker={activeTicker}
+              ohlcData={activeTicker ? ohlcCache[activeTicker] : undefined}
+              maximized={maximizedSidePanel === "similar"}
+              onMaximizeChange={(m) => setMaximizedSidePanel(m ? "similar" : null)}
+            />
+          )}
+        </div>
+      )}
 
       {/* Pairs preset ticker picker dialog */}
       <Dialog open={pairsPickerOpen} onOpenChange={setPairsPickerOpen}>
