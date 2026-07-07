@@ -3579,6 +3579,18 @@ export async function registerRoutes(server: Server, app: Express) {
               const dateSet = new Set([...existingDates, ...result.dates]);
               const mergedDates = Array.from(dateSet).sort();
 
+              // Realign every per-ticker RLE array to the merged axis. A date
+              // union can insert dates mid-array; without this, position-indexed
+              // values for the freshly copied tickers (aligned to result.dates)
+              // and the pre-existing ones (aligned to existingDates) shift out of
+              // alignment — dropping the newest values (e.g. the latest week).
+              const workbookTickerSet = new Set(result.tickers.map((t: any) => t.ticker));
+              const realignedCount = realignTickerFiles(tickerDir, mergedDates, (ticker) => {
+                const from = workbookTickerSet.has(ticker) ? result.dates : existingDates;
+                return from.length ? from : null;
+              });
+              console.log(`[batch-job ${jobId}] Realigned ${realignedCount} ticker files to merged axis (${mergedDates.length} dates)`);
+
               for (const [ticker, evts] of Object.entries(result.events) as [string, any][]) {
                 if (!existingEvents[ticker]) existingEvents[ticker] = {};
                 for (const [key, vals] of Object.entries(evts) as [string, any][]) {

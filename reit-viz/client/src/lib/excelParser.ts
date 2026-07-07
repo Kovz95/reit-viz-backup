@@ -469,6 +469,9 @@ export async function parseExcelClientSide(
     metrics: string[];
   }> = {};
   const tickerData: Record<string, Record<string, (number | string)[]>> = {};
+  // Each ticker's OWN date axis (sheets can differ in range) — needed to realign
+  // every ticker to a common union axis before returning.
+  const tickerDatesMap: Record<string, string[]> = {};
   let tickerMeta: Record<string, {
     ticker: string; name: string; economy: string; sector: string;
     subsector: string; industryGroup: string; industry: string; subindustry: string;
@@ -527,6 +530,7 @@ export async function parseExcelClientSide(
         }
 
         tickerData[ticker] = result.data;
+        tickerDatesMap[ticker] = result.dates;
         tickersMap[ticker] = {
           ticker,
           dates: result.dates.length,
@@ -598,6 +602,7 @@ export async function parseExcelClientSide(
       }
 
       tickerData[ticker] = result.data;
+      tickerDatesMap[ticker] = result.dates;
       tickersMap[ticker] = {
         ticker,
         dates: result.dates.length,
@@ -634,6 +639,60 @@ export async function parseExcelClientSide(
   }
 
   report("parsing_tickerlist", 1, 1, `Found ${Object.keys(tickerMeta).length} tickers in Tickerlist`);
+
+  // ---------- Realign every ticker to a common union date axis ----------
+  // Sheets can span different date ranges (some run a day/week longer at the
+  // tail). Each ticker's metric arrays were encoded against its OWN axis, but
+  // the workbook returns a single `dates`. Collapsing to the longest ticker's
+  // axis (or any single axis) drops the newest values for every ticker whose
+  // axis differs at the tail — e.g. the latest week reads as null. Union all
+  // axes and remap each ticker's values BY DATE so nothing is lost.
+  {
+    const rleDecode = (rle: (number | string)[], len: number): (number | null)[] => {
+      const out: (number | null)[] = [];
+      for (const it of rle) {
+        if (typeof it === "string" && it.startsWith("~")) {
+          const n = parseInt(it.slice(1), 10);
+          for (let i = 0; i < n; i++) out.push(null);
+        } else out.push((it ?? null) as number | null);
+      }
+      while (out.length < len) out.push(null);
+      if (out.length > len) out.length = len;
+      return out;
+    };
+    const unionSet = new Set<string>();
+    for (const ds of Object.values(tickerDatesMap)) for (const d of ds) unionSet.add(d);
+    const unionDates = Array.from(unionSet).sort();
+    if (unionDates.length > 0) {
+      const unionIndex = new Map(unionDates.map((d, i) => [d, i] as const));
+      for (const ticker of Object.keys(tickerData)) {
+        const ownDates = tickerDatesMap[ticker];
+        if (!ownDates || ownDates.length === 0) continue;
+        let same = ownDates.length === unionDates.length;
+        if (same) {
+          for (let i = 0; i < ownDates.length; i++) {
+            if (ownDates[i] !== unionDates[i]) { same = false; break; }
+          }
+        }
+        if (same) continue; // already on the union axis
+        const realigned: Record<string, (number | string)[]> = {};
+        for (const [metric, rle] of Object.entries(tickerData[ticker])) {
+          const dense = rleDecode(rle, ownDates.length);
+          const newDense: (number | null)[] = new Array(unionDates.length).fill(null);
+          for (let i = 0; i < dense.length; i++) {
+            const v = dense[i];
+            if (v === null || v === undefined) continue;
+            const gi = unionIndex.get(ownDates[i]);
+            if (gi !== undefined) newDense[gi] = v;
+          }
+          realigned[metric] = runLengthEncode(newDense);
+        }
+        tickerData[ticker] = realigned;
+        if (tickersMap[ticker]) tickersMap[ticker].dates = unionDates.length;
+      }
+      allDates = unionDates;
+    }
+  }
 
   // ---------- Build final tickers array ----------
   const tickers = Object.values(tickersMap).map((t) => {
