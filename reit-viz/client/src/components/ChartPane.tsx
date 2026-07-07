@@ -151,6 +151,8 @@ interface ChartPaneProps {
   measureShade?: boolean;
   /** Measure tool: snap endpoints to the nearest data point (magnet mode). */
   measureMagnet?: boolean;
+  /** Measure tool: mirror the measurement across all panes over the same time span. */
+  measureAll?: boolean;
   onCrosshairMove?: (data: { time: string; values: Record<string, number> } | null) => void;
   onDrawingAdded?: () => void;
   onDrawingDeleted?: () => void;
@@ -632,6 +634,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   drawColor,
   measureShade = true,
   measureMagnet = false,
+  measureAll = false,
   onCrosshairMove,
   onDrawingAdded,
   onDrawingDeleted,
@@ -733,6 +736,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Latest magnet-toggle value, read by the drag handler.
   const measureMagnetRef = useRef(measureMagnet);
   measureMagnetRef.current = measureMagnet;
+  // Latest all-panes-toggle value.
+  const measureAllRef = useRef(measureAll);
+  measureAllRef.current = measureAll;
   const [measureBox, setMeasureBox] = useState<{
     clientX: number;
     clientY: number;
@@ -754,6 +760,101 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const first = seriesMapRef.current.values().next();
     return first.done ? null : first.value;
   }, []);
+
+  // Detach this pane's measure overlay (line/rect primitive + info box).
+  const clearMeasureOverlay = useCallback(() => {
+    if (measurePrimRef.current) {
+      try { measurePrimRef.current.series.detachPrimitive(measurePrimRef.current.prim); } catch {}
+      measurePrimRef.current = null;
+    }
+    setMeasureBox(null);
+  }, []);
+
+  // This pane's own series value at a given axis time (close for candles, value
+  // for lines) — used by "all panes" mode to mirror a measurement onto series
+  // that the cursor never touched.
+  const valueAtTime = useCallback((time: string): { value: number; logical: number } | null => {
+    const chart = chartRef.current;
+    if (!chart) return null;
+    const ts = chart.timeScale();
+    const x = ts.timeToCoordinate(time as Time);
+    if (x == null) return null;
+    const logical = ts.coordinateToLogical(x);
+    if (logical == null) return null;
+    const idx = Math.round(logical as number);
+    for (const s of seriesMapRef.current.values()) {
+      try {
+        const d: any = (s as any).dataByIndex(idx);
+        if (!d) continue;
+        if ("value" in d && d.value != null) return { value: d.value, logical: logical as number };
+        if ("close" in d && d.close != null) return { value: d.close, logical: logical as number };
+      } catch {}
+    }
+    return null;
+  }, []);
+
+  // "All panes" follower: draw this pane's measurement over [startTime, endTime]
+  // using its OWN series values at those times (so magnet-like on every series),
+  // with the info box anchored to this pane's end point.
+  const drawSpanMeasure = useCallback((startTime: string, endTime: string) => {
+    const chart = chartRef.current;
+    const container = containerRef.current;
+    if (!chart || !container) return;
+    const s = valueAtTime(startTime);
+    const e = valueAtTime(endTime);
+    if (!s || !e) return;
+    const series = getAnySeries();
+    if (!series) return;
+
+    const up = e.value >= s.value;
+    try {
+      if (!measurePrimRef.current) {
+        const prim = new MeasurePrimitive();
+        series.attachPrimitive(prim);
+        measurePrimRef.current = { prim, series };
+      }
+      measurePrimRef.current.prim.setMeasure({
+        startTime, startPrice: s.value, endTime, endPrice: e.value, up,
+        showRect: measureShadeRef.current,
+      });
+    } catch { return; }
+
+    const ts = chart.timeScale();
+    const bars = Math.abs(Math.round(e.logical) - Math.round(s.logical));
+    const ta = Date.parse(startTime), tb = Date.parse(endTime);
+    const days = isFinite(ta) && isFinite(tb) ? Math.round(Math.abs(tb - ta) / 86400000) : NaN;
+    const x1 = ts.timeToCoordinate(startTime as Time) ?? 0;
+    const x2 = ts.timeToCoordinate(endTime as Time) ?? 0;
+    const y1 = series.priceToCoordinate(s.value as any) ?? 0;
+    const y2 = series.priceToCoordinate(e.value as any) ?? 0;
+    const angle = (Math.atan2(-(y2 - y1), x2 - x1) * 180) / Math.PI;
+    const absChange = e.value - s.value;
+    const pctChange = s.value !== 0 ? (absChange / s.value) * 100 : 0;
+    const rect = container.getBoundingClientRect();
+    setMeasureBox({
+      clientX: rect.left + x2 + 12,
+      clientY: rect.top + y2 + 12,
+      bars, days, angle, absChange, pctChange, up,
+    });
+  }, [getAnySeries, valueAtTime]);
+
+  // "All panes" wiring: follower panes redraw on span broadcasts; every pane
+  // clears on a clear broadcast.
+  useEffect(() => {
+    const onSpan = (ev: Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (!measureAllRef.current || activeTool !== "measure") return;
+      if (d.originPaneId === paneId) return; // origin draws itself
+      drawSpanMeasure(d.startTime, d.endTime);
+    };
+    const onClear = () => clearMeasureOverlay();
+    window.addEventListener("reit-viz-measure-span", onSpan);
+    window.addEventListener("reit-viz-measure-clear", onClear);
+    return () => {
+      window.removeEventListener("reit-viz-measure-span", onSpan);
+      window.removeEventListener("reit-viz-measure-clear", onClear);
+    };
+  }, [paneId, activeTool, drawSpanMeasure, clearMeasureOverlay]);
 
   useImperativeHandle(ref, () => ({
     getChart: () => chartRef.current,
@@ -1283,16 +1384,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const chart = chartRef.current;
     if (!container || !chart || !chartReady) return;
 
-    const clearOverlay = () => {
-      if (measurePrimRef.current) {
-        try { measurePrimRef.current.series.detachPrimitive(measurePrimRef.current.prim); } catch {}
-        measurePrimRef.current = null;
-      }
-      setMeasureBox(null);
-    };
-
     if (activeTool !== "measure") {
-      clearOverlay();
+      clearMeasureOverlay();
       return;
     }
 
@@ -1372,7 +1465,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (e.button !== 0) return; // left click only
       const pt = resolvePoint(e);
       if (!pt) return;
-      clearOverlay();
+      clearMeasureOverlay();
+      // Clear any prior measurement on the other panes before starting anew.
+      window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
       isMeasuring = true;
       start = pt;
       // Disable all chart interaction while measuring so the drag is ours.
@@ -1427,6 +1522,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           showRect: measureShadeRef.current,
         });
       } catch {}
+
+      // "All panes" mode: mirror this time span onto every other pane.
+      if (measureAllRef.current) {
+        window.dispatchEvent(new CustomEvent("reit-viz-measure-span", {
+          detail: { startTime: start.time, endTime: end.time, originPaneId: paneId },
+        }));
+      }
     };
 
     const handleMouseUp = () => {
@@ -1455,7 +1557,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
       } catch {}
     };
-  }, [activeTool, chartReady, paneSeries, getAnySeries, fullDates]);
+  }, [activeTool, chartReady, paneSeries, getAnySeries, fullDates, clearMeasureOverlay]);
 
   // Live-update an already-drawn measurement when the shade toggle flips.
   useEffect(() => {

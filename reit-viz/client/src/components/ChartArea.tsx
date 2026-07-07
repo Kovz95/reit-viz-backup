@@ -31,6 +31,7 @@ import {
   Megaphone,
   CircleDollarSign,
   Magnet,
+  Rows3,
   Save,
   Trash2,
   X,
@@ -443,6 +444,13 @@ export default function ChartArea({
   const [measureShade, setMeasureShade] = useState(true);
   // Measure tool: snap endpoints to nearest data point (magnet mode)
   const [measureMagnet, setMeasureMagnet] = useState(false);
+  // Measure tool: mirror the measurement across all panes over the same time span
+  const [measureAll, setMeasureAll] = useState(false);
+
+  // Changing the all-panes mode clears any current measurement (predictable reset).
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
+  }, [measureAll]);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
@@ -1961,6 +1969,20 @@ export default function ChartArea({
           </Button>
         )}
 
+        {activeTool === "measure" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-6 px-2 text-[11px] gap-1 ${measureAll ? "border border-primary text-primary" : "text-muted-foreground"}`}
+            onClick={() => setMeasureAll((v) => !v)}
+            title={measureAll ? "All panes — mirroring the measurement across every plot" : "Measure the same time span across all panes at once"}
+            data-testid="measure-all-toggle"
+          >
+            <Rows3 className="w-3 h-3" />
+            All panes
+          </Button>
+        )}
+
         {drawingCount > 0 && (
           <Button
             variant="ghost"
@@ -2127,6 +2149,7 @@ export default function ChartArea({
                   drawColor={drawColor}
                   measureShade={measureShade}
                   measureMagnet={measureMagnet}
+                  measureAll={measureAll}
                   onCrosshairMove={(data) => handleCrosshairMove(pane.id, data)}
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}
