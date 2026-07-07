@@ -113,13 +113,21 @@ export async function fetchYahooPrices(
       Accept: "application/json",
     },
   });
+  // Parse the body even on a non-2xx status: Yahoo returns a chart.error
+  // ("Not Found · No data found, symbol may be delisted") for delisted/unknown
+  // symbols, usually with a 404. We want that specific signal — flagged as
+  // `notFound` — so callers can tell "delisted" apart from a transient failure.
+  const json: any = await resp.json().catch(() => null);
+  const chartErr = json?.chart?.error;
+  if (chartErr) {
+    const err: any = new Error(chartErr.description || chartErr.code || `Yahoo error for ${sym}`);
+    if (/not\s*found|delisted/i.test(`${chartErr.code ?? ""} ${chartErr.description ?? ""}`)) {
+      err.notFound = true;
+    }
+    throw err;
+  }
   if (!resp.ok) {
     throw new Error(`Yahoo chart API returned HTTP ${resp.status} for ${sym}`);
-  }
-
-  const json: any = await resp.json();
-  if (json?.chart?.error) {
-    throw new Error(json.chart.error?.description || `Yahoo error for ${sym}`);
   }
   const result = json?.chart?.result?.[0];
   const currency: string | undefined = result?.meta?.currency ?? undefined;

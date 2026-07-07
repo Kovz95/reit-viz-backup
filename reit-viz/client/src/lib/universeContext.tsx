@@ -35,6 +35,8 @@ export interface UniverseAdvInfo {
   dollarVolMM?: number | null;
   /** Where dollarVolMM came from. */
   source: "yahoo90" | "global" | "none";
+  /** Yahoo reports the symbol as not found / delisted. */
+  delisted?: boolean;
   /** ISO date of the most recent bar (yahoo90 only). */
   asOf?: string | null;
   /** Bars averaged (yahoo90 only). */
@@ -169,6 +171,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       const key = t.ticker.toUpperCase();
       const real = realAdvMap.get(key);
       const glob = globalAdvMap.get(key);
+      const delisted = real?.delisted === true;
       if (real && fin(real.advUsdMM)) {
         merged.set(key, {
           price: real.lastClose,
@@ -186,9 +189,10 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
           adv: glob.adv,
           dollarVolMM: glob.dollarVolMM,
           source: "global",
+          delisted,
         });
       } else {
-        merged.set(key, { dollarVolMM: null, source: "none" });
+        merged.set(key, { dollarVolMM: null, source: "none", delisted });
       }
     }
     return merged;

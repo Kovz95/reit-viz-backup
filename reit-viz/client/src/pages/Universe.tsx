@@ -750,8 +750,21 @@ export default function Universe() {
                   <td className="py-1 px-2 text-center">
                     {inFiltered && <Check className="w-3 h-3 text-primary" />}
                   </td>
-                  <td className="py-1 px-2 font-mono font-bold text-foreground">
+                  <td className="py-1 px-2 font-mono font-bold text-foreground whitespace-nowrap">
                     {ticker.ticker}
+                    {(() => {
+                      const key = String(ticker.ticker).toUpperCase();
+                      const delisted =
+                        advMap.get(key)?.delisted === true || adv30Map.get(key)?.delisted === true;
+                      return delisted ? (
+                        <span
+                          className="ml-1.5 align-middle text-[8px] font-sans font-medium uppercase tracking-wide px-1 py-px rounded bg-rose-500/15 text-rose-400 border border-rose-500/30"
+                          title="No live market data — Yahoo reports this symbol as delisted"
+                        >
+                          delisted
+                        </span>
+                      ) : null;
+                    })()}
                   </td>
                   <td className="py-1 px-2 truncate max-w-[200px]" title={ticker.name}>
                     {ticker.name}

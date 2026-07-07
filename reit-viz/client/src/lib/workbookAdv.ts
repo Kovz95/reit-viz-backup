@@ -17,6 +17,8 @@ export interface AdvEntry {
   days: number;
   asOf: string | null;
   window: number;
+  /** Yahoo reports the symbol as not found / delisted (vs a transient failure). */
+  delisted?: boolean;
 }
 
 export type AdvMap = Map<string, AdvEntry>;

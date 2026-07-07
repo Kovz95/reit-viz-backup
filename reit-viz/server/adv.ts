@@ -34,6 +34,9 @@ export interface AdvEntry {
   window: number;
   /** ISO timestamp this entry was computed. */
   computedAt: string;
+  /** True when Yahoo reports the symbol as not found / delisted (vs a transient
+   *  failure) — lets the UI distinguish a delisted name from "still loading". */
+  delisted?: boolean;
 }
 
 type AdvCache = Record<string, AdvEntry>; // keyed by UPPER ticker
@@ -188,10 +191,11 @@ export async function getAdvBatch(
     const computed = await mapLimit(stale, MAX_CONCURRENCY, async (ticker) => {
       try {
         return [ticker, await computeOne(ticker, window, forceRefresh)] as const;
-      } catch {
+      } catch (err) {
         const empty: AdvEntry = {
           advUsdMM: null, advShares: null, lastClose: null, currency: null,
           days: 0, asOf: null, window, computedAt: new Date().toISOString(),
+          ...((err as any)?.notFound ? { delisted: true } : {}),
         };
         return [ticker, empty] as const;
       }
