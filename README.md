@@ -86,6 +86,25 @@ openssl s_client -connect 45.63.20.126:443 -alpn h2 </dev/null 2>/dev/null | gre
 # → ALPN protocol: h2
 ```
 
+#### Diagnosing "prod unreachable" — rule out a client-side filter first
+
+Prod is a **bare IP with a self-signed cert on `:443`**, which some corporate/home
+web-filtering appliances flag and intercept. Before assuming the server is down, check for a
+*client-network* block — tell-tale signs it's the filter, not prod:
+
+- `ping` and a raw TCP connect to `:443` succeed, but the **TLS handshake resets**.
+- Plain HTTP to **both** `:443` and `:80` `302`-redirects to something like
+  `http://45.63.20.126:6080/php/urlblock.php?args=…` (a Sophos-style URL-block page).
+- Unrelated sites (e.g. `github.com`) are unaffected, and the site loads fine from another
+  network (phone on cellular).
+
+The fix is client-side: allow-list the IP, toggle VPN, or use a different network — **do not
+restart nginx/pm2**, prod is healthy.
+
+Also: `curl https://45.63.20.126` from **Windows can fail the TLS handshake even when prod is
+fine** — schannel doesn't send SNI for a bare IP. Verify with a real browser (Chrome/Edge),
+which negotiates correctly, rather than trusting a curl failure.
+
 ## Layout
 
 ```
