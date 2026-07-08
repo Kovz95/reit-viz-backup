@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getTickers, getOhlcData, getMetricSeries, getPairsData } from "@/lib/dataService";
 import type { PairsData } from "@/lib/dataService";
+import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
+import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
 import type { TickerMeta } from "@shared/schema";
 import Sidebar from "@/components/Sidebar";
 import { useUpload } from "@/lib/uploadContext";
@@ -691,10 +693,35 @@ export default function Dashboard() {
     return sorted;
   }, [tickers]);
 
+  // Carousel classification filter — narrows the ticker dropdown + prev/next
+  // navigation to the selected classifications (Economy → Subindustry).
+  const [carouselClassFilters, setCarouselClassFilters] = useState<ClassFilters>(emptyClassFilters);
+
+  const filteredTickerList = useMemo(
+    () => applyClassFilters(tickerList as any, carouselClassFilters, "", new Set<string>()) as TickerMeta[],
+    [tickerList, carouselClassFilters]
+  );
+
+  // Unique values per classification level (full universe) — feeds the filter chips.
+  const classFilterOptions = useMemo(() => {
+    const opts: Record<string, Set<string>> = {};
+    for (const key of CLASSIFICATION_KEYS) opts[key] = new Set();
+    for (const t of tickers) {
+      for (const key of CLASSIFICATION_KEYS) {
+        const v = (t as any)[key];
+        if (v) opts[key].add(v);
+      }
+    }
+    const result: Record<string, string[]> = {};
+    for (const key of CLASSIFICATION_KEYS) result[key] = [...opts[key]].sort();
+    return result;
+  }, [tickers]);
+
+  // Index of the active ticker within the FILTERED list (drives x/N + navigation).
   const currentTickerIndex = useMemo(() => {
-    if (!activeTicker || !tickerList.length) return -1;
-    return tickerList.findIndex((t) => t.ticker === activeTicker);
-  }, [activeTicker, tickerList]);
+    if (!activeTicker || !filteredTickerList.length) return -1;
+    return filteredTickerList.findIndex((t) => t.ticker === activeTicker);
+  }, [activeTicker, filteredTickerList]);
 
   // Remove a pane and its series
   const removePane = useCallback((paneId: number) => {
@@ -1231,18 +1258,18 @@ export default function Dashboard() {
   // Navigate to next/prev ticker
   const navigateTicker = useCallback(
     (direction: "next" | "prev") => {
-      if (!tickerList.length) return;
+      if (!filteredTickerList.length) return;
       if (currentTickerIndex < 0) {
-        loadViewForTicker(tickerList[0].ticker);
+        loadViewForTicker(filteredTickerList[0].ticker);
         return;
       }
       const newIndex =
         direction === "next"
-          ? (currentTickerIndex + 1) % tickerList.length
-          : (currentTickerIndex - 1 + tickerList.length) % tickerList.length;
-      loadViewForTicker(tickerList[newIndex].ticker);
+          ? (currentTickerIndex + 1) % filteredTickerList.length
+          : (currentTickerIndex - 1 + filteredTickerList.length) % filteredTickerList.length;
+      loadViewForTicker(filteredTickerList[newIndex].ticker);
     },
-    [tickerList, currentTickerIndex, loadViewForTicker]
+    [filteredTickerList, currentTickerIndex, loadViewForTicker]
   );
 
   // Keyboard navigation
@@ -1556,6 +1583,10 @@ export default function Dashboard() {
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           tickerList={tickerList}
+          carouselTickerList={filteredTickerList}
+          carouselClassFilters={carouselClassFilters}
+          onCarouselClassFiltersChange={setCarouselClassFilters}
+          carouselClassOptions={classFilterOptions}
           currentTickerIndex={currentTickerIndex}
           onNavigateTicker={navigateTicker}
           onSelectTicker={(ticker: string) => loadViewForTicker(ticker)}

@@ -45,7 +45,9 @@ import {
   Sparkles,
   StickyNote,
   Search,
+  Filter,
 } from "lucide-react";
+import { FilterDropdown, emptyClassFilters, type ClassFilters } from "./ClassificationFilters";
 import BasketTickerPill from "./BasketTickerPill";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "./GridLayoutPicker";
 import type { GridLayout } from "./GridLayoutPicker";
@@ -110,6 +112,15 @@ interface ChartAreaProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   tickerList: TickerMeta[];
+  /** Classification-filtered subset of tickerList that feeds the carousel
+   *  dropdown + prev/next navigation (full tickerList still drives the
+   *  pairs/correlation pickers). */
+  carouselTickerList: TickerMeta[];
+  /** Active carousel classification filters (Economy → Subindustry). */
+  carouselClassFilters: ClassFilters;
+  onCarouselClassFiltersChange: (f: ClassFilters) => void;
+  /** Unique values per classification level (full universe) for the chips. */
+  carouselClassOptions: Record<string, string[]>;
   currentTickerIndex: number;
   onNavigateTicker: (dir: "next" | "prev") => void;
   onSelectTicker: (ticker: string) => void;
@@ -187,6 +198,17 @@ interface ChartAreaProps {
   onColorByMapChange?: (map: Record<number, string>) => void;
 }
 
+// Carousel classification filter chips (broad → narrow). Chips with only one
+// unique value across the universe are auto-hidden to keep the popover tidy.
+const CAROUSEL_CLASS_FIELDS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+
 export default function ChartArea({
   plottedSeries,
   panes,
@@ -195,6 +217,10 @@ export default function ChartArea({
   sidebarOpen,
   onToggleSidebar,
   tickerList,
+  carouselTickerList,
+  carouselClassFilters,
+  onCarouselClassFiltersChange,
+  carouselClassOptions,
   currentTickerIndex,
   onNavigateTicker,
   onSelectTicker,
@@ -741,7 +767,13 @@ export default function ChartArea({
     paneSeriesRefsMap.current.delete(paneId);
   }, []);
 
-  const currentTicker = tickerList[currentTickerIndex];
+  // Resolve from the full list so the header name/tooltip stays correct even
+  // when the active ticker is excluded by the carousel classification filter.
+  const currentTicker = tickerList.find((t) => t.ticker === activeTicker) ?? tickerList[currentTickerIndex];
+  const anyCarouselFilterActive = useMemo(
+    () => Object.values(carouselClassFilters).some((s) => s.size > 0),
+    [carouselClassFilters]
+  );
 
   // Fetch events when the active ticker changes
   useEffect(() => {
@@ -1057,7 +1089,7 @@ export default function ChartArea({
         <Button
           variant="ghost" size="sm" className="h-7 w-7 p-0"
           onClick={() => onNavigateTicker("prev")}
-          disabled={tickerList.length === 0}
+          disabled={carouselTickerList.length === 0}
           data-testid="prev-ticker"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -1081,21 +1113,57 @@ export default function ChartArea({
                   {currentTicker.name}
                 </span>
               )}
-              {tickerList.length > 0 && (
+              {carouselTickerList.length > 0 && (
                 <span className="text-[10px] text-muted-foreground/50 flex-shrink-0">
-                  {currentTickerIndex + 1}/{tickerList.length}
+                  {currentTickerIndex >= 0 ? `${currentTickerIndex + 1}/${carouselTickerList.length}` : `${carouselTickerList.length}`}
                 </span>
+              )}
+              {anyCarouselFilterActive && (
+                <Filter className="w-3 h-3 text-primary flex-shrink-0" data-testid="carousel-filter-active" />
               )}
               <ChevronsUpDown className="w-3 h-3 text-muted-foreground/50 flex-shrink-0" />
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto min-w-[280px] max-w-[520px] p-0" align="start">
+            {/* Classification filters — narrow the carousel to selected sectors/industries */}
+            {(() => {
+              const shownFields = CAROUSEL_CLASS_FIELDS.filter(
+                (f) => (carouselClassOptions[f.key]?.length ?? 0) > 1
+              );
+              if (shownFields.length === 0) return null;
+              return (
+                <div className="flex flex-wrap items-center gap-1 p-1.5 border-b border-border">
+                  {shownFields.map((f) => (
+                    <FilterDropdown
+                      key={f.key}
+                      label={f.label}
+                      options={carouselClassOptions[f.key] || []}
+                      selected={carouselClassFilters[f.key] || new Set()}
+                      onChange={(next) =>
+                        onCarouselClassFiltersChange({ ...carouselClassFilters, [f.key]: next })
+                      }
+                      testId={`carousel-filter-${f.key}`}
+                    />
+                  ))}
+                  {anyCarouselFilterActive && (
+                    <button
+                      onClick={() => onCarouselClassFiltersChange(emptyClassFilters())}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-muted-foreground hover:text-destructive"
+                      data-testid="carousel-filter-clear"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                      Clear
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
             <Command>
               <CommandInput placeholder="Search ticker or name..." className="h-8 text-xs" />
               <CommandList className="max-h-[300px]">
                 <CommandEmpty>No ticker found.</CommandEmpty>
                 <CommandGroup>
-                  {tickerList.map((t) => (
+                  {carouselTickerList.map((t) => (
                     <CommandItem
                       key={t.ticker}
                       value={`${t.ticker} ${t.name} ${t.subindustry}`}
@@ -1123,7 +1191,7 @@ export default function ChartArea({
         <Button
           variant="ghost" size="sm" className="h-7 w-7 p-0"
           onClick={() => onNavigateTicker("next")}
-          disabled={tickerList.length === 0}
+          disabled={carouselTickerList.length === 0}
           data-testid="next-ticker"
         >
           <ChevronRight className="w-4 h-4" />
