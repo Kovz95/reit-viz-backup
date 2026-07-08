@@ -1561,6 +1561,16 @@ export default function Sidebar({
                       <Button
                         size="sm"
                         variant="ghost"
+                        className="h-6 text-[10px] px-1.5 text-primary hover:text-primary"
+                        onClick={() => selectTicker(`BASKET:${b.id}`)}
+                        title="Plot this basket on the chart"
+                      >
+                        <LineChart className="w-3 h-3 mr-1" />
+                        Plot
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
                         className="h-6 text-[10px] px-1.5"
                         onClick={() => setInspectBasketId(b.id)}
                         title="Inspect basket metric math"
