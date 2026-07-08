@@ -1497,6 +1497,17 @@ export default function Macro() {
                   const cid = numToChartId.get(numId);
                   if (cid) setIndicatorsMap(prev => ({ ...prev, [cid]: indicators }));
                 }}
+                onApplyToAllPanes={(indicators) => {
+                  // One atomic write across every pane (looping would clobber).
+                  setIndicatorsMap(prev => {
+                    const next = { ...prev };
+                    for (const p of panelPanes) {
+                      const cid = numToChartId.get(p.id);
+                      if (cid) next[cid] = { ...indicators };
+                    }
+                    return next;
+                  });
+                }}
                 onClose={() => setShowIndicators(false)}
               />
             );

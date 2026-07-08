@@ -2409,6 +2409,15 @@ export default function ChartArea({
             onChangeIndicators={(paneId, indicators) =>
               setIndicatorsMap(prev => ({ ...prev, [paneId]: indicators }))
             }
+            onApplyToAllPanes={(indicators) =>
+              // Single atomic write across every pane. Looping the per-pane
+              // setter would clobber (each call composes off the same stale map).
+              setIndicatorsMap(prev => {
+                const next = { ...prev };
+                for (const p of panes) next[p.id] = { ...indicators };
+                return next;
+              })
+            }
             onClose={() => setShowIndicators(false)}
           />
         )}

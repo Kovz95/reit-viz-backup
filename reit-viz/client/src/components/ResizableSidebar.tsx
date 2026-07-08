@@ -95,7 +95,10 @@ export function ResizableSidebar({
   return (
     <div
       className={cn(
-        "relative flex-shrink-0 border-l border-border bg-card/50",
+        // `min-h-0` lets this flex item be clamped to the host row's height
+        // instead of growing to its (tall) content — otherwise the inner
+        // scroll region never gets a bounded height and the panel is clipped.
+        "relative flex-shrink-0 flex flex-col min-h-0 overflow-hidden border-l border-border bg-card/50",
         className,
       )}
       style={{ width }}
@@ -110,7 +113,7 @@ export function ResizableSidebar({
       >
         <span className="absolute inset-y-0 left-0 w-px bg-transparent transition-colors group-hover:bg-primary/60" />
       </div>
-      <div className="h-full overflow-y-auto">{children}</div>
+      <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
     </div>
   );
 }

@@ -27,6 +27,10 @@ interface IndicatorsPanelProps {
   activePaneId: number | null;
   onSelectPane: (paneId: number) => void;
   onChangeIndicators: (paneId: number, indicators: ActiveIndicators) => void;
+  /** Write the same indicator config to every pane in ONE atomic update.
+   * Must be a single state write — looping onChangeIndicators clobbers, since
+   * the host composes each call off the same (stale) map. */
+  onApplyToAllPanes: (indicators: ActiveIndicators) => void;
   onClose: () => void;
 }
 
@@ -233,6 +237,7 @@ export default function IndicatorsPanel({
   activePaneId,
   onSelectPane,
   onChangeIndicators,
+  onApplyToAllPanes,
   onClose,
 }: IndicatorsPanelProps) {
   // Per-section collapse state — empty set means every section is expanded (default).
@@ -249,24 +254,27 @@ export default function IndicatorsPanel({
   const toggleAll = () =>
     setCollapsedSections(allCollapsed ? new Set() : new Set(INDICATOR_SECTIONS));
 
+  // When on, every indicator toggle mirrors to ALL panes (a live "select all"),
+  // not just the one shown in the pane selector. Auto-disabled with a single pane.
+  const [applyToAll, setApplyToAll] = useState(false);
+
   const selectedPaneId = activePaneId ?? (panes.length > 0 ? panes[0].id : null);
   const activeIndicators = selectedPaneId !== null ? (indicatorsMap[selectedPaneId] || {}) : {};
 
   const setActiveIndicators = (indicators: ActiveIndicators) => {
-    if (selectedPaneId !== null) {
+    if (selectedPaneId === null) return;
+    if (applyToAll && panes.length > 1) {
+      onApplyToAllPanes(indicators);
+    } else {
       onChangeIndicators(selectedPaneId, indicators);
     }
   };
 
   const activeTicker = panes.find((p) => p.id === selectedPaneId)?.ticker ?? null;
 
-  // Copy indicators from current pane to all other panes
+  // Copy the current pane's indicators to every pane (one-time, atomic).
   const copyToAll = () => {
-    for (const pane of panes) {
-      if (pane.id !== selectedPaneId) {
-        onChangeIndicators(pane.id, { ...activeIndicators });
-      }
-    }
+    onApplyToAllPanes(activeIndicators);
   };
 
   // Mean/std band local state
@@ -363,7 +371,7 @@ export default function IndicatorsPanel({
                 size="sm"
                 className="h-7 px-2 text-[10px] gap-1 flex-shrink-0"
                 onClick={copyToAll}
-                title="Copy this pane's indicators to all other panes"
+                title="Copy this pane's indicators to all other panes (one-time)"
                 data-testid="copy-indicators-to-all"
               >
                 <Copy className="w-3 h-3" />
@@ -371,6 +379,22 @@ export default function IndicatorsPanel({
               </Button>
             )}
           </div>
+          {panes.length > 1 && (
+            <label
+              className="flex items-center gap-2 pt-0.5 cursor-pointer select-none"
+              title="While on, every indicator change applies to all panes at once"
+            >
+              <Switch
+                checked={applyToAll}
+                onCheckedChange={setApplyToAll}
+                className="scale-90"
+                data-testid="apply-indicators-to-all-toggle"
+              />
+              <span className={`text-[10px] ${applyToAll ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                {applyToAll ? `Applying to all ${panes.length} panes` : "Apply to all panes"}
+              </span>
+            </label>
+          )}
         </div>
       )}
 
