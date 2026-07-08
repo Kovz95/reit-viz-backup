@@ -52,6 +52,30 @@ Two manual workflows (Actions tab). Both need the `VULTR_SSH_PASSWORD` repo secr
 Optional repo variables override the defaults: `VULTR_HOST` (45.63.20.126), `VULTR_USER`
 (root), `VULTR_PATH` / `VULTR_DIR` (/opt/reit-viz), `PM2_APP` (reit-viz).
 
+### Server-side config (NOT version-controlled — restore manually after a rebuild)
+
+The deploy only ships the app bundle (`dist/`). The reverse proxy that fronts it lives on
+the Vultr box under `/etc/nginx/` and is **not** in this repo — so the settings below must be
+re-applied by hand if the server is ever rebuilt.
+
+`nginx` (1.22.1) terminates TLS on `:443` and proxies to the pm2-managed Express server; it
+then serves `dist/public` assets. There are ~167 lazily-loaded JS chunks, so **HTTP/2 is
+enabled** on the TLS listener to multiplex them over one connection (HTTP/1.1 caps a browser
+at ~6 connections per origin). On nginx 1.22 this is the `http2` parameter on the `listen`
+line — `listen 443 ssl http2;` (the standalone `http2 on;` directive only exists in 1.25.1+):
+
+```bash
+# as root on the server — inspect, back up, patch, test, reload
+CONF=$(grep -rlE 'listen[^;]*\bssl\b' /etc/nginx/ | head -1)
+cp -a "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)"
+sed -i -E '/listen[^;]*\bssl\b/{ /\bhttp2\b/! s/(\bssl\b)/\1 http2/ }' "$CONF"   # idempotent
+nginx -t && systemctl reload nginx        # if -t fails, restore the .bak and reload
+
+# verify h2 is negotiated (ALPN):
+openssl s_client -connect 45.63.20.126:443 -alpn h2 </dev/null 2>/dev/null | grep ALPN
+# → ALPN protocol: h2
+```
+
 ## Layout
 
 ```
