@@ -21,6 +21,7 @@ import {
   Link2,
   Gauge,
   Percent,
+  Grid3X3,
   Activity,
   Globe,
   Target,
@@ -250,6 +251,7 @@ function NavBar() {
     { path: "/", label: "Charts", icon: BarChart3 },
     { path: "/universe", label: "Universe", icon: Globe },
     { path: "/global-universe", label: "Global Universe", icon: Globe },
+    { path: "/baskets", label: "Baskets", icon: Grid3X3 },
     {
       path: "__cross_section_group",
       label: "Cross-Section",
