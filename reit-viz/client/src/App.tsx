@@ -106,6 +106,7 @@ const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
 const Alerts = lazy(() => import("@/pages/Alerts"));
 const DataExplorer = lazy(() => import("@/pages/DataExplorer"));
+const PCA = lazy(() => import("@/pages/PCA"));
 const NotFound = lazy(() => import("@/pages/not-found"));
 
 // ─── Upload status banner ─────────────────────────────────────────────────────
@@ -337,6 +338,7 @@ function NavBar() {
         { path: "/slow-stoch-optimizer", label: "SlowStoch Opt", icon: Activity },
         { path: "/dual-ma-optimizer", label: "DualMA Opt", icon: Activity },
         { path: "/tva-optimizer", label: "TVA Opt", icon: Crosshair },
+        { path: "/pca", label: "PCA", icon: BarChart2 },
         { path: "/levels", label: "Levels & Trendlines", icon: TrendingUp },
         { path: "/auto-trendline-backtest", label: "Auto Trendline BT", icon: TrendingUp },
       ],
@@ -641,6 +643,7 @@ const PAGES = [
   { path: "/slow-stoch-optimizer", label: "Slow Stoch Optimizer" },
   { path: "/dual-ma-optimizer", label: "DualMA Optimizer" },
   { path: "/tva-optimizer", label: "TVA Optimizer" },
+  { path: "/pca", label: "PCA" },
   { path: "/levels", label: "Levels & Trendlines" },
   { path: "/support-resistance", label: "Support / Resistance" },
   { path: "/trendlines", label: "Trendlines" },
@@ -780,6 +783,7 @@ function AppShell() {
               <Route path="/similar-setups" component={SimilarSetups} />
               <Route path="/alerts" component={Alerts} />
               <Route path="/data" component={DataExplorer} />
+              <Route path="/pca" component={PCA} />
               <Route component={NotFound} />
             </Switch>
             </Suspense>
