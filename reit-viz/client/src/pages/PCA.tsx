@@ -28,7 +28,7 @@ import {
 } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Maximize2, Minimize2, Play, X } from "lucide-react";
+import { Maximize2, Minimize2, Play, X, HelpCircle } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
@@ -484,6 +484,84 @@ function ResidualTable({
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// In-app help
+// ════════════════════════════════════════════════════════════════════════════
+
+function HelpOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border border-border rounded-lg max-w-3xl w-full max-h-[85vh] overflow-auto shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border sticky top-0 bg-card z-10">
+          <HelpCircle className="w-4 h-4 text-primary" />
+          <span className="text-sm font-bold">Using the PCA page</span>
+          <div className="flex-1" />
+          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose} title="Close">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+        <div className="p-4 space-y-4 text-xs leading-relaxed text-muted-foreground">
+          <p>
+            <span className="text-foreground">PCA compresses many co-moving series into a few independent
+            "factors" ranked by importance.</span> For returns, <b className="text-foreground">PC1 ≈ the market</b>{" "}
+            (everything moving together); PC2, PC3… are the next strongest leftover patterns (style / sector spreads),
+            each independent of the ones before it.
+          </p>
+
+          <div>
+            <div className="text-foreground font-semibold uppercase tracking-wider text-[10px] mb-1">Controls</div>
+            <ul className="space-y-0.5">
+              <li><b className="text-foreground">Min Obs</b> — min trading days of history; shorter names are dropped (see the "Excluded" note). All names are trimmed to a common date window.</li>
+              <li><b className="text-foreground">Components</b> — how many PCs to show; in Residual mode, how many factors to strip out.</li>
+              <li><b className="text-foreground">corr / cov</b> — corr (default) treats every name equally; cov lets high-vol names dominate PC1.</li>
+              <li><b className="text-foreground">Clusters</b> — (Clustering mode) number of groups. <b className="text-foreground">Run</b> — computes; click again to cancel.</li>
+            </ul>
+          </div>
+
+          <div>
+            <div className="text-foreground font-semibold uppercase tracking-wider text-[10px] mb-1">Modes</div>
+            <ul className="space-y-0.5">
+              <li><b className="text-foreground">Factors</b> — the plain decomposition. How correlated is the universe, and which names are most market-sensitive.</li>
+              <li><b className="text-foreground">Clustering</b> — colors the scatter by data-driven groups that trade together (pairs / basket candidates).</li>
+              <li><b className="text-foreground">Residual</b> — strips out common factor moves, leaving idiosyncratic residuals → mean-reversion candidates.</li>
+              <li><b className="text-foreground">Fundamentals</b> — PCA over a snapshot of valuation / growth / yield metrics (single date, no time series).</li>
+            </ul>
+          </div>
+
+          <div>
+            <div className="text-foreground font-semibold uppercase tracking-wider text-[10px] mb-1">Reading the panels</div>
+            <ul className="space-y-0.5">
+              <li><b className="text-foreground">PC1/PC2 scatter</b> — each dot is a ticker; close together = co-move. x = market exposure, y = the PC2 style split. Colored by sector (or cluster).</li>
+              <li><b className="text-foreground">Scree</b> — variance per PC + cumulative line. A big PC1 bar = strong common factor; the elbow shows how many factors matter.</li>
+              <li><b className="text-foreground">Factor time series</b> — cumulative path of each PC's score (PC1 ≈ the market's move).</li>
+              <li><b className="text-foreground">Loadings heatmap</b> — each row is a ticker's exposure to PC1–PC3 (green +, red −); similar rows behave similarly.</li>
+            </ul>
+          </div>
+
+          <div>
+            <div className="text-foreground font-semibold uppercase tracking-wider text-[10px] mb-1">Residual table cheat-sheet</div>
+            <ul className="space-y-0.5">
+              <li><b className="text-foreground">Resid Z</b> — how stretched a name is vs its factor-implied value. <b className="text-foreground">|Z| ≥ 2</b> is notable; negative = cheap (long), positive = rich (short).</li>
+              <li><b className="text-foreground">Half-life</b> — days to mean-revert; lower = faster. Best setups = high |Z| + short half-life. Click a row to plot its residual path.</li>
+            </ul>
+          </div>
+
+          <p className="text-[10px] text-muted-foreground/70">
+            Note: PCs are statistical patterns, not causes; their sign/order can shift as the universe changes (signs are
+            stabilized so PC1 stays positive). Return modes use daily log-returns.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Page
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -509,6 +587,7 @@ export default function PCA() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PcaRun | null>(null);
   const [maximized, setMaximized] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const [residualTicker, setResidualTicker] = useState<string>("");
   const cancelRef = useRef(false);
 
@@ -691,9 +770,18 @@ export default function PCA() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
       {/* Header / controls */}
       <div className="flex-shrink-0 px-4 pt-2 pb-2 border-b border-border bg-card flex flex-wrap items-center gap-3">
         <h2 className="text-sm font-bold text-foreground tracking-tight">PCA</h2>
+        <button
+          data-testid="pca-help"
+          className="text-muted-foreground hover:text-foreground"
+          onClick={() => setShowHelp(true)}
+          title="How to use this page"
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+        </button>
         <div className="flex gap-px">
           {MODES.map((m) => (
             <button
