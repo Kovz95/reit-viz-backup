@@ -382,6 +382,10 @@ export default function Dashboard() {
   const [plottedSeries, setPlottedSeries] = useState<PlottedSeries[]>([]);
   const plottedSeriesRef = useRef<PlottedSeries[]>([]);
   plottedSeriesRef.current = plottedSeries;
+  // Metrics the user has added on top of the active preset. Carried across
+  // carousel/company switches so an added fundamental series doesn't get wiped
+  // by the preset rebuild in loadViewForTicker; reset when a preset is picked.
+  const extraMetricsRef = useRef<string[]>([]);
   const [panes, setPanes] = useState<PaneInfo[]>([]);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
   const [chartConfig, setChartConfig] = useState<ChartConfig>({
@@ -711,6 +715,15 @@ export default function Dashboard() {
         setActiveView(view);
       }
 
+      // Picking a preset explicitly (viewName passed) starts from a clean
+      // template. Company switches (carousel arrows / ticker dropdown pass no
+      // viewName) keep any series the user added on top of the preset.
+      if (viewName) extraMetricsRef.current = [];
+      const effectiveMetrics = [
+        ...metrics,
+        ...extraMetricsRef.current.filter((m) => !metrics.includes(m)),
+      ];
+
       paneGeneration++;
       const myGeneration = paneGeneration;
       setIsLoadingView(true);
@@ -732,7 +745,7 @@ export default function Dashboard() {
         }
 
         const results = await Promise.all(
-          metrics.map(async (metric, idx) => {
+          effectiveMetrics.map(async (metric, idx) => {
             // Isolate per-metric failures: a single metric/ticker with no data
             // must not reject the whole view and blank the workspace.
             try {
@@ -1367,6 +1380,14 @@ export default function Dashboard() {
   // Add series with specific add mode
   const addSeriesWithMode = useCallback(
     (seriesList: PlottedSeries[], mode: "overlay" | "new-all" | "new-each", targetPaneId?: number) => {
+      // Remember the metrics being added so they carry across company switches.
+      // (Filtered against the preset in loadViewForTicker, so preset metrics are
+      // no-ops here.)
+      for (const s of seriesList) {
+        if (s.metric && !extraMetricsRef.current.includes(s.metric)) {
+          extraMetricsRef.current = [...extraMetricsRef.current, s.metric];
+        }
+      }
       if (mode === "overlay" && targetPaneId !== undefined) {
         setPlottedSeries((prev) => {
           const next = [...prev];
@@ -1415,6 +1436,17 @@ export default function Dashboard() {
 
   const removeSeries = useCallback((id: string) => {
     const gen = ++paneGeneration;
+    // If this was a user-added metric and no other pane still uses it, stop
+    // carrying it to the next company.
+    const removed = plottedSeriesRef.current.find((s) => s.id === id);
+    if (removed) {
+      const stillUsed = plottedSeriesRef.current.some(
+        (s) => s.id !== id && s.metric === removed.metric
+      );
+      if (!stillUsed) {
+        extraMetricsRef.current = extraMetricsRef.current.filter((m) => m !== removed.metric);
+      }
+    }
     setPlottedSeries((prev) => prev.filter((s) => s.id !== id));
     // Clean up orphan panes — but only if no newer operation has occurred
     setTimeout(() => {
