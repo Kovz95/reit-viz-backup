@@ -14,6 +14,16 @@ docker run -d --name reit-viz -p 5000:5000 reit-viz
 Upload your REIT workbook from the in-app **Data Management** UI to populate ticker data
 (the server stores it under `reit-viz/data/`).
 
+## PCA analysis
+
+The **PCA** page (top nav → *Optimizers* → *PCA*, or `/#/pca`) runs principal-component
+analysis over the filtered universe. Four modes: **Factors** (latent factors in daily
+returns, PC1 ≈ market), **Clustering** (peer groups that co-move), **Residual** (factor
+model → idiosyncratic mean-reversion candidates), and **Fundamentals** (PCA over a
+valuation/growth/yield snapshot). Click the **?** by the title for an in-app guide.
+
+![PCA page — Factors mode: PC1/PC2 scatter, scree, factor time series, loadings heatmap](docs/pca.png)
+
 ### Resync ticker data from the live Vultr backend
 
 Fresh local containers have no per-ticker price files, so charts 404. Instead of
