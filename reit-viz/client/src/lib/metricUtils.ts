@@ -1,13 +1,7 @@
-// Stub — TODO: reverse-engineer from production bundle
-
-/**
- * Returns true if the given metric key represents a percentage-based metric
- * (e.g. "Dividend Yield", "FFO Yield"), as opposed to a ratio / price multiple.
- */
-export function isPercentMetric(_metricKey: string): boolean {
-  // Stub — TODO: reverse-engineer from production bundle
-  return false;
-}
+// Delegate to the canonical percent-metric detection so every consumer agrees
+// (this used to be a stub returning false, which made FactorBacktest treat
+// every percentage metric as a plain number).
+export { isPercentMetric } from "@/lib/dataService";
 
 /**
  * Returns a human-readable label for a metric key.

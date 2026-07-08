@@ -285,17 +285,38 @@ const DECIMAL_TO_PERCENT_METRICS = new Set([
   "% off 52wk High", "% off 52wk Low",
 ]);
 
+// Percentages already stored in PERCENT units (e.g. 7.2 = 7.2%): only get a "%"
+// suffix, never re-scaled.
+function isPercentStoredMetric(metric: string): boolean {
+  return metric.includes("Chg%") || metric.includes("Interest%") || SI_DELTA_METRICS.has(metric);
+}
+
+// Percentages stored as a DECIMAL/fraction (e.g. 0.072 = 7.2%): scaled ×100 for
+// display and suffixed with "%". Rule-based so the whole family — growth rates,
+// yields, payout ratios, cap rate, 52-week-range offsets, guidance % changes,
+// and the bull/bear sentiment split — is handled automatically instead of any
+// new/uncovered member silently rendering as a bare decimal (0.20 vs 20%).
+function isDecimalPercentMetric(metric: string): boolean {
+  if (isPercentStoredMetric(metric)) return false; // already in percent units
+  if (DECIMAL_TO_PERCENT_METRICS.has(metric)) return true;
+  return /growth\b/i.test(metric)
+    || /\byield\b/i.test(metric)
+    || /\bpayout\b/i.test(metric)
+    || /cap\s*rate/i.test(metric)
+    || /%\s*off\b/i.test(metric)
+    || /%\s*change/i.test(metric)
+    || metric === "Bull%"
+    || metric === "Bear%";
+}
+
 /** Returns the multiplier for a metric (100 for decimals-that-are-percentages, 1 otherwise) */
 export function metricMultiplier(metric: string): number {
-  return DECIMAL_TO_PERCENT_METRICS.has(metric) ? 100 : 1;
+  return isDecimalPercentMetric(metric) ? 100 : 1;
 }
 
 /** Returns true if the metric should show a "%" suffix */
 export function isPercentMetric(metric: string): boolean {
-  return DECIMAL_TO_PERCENT_METRICS.has(metric)
-    || metric.includes("Chg%")
-    || metric.includes("Interest%")
-    || SI_DELTA_METRICS.has(metric);
+  return isPercentStoredMetric(metric) || isDecimalPercentMetric(metric);
 }
 
 // ---- Computed Short Interest Delta Metrics ----
