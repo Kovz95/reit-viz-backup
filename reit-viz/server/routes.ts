@@ -5281,6 +5281,46 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({});
   });
 
+  // ── Baskets — persisted server-side so they're shared across devices/browsers
+  // (previously localStorage-only). Stored as an id-keyed array in
+  // DATA_DIR/baskets.json (the mounted volume → survives recreate). The client
+  // owns name-uniqueness + sort ordering; the server is a plain id-keyed store.
+  const basketsFile = path.join(DATA_DIR, "baskets.json");
+  function loadBaskets(): any[] {
+    try {
+      if (!fs.existsSync(basketsFile)) return [];
+      const j = readJSON(basketsFile);
+      return Array.isArray(j) ? j : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveBaskets(list: any[]): void {
+    fs.writeFileSync(basketsFile, JSON.stringify(list, null, 2));
+  }
+
+  app.get("/api/baskets", (_req, res) => {
+    res.json({ baskets: loadBaskets() });
+  });
+  // Upsert one basket by id (body = full Basket object). Returns the stored basket.
+  app.post("/api/baskets", (req, res) => {
+    const b = (req.body ?? {}) as any;
+    if (!b || typeof b.id !== "string" || typeof b.name !== "string" || !Array.isArray(b.tickers)) {
+      return res.status(400).json({ error: "invalid basket" });
+    }
+    const list = loadBaskets();
+    const idx = list.findIndex((x) => x && x.id === b.id);
+    if (idx >= 0) list[idx] = b;
+    else list.push(b);
+    saveBaskets(list);
+    res.json({ basket: b });
+  });
+  app.post("/api/baskets/:id/delete", (req, res) => {
+    const id = String(req.params.id);
+    saveBaskets(loadBaskets().filter((x) => x && x.id !== id));
+    res.json({});
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // Reconstructed endpoints used by the rebuilt client (optimizer / workbook /
   // performance / baskets / peer-relative pages). These read the same data

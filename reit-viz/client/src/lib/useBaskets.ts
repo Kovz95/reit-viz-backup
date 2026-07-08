@@ -1,8 +1,11 @@
-// Hand-written from call-site inference (BasketTickerPill.tsx, BasketPicker.tsx)
-// Storage key: "reit-viz:baskets:v1"
-// Uses localStorage with storage-event broadcast for cross-consumer sync.
+// Baskets: server-backed collection shared across devices/browsers.
+// Persisted on the server (see /api/baskets in server/routes.ts). The hook +
+// mutators keep the same synchronous interface they had when this was
+// localStorage-backed; a module cache + change event give optimistic
+// reactivity across the app, reconciling with the server in the background.
 
 import { useState, useEffect, useCallback } from "react";
+import { apiRequest } from "@/lib/queryClient";
 
 export interface Basket {
   id: string;
@@ -31,8 +34,42 @@ export interface UseBasketsReturn {
   getBasket: (id: string) => Basket | undefined;
 }
 
-const STORAGE_KEY = "reit-viz:baskets:v1";
+const LEGACY_STORAGE_KEY = "reit-viz:baskets:v1";
 const CHANGE_EVENT = "reit-viz:baskets:changed";
+
+// Module-level cache so once loaded, later hook mounts render populated
+// synchronously (and mutators can update it optimistically before the server
+// round-trips).
+let cache: Basket[] = [];
+let inflight: Promise<Basket[]> | null = null;
+
+function emitChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
+  }
+}
+
+function sortByName(list: Basket[]): Basket[] {
+  return [...list].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function normalizeBasket(b: any): Basket | null {
+  if (!b || typeof b.id !== "string" || typeof b.name !== "string" || !Array.isArray(b.tickers)) {
+    return null;
+  }
+  const now = Date.now();
+  return {
+    id: b.id,
+    name: b.name,
+    tickers: b.tickers.map((t: string) => String(t).toUpperCase()),
+    createdAt: typeof b.createdAt === "number" ? b.createdAt : now,
+    updatedAt: typeof b.updatedAt === "number" ? b.updatedAt : now,
+    weighting: typeof b.weighting === "string" ? b.weighting : "market_cap",
+    rebalance: typeof b.rebalance === "string" ? b.rebalance : "monthly",
+    customWeights: b.customWeights && typeof b.customWeights === "object" ? b.customWeights : {},
+    volLookback: typeof b.volLookback === "number" ? b.volLookback : 60,
+  };
+}
 
 function createBasket(name: string, tickers: string[], options?: BasketOptions): Basket {
   const now = Date.now();
@@ -52,92 +89,101 @@ function createBasket(name: string, tickers: string[], options?: BasketOptions):
   };
 }
 
-function loadBaskets(): Basket[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (b): b is Basket =>
-        b != null &&
-        typeof b.id === "string" &&
-        typeof b.name === "string" &&
-        Array.isArray(b.tickers)
-    );
-  } catch {
-    return [];
-  }
+async function getFromServer(): Promise<Basket[]> {
+  const resp = await apiRequest("GET", "/api/baskets");
+  const json = (await resp.json()) as { baskets?: any[] };
+  const list = (json.baskets ?? [])
+    .map(normalizeBasket)
+    .filter((b): b is Basket => b != null);
+  return sortByName(list);
 }
 
-function saveBaskets(baskets: Basket[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(baskets));
-    window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
-  } catch (e) {
-    // storage quota exceeded / serialization failure — the write was dropped, so
-    // surface it (the in-memory state will still show the basket until reload).
-    console.warn("[baskets] failed to persist baskets to localStorage:", e);
-  }
+/** Load the server list (deduped), migrating any legacy localStorage baskets
+ *  up to the server once. */
+function refresh(): Promise<Basket[]> {
+  if (inflight) return inflight;
+  const p = (async () => {
+    let server: Basket[];
+    try {
+      server = await getFromServer();
+    } catch {
+      return cache;
+    }
+    // One-time migration of pre-server localStorage baskets.
+    try {
+      if (typeof window !== "undefined") {
+        const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (raw) {
+          const legacy = JSON.parse(raw);
+          if (Array.isArray(legacy)) {
+            const byName = new Set(server.map((b) => b.name));
+            const byId = new Set(server.map((b) => b.id));
+            const missing = legacy
+              .map(normalizeBasket)
+              .filter((b): b is Basket => b != null && !byId.has(b.id) && !byName.has(b.name));
+            if (missing.length) {
+              await Promise.all(
+                missing.map((b) => apiRequest("POST", "/api/baskets", b).catch(() => {})),
+              );
+              server = await getFromServer().catch(() => server);
+            }
+          }
+          window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+        }
+      }
+    } catch { /* ignore migration errors */ }
+    cache = server;
+    return server;
+  })();
+  inflight = p;
+  p.finally(() => { inflight = null; });
+  return p;
 }
 
 export function useBaskets(): UseBasketsReturn {
-  const [baskets, setBaskets] = useState<Basket[]>(() => loadBaskets());
+  const [baskets, setBaskets] = useState<Basket[]>(() => cache);
 
-  // Sync with other tabs and consumers via storage event + custom event
   useEffect(() => {
-    function handleChange() {
-      setBaskets(loadBaskets());
-    }
-    function handleStorage(e: StorageEvent) {
-      if (e.key === STORAGE_KEY) {
-        setBaskets(loadBaskets());
-      }
-    }
-    window.addEventListener(CHANGE_EVENT, handleChange);
-    window.addEventListener("storage", handleStorage);
+    let alive = true;
+    const sync = () => { if (alive) setBaskets(cache); };
+    // Cross-tab sync: another tab's write hits the server but we can't hear its
+    // in-memory event, so force a re-fetch (not just a cache read) on focus.
+    const onFocus = () => {
+      inflight = null; // bypass the load-once guard so focus always re-fetches
+      void refresh().then(sync);
+    };
+    refresh().then(sync);
+    window.addEventListener(CHANGE_EVENT, sync);
+    window.addEventListener("focus", onFocus);
     return () => {
-      window.removeEventListener(CHANGE_EVENT, handleChange);
-      window.removeEventListener("storage", handleStorage);
+      alive = false;
+      window.removeEventListener(CHANGE_EVENT, sync);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
   const addBasket = useCallback(
     (name: string, tickers: string[], options?: BasketOptions): Basket => {
       const trimmed = name.trim();
-      let newBasket: Basket | null = null;
-      setBaskets((prev) => {
-        const existing = prev.find((b) => b.name === trimmed);
-        if (existing) {
-          // Overwrite tickers on same-name basket (matches production behaviour)
-          const updated: Basket = {
+      const upperTickers = tickers.map((t) => t.toUpperCase());
+      // Upsert by name (matches production behaviour): overwrite an existing
+      // same-name basket, otherwise create a new one.
+      const existing = cache.find((b) => b.name === trimmed);
+      const basket: Basket = existing
+        ? {
             ...existing,
-            tickers: tickers.map((t) => t.toUpperCase()),
+            tickers: upperTickers,
             weighting: options?.weighting ?? existing.weighting,
             rebalance: options?.rebalance ?? existing.rebalance,
             customWeights: options?.customWeights ?? existing.customWeights,
             volLookback: options?.volLookback ?? existing.volLookback,
             updatedAt: Date.now(),
-          };
-          newBasket = updated;
-          const next = prev
-            .map((b) => (b.id === existing.id ? updated : b))
-            .sort((a, b) => a.name.localeCompare(b.name));
-          saveBaskets(next);
-          return next;
-        }
-        const basket = createBasket(name, tickers, options);
-        newBasket = basket;
-        const next = [...prev, basket].sort((a, b) =>
-          a.name.localeCompare(b.name)
-        );
-        saveBaskets(next);
-        return next;
-      });
-      // Return synchronously — newBasket is set during the setState reducer
-      return newBasket ?? createBasket(name, tickers, options);
+          }
+        : createBasket(name, tickers, options);
+      cache = sortByName([...cache.filter((b) => b.id !== basket.id), basket]);
+      emitChanged();
+      void persist(basket);
+      return basket;
     },
     []
   );
@@ -149,40 +195,41 @@ export function useBaskets(): UseBasketsReturn {
         Pick<Basket, "name" | "tickers" | "weighting" | "rebalance" | "customWeights" | "volLookback">
       >
     ): void => {
-      setBaskets((prev) => {
-        const next = prev
-          .map((b) => {
-            if (b.id !== id) return b;
-            return {
-              ...b,
-              name: patch.name !== undefined ? patch.name.trim() : b.name,
-              tickers:
-                patch.tickers !== undefined
-                  ? patch.tickers.map((t) => t.toUpperCase())
-                  : b.tickers,
-              weighting: patch.weighting !== undefined ? patch.weighting : b.weighting,
-              rebalance: patch.rebalance !== undefined ? patch.rebalance : b.rebalance,
-              customWeights:
-                patch.customWeights !== undefined ? patch.customWeights : b.customWeights,
-              volLookback:
-                patch.volLookback !== undefined ? patch.volLookback : b.volLookback,
-              updatedAt: Date.now(),
-            };
-          })
-          .sort((a, b) => a.name.localeCompare(b.name));
-        saveBaskets(next);
-        return next;
-      });
+      const existing = cache.find((b) => b.id === id);
+      if (!existing) return;
+      const updated: Basket = {
+        ...existing,
+        name: patch.name !== undefined ? patch.name.trim() : existing.name,
+        tickers:
+          patch.tickers !== undefined ? patch.tickers.map((t) => t.toUpperCase()) : existing.tickers,
+        weighting: patch.weighting !== undefined ? patch.weighting : existing.weighting,
+        rebalance: patch.rebalance !== undefined ? patch.rebalance : existing.rebalance,
+        customWeights:
+          patch.customWeights !== undefined ? patch.customWeights : existing.customWeights,
+        volLookback: patch.volLookback !== undefined ? patch.volLookback : existing.volLookback,
+        updatedAt: Date.now(),
+      };
+      cache = sortByName(cache.map((b) => (b.id === id ? updated : b)));
+      emitChanged();
+      void persist(updated);
     },
     []
   );
 
   const deleteBasket = useCallback((id: string): void => {
-    setBaskets((prev) => {
-      const next = prev.filter((b) => b.id !== id);
-      saveBaskets(next);
-      return next;
-    });
+    cache = cache.filter((b) => b.id !== id);
+    emitChanged();
+    void (async () => {
+      try {
+        await apiRequest("POST", `/api/baskets/${encodeURIComponent(id)}/delete`);
+      } catch {
+        return; // keep optimistic removal
+      }
+      try {
+        cache = await getFromServer();
+        emitChanged();
+      } catch { /* keep optimistic cache */ }
+    })();
   }, []);
 
   // Resolve by id first, then fall back to name. Basket tokens ("BASKET:<x>") are
@@ -197,4 +244,18 @@ export function useBaskets(): UseBasketsReturn {
   );
 
   return { baskets, addBasket, updateBasket, deleteBasket, getBasket };
+}
+
+/** Persist a single basket to the server, reconciling the cache with the
+ *  authoritative server list afterward. */
+async function persist(basket: Basket): Promise<void> {
+  try {
+    await apiRequest("POST", "/api/baskets", basket);
+  } catch {
+    return; // keep optimistic cache; server may retry on next load
+  }
+  try {
+    cache = await getFromServer();
+    emitChanged();
+  } catch { /* keep optimistic cache */ }
 }
