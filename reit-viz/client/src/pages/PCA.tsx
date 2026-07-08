@@ -102,8 +102,7 @@ interface PcaRun {
   pca: PcaResult;
   obsDates: string[]; // observation dates for factor series (empty in fundamentals)
   pointLabels: string[]; // scatter point labels (tickers)
-  pointX: number[]; // PC1 coordinate per point
-  pointY: number[]; // PC2 coordinate per point
+  scatterSource: number[][]; // per-point component coordinates (loadings, or scores for fundamentals)
   colorKey: string[]; // sector (or cluster label) per point → color
   clusters?: number[];
   residuals?: ResidualRow[];
@@ -129,12 +128,14 @@ function Panel({
   id,
   maximized,
   onMaximize,
+  headerExtra,
   children,
 }: {
   title: string;
   id: string;
   maximized: string | null;
   onMaximize: (id: string | null) => void;
+  headerExtra?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const isMax = maximized === id;
@@ -149,6 +150,11 @@ function Panel({
     >
       <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">{title}</span>
+        {headerExtra && (
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            {headerExtra}
+          </div>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -589,6 +595,10 @@ export default function PCA() {
   const [maximized, setMaximized] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [residualTicker, setResidualTicker] = useState<string>("");
+  // Which two components the scatter plots (0-based). Changing these re-plots
+  // instantly without re-running the decomposition.
+  const [pcX, setPcX] = usePersistedState<number>("pca.pcX", 0);
+  const [pcY, setPcY] = usePersistedState<number>("pca.pcY", 1);
   const cancelRef = useRef(false);
 
   // Discover which candidate fundamentals the workbook actually carries.
@@ -644,8 +654,7 @@ export default function PCA() {
           pca,
           obsDates: [],
           pointLabels: fm.rowLabels,
-          pointX: pca.scores.map((s) => s[0] ?? 0),
-          pointY: pca.scores.map((s) => s[1] ?? 0),
+          scatterSource: pca.scores,
           colorKey: fm.rowLabels.map((t) => fm.sectorByTicker[t] || "—"),
           numComponents,
           dropped: fm.dropped,
@@ -693,8 +702,7 @@ export default function PCA() {
         pca,
         obsDates,
         pointLabels: cleaned.tickers,
-        pointX: pca.loadings.map((l) => l[0] ?? 0),
-        pointY: pca.loadings.map((l) => l[1] ?? 0),
+        scatterSource: pca.loadings,
         colorKey,
         clusters,
         residuals,
@@ -721,6 +729,17 @@ export default function PCA() {
     () => (result ? buildColorMap(result.colorKey) : {}),
     [result],
   );
+
+  // Plotted scatter axes, derived from the chosen component indices (clamped to
+  // the available count so a smaller re-run can't reference a missing PC).
+  const scatterXY = useMemo(() => {
+    if (!result) return { xs: [] as number[], ys: [] as number[], cx: 0, cy: 1 };
+    const nc = result.pca.varianceExplained.length;
+    const cx = Math.min(Math.max(0, pcX), Math.max(0, nc - 1));
+    const cy = Math.min(Math.max(0, pcY), Math.max(0, nc - 1));
+    const src = result.scatterSource;
+    return { xs: src.map((r) => r[cx] ?? 0), ys: src.map((r) => r[cy] ?? 0), cx, cy };
+  }, [result, pcX, pcY]);
 
   // Factor time-series lines.
   const factorSeries = useMemo(() => {
@@ -945,19 +964,45 @@ export default function PCA() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 flex-1 min-h-0" style={{ minHeight: 520 }}>
               <div className="min-h-[240px]">
                 <Panel
-                  title={`PC1 / PC2 ${result.mode === "fundamentals" ? "scores" : "loadings"}`}
+                  title={`PC scatter (${result.mode === "fundamentals" ? "scores" : "loadings"})`}
                   id="scatter"
                   maximized={maximized}
                   onMaximize={setMaximized}
+                  headerExtra={
+                    <>
+                      <span className="text-[9px] text-muted-foreground uppercase">X</span>
+                      <select
+                        data-testid="pca-axis-x"
+                        value={scatterXY.cx}
+                        onChange={(e) => setPcX(Number(e.target.value))}
+                        className="h-5 text-[10px] font-mono bg-background border border-border rounded px-1 text-foreground"
+                      >
+                        {result.pca.varianceExplained.map((_, i) => (
+                          <option key={i} value={i}>PC{i + 1}</option>
+                        ))}
+                      </select>
+                      <span className="text-[9px] text-muted-foreground uppercase ml-1">Y</span>
+                      <select
+                        data-testid="pca-axis-y"
+                        value={scatterXY.cy}
+                        onChange={(e) => setPcY(Number(e.target.value))}
+                        className="h-5 text-[10px] font-mono bg-background border border-border rounded px-1 text-foreground"
+                      >
+                        {result.pca.varianceExplained.map((_, i) => (
+                          <option key={i} value={i}>PC{i + 1}</option>
+                        ))}
+                      </select>
+                    </>
+                  }
                 >
                   <ScatterPanel
                     labels={result.pointLabels}
-                    xs={result.pointX}
-                    ys={result.pointY}
+                    xs={scatterXY.xs}
+                    ys={scatterXY.ys}
                     colorKeys={result.colorKey}
                     colorMap={colorMap}
-                    xLabel={`PC1 (${(result.pca.varianceExplained[0] * 100).toFixed(1)}%)`}
-                    yLabel={`PC2 (${((result.pca.varianceExplained[1] ?? 0) * 100).toFixed(1)}%)`}
+                    xLabel={`PC${scatterXY.cx + 1} (${(result.pca.varianceExplained[scatterXY.cx] * 100).toFixed(1)}%)`}
+                    yLabel={`PC${scatterXY.cy + 1} (${(result.pca.varianceExplained[scatterXY.cy] * 100).toFixed(1)}%)`}
                   />
                 </Panel>
               </div>
