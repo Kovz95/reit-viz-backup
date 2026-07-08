@@ -256,7 +256,7 @@ function SubIndicatorChart({
       },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.06)", minimumWidth: 70 },
       timeScale: { borderColor: "rgba(255,255,255,0.06)", visible: false, rightOffset: 5, barSpacing: 3, minBarSpacing: 1 },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      handleScroll: { mouseWheel: false, pressedMouseMove: true },
       handleScale: { mouseWheel: true, pinch: true },
     });
     chartRef.current = chart;
@@ -1134,7 +1134,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           barSpacing: 3,
           minBarSpacing: 1,
         },
-        handleScroll: { mouseWheel: true, pressedMouseMove: true },
+        // Wheel zooms (cursor-anchored) but does NOT scroll: pointing devices that
+        // emit a horizontal delta (tilt wheels, trackpads) would otherwise pan the
+        // chart sideways while zooming. Pan is still available via click-drag.
+        handleScroll: { mouseWheel: false, pressedMouseMove: true },
         handleScale: { mouseWheel: true, pinch: true },
       });
 
@@ -1369,9 +1372,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
     if (activeTool !== "none") {
-      chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: false } });
+      chart.applyOptions({ handleScroll: { mouseWheel: false, pressedMouseMove: false } });
     } else {
-      chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: true } });
+      chart.applyOptions({ handleScroll: { mouseWheel: false, pressedMouseMove: true } });
     }
   }, [activeTool, chartReady]);
 
@@ -1544,7 +1547,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (!isDrawing) return;
       isDrawing = false;
       // Re-enable chart interaction (keep pressedMouseMove off since freehand tool is active)
-      chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: false }, handleScale: { mouseWheel: true, pinch: true } });
+      chart.applyOptions({ handleScroll: { mouseWheel: false, pressedMouseMove: false }, handleScale: { mouseWheel: true, pinch: true } });
 
       if (freehandPoints.length >= 2 && liveSeries) {
         const drawId = `draw-${Date.now()}`;
@@ -1572,7 +1575,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       container.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
       // Ensure chart interaction is re-enabled on cleanup (the tool-level effect handles pressedMouseMove)
-      try { chart.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: true }, handleScale: { mouseWheel: true, pinch: true } }); } catch {}
+      try { chart.applyOptions({ handleScroll: { mouseWheel: false, pressedMouseMove: true }, handleScale: { mouseWheel: true, pinch: true } }); } catch {}
     };
   }, [activeTool, drawColor, chartReady, paneSeries, onDrawingAdded, getAnySeries]);
 
@@ -1737,7 +1740,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       isMeasuring = false;
       // Re-enable chart interaction (pressedMouseMove stays off — tool is still active).
       chart.applyOptions({
-        handleScroll: { mouseWheel: true, pressedMouseMove: false },
+        handleScroll: { mouseWheel: false, pressedMouseMove: false },
         handleScale: { mouseWheel: true, pinch: true },
       });
       // Leave the line + box on screen until the next drag or tool switch.
@@ -1753,7 +1756,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       window.removeEventListener("mouseup", handleMouseUp);
       try {
         chart.applyOptions({
-          handleScroll: { mouseWheel: true, pressedMouseMove: true },
+          handleScroll: { mouseWheel: false, pressedMouseMove: true },
           handleScale: { mouseWheel: true, pinch: true },
         });
       } catch {}
