@@ -417,6 +417,18 @@ export default function Dashboard() {
     []
   );
 
+  // Human-facing label for a ticker: BASKET:<id> tokens resolve to the basket's
+  // name (falling back to the raw token if the basket was deleted); everything
+  // else is shown verbatim. Used for pane titles, series labels, and the carousel
+  // so a plotted basket reads as its name instead of "BASKET:<uuid>".
+  const tickerDisplayName = useCallback(
+    (tk: string): string => {
+      const id = extractBasketId(tk);
+      return id ? resolveBasket(id)?.name ?? tk : tk;
+    },
+    [resolveBasket]
+  );
+
   // Workspace tracking (manual save/load only — autosave handled by AutoSaveManager)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(null);
   const [layoutMode, setLayoutMode] = useState<GridLayout>("1x1");
@@ -799,11 +811,12 @@ export default function Dashboard() {
         const prevSeriesMap = new Map<string, PlottedSeries>();
         for (const s of plottedSeriesRef.current) prevSeriesMap.set(s.id, s);
 
+        const tName = tickerDisplayName(ticker);
         for (const r of results) {
           const paneId = nextPaneId++;
           newPanes.push({
             id: paneId,
-            label: `${ticker} \u2014 ${r.metric === "close" ? "Price" : r.metric}`,
+            label: `${tName} \u2014 ${r.metric === "close" ? "Price" : r.metric}`,
             ticker,
           });
           const seriesId = `${ticker}:${r.metric}:${nextSeriesSeq++}`;
@@ -821,7 +834,7 @@ export default function Dashboard() {
             paneIndex: paneId,
             data: r.data,
             visible: true,
-            label: `${ticker} - ${r.metric}`,
+            label: `${tName} - ${r.metric}`,
           });
         }
 
@@ -832,7 +845,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    [activeView, allViews, resolveBasket]
+    [activeView, allViews, resolveBasket, tickerDisplayName]
   );
 
   // Load the Re-Rating "jump to charts" analysis: 5 stacked panes for one ticker —
@@ -1443,7 +1456,7 @@ export default function Dashboard() {
         const newSeriesList: PlottedSeries[] = [];
         for (const s of seriesList) {
           const paneId = nextPaneId++;
-          newPanes.push({ id: paneId, label: `${s.ticker} \u2014 ${s.metric}`, ticker: s.ticker });
+          newPanes.push({ id: paneId, label: `${tickerDisplayName(s.ticker)} \u2014 ${s.metric}`, ticker: s.ticker });
           newSeriesList.push({ ...s, paneIndex: paneId });
         }
         setPanes((prev) => [...prev, ...newPanes]);
@@ -1458,7 +1471,7 @@ export default function Dashboard() {
         });
       }
     },
-    []
+    [tickerDisplayName]
   );
 
   const removeSeries = useCallback((id: string) => {
@@ -1579,6 +1592,7 @@ export default function Dashboard() {
           plottedSeries={plottedSeries}
           panes={panes}
           activeTicker={activeTicker}
+          activeTickerLabel={activeTicker ? tickerDisplayName(activeTicker) : null}
           chartConfig={chartConfig}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}

@@ -107,6 +107,8 @@ interface ChartAreaProps {
   plottedSeries: PlottedSeries[];
   panes: PaneInfo[];
   activeTicker: string | null;
+  /** Display label for activeTicker (resolves BASKET:<id> to the basket name). */
+  activeTickerLabel?: string | null;
   chartConfig: ChartConfig;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
@@ -212,6 +214,7 @@ export default function ChartArea({
   plottedSeries,
   panes,
   activeTicker,
+  activeTickerLabel,
   chartConfig,
   sidebarOpen,
   onToggleSidebar,
@@ -1105,7 +1108,7 @@ export default function ChartArea({
             >
               {isLoadingView && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground flex-shrink-0" />}
               <span className="font-mono font-bold text-sm text-primary" data-testid="current-ticker">
-                {activeTicker || "—"}
+                {activeTickerLabel || activeTicker || "—"}
               </span>
               {currentTicker && (
                 <span className="text-xs text-muted-foreground truncate hidden sm:inline">

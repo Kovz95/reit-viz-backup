@@ -33,6 +33,7 @@ import { getSeriesColor } from "@/lib/chartColors";
 import ChartsComparePanel from "./ChartsComparePanel";
 import BasketMetricInspector, { type InspectableBasket } from "./BasketMetricInspector";
 import { useBaskets } from "@/lib/useBaskets";
+import { extractBasketId } from "@/lib/basketUtils";
 import {
   ChevronDown,
   ChevronRight,
@@ -176,7 +177,12 @@ export default function Sidebar({
   const onRemoveWorkbook = removeFundamentalWorkbook;
 
   // ── Saved baskets + metric inspector (basket-math-metric / basket-math-asof) ──
-  const { baskets } = useBaskets();
+  const { baskets, getBasket } = useBaskets();
+  // BASKET:<id> → basket name for series labels (raw token otherwise).
+  const tickerDisplayName = (tk: string): string => {
+    const id = extractBasketId(tk);
+    return id ? getBasket(id)?.name ?? tk : tk;
+  };
   const [inspectBasketId, setInspectBasketId] = useState<string | null>(null);
   const inspectBasket = useMemo<InspectableBasket | null>(
     () => (baskets.find((b) => b.id === inspectBasketId) as InspectableBasket | undefined) ?? null,
@@ -465,7 +471,7 @@ export default function Sidebar({
         paneIndex: 0, // Will be set by addSeriesWithMode
         data,
         visible: true,
-        label: `${ticker} - ${metric}`,
+        label: `${tickerDisplayName(ticker)} - ${metric}`,
       };
 
       const tgtPaneId =
@@ -988,7 +994,7 @@ export default function Sidebar({
                     className="w-full h-7 justify-between px-2 text-[11px] font-mono"
                     data-testid="series-ticker-picker"
                   >
-                    {seriesTicker || "Select ticker"}
+                    {seriesTicker ? tickerDisplayName(seriesTicker) : "Select ticker"}
                     <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
                   </Button>
                 </PopoverTrigger>
@@ -1082,7 +1088,7 @@ export default function Sidebar({
                     />
                   </div>
                   <div className="text-[10px] text-muted-foreground">
-                    Click to add/remove series for <span className="font-mono font-semibold text-primary">{seriesTicker}</span>
+                    Click to add/remove series for <span className="font-mono font-semibold text-primary">{tickerDisplayName(seriesTicker)}</span>
                   </div>
                   <div className="space-y-1 max-h-[400px] overflow-y-auto">
                     {Object.entries(filteredMetrics).map(([cat, metrics]) => (
