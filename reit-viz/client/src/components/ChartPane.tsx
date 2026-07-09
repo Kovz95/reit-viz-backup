@@ -37,7 +37,7 @@ import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info, Maximize2, Minimize2 } from "lucide-react";
+import { Info, Maximize2, Minimize2, Trash2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
@@ -827,6 +827,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     absChange: number;
     pctChange: number;
     up: boolean;
+  } | null>(null);
+
+  // Right-click "Delete" menu for removing a single drawing (line/trendline/freehand).
+  const [drawingMenu, setDrawingMenu] = useState<{
+    clientX: number;
+    clientY: number;
+    id: string;
+    label: string;
   } | null>(null);
 
   // Which sub-indicator subplot (RSI/MACD/…) is expanded to fill the pane (null = none).
@@ -1789,6 +1797,84 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     measurePrimRef.current?.prim.setShowRect(measureShade);
   }, [measureShade]);
 
+  // Hit-test the drawings at a pane-relative pixel point; returns the index of the
+  // nearest drawing within tolerance, or -1. Shared by the eraser and right-click delete.
+  const pickDrawingAt = useCallback((x: number, y: number): number => {
+    const chart = chartRef.current;
+    const anySeries = getAnySeries();
+    if (!chart || !anySeries) return -1;
+
+    const clickPrice = anySeries.coordinateToPrice(y);
+    const clickTime = chart.timeScale().coordinateToTime(x);
+    if (clickPrice === null || clickPrice === undefined) return -1;
+    const clickTimeStr = clickTime ? String(clickTime) : null;
+
+    let bestIdx = -1;
+    let bestDist = Infinity;
+
+    // Use chart height to compute a pixel-based tolerance
+    const container = containerRef.current;
+    const chartHeight = container?.clientHeight ?? 400;
+    let priceRange = 1;
+    try {
+      const topPrice = anySeries.coordinateToPrice(0);
+      const bottomPrice = anySeries.coordinateToPrice(chartHeight);
+      if (topPrice !== null && bottomPrice !== null) {
+        priceRange = Math.abs(topPrice - bottomPrice) || 1;
+      }
+    } catch {}
+    const priceTol = priceRange * 0.03; // ~3% of visible price range (generous hit target)
+
+    for (let i = 0; i < drawingsRef.current.length; i++) {
+      const d = drawingsRef.current[i];
+      if (d.type === "hline" && d.price !== undefined) {
+        const dist = Math.abs(clickPrice - d.price);
+        if (dist < priceTol && dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      } else if ((d.type === "trendline" || d.type === "freehand") && d.points && d.points.length >= 2) {
+        // Check distance to each segment via linear interpolation in price at clickTime
+        for (let j = 0; j < d.points.length - 1; j++) {
+          const p1 = d.points[j];
+          const p2 = d.points[j + 1];
+          if (clickTimeStr && clickTimeStr >= p1.time && clickTimeStr <= p2.time) {
+            const t1 = new Date(p1.time).getTime();
+            const t2 = new Date(p2.time).getTime();
+            const tc = new Date(clickTimeStr).getTime();
+            const frac = t2 === t1 ? 0 : (tc - t1) / (t2 - t1);
+            const interpPrice = p1.price + frac * (p2.price - p1.price);
+            const dist = Math.abs(clickPrice - interpPrice);
+            if (dist < priceTol && dist < bestDist) {
+              bestDist = dist;
+              bestIdx = i;
+            }
+          }
+        }
+        // Also check proximity to any point directly (for freehand with sparse points)
+        for (const pt of d.points) {
+          const dist = Math.abs(clickPrice - pt.price);
+          if (dist < priceTol && dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+          }
+        }
+      }
+    }
+    return bestIdx;
+  }, [getAnySeries]);
+
+  // Remove a single drawing (its series + record) and notify the parent count.
+  const deleteDrawingById = useCallback((id: string) => {
+    const chart = chartRef.current;
+    const idx = drawingsRef.current.findIndex((d) => d.id === id);
+    if (idx < 0) return;
+    const d = drawingsRef.current[idx];
+    if (d.seriesRef && chart) { try { chart.removeSeries(d.seriesRef); } catch {} }
+    drawingsRef.current.splice(idx, 1);
+    onDrawingDeleted?.();
+  }, [onDrawingDeleted]);
+
   // Eraser tool: click to delete nearest drawing
   useEffect(() => {
     const chart = chartRef.current;
@@ -1797,88 +1883,46 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     const handleClick = (param: any) => {
       if (!param.point) return;
-
-      const anySeries = getAnySeries();
-      if (!anySeries) return;
-
-      const clickPrice = anySeries.coordinateToPrice(param.point.y);
-      const clickTime = chart.timeScale().coordinateToTime(param.point.x);
-      if (clickPrice === null || clickPrice === undefined) return;
-
-      const clickTimeStr = clickTime ? String(clickTime) : null;
-
-      // Find the nearest drawing within a reasonable threshold
-      let bestIdx = -1;
-      let bestDist = Infinity;
-
-      // Use chart height to compute a pixel-based tolerance
-      const container = containerRef.current;
-      const chartHeight = container?.clientHeight ?? 400;
-      let priceRange = 1;
-      try {
-        // Use autoscale info to estimate visible price range
-        const topPrice = anySeries.coordinateToPrice(0);
-        const bottomPrice = anySeries.coordinateToPrice(chartHeight);
-        if (topPrice !== null && bottomPrice !== null) {
-          priceRange = Math.abs(topPrice - bottomPrice) || 1;
-        }
-      } catch {}
-      const priceTol = priceRange * 0.03; // ~3% of visible price range (generous hit target)
-
-      for (let i = 0; i < drawingsRef.current.length; i++) {
-        const d = drawingsRef.current[i];
-        if (d.type === "hline" && d.price !== undefined) {
-          const dist = Math.abs(clickPrice - d.price);
-          if (dist < priceTol && dist < bestDist) {
-            bestDist = dist;
-            bestIdx = i;
-          }
-        } else if ((d.type === "trendline" || d.type === "freehand") && d.points && d.points.length >= 2) {
-          // Check distance to each segment
-          for (let j = 0; j < d.points.length - 1; j++) {
-            const p1 = d.points[j];
-            const p2 = d.points[j + 1];
-            // Simple: check if click price is close to interpolated price at clickTime
-            if (clickTimeStr && clickTimeStr >= p1.time && clickTimeStr <= p2.time) {
-              const timeFrac = p2.time === p1.time ? 0 :
-                (clickTimeStr.localeCompare(p1.time)) / (p2.time.localeCompare(p1.time) || 1);
-              // Linear interpolation in price
-              const t1 = new Date(p1.time).getTime();
-              const t2 = new Date(p2.time).getTime();
-              const tc = clickTimeStr ? new Date(clickTimeStr).getTime() : t1;
-              const frac = t2 === t1 ? 0 : (tc - t1) / (t2 - t1);
-              const interpPrice = p1.price + frac * (p2.price - p1.price);
-              const dist = Math.abs(clickPrice - interpPrice);
-              if (dist < priceTol && dist < bestDist) {
-                bestDist = dist;
-                bestIdx = i;
-              }
-            }
-          }
-          // Also check if click is near any point directly (for freehand with sparse points)
-          for (const pt of d.points) {
-            const dist = Math.abs(clickPrice - pt.price);
-            if (dist < priceTol && dist < bestDist) {
-              bestDist = dist;
-              bestIdx = i;
-            }
-          }
-        }
-      }
-
-      if (bestIdx >= 0) {
-        const drawing = drawingsRef.current[bestIdx];
-        if (drawing.seriesRef) {
-          try { chart.removeSeries(drawing.seriesRef); } catch {}
-        }
-        drawingsRef.current.splice(bestIdx, 1);
-        onDrawingDeleted?.();
-      }
+      const bestIdx = pickDrawingAt(param.point.x, param.point.y);
+      if (bestIdx >= 0) deleteDrawingById(drawingsRef.current[bestIdx].id);
     };
 
     chart.subscribeClick(handleClick);
     return () => chart.unsubscribeClick(handleClick);
-  }, [activeTool, chartReady, onDrawingDeleted, getAnySeries]);
+  }, [activeTool, chartReady, pickDrawingAt, deleteDrawingById]);
+
+  // Right-click a drawing to delete just that one — works regardless of the active
+  // tool, so you don't have to switch to the eraser first.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !chartReady) return;
+    const onContextMenu = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const idx = pickDrawingAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (idx < 0) { setDrawingMenu(null); return; }
+      e.preventDefault(); // suppress the browser menu only when we hit a drawing
+      const d = drawingsRef.current[idx];
+      const label = d.type === "hline" ? "line" : d.type === "trendline" ? "trendline" : "drawing";
+      setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, id: d.id, label });
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+    return () => container.removeEventListener("contextmenu", onContextMenu);
+  }, [chartReady, pickDrawingAt]);
+
+  // Dismiss the drawing menu on any outside click, wheel scroll, or Escape.
+  useEffect(() => {
+    if (!drawingMenu) return;
+    const close = () => setDrawingMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setDrawingMenu(null); };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("wheel", close, { passive: true });
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("wheel", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [drawingMenu]);
 
   // Clear drawings function
   const clearDrawings = useCallback(() => {
@@ -3269,6 +3313,25 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             {Number.isFinite(measureBox.days) ? `, ${measureBox.days} day${measureBox.days === 1 ? "" : "s"}` : ""}
           </div>
           <div className="opacity-90">Angle {measureBox.angle.toFixed(1)}°</div>
+        </div>
+      )}
+      {/* Right-click "Delete" menu for a single drawing */}
+      {drawingMenu && (
+        <div
+          className="rounded border border-border bg-popover shadow-lg text-xs overflow-hidden"
+          style={{ position: "fixed", left: drawingMenu.clientX, top: drawingMenu.clientY, zIndex: 70 }}
+          onMouseDown={(e) => e.stopPropagation()}
+          data-testid={`drawing-menu-${paneId}`}
+        >
+          <button
+            type="button"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-destructive hover:bg-destructive/10 w-full text-left"
+            onClick={() => { deleteDrawingById(drawingMenu.id); setDrawingMenu(null); }}
+            data-testid={`drawing-delete-${paneId}`}
+          >
+            <Trash2 className="w-3 h-3" />
+            Delete {drawingMenu.label}
+          </button>
         </div>
       )}
       {/* Sub-indicator charts (RSI, MACD, HA) stacked below. Double-click one
