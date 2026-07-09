@@ -37,6 +37,8 @@ export interface BasketEditorPanelProps {
   onClose?: () => void;
   hideClose?: boolean;
   embedded?: boolean;
+  /** Hide the built-in saved-baskets list (e.g. when a richer manager renders it). */
+  hideSavedList?: boolean;
   [key: string]: any;
 }
 
@@ -45,6 +47,7 @@ export function BasketEditorPanel({
   onClose,
   hideClose = false,
   embedded = false,
+  hideSavedList = false,
 }: BasketEditorPanelProps) {
   const { baskets, addBasket, deleteBasket } = useBaskets();
 
@@ -224,7 +227,7 @@ export function BasketEditorPanel({
       )}
 
       {/* Saved baskets */}
-      {baskets.length > 0 && (
+      {!hideSavedList && baskets.length > 0 && (
         <div className="mt-1 border-t border-border pt-2">
           <div className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider mb-1">
             Saved baskets ({baskets.length})
