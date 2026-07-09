@@ -848,6 +848,112 @@ export default function Dashboard() {
     [activeView, allViews, resolveBasket, tickerDisplayName]
   );
 
+  // Remap the CURRENT layout onto a different company (used by the carousel
+  // arrows + ticker dropdown). Unlike loadViewForTicker — which rebuilds from
+  // the active preset — this preserves the exact pane arrangement, overlays,
+  // per-pane indicators / color-by / grid sizing (all keyed by pane id),
+  // per-series styling, user-added series AND deletions. It simply swaps every
+  // series that belongs to the OLD active ticker over to the new one and
+  // refetches its data. Series pinned to a different ticker (cross-company
+  // comparison overlays), synthetic/derived series (CORR/RATIO/…), macro
+  // overlays, and uploaded-sheet series all have ticker !== oldTicker, so they
+  // are left untouched.
+  const remapLayoutToTicker = useCallback(
+    async (newTicker: string) => {
+      const oldTicker = activeTickerRef.current;
+      const curPanes = panesRef.current;
+      const curSeries = plottedSeriesRef.current;
+
+      // No existing layout to carry (first load / empty canvas) — or nothing to
+      // do (same ticker). Fall back to a normal preset load for the empty case.
+      if (!oldTicker || curPanes.length === 0 || curSeries.length === 0) {
+        loadViewForTicker(newTicker);
+        return;
+      }
+      if (newTicker === oldTicker) return;
+
+      const gen = ++paneGeneration;
+      setIsLoadingView(true);
+      setActiveTicker(newTicker);
+
+      // Series that belong to the old company AND can be refetched by metric.
+      const belongsToOld = (s: PlottedSeries) =>
+        s.ticker === oldTicker &&
+        !s.id.startsWith("uploaded:") &&
+        !s.metric.startsWith("xl:");
+
+      const oldName = tickerDisplayName(oldTicker);
+      const newName = tickerDisplayName(newTicker);
+
+      // Relabel panes owned by the old ticker; KEEP pane ids so per-pane
+      // indicators / color-by / grid fractions survive the switch.
+      const newPanes: PaneInfo[] = curPanes.map((p) =>
+        p.ticker === oldTicker
+          ? {
+              ...p,
+              ticker: newTicker,
+              label: p.label.startsWith(oldName)
+                ? newName + p.label.slice(oldName.length)
+                : p.label,
+            }
+          : p
+      );
+
+      // Swap the old ticker's series to the new one (fresh id, empty data to be
+      // filled by the refetch below). Everything else is preserved verbatim.
+      const remapped: PlottedSeries[] = [];
+      const newSeries: PlottedSeries[] = curSeries.map((s) => {
+        if (!belongsToOld(s)) return s;
+        const ns: PlottedSeries = {
+          ...s,
+          id: `${newTicker}:${s.metric}:${nextSeriesSeq++}`,
+          ticker: newTicker,
+          label: `${newName} - ${s.metric}`,
+          data: [],
+        };
+        remapped.push(ns);
+        return ns;
+      });
+
+      setPanes(newPanes);
+      setPlottedSeries(newSeries);
+
+      try {
+        // Prime OHLC for a basket target (single tickers are handled by the
+        // uniquePaneTickers effect that fetches candles for new pane tickers).
+        const basketCache = new Map<string, BasketOhlcResult | null>();
+        if (isBasketTicker(newTicker)) {
+          const res = await fetchBasketOhlc(newTicker, resolveBasket);
+          basketCache.set(newTicker, res ?? null);
+          if (res && paneGeneration === gen) {
+            setOhlcCache((prev) => ({ ...prev, [newTicker]: basketOhlcToCandles(res) }));
+          }
+        }
+
+        // Refetch each remapped series and patch it in by id. Per-series so the
+        // layout fills progressively; a per-metric failure just leaves that
+        // series empty (mirrors loadViewForTicker's isolation).
+        await Promise.all(
+          remapped.map(async (s) => {
+            try {
+              const data = await getMetricSeriesResolved(newTicker, s.metric, resolveBasket, basketCache);
+              if (paneGeneration !== gen) return;
+              setPlottedSeries((prev) =>
+                prev.map((ps) => (ps.id === s.id ? { ...ps, data } : ps))
+              );
+            } catch (err) {
+              console.warn(`No data for ${newTicker} / ${s.metric}`, err);
+            }
+          })
+        );
+      } catch (e) {
+        console.error("Failed to remap layout", e);
+      }
+      if (paneGeneration === gen) setIsLoadingView(false);
+    },
+    [loadViewForTicker, resolveBasket, tickerDisplayName]
+  );
+
   // Load the Re-Rating "jump to charts" analysis: 5 stacked panes for one ticker —
   // Price, the multiple (with rolling median/p10/p90 overlay), and the rolling
   // percentile / z-score / reward:risk of that multiple. The last three are
@@ -1273,16 +1379,16 @@ export default function Dashboard() {
     (direction: "next" | "prev") => {
       if (!filteredTickerList.length) return;
       if (currentTickerIndex < 0) {
-        loadViewForTicker(filteredTickerList[0].ticker);
+        remapLayoutToTicker(filteredTickerList[0].ticker);
         return;
       }
       const newIndex =
         direction === "next"
           ? (currentTickerIndex + 1) % filteredTickerList.length
           : (currentTickerIndex - 1 + filteredTickerList.length) % filteredTickerList.length;
-      loadViewForTicker(filteredTickerList[newIndex].ticker);
+      remapLayoutToTicker(filteredTickerList[newIndex].ticker);
     },
-    [filteredTickerList, currentTickerIndex, loadViewForTicker]
+    [filteredTickerList, currentTickerIndex, remapLayoutToTicker]
   );
 
   // Keyboard navigation
@@ -1603,7 +1709,7 @@ export default function Dashboard() {
           carouselClassOptions={classFilterOptions}
           currentTickerIndex={currentTickerIndex}
           onNavigateTicker={navigateTicker}
-          onSelectTicker={(ticker: string) => loadViewForTicker(ticker)}
+          onSelectTicker={(ticker: string) => remapLayoutToTicker(ticker)}
           activeView={activeView}
           presetViews={Object.keys(PRESET_VIEWS)}
           viewGroups={[
