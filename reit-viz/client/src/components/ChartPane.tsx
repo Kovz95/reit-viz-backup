@@ -1155,7 +1155,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         param.seriesData.forEach((data: any, series: any) => {
           const opts = series.options();
           if ("value" in data) {
-            const title = opts.title || "value";
+            const title = opts.title || "";
             if (title) values[title] = data.value;
           } else if ("close" in data) {
             values["Price"] = data.close;
@@ -1258,7 +1258,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (!d) continue;
         const opts = series.options() as any;
         if ("value" in d && d.value != null) {
-          const title = opts.title || "value";
+          const title = opts.title || "";
           if (title) values[title] = d.value;
         } else if ("close" in d && d.close != null) {
           values["Price"] = d.close;
@@ -2045,10 +2045,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         const isOverlay = useLeftScale && ps.id !== firstSeriesId;
         if (!seriesMapRef.current.has(markerKey)) {
           const mk = chart.addSeries(LineSeries, {
-            // Same title as the parent line so the crosshair readout (keyed by
-            // title) collapses both onto one row with the same value instead of
-            // adding a phantom entry.
-            title: ps.label,
+            // No title: LWC would otherwise render a second price-axis tag for
+            // it. Empty-title series are also skipped by every crosshair-readout
+            // builder, so the overlay stays invisible everywhere but the dots.
             color: ps.color,
             lineVisible: false,
             pointMarkersVisible: true,
