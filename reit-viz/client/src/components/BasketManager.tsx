@@ -17,6 +17,7 @@ import {
   Pencil,
   Check,
   Copy,
+  GitMerge,
 } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
 import BasketMetricInspector, {
@@ -59,6 +60,17 @@ const WEIGHTING_FORMULA: Record<string, string> = {
   custom: "wᵢ = cᵢ / Σ c  — your custom raw weights, normalized to sum to 1.",
 };
 
+// Return `base`, or `base 2` / `base 3` / … if that name is already taken.
+// addBasket upserts by name, so a fresh basket needs a non-colliding name to
+// avoid silently overwriting an existing one.
+function uniqueName(base: string, taken: Set<string>): string {
+  if (!taken.has(base)) return base;
+  let n = 2;
+  let name = `${base} ${n}`;
+  while (taken.has(name)) name = `${base} ${++n}`;
+  return name;
+}
+
 function fmtDate(ms?: number): string {
   if (!ms || !Number.isFinite(ms)) return "—";
   try {
@@ -79,10 +91,14 @@ function BasketCard({
   basket,
   tickers,
   onInspect,
+  selected,
+  onToggleSelect,
 }: {
   basket: Basket;
   tickers: TickerLike[];
   onInspect: (id: string) => void;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   const { baskets, updateBasket, deleteBasket, addBasket } = useBaskets();
   const [expanded, setExpanded] = useState(false);
@@ -145,10 +161,7 @@ function BasketCard({
   // (addBasket upserts by name, so the name must be unique to avoid overwrite.)
   const duplicate = useCallback(() => {
     const names = new Set(baskets.map((b) => b.name));
-    const base = `${basket.name} (copy)`;
-    let name = base;
-    let n = 2;
-    while (names.has(name)) name = `${base} ${n++}`;
+    const name = uniqueName(`${basket.name} (copy)`, names);
     addBasket(name, [...basket.tickers], {
       weighting: basket.weighting,
       rebalance: basket.rebalance,
@@ -180,11 +193,21 @@ function BasketCard({
 
   return (
     <div
-      className="rounded-md border border-border bg-card"
+      className={`rounded-md border bg-card ${
+        selected ? "border-sky-500/70" : "border-border"
+      }`}
       data-testid={`basket-card-${basket.id}`}
     >
       {/* Header row */}
       <div className="flex items-center gap-2 px-2 py-1.5">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(basket.id)}
+          className="flex-shrink-0 w-3.5 h-3.5 accent-sky-500 cursor-pointer"
+          title="Select for merge"
+          data-testid={`basket-select-${basket.id}`}
+        />
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -483,9 +506,10 @@ function BasketCard({
 
 // ── Manager (list of cards + shared inspector dialog) ─────────────────────────
 export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
-  const { baskets } = useBaskets();
+  const { baskets, addBasket } = useBaskets();
   const [inspectId, setInspectId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const inspectBasket = useMemo<InspectableBasket | null>(
     () =>
@@ -505,6 +529,64 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
     );
   }, [baskets, filter]);
 
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Baskets selected for merge, in the order they appear in the list. The first
+  // one supplies the weighting scheme / rebalance / vol-lookback for the merge.
+  const selectedBaskets = useMemo(
+    () => baskets.filter((b) => selectedIds.has(b.id)),
+    [baskets, selectedIds],
+  );
+
+  // Merge: union the constituents of every selected basket (dedup, first-seen
+  // order) into a brand-new basket, inheriting config from the first selection.
+  const mergeSelected = useCallback(() => {
+    if (selectedBaskets.length < 2) return;
+    const seen = new Set<string>();
+    const tickers: string[] = [];
+    for (const b of selectedBaskets) {
+      for (const t of b.tickers) {
+        if (!seen.has(t)) {
+          seen.add(t);
+          tickers.push(t);
+        }
+      }
+    }
+    // First basket that defines a custom weight for a ticker wins.
+    const customWeights: Record<string, number> = {};
+    for (const b of selectedBaskets) {
+      for (const [t, w] of Object.entries(b.customWeights)) {
+        if (!(t in customWeights)) customWeights[t] = w;
+      }
+    }
+    const first = selectedBaskets[0];
+    const joined = selectedBaskets.map((b) => b.name).join(" + ");
+    const base =
+      joined.length <= 48
+        ? `Merge: ${joined}`
+        : `Merge of ${selectedBaskets.length} baskets`;
+    const name = uniqueName(base, new Set(baskets.map((b) => b.name)));
+    addBasket(name, tickers, {
+      weighting: first.weighting,
+      rebalance: first.rebalance,
+      customWeights,
+      volLookback: first.volLookback,
+    });
+    setSelectedIds(new Set());
+  }, [selectedBaskets, baskets, addBasket]);
+
+  const mergedTickerCount = useMemo(
+    () => new Set(selectedBaskets.flatMap((b) => b.tickers)).size,
+    [selectedBaskets],
+  );
+
   return (
     <div data-testid="basket-manager">
       <div className="flex items-center justify-between gap-2 mb-2">
@@ -523,6 +605,48 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
         )}
       </div>
 
+      {/* Merge action bar — appears once at least one basket is selected. */}
+      {selectedIds.size > 0 && (
+        <div
+          className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded border border-sky-500/50 bg-sky-500/10"
+          data-testid="basket-merge-bar"
+        >
+          <span className="text-[10px] font-mono text-sky-200">
+            {selectedIds.size} selected
+            {selectedBaskets.length >= 2 && (
+              <span className="text-sky-300/70">
+                {" "}
+                → {mergedTickerCount} unique tickers
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={mergeSelected}
+            disabled={selectedBaskets.length < 2}
+            className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky-500/50 bg-sky-500/20 text-sky-100 hover:bg-sky-500/30 disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
+            title={
+              selectedBaskets.length < 2
+                ? "Select at least two baskets to merge"
+                : "Merge selected baskets into a new one (union of tickers)"
+            }
+            data-testid="basket-merge-button"
+          >
+            <GitMerge className="w-3 h-3" />
+            Merge
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+            className="text-muted-foreground hover:text-foreground"
+            title="Clear selection"
+            data-testid="basket-merge-clear"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {baskets.length === 0 ? (
         <div className="text-xs text-muted-foreground py-6 text-center">
           No saved baskets yet. Create one above and it will appear here with
@@ -540,6 +664,8 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
               basket={b}
               tickers={tickers}
               onInspect={setInspectId}
+              selected={selectedIds.has(b.id)}
+              onToggleSelect={toggleSelect}
             />
           ))}
         </div>
