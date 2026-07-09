@@ -169,6 +169,8 @@ interface ChartPaneProps {
   onDrawingDeleted?: () => void;
   /** Called when the user clicks a candle while the "fractal-anchor" tool is active. */
   onFractalAnchorPick?: (date: string) => void;
+  /** Called when the user right-click-deletes a fractal line — turns the indicator off. */
+  onDeleteFractal?: () => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -709,6 +711,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onDrawingAdded,
   onDrawingDeleted,
   onFractalAnchorPick,
+  onDeleteFractal,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -728,6 +731,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
   const { colors: IC } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
+  // Geometry of the fractal indicator lines (resistance/support), kept alongside
+  // indicatorSeriesRef so right-click can hit-test them — they're indicator
+  // overlays, not drawings, so pickDrawingAt/the eraser can't see them.
+  const fractalLinesRef = useRef<{ points: { time: string; value: number }[] }[]>([]);
   // Invisible whitespace series spanning the full global date axis. It forces
   // every pane's time scale to be identical so that stacked panes (e.g. price
   // over premium-to-NTA) line up by date even when their real series cover
@@ -834,7 +841,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const [drawingMenu, setDrawingMenu] = useState<{
     clientX: number;
     clientY: number;
-    id: string;
+    kind: "drawing" | "fractal";
+    id?: string;
     label: string;
   } | null>(null);
 
@@ -1106,6 +1114,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       chartRef.current = null;
       seriesMapRef.current.clear();
       indicatorSeriesRef.current = [];
+      fractalLinesRef.current = [];
       spacerSeriesRef.current = null;
       setChartReady(false);
     }
@@ -1214,6 +1223,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         setChartReady(false);
         seriesMapRef.current.clear();
         indicatorSeriesRef.current = [];
+        fractalLinesRef.current = [];
         spacerSeriesRef.current = null;
       }
     };
@@ -1865,6 +1875,49 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return bestIdx;
   }, [getAnySeries]);
 
+  // Hit-test the fractal indicator lines at a pane-relative pixel point. Returns
+  // true if near either the resistance or support line. Uses the same price-space
+  // interpolation as pickDrawingAt, since fractal lines are stored as point pairs.
+  const pickFractalAt = useCallback((x: number, y: number): boolean => {
+    const chart = chartRef.current;
+    const anySeries = getAnySeries();
+    if (!chart || !anySeries || fractalLinesRef.current.length === 0) return false;
+
+    const clickPrice = anySeries.coordinateToPrice(y);
+    const clickTime = chart.timeScale().coordinateToTime(x);
+    if (clickPrice === null || clickPrice === undefined || !clickTime) return false;
+    const clickTimeStr = String(clickTime);
+
+    const container = containerRef.current;
+    const chartHeight = container?.clientHeight ?? 400;
+    let priceRange = 1;
+    try {
+      const topPrice = anySeries.coordinateToPrice(0);
+      const bottomPrice = anySeries.coordinateToPrice(chartHeight);
+      if (topPrice !== null && bottomPrice !== null) {
+        priceRange = Math.abs(topPrice - bottomPrice) || 1;
+      }
+    } catch {}
+    const priceTol = priceRange * 0.03; // ~3% of visible price range (matches drawings)
+
+    for (const line of fractalLinesRef.current) {
+      const pts = line.points;
+      for (let j = 0; j < pts.length - 1; j++) {
+        const p1 = pts[j];
+        const p2 = pts[j + 1];
+        if (clickTimeStr >= p1.time && clickTimeStr <= p2.time) {
+          const t1 = new Date(p1.time).getTime();
+          const t2 = new Date(p2.time).getTime();
+          const tc = new Date(clickTimeStr).getTime();
+          const frac = t2 === t1 ? 0 : (tc - t1) / (t2 - t1);
+          const interp = p1.value + frac * (p2.value - p1.value);
+          if (Math.abs(clickPrice - interp) < priceTol) return true;
+        }
+      }
+    }
+    return false;
+  }, [getAnySeries]);
+
   // Remove a single drawing (its series + record) and notify the parent count.
   const deleteDrawingById = useCallback((id: string) => {
     const chart = chartRef.current;
@@ -1899,16 +1952,27 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!container || !chartReady) return;
     const onContextMenu = (e: MouseEvent) => {
       const rect = container.getBoundingClientRect();
-      const idx = pickDrawingAt(e.clientX - rect.left, e.clientY - rect.top);
-      if (idx < 0) { setDrawingMenu(null); return; }
-      e.preventDefault(); // suppress the browser menu only when we hit a drawing
-      const d = drawingsRef.current[idx];
-      const label = d.type === "hline" ? "line" : d.type === "trendline" ? "trendline" : "drawing";
-      setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, id: d.id, label });
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const idx = pickDrawingAt(px, py);
+      if (idx >= 0) {
+        e.preventDefault(); // suppress the browser menu only when we hit a drawing
+        const d = drawingsRef.current[idx];
+        const label = d.type === "hline" ? "line" : d.type === "trendline" ? "trendline" : "drawing";
+        setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, kind: "drawing", id: d.id, label });
+        return;
+      }
+      // No drawing hit — fall back to the fractal indicator lines.
+      if (pickFractalAt(px, py)) {
+        e.preventDefault();
+        setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, kind: "fractal", label: "fractal lines" });
+        return;
+      }
+      setDrawingMenu(null);
     };
     container.addEventListener("contextmenu", onContextMenu);
     return () => container.removeEventListener("contextmenu", onContextMenu);
-  }, [chartReady, pickDrawingAt]);
+  }, [chartReady, pickDrawingAt, pickFractalAt]);
 
   // Dismiss the drawing menu on any outside click, wheel scroll, or Escape.
   useEffect(() => {
@@ -1989,6 +2053,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       try { chart.removeSeries(s); } catch {}
     }
     indicatorSeriesRef.current = [];
+    fractalLinesRef.current = [];
 
     // Add OHLC candlestick if this pane has the close series AND chart type is candlestick
     // (only in raw mode — candlestick doesn't make sense for z-score/percentile)
@@ -2419,6 +2484,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
         s.setData(line.points.map((p) => ({ time: p.time as Time, value: p.value })));
         indicatorSeriesRef.current.push(s);
+        fractalLinesRef.current.push({
+          points: line.points.map((p) => ({ time: String(p.time), value: p.value })),
+        });
       };
 
       drawLine(fr.resistance, IC.fractal_resistance, `Fractal R (n${fr.n}${tfLabel})${anchorLabel}`);
@@ -3332,7 +3400,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           <button
             type="button"
             className="flex items-center gap-1.5 px-3 py-1.5 text-destructive hover:bg-destructive/10 w-full text-left"
-            onClick={() => { deleteDrawingById(drawingMenu.id); setDrawingMenu(null); }}
+            onClick={() => {
+              if (drawingMenu.kind === "fractal") onDeleteFractal?.();
+              else if (drawingMenu.id) deleteDrawingById(drawingMenu.id);
+              setDrawingMenu(null);
+            }}
             data-testid={`drawing-delete-${paneId}`}
           >
             <Trash2 className="w-3 h-3" />

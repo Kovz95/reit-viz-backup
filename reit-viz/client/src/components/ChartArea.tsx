@@ -1074,6 +1074,17 @@ export default function ChartArea({
     setActiveTool("none");
   }, [setIndicatorsMap, fractalN, fractalTimeframe]);
 
+  // Right-click-delete a fractal line: fractals are a paired indicator overlay, so
+  // "deleting" turns the indicator off for that pane (drops both R and S lines).
+  const handleDeleteFractal = useCallback((paneId: number) => {
+    setIndicatorsMap((prev) => {
+      const cur = prev[paneId];
+      if (!cur?.fractalLines) return prev;
+      const { fractalLines, ...rest } = cur;
+      return { ...prev, [paneId]: rest };
+    });
+  }, [setIndicatorsMap]);
+
   // Toolbar period/timeframe: remember as the anchoring defaults AND live-apply to
   // every pane that already has fractal lines on, so the change is visible at once.
   // Build the next map from the current one (a plain object, not a function updater,
@@ -2429,6 +2440,7 @@ export default function ChartArea({
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}
                   onFractalAnchorPick={(date) => handleFractalAnchorPick(pane.id, date)}
+                  onDeleteFractal={() => handleDeleteFractal(pane.id)}
                   isActive={false}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}
