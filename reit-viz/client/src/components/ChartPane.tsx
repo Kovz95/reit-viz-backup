@@ -799,6 +799,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   }>({ pending: false });
   // Measure tool (TradingView-style ruler): transient primitive overlay + info box.
   const measurePrimRef = useRef<{ prim: MeasurePrimitive; series: ISeriesApi<any> } | null>(null);
+  // Detach the measure overlay from its series ahead of any chart teardown, so the
+  // still-attached primitive isn't poked during disposal ("Object is disposed").
+  // Measurements survive tool switches, not full chart rebuilds/unmounts — those
+  // already clear every overlay.
+  const detachMeasurePrim = () => {
+    const ref = measurePrimRef.current;
+    if (!ref) return;
+    try { ref.series.detachPrimitive(ref.prim); } catch {}
+    measurePrimRef.current = null;
+  };
   // Latest shade-toggle value, read by the drag handler without re-running its effect.
   const measureShadeRef = useRef(measureShade);
   measureShadeRef.current = measureShade;
@@ -1082,6 +1092,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Clean up previous
     if (chartRef.current) {
+      detachMeasurePrim();
       chartRef.current.remove();
       chartRef.current = null;
       seriesMapRef.current.clear();
@@ -1188,6 +1199,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return () => {
       if (chartRef.current) {
         onChartDestroyed?.(paneId);
+        detachMeasurePrim();
         chartRef.current.remove();
         chartRef.current = null;
         setChartReady(false);
