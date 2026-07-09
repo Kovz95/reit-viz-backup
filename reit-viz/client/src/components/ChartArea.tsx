@@ -8,7 +8,6 @@ import type { IChartApi } from "lightweight-charts";
 import ChartPane from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
-import PairsPickerPanel from "./PairsPickerPanel";
 import QuickAnalyzePanel from "./QuickAnalyzePanel";
 import SignalEngineAnalyzer from "./SignalEngineAnalyzer";
 import { SeededOverlaysManager } from "./SeededOverlaysManager";
@@ -434,7 +433,6 @@ export default function ChartArea({
   const [timeRange, setTimeRange] = useState("5Y");
   const [showIndicators, setShowIndicators] = useState(false);
   const [showCorrelation, setShowCorrelation] = useState(false);
-  const [showPairs, setShowPairs] = useState(false);
   // Per-pane indicator state: paneId → ActiveIndicators
   // Prefer prop from parent (persisted in workspace state), fall back to local.
   const [localIndicatorsMap, setLocalIndicatorsMap] = useState<Record<number, ActiveIndicators>>({});
@@ -2043,21 +2041,10 @@ export default function ChartArea({
           variant={showIndicators ? "default" : "ghost"}
           size="sm"
           className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowIndicators(!showIndicators); setShowCorrelation(false); setShowPairs(false); }}
+          onClick={() => { setShowIndicators(!showIndicators); setShowCorrelation(false); }}
           data-testid="toggle-indicators"
         >
           Indicators
-        </Button>
-
-        {/* Pairs */}
-        <Button
-          variant={showPairs ? "default" : "ghost"}
-          size="sm"
-          className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowPairs(!showPairs); setShowCorrelation(false); setShowIndicators(false); }}
-          data-testid="toggle-pairs"
-        >
-          Pairs
         </Button>
 
         {/* Quick Analyze */}
@@ -2490,15 +2477,6 @@ export default function ChartArea({
             panes={panes}
             onPlot={onAddFormulaSeries}
             onClose={() => setShowCorrelation(false)}
-          />
-        )}
-
-        {showPairs && onAddFormulaSeries && (
-          <PairsPickerPanel
-            tickerList={tickerList}
-            panes={panes}
-            onPlot={onAddFormulaSeries}
-            onClose={() => setShowPairs(false)}
           />
         )}
 
