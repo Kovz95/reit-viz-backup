@@ -36,6 +36,7 @@ import { useBaskets } from "@/lib/useBaskets";
 import { extractBasketId } from "@/lib/basketUtils";
 import {
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   X,
   Eye,
@@ -111,6 +112,10 @@ interface SidebarProps {
   ) => void;
   onRemoveSeries: (id: string) => void;
   onRemovePane: (paneId: number) => void;
+  /** Move a series to a different existing pane (Current Layout up/down arrows). */
+  onMoveSeriesToPane: (seriesId: string, targetPaneId: number) => void;
+  /** Reorder panes by dropping pane `fromId` into `toId`'s slot (drag-drop). */
+  onReorderPanes: (fromId: number, toId: number) => void;
   onClearAll: () => void;
   onToggleVisibility: (id: string) => void;
   onUpdateSeries: (id: string, updates: Partial<Pick<PlottedSeries, "color" | "lineWidth" | "lineStyle">>) => void;
@@ -162,6 +167,8 @@ export default function Sidebar({
   onAddSeriesWithMode,
   onRemoveSeries,
   onRemovePane,
+  onMoveSeriesToPane,
+  onReorderPanes,
   onClearAll,
   onToggleVisibility,
   onUpdateSeries,
@@ -175,6 +182,10 @@ export default function Sidebar({
   const { fundamentalSheets, removeFundamentalWorkbook } = useUpload();
   const uploadedSheets = fundamentalSheets;
   const onRemoveWorkbook = removeFundamentalWorkbook;
+
+  // Current Layout: drag-drop pane reordering (native HTML5 DnD).
+  const [dragPaneId, setDragPaneId] = useState<number | null>(null);
+  const [dragOverPaneId, setDragOverPaneId] = useState<number | null>(null);
 
   // ── Saved baskets + metric inspector (basket-math-metric / basket-math-asof) ──
   const { baskets, getBasket } = useBaskets();
@@ -1364,19 +1375,58 @@ export default function Sidebar({
                       Clear All
                     </Button>
                   </div>
-                  {panes.map((pane) => (
+                  {panes.map((pane, paneIdx) => (
                     <div
                       key={pane.id}
-                      className="border border-border/50 rounded p-1.5 space-y-0.5"
+                      onDragOver={(e) => {
+                        if (dragPaneId === null) return;
+                        e.preventDefault();
+                        if (dragOverPaneId !== pane.id) setDragOverPaneId(pane.id);
+                      }}
+                      onDragLeave={() =>
+                        setDragOverPaneId((cur) => (cur === pane.id ? null : cur))
+                      }
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragPaneId !== null && dragPaneId !== pane.id) {
+                          onReorderPanes(dragPaneId, pane.id);
+                        }
+                        setDragPaneId(null);
+                        setDragOverPaneId(null);
+                      }}
+                      className={`border rounded p-1.5 space-y-0.5 transition-colors ${
+                        dragOverPaneId === pane.id && dragPaneId !== null && dragPaneId !== pane.id
+                          ? "border-primary bg-primary/5"
+                          : "border-border/50"
+                      } ${dragPaneId === pane.id ? "opacity-50" : ""}`}
+                      data-testid={`layout-pane-${pane.id}`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                          {pane.label}
-                        </span>
+                        <div className="flex items-center gap-1 min-w-0">
+                          {/* Drag handle — reorder plots by dragging this */}
+                          <span
+                            draggable
+                            onDragStart={(e) => {
+                              setDragPaneId(pane.id);
+                              e.dataTransfer.effectAllowed = "move";
+                              // Firefox requires data to be set for a drag to begin.
+                              try { e.dataTransfer.setData("text/plain", String(pane.id)); } catch {}
+                            }}
+                            onDragEnd={() => { setDragPaneId(null); setDragOverPaneId(null); }}
+                            className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground flex-shrink-0"
+                            title="Drag to reorder plots"
+                            data-testid={`drag-pane-${pane.id}`}
+                          >
+                            <GripVertical className="w-3 h-3" />
+                          </span>
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider truncate">
+                            {pane.label}
+                          </span>
+                        </div>
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-5 w-5 p-0 text-destructive hover:text-destructive"
+                          className="h-5 w-5 p-0 text-destructive hover:text-destructive flex-shrink-0"
                           onClick={() => onRemovePane(pane.id)}
                           data-testid={`remove-pane-${pane.id}`}
                         >
@@ -1477,6 +1527,25 @@ export default function Sidebar({
                           <span className="truncate flex-1 font-mono text-[11px]">
                             {s.label}
                           </span>
+                          {/* Move this series to the pane above / below */}
+                          <button
+                            className="p-0.5 text-muted-foreground/60 hover:text-foreground disabled:opacity-20 disabled:hover:text-muted-foreground/60"
+                            disabled={paneIdx === 0}
+                            onClick={() => onMoveSeriesToPane(s.id, panes[paneIdx - 1].id)}
+                            title="Move to pane above"
+                            data-testid={`move-series-up-${s.id}`}
+                          >
+                            <ChevronUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            className="p-0.5 text-muted-foreground/60 hover:text-foreground disabled:opacity-20 disabled:hover:text-muted-foreground/60"
+                            disabled={paneIdx === panes.length - 1}
+                            onClick={() => onMoveSeriesToPane(s.id, panes[paneIdx + 1].id)}
+                            title="Move to pane below"
+                            data-testid={`move-series-down-${s.id}`}
+                          >
+                            <ChevronDown className="w-3 h-3" />
+                          </button>
                           <button
                             className="opacity-0 group-hover:opacity-100 p-0.5"
                             onClick={() => onToggleVisibility(s.id)}

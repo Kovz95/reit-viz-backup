@@ -742,6 +742,30 @@ export default function Dashboard() {
     setPlottedSeries((prev) => prev.filter((s) => s.paneIndex !== paneId));
   }, []);
 
+  // Move a single series to a different existing pane (Current Layout up/down
+  // arrows). Only repoints the series' paneIndex — panes/order are untouched.
+  const moveSeriesToPane = useCallback((seriesId: string, targetPaneId: number) => {
+    setPlottedSeries((prev) =>
+      prev.map((s) => (s.id === seriesId ? { ...s, paneIndex: targetPaneId } : s))
+    );
+  }, []);
+
+  // Reorder panes (Current Layout drag-drop): drop pane `fromId` into `toId`'s
+  // slot. Pane ids are preserved, so per-pane indicators/color-by stay attached;
+  // only the render order (and thus grid placement) changes.
+  const reorderPanes = useCallback((fromId: number, toId: number) => {
+    if (fromId === toId) return;
+    setPanes((prev) => {
+      const fromIdx = prev.findIndex((p) => p.id === fromId);
+      const toIdx = prev.findIndex((p) => p.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+  }, []);
+
   // Load a preset view for a given ticker
   const loadViewForTicker = useCallback(
     async (ticker: string, viewName?: string) => {
@@ -1682,6 +1706,8 @@ export default function Dashboard() {
           onAddSeriesWithMode={addSeriesWithMode}
           onRemoveSeries={removeSeries}
           onRemovePane={removePane}
+          onMoveSeriesToPane={moveSeriesToPane}
+          onReorderPanes={reorderPanes}
           onClearAll={clearAllSeries}
           onToggleVisibility={toggleSeriesVisibility}
           onUpdateSeries={updateSeries}

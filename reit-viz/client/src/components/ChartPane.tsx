@@ -2005,13 +2005,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           });
         }
       } else {
-        // Update existing series data and style
+        // Update existing series data and style. Include the point-marker opts
+        // so switching Line <-> L+Dot on a series that persists across the
+        // chart-type change actually toggles the dots (otherwise the markers
+        // keep whatever state they had when the series was first created).
         const existing = seriesMapRef.current.get(ps.id)!;
         try {
           existing.applyOptions({
             color: ps.color,
             lineWidth: (ps.lineWidth ?? 2) as any,
             lineStyle: ps.lineStyle ?? 0,
+            crosshairMarkerRadius: isLineScatter ? 3.5 : 4,
+            pointMarkersVisible: isLineScatter,
+            pointMarkersRadius: isLineScatter ? 2.5 : undefined,
           });
           existing.setData(applyColorByToData(ps.data));
         } catch {}
