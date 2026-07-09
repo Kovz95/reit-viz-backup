@@ -2135,6 +2135,20 @@ export default function ChartArea({
           </Button>
         )}
 
+        {activeTool === "measure" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-destructive"
+            onClick={() => window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"))}
+            title="Clear all measurements"
+            data-testid="measure-clear"
+          >
+            <Trash2 className="w-3 h-3" />
+            Clear
+          </Button>
+        )}
+
         {drawingCount > 0 && (
           <Button
             variant="ghost"

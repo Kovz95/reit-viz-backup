@@ -962,12 +962,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     window.dispatchEvent(new CustomEvent("reit-viz:patterns-most-relevant", { detail: { paneId, relevant: patternResults.relevant } }));
   }, [patternResults, paneId]);
 
-  // Detach this pane's measure overlay (line/rect primitive + info box).
+  // Remove all of this pane's measurements (keeps the primitive attached so new
+  // measurements can be drawn again) and hide the floating readout box.
   const clearMeasureOverlay = useCallback(() => {
-    if (measurePrimRef.current) {
-      try { measurePrimRef.current.series.detachPrimitive(measurePrimRef.current.prim); } catch {}
-      measurePrimRef.current = null;
-    }
+    try { measurePrimRef.current?.prim.clearAll(); } catch {}
     setMeasureBox(null);
   }, []);
 
@@ -1014,7 +1012,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         series.attachPrimitive(prim);
         measurePrimRef.current = { prim, series };
       }
-      measurePrimRef.current.prim.setMeasure({
+      measurePrimRef.current.prim.updateCurrent({
         startTime, startPrice: s.value, endTime, endPrice: e.value, up,
         showRect: measureShadeRef.current,
       });
@@ -1049,11 +1047,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       drawSpanMeasure(d.startTime, d.endTime);
     };
     const onClear = () => clearMeasureOverlay();
+    // Origin finished its drag: followers commit their mirrored measure so it
+    // persists alongside any earlier ones instead of being overwritten.
+    const onCommit = () => { try { measurePrimRef.current?.prim.commitCurrent(); } catch {} };
     window.addEventListener("reit-viz-measure-span", onSpan);
     window.addEventListener("reit-viz-measure-clear", onClear);
+    window.addEventListener("reit-viz-measure-commit", onCommit);
     return () => {
       window.removeEventListener("reit-viz-measure-span", onSpan);
       window.removeEventListener("reit-viz-measure-clear", onClear);
+      window.removeEventListener("reit-viz-measure-commit", onCommit);
     };
   }, [paneId, activeTool, drawSpanMeasure, clearMeasureOverlay]);
 
@@ -1589,7 +1592,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!container || !chart || !chartReady) return;
 
     if (activeTool !== "measure") {
-      clearMeasureOverlay();
+      // Keep any drawn measurements on screen after the tool is deselected;
+      // only hide the cursor-following readout box.
+      setMeasureBox(null);
       return;
     }
 
@@ -1669,9 +1674,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (e.button !== 0) return; // left click only
       const pt = resolvePoint(e);
       if (!pt) return;
-      clearMeasureOverlay();
-      // Clear any prior measurement on the other panes before starting anew.
-      window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
+      // Don't clear prior measurements — each drag adds another persistent one.
       isMeasuring = true;
       start = pt;
       // Disable all chart interaction while measuring so the drag is ours.
@@ -1717,7 +1720,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             measurePrimRef.current = { prim, series };
           }
         }
-        measurePrimRef.current?.prim.setMeasure({
+        measurePrimRef.current?.prim.updateCurrent({
           startTime: start.time,
           startPrice: start.price,
           endTime: end.time,
@@ -1743,7 +1746,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         handleScroll: { mouseWheel: false, pressedMouseMove: false },
         handleScale: { mouseWheel: true, pinch: true },
       });
-      // Leave the line + box on screen until the next drag or tool switch.
+      // Finalize this measurement so it persists; the next drag adds another.
+      try { measurePrimRef.current?.prim.commitCurrent(); } catch {}
+      // All-panes mode: tell follower panes to finalize their mirror too.
+      if (measureAllRef.current) {
+        window.dispatchEvent(new CustomEvent("reit-viz-measure-commit"));
+      }
+      // Leave the drawn line + box on screen; the readout clears on tool switch.
     };
 
     container.addEventListener("mousedown", handleMouseDown);
