@@ -5,7 +5,7 @@
 // and as a popover elsewhere.
 
 import { useState, useMemo, useCallback } from "react";
-import { Search, X, Trash2, Plus, Check } from "lucide-react";
+import { Search, X, Trash2, Plus, Check, GitMerge } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
 
 // Faithful to the bundle's weighting/rebalance option sets + labels.
@@ -79,6 +79,34 @@ export function BasketEditorPanel({
   const removeTicker = useCallback((t: string) => {
     setSelected((prev) => prev.filter((x) => x !== t));
   }, []);
+
+  // Merge a saved basket's constituents into the working selection (union,
+  // case-insensitive dedup, first-seen order preserved). Which tickers are new
+  // is computed from the current selection up-front so the state updater stays
+  // pure and the "added" count is reliable.
+  const mergeInBasket = useCallback(
+    (id: string) => {
+      const b = baskets.find((x) => x.id === id);
+      if (!b) return;
+      const have = new Set(selected.map((t) => t.toUpperCase()));
+      const toAdd: string[] = [];
+      for (const t of b.tickers) {
+        const up = t.toUpperCase();
+        if (!have.has(up)) {
+          have.add(up);
+          toAdd.push(up);
+        }
+      }
+      if (toAdd.length) setSelected((prev) => [...prev, ...toAdd]);
+      setSavedMsg(
+        toAdd.length > 0
+          ? `Merged ${toAdd.length} ticker${toAdd.length === 1 ? "" : "s"} from "${b.name}"`
+          : `All of "${b.name}" already selected`,
+      );
+      setTimeout(() => setSavedMsg(null), 3000);
+    },
+    [baskets, selected],
+  );
 
   const canSave = name.trim().length > 0 && selected.length > 0;
 
@@ -182,6 +210,33 @@ export function BasketEditorPanel({
           ))
         )}
       </div>
+
+      {/* Merge in an existing saved basket's tickers */}
+      {baskets.length > 0 && (
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider w-16 flex-shrink-0">
+            <GitMerge className="w-3 h-3" />
+            Merge in
+          </label>
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) mergeInBasket(e.target.value);
+              e.target.value = "";
+            }}
+            className="flex-1 text-[10px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground focus:outline-none focus:border-amber-500/50"
+            data-testid="basket-editor-merge-select"
+            title="Add a saved basket's tickers to this selection"
+          >
+            <option value="">Merge a saved basket's tickers…</option>
+            {baskets.map((b: Basket) => (
+              <option key={b.id} value={b.id}>
+                {b.name} ({b.tickers.length})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Weighting + Rebalance */}
       <div className="flex items-center gap-2">
