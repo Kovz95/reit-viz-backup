@@ -16,6 +16,7 @@ import {
   Sigma,
   Pencil,
   Check,
+  Copy,
 } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
 import BasketMetricInspector, {
@@ -83,7 +84,7 @@ function BasketCard({
   tickers: TickerLike[];
   onInspect: (id: string) => void;
 }) {
-  const { updateBasket, deleteBasket } = useBaskets();
+  const { baskets, updateBasket, deleteBasket, addBasket } = useBaskets();
   const [expanded, setExpanded] = useState(false);
   const [search, setSearch] = useState("");
   const [editingName, setEditingName] = useState(false);
@@ -139,6 +140,22 @@ function BasketCard({
     }
     setEditingName(false);
   }, [nameDraft, basket.id, basket.name, updateBasket]);
+
+  // Duplicate: new id + a non-colliding "(copy)" name, same tickers/config.
+  // (addBasket upserts by name, so the name must be unique to avoid overwrite.)
+  const duplicate = useCallback(() => {
+    const names = new Set(baskets.map((b) => b.name));
+    const base = `${basket.name} (copy)`;
+    let name = base;
+    let n = 2;
+    while (names.has(name)) name = `${base} ${n++}`;
+    addBasket(name, [...basket.tickers], {
+      weighting: basket.weighting,
+      rebalance: basket.rebalance,
+      customWeights: { ...basket.customWeights },
+      volLookback: basket.volLookback,
+    });
+  }, [baskets, basket, addBasket]);
 
   const setWeighting = (weighting: string) =>
     updateBasket(basket.id, { weighting });
@@ -225,6 +242,15 @@ function BasketCard({
         >
           <Sigma className="w-3 h-3" />
           Inspect
+        </button>
+        <button
+          type="button"
+          onClick={duplicate}
+          className="text-muted-foreground hover:text-sky-300 flex-shrink-0"
+          title={`Duplicate ${basket.name}`}
+          data-testid={`basket-duplicate-${basket.id}`}
+        >
+          <Copy className="w-3.5 h-3.5" />
         </button>
         <button
           type="button"
