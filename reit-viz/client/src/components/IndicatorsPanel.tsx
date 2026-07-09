@@ -298,6 +298,7 @@ export default function IndicatorsPanel({
     on: boolean,
     n?: number,
     anchorDate?: string | null,
+    timeframe?: "daily" | "weekly",
   ) => {
     if (!on) {
       setActiveIndicators({ ...activeIndicators, fractalLines: undefined });
@@ -308,7 +309,7 @@ export default function IndicatorsPanel({
       anchorDate === undefined ? cur?.anchorDate : anchorDate === null ? undefined : anchorDate;
     setActiveIndicators({
       ...activeIndicators,
-      fractalLines: { n: n ?? fractalN, anchorDate: nextAnchor },
+      fractalLines: { n: n ?? fractalN, anchorDate: nextAnchor, timeframe: timeframe ?? cur?.timeframe },
     });
   };
 
@@ -870,6 +871,23 @@ export default function IndicatorsPanel({
                   }}
                   data-testid="custom-fractal-period"
                 />
+              </div>
+
+              {/* Timeframe: detect pivots on daily or weekly bars */}
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">Timeframe</span>
+                {(["daily", "weekly"] as const).map((tf) => (
+                  <Button
+                    key={tf}
+                    variant={(activeIndicators.fractalLines?.timeframe ?? "daily") === tf ? "default" : "secondary"}
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    onClick={() => updateFractal(true, undefined, undefined, tf)}
+                    data-testid={`panel-fractal-tf-${tf}`}
+                  >
+                    {tf === "daily" ? "Daily" : "Weekly"}
+                  </Button>
+                ))}
               </div>
 
               {/* As-of anchor date */}

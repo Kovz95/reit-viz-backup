@@ -50,6 +50,47 @@ const EMPTY: FractalTrendlines = {
 };
 
 /**
+ * Collapse a daily OHLC series into weekly bars: each calendar week (Mon–Sun)
+ * becomes one bar with high = max of the week, low = min of the week, dated to the
+ * week's LAST daily bar (a real chart date, so the resulting line points still map
+ * onto the daily x-axis). Bars must be sorted ascending by time.
+ */
+export function resampleWeekly(bars: FractalBar[]): FractalBar[] {
+  if (!Array.isArray(bars) || bars.length === 0) return [];
+  const mondayKey = (dateStr: string): string => {
+    const d = new Date(dateStr + "T00:00:00Z");
+    if (Number.isNaN(d.getTime())) return dateStr;
+    const dow = (d.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+    d.setUTCDate(d.getUTCDate() - dow);
+    return d.toISOString().slice(0, 10);
+  };
+  const out: FractalBar[] = [];
+  let curKey = "";
+  let high = -Infinity;
+  let low = Infinity;
+  let lastTime = "";
+  const flush = () => {
+    if (lastTime && Number.isFinite(high) && Number.isFinite(low)) {
+      out.push({ time: lastTime, high, low });
+    }
+  };
+  for (const b of bars) {
+    const k = mondayKey(b.time);
+    if (k !== curKey) {
+      flush();
+      curKey = k;
+      high = -Infinity;
+      low = Infinity;
+    }
+    if (Number.isFinite(b.high)) high = Math.max(high, b.high);
+    if (Number.isFinite(b.low)) low = Math.min(low, b.low);
+    lastTime = b.time; // last daily bar seen in this week (input is ascending)
+  }
+  flush();
+  return out;
+}
+
+/**
  * Compute fractal resistance/support trendlines for an OHLC bar series.
  *
  * @param bars      OHLC bars sorted ascending by time.

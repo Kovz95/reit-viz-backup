@@ -32,7 +32,7 @@ import {
 } from "@/lib/indicators";
 import type { HASmoothConfig } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
-import { computeFractalTrendlines } from "@/lib/fractalTrendlines";
+import { computeFractalTrendlines, resampleWeekly } from "@/lib/fractalTrendlines";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
@@ -118,8 +118,9 @@ export interface ActiveIndicators {
   obv?: boolean;
   ad?: boolean;
   cmf?: number;       // period
-  /** DojiEmoji fractal trendlines. n = fractal period; anchorDate = "as-of" replay date (undefined = latest bar). */
-  fractalLines?: { n: number; anchorDate?: string };
+  /** DojiEmoji fractal trendlines. n = fractal period; anchorDate = "as-of" replay date (undefined = latest bar);
+   *  timeframe = bar granularity pivots are detected on ("weekly" resamples daily→weekly first; default "daily"). */
+  fractalLines?: { n: number; anchorDate?: string; timeframe?: "daily" | "weekly" };
   /** Auto-detected diagonal support/resistance trendlines (pivot-pair RANSAC). */
   autoTrendlines?: boolean;
   /** Auto-detected horizontal support/resistance levels. */
@@ -2390,11 +2391,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       Array.isArray(ohlcData) &&
       ohlcData.length > 0
     ) {
-      const { n, anchorDate } = activeIndicators.fractalLines;
-      const bars = (ohlcData as any[])
+      const { n, anchorDate, timeframe } = activeIndicators.fractalLines;
+      const daily = (ohlcData as any[])
         .filter((b) => b && typeof b.time === "string")
         .map((b) => ({ time: b.time as string, high: Number(b.high), low: Number(b.low) }));
+      // Weekly: collapse each ISO week's daily bars into one (high=max, low=min),
+      // dated to the week's last bar (a real chart date) so pivots detect weekly swings.
+      const bars =
+        timeframe === "weekly" ? resampleWeekly(daily) : daily;
       const fr = computeFractalTrendlines(bars, n, anchorDate);
+      const tfLabel = timeframe === "weekly" ? ", W" : "";
       const anchorLabel = anchorDate ? ` @ ${anchorDate}` : "";
 
       const drawLine = (line: typeof fr.resistance, color: string, label: string) => {
@@ -2415,8 +2421,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         indicatorSeriesRef.current.push(s);
       };
 
-      drawLine(fr.resistance, IC.fractal_resistance, `Fractal R (n${fr.n})${anchorLabel}`);
-      drawLine(fr.support, IC.fractal_support, `Fractal S (n${fr.n})${anchorLabel}`);
+      drawLine(fr.resistance, IC.fractal_resistance, `Fractal R (n${fr.n}${tfLabel})${anchorLabel}`);
+      drawLine(fr.support, IC.fractal_support, `Fractal S (n${fr.n}${tfLabel})${anchorLabel}`);
     }
 
     // ── Auto trendlines (pivot-pair RANSAC) ──

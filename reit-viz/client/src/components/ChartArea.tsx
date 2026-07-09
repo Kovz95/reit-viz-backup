@@ -477,6 +477,9 @@ export default function ChartArea({
   const [measureMagnet, setMeasureMagnet] = useState(false);
   // Measure tool: mirror the measurement across all panes over the same time span
   const [measureAll, setMeasureAll] = useState(false);
+  // Fractal Anchor tool: period + timeframe applied when anchoring / editing fractal lines.
+  const [fractalN, setFractalN] = useState(10);
+  const [fractalTimeframe, setFractalTimeframe] = useState<"daily" | "weekly">("daily");
 
   // Changing the all-panes mode clears any current measurement (predictable reset).
   useEffect(() => {
@@ -1060,15 +1063,32 @@ export default function ChartArea({
   ];
 
   // Click a candle (with the Fractal Anchor tool active) to set the as-of date for
-  // that pane's fractal lines. Auto-enables the indicator if it isn't on yet.
+  // that pane's fractal lines. Auto-enables the indicator if it isn't on yet, using
+  // the period + timeframe currently selected in the toolbar.
   const handleFractalAnchorPick = useCallback((paneId: number, date: string) => {
     setIndicatorsMap((prev) => {
       const cur = prev[paneId] || {};
-      const fl = cur.fractalLines ?? { n: 10 };
+      const fl = cur.fractalLines ?? { n: fractalN, timeframe: fractalTimeframe };
       return { ...prev, [paneId]: { ...cur, fractalLines: { ...fl, anchorDate: date } } };
     });
     setActiveTool("none");
-  }, [setIndicatorsMap]);
+  }, [setIndicatorsMap, fractalN, fractalTimeframe]);
+
+  // Toolbar period/timeframe: remember as the anchoring defaults AND live-apply to
+  // every pane that already has fractal lines on, so the change is visible at once.
+  // Build the next map from the current one (a plain object, not a function updater,
+  // so setIndicatorsMap doesn't propagate to the parent inside a render-phase updater).
+  const applyFractalParams = useCallback((patch: { n?: number; timeframe?: "daily" | "weekly" }) => {
+    if (patch.n !== undefined) setFractalN(patch.n);
+    if (patch.timeframe !== undefined) setFractalTimeframe(patch.timeframe);
+    const next = { ...indicatorsMap };
+    for (const [pid, ind] of Object.entries(indicatorsMap)) {
+      if (ind?.fractalLines) {
+        next[Number(pid)] = { ...ind, fractalLines: { ...ind.fractalLines, ...patch } };
+      }
+    }
+    setIndicatorsMap(next);
+  }, [indicatorsMap, setIndicatorsMap]);
 
   // Track drawing count across all panes so we can show "Clear All"
   const [drawingCount, setDrawingCount] = useState(0);
@@ -2147,6 +2167,51 @@ export default function ChartArea({
             <Trash2 className="w-3 h-3" />
             Clear
           </Button>
+        )}
+
+        {activeTool === "fractal-anchor" && (
+          <div className="flex items-center gap-0.5" data-testid="fractal-toolbar">
+            <span className="text-[10px] text-muted-foreground mr-1">click a candle · n</span>
+            {[5, 10, 20].map((p) => (
+              <Button
+                key={p}
+                variant="ghost"
+                size="sm"
+                className={`h-6 px-1.5 text-[11px] ${fractalN === p ? "border border-primary text-primary" : "text-muted-foreground"}`}
+                onClick={() => applyFractalParams({ n: p })}
+                title={`Fractal period ${p}`}
+                data-testid={`fractal-period-${p}`}
+              >
+                {p}
+              </Button>
+            ))}
+            <input
+              type="number"
+              min={2}
+              max={100}
+              value={fractalN}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (Number.isFinite(n) && n >= 2 && n <= 100) applyFractalParams({ n });
+              }}
+              className="h-6 w-11 text-[11px] px-1 bg-background border border-border rounded text-foreground focus:outline-none focus:border-primary"
+              title="Custom fractal period"
+              data-testid="fractal-period-custom"
+            />
+            {(["daily", "weekly"] as const).map((tf) => (
+              <Button
+                key={tf}
+                variant="ghost"
+                size="sm"
+                className={`h-6 px-2 text-[11px] ${tf === "daily" ? "ml-1 " : ""}${fractalTimeframe === tf ? "border border-primary text-primary" : "text-muted-foreground"}`}
+                onClick={() => applyFractalParams({ timeframe: tf })}
+                title={tf === "weekly" ? "Detect pivots on weekly bars" : "Detect pivots on daily bars"}
+                data-testid={`fractal-tf-${tf}`}
+              >
+                {tf === "daily" ? "Daily" : "Weekly"}
+              </Button>
+            ))}
+          </div>
         )}
 
         {drawingCount > 0 && (
