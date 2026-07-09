@@ -1887,8 +1887,21 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // Determine if this pane has the active ticker's close/ohlc
     const hasClose = transformedPaneSeries.some(s => s.metric === "close" && s.ticker === activeTicker);
 
+    // When color-by is active it writes per-point colors into the line data,
+    // which suppresses lightweight-charts' built-in point markers (verified in
+    // isolation: a per-point-colored line never draws pointMarkers). For L+Dot
+    // we then draw the dots via a separate marker-only overlay series keyed
+    // `${id}:markers` (plain data, no per-point color, no line).
+    const needMarkers =
+      chartConfig.chartType === "line-scatter" && !!colorByData && colorByData.size > 0;
+
     // Remove stale series
     const currentIds = new Set(paneSeries.map((s) => s.id));
+    if (needMarkers) {
+      for (const s of transformedPaneSeries) {
+        if (s.visible && s.data.length > 0) currentIds.add(`${s.id}:markers`);
+      }
+    }
     // Only keep ohlc if candlestick mode AND raw transform
     if (ohlcData && activeTicker && chartConfig.chartType === "candlestick" && hasClose && dataTransform === "raw") {
       currentIds.add(`${activeTicker}:ohlc`);
@@ -2021,6 +2034,39 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           });
           existing.setData(applyColorByToData(ps.data));
         } catch {}
+      }
+
+      // Draw L+Dot markers via a dedicated overlay when color-by is on (its
+      // per-point colors otherwise hide the line's own point markers). The
+      // overlay carries plain data (no per-point color) so its markers render,
+      // and rides the same price scale so the dots sit exactly on the line.
+      const markerKey = `${ps.id}:markers`;
+      if (needMarkers) {
+        const isOverlay = useLeftScale && ps.id !== firstSeriesId;
+        if (!seriesMapRef.current.has(markerKey)) {
+          const mk = chart.addSeries(LineSeries, {
+            // Same title as the parent line so the crosshair readout (keyed by
+            // title) collapses both onto one row with the same value instead of
+            // adding a phantom entry.
+            title: ps.label,
+            color: ps.color,
+            lineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 2.5,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            ...(isOverlay ? { priceScaleId: "left" } : {}),
+          });
+          mk.setData(ps.data);
+          seriesMapRef.current.set(markerKey, mk);
+        } else {
+          try {
+            const mk = seriesMapRef.current.get(markerKey)!;
+            mk.applyOptions({ color: ps.color });
+            mk.setData(ps.data);
+          } catch {}
+        }
       }
     }
 
