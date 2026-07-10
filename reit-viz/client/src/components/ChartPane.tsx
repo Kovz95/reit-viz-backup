@@ -1481,11 +1481,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!chart) return false;
     let seriesRef: ISeriesApi<any> | undefined;
     if (spec.type === "hline" && spec.price != null) {
-      // Span this pane's own full time range at the shared price level. If the
-      // pane has no data yet (a just-added pane still loading), bail so the
-      // caller can retry once its series arrive — don't add an empty line.
-      const allTimes = paneSeries.flatMap((ps) => ps.data.map((d) => d.time));
-      const sortedTimes = [...new Set(allTimes)].sort();
+      // Span the shared global date axis so the line renders on every pane at the
+      // same price — even panes whose own series is sparse (e.g. a P/FFO ratio
+      // with few points). Fall back to this pane's own dates only if the global
+      // axis isn't loaded yet; bail (so the caller can retry) if neither is ready.
+      const sortedTimes = fullDates.length >= 2
+        ? fullDates
+        : [...new Set(paneSeries.flatMap((ps) => ps.data.map((d) => d.time)))].sort();
       if (sortedTimes.length < 2) return false;
       const s = chart.addSeries(LineSeries, {
         color: spec.color, lineWidth: 2, lineStyle: LineStyle.Dashed, title: "",
@@ -1512,7 +1514,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       price: spec.price, points: spec.points, seriesRef,
     });
     return true;
-  }, [paneSeries]);
+  }, [paneSeries, fullDates]);
 
   useEffect(() => {
     const chart = chartRef.current;
