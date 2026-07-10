@@ -1085,13 +1085,23 @@ export default function ChartArea({
 
   // Right-click-delete a fractal line: fractals are a paired indicator overlay, so
   // "deleting" turns the indicator off for that pane (drops both R and S lines).
+  // This pane only — the right-click menu's "Delete on all panes" handles the rest.
   const handleDeleteFractal = useCallback((paneId: number) => {
-    // In "all panes" mode, deleting one pane's fractals drops them everywhere.
-    const ids = drawAllRef.current ? Array.from(paneRefs.current.keys()) : [paneId];
+    setIndicatorsMap((prev) => {
+      const cur = prev[paneId];
+      if (!cur?.fractalLines) return prev;
+      const { fractalLines, ...rest } = cur;
+      return { ...prev, [paneId]: rest };
+    });
+  }, [setIndicatorsMap]);
+
+  // Right-click "delete on all panes" for fractals: always drop them everywhere,
+  // regardless of the current single/all-panes toggle.
+  const handleDeleteFractalAll = useCallback(() => {
     setIndicatorsMap((prev) => {
       const next = { ...prev };
       let changed = false;
-      for (const id of ids) {
+      for (const id of Array.from(paneRefs.current.keys())) {
         const cur = next[id];
         if (cur?.fractalLines) {
           const { fractalLines, ...rest } = cur;
@@ -2461,6 +2471,7 @@ export default function ChartArea({
                   onDrawingDeleted={decrementDrawingCount}
                   onFractalAnchorPick={(date) => handleFractalAnchorPick(pane.id, date)}
                   onDeleteFractal={() => handleDeleteFractal(pane.id)}
+                  onDeleteFractalAll={handleDeleteFractalAll}
                   isActive={false}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}

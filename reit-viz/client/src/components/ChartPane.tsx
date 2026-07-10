@@ -37,7 +37,7 @@ import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info, Maximize2, Minimize2, Trash2 } from "lucide-react";
+import { Info, Maximize2, Minimize2, Trash2, Rows3 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
@@ -159,6 +159,26 @@ type DrawSpec = {
 // Kept in sync at the create / delete / clear-all choke points below.
 const allPanesDrawings = new Map<string, DrawSpec>();
 
+// A right-click "delete on all panes" target: identify the same drawing on every
+// pane by its shared group id, or (for lines drawn independently per pane) by its
+// geometry — same type at the same price / points, within a small tolerance.
+type DeleteSpec = { groupId?: string; type: Drawing["type"]; price?: number; points?: { time: string; price: number }[] };
+const priceTol = (p: number) => Math.max(1e-6, Math.abs(p) * 0.005); // ~0.5%
+function drawingMatchesSpec(d: Drawing, spec: DeleteSpec): boolean {
+  if (spec.groupId && d.groupId === spec.groupId) return true;
+  if (d.type !== spec.type) return false;
+  if (spec.type === "hline") {
+    if (d.price == null || spec.price == null) return false;
+    return Math.abs(d.price - spec.price) <= priceTol(spec.price);
+  }
+  const a = d.points, b = spec.points;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].time !== b[i].time || Math.abs(a[i].price - b[i].price) > priceTol(b[i].price)) return false;
+  }
+  return true;
+}
+
 export interface ChartPaneHandle {
   getChart: () => IChartApi | null;
   fitContent: () => void;
@@ -192,6 +212,8 @@ interface ChartPaneProps {
   onFractalAnchorPick?: (date: string) => void;
   /** Called when the user right-click-deletes a fractal line — turns the indicator off. */
   onDeleteFractal?: () => void;
+  /** Right-click "delete on all panes" for fractal lines — turns them off everywhere. */
+  onDeleteFractalAll?: () => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -734,6 +756,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onDrawingDeleted,
   onFractalAnchorPick,
   onDeleteFractal,
+  onDeleteFractalAll,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -2018,8 +2041,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return false;
   }, [getAnySeries]);
 
-  // Remove a single drawing (its series + record) and notify the parent count.
-  // If it was drawn in "all panes" mode, tell the other panes to drop their copy.
+  // Remove a single drawing (its series + record) from THIS pane only, and notify
+  // the parent count. "Delete on all panes" is a separate, explicit action below.
   const deleteDrawingById = useCallback((id: string) => {
     const chart = chartRef.current;
     const idx = drawingsRef.current.findIndex((d) => d.id === id);
@@ -2028,29 +2051,37 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (d.seriesRef && chart) { try { chart.removeSeries(d.seriesRef); } catch {} }
     drawingsRef.current.splice(idx, 1);
     onDrawingDeleted?.();
-    if (d.groupId) {
-      allPanesDrawings.delete(d.groupId);
-      window.dispatchEvent(new CustomEvent("reit-viz-draw-delete", {
-        detail: { groupId: d.groupId, originPaneId: paneId },
-      }));
-    }
   }, [onDrawingDeleted]);
 
-  // Remove every local drawing sharing a groupId (the "all panes" mirror copies),
-  // without re-broadcasting. Used when another pane originates the delete.
-  const deleteDrawingsByGroup = useCallback((groupId: string) => {
+  // Remove every local drawing matching a delete-spec (shared group id, or same
+  // geometry). Used both by the origin pane and — via broadcast — by the others.
+  const deleteMatchingDrawings = useCallback((spec: DeleteSpec) => {
     const chart = chartRef.current;
     let removed = false;
     for (let i = drawingsRef.current.length - 1; i >= 0; i--) {
       const d = drawingsRef.current[i];
-      if (d.groupId === groupId) {
+      if (drawingMatchesSpec(d, spec)) {
         if (d.seriesRef && chart) { try { chart.removeSeries(d.seriesRef); } catch {} }
+        if (d.groupId) allPanesDrawings.delete(d.groupId);
         drawingsRef.current.splice(i, 1);
         removed = true;
       }
     }
     if (removed) onDrawingDeleted?.();
   }, [onDrawingDeleted]);
+
+  // "Delete on all panes": drop this drawing here and tell every other pane to drop
+  // the matching one (so a later-added pane won't resurrect it, clear the registry).
+  const deleteDrawingEverywhere = useCallback((id: string) => {
+    const d = drawingsRef.current.find((x) => x.id === id);
+    if (!d) return;
+    const spec: DeleteSpec = { groupId: d.groupId, type: d.type, price: d.price, points: d.points };
+    if (spec.groupId) allPanesDrawings.delete(spec.groupId);
+    deleteMatchingDrawings(spec);
+    window.dispatchEvent(new CustomEvent("reit-viz-draw-delete-all", {
+      detail: { ...spec, originPaneId: paneId },
+    }));
+  }, [deleteMatchingDrawings]);
 
   // "All panes" wiring: mirror drawing create/delete broadcasts from other panes so
   // the same line/trend/freehand appears — and disappears — on every pane at once.
@@ -2064,18 +2095,18 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       });
       onDrawingAdded?.();
     };
-    const onDelete = (ev: Event) => {
+    const onDeleteAll = (ev: Event) => {
       const d = (ev as CustomEvent).detail;
       if (!d || d.originPaneId === paneId) return;
-      deleteDrawingsByGroup(d.groupId);
+      deleteMatchingDrawings(d);
     };
     window.addEventListener("reit-viz-draw-add", onAdd);
-    window.addEventListener("reit-viz-draw-delete", onDelete);
+    window.addEventListener("reit-viz-draw-delete-all", onDeleteAll);
     return () => {
       window.removeEventListener("reit-viz-draw-add", onAdd);
-      window.removeEventListener("reit-viz-draw-delete", onDelete);
+      window.removeEventListener("reit-viz-draw-delete-all", onDeleteAll);
     };
-  }, [paneId, addDrawingFromSpec, deleteDrawingsByGroup, onDrawingAdded]);
+  }, [paneId, addDrawingFromSpec, deleteMatchingDrawings, onDrawingAdded]);
 
   // Catch-up for panes added *after* an "all panes" drawing was made: once this
   // pane's chart is ready (and its data has loaded, needed for hline ranges),
@@ -3573,6 +3604,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           >
             <Trash2 className="w-3 h-3" />
             Delete {drawingMenu.label}
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-destructive hover:bg-destructive/10 w-full text-left border-t border-border/60"
+            onClick={() => {
+              if (drawingMenu.kind === "fractal") (onDeleteFractalAll ?? onDeleteFractal)?.();
+              else if (drawingMenu.id) deleteDrawingEverywhere(drawingMenu.id);
+              setDrawingMenu(null);
+            }}
+            data-testid={`drawing-delete-all-${paneId}`}
+          >
+            <Rows3 className="w-3 h-3" />
+            Delete on all panes
           </button>
         </div>
       )}
