@@ -144,6 +144,21 @@ interface Drawing {
   groupId?: string;
 }
 
+// A location-only spec for an "all panes" drawing (no chart/series binding).
+type DrawSpec = {
+  groupId: string;
+  type: Drawing["type"];
+  color: string;
+  price?: number;
+  points?: { time: string; price: number }[];
+};
+
+// Registry of the "all panes" drawings that currently exist, keyed by groupId and
+// shared across every ChartPane (same module). A pane that mounts *after* a drawing
+// was made reads this to catch up, so newly-added panes get the drawings too.
+// Kept in sync at the create / delete / clear-all choke points below.
+const allPanesDrawings = new Map<string, DrawSpec>();
+
 export interface ChartPaneHandle {
   getChart: () => IChartApi | null;
   fitContent: () => void;
@@ -1109,6 +1124,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
       }
       drawingsRef.current = [];
+      // Clear All wipes the shared registry too, so a later-added pane starts clean.
+      allPanesDrawings.clear();
     },
   }));
 
@@ -1438,20 +1455,21 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!chart) return;
     let seriesRef: ISeriesApi<any> | undefined;
     if (spec.type === "hline" && spec.price != null) {
+      // Span this pane's own full time range at the shared price level. If the
+      // pane has no data yet (a just-added pane still loading), bail so the
+      // caller can retry once its series arrive — don't add an empty line.
+      const allTimes = paneSeries.flatMap((ps) => ps.data.map((d) => d.time));
+      const sortedTimes = [...new Set(allTimes)].sort();
+      if (sortedTimes.length < 2) return;
       const s = chart.addSeries(LineSeries, {
         color: spec.color, lineWidth: 2, lineStyle: LineStyle.Dashed, title: "",
         crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
         autoscaleInfoProvider: () => null,
       });
-      // Span this pane's own full time range at the shared price level.
-      const allTimes = paneSeries.flatMap((ps) => ps.data.map((d) => d.time));
-      const sortedTimes = [...new Set(allTimes)].sort();
-      if (sortedTimes.length >= 2) {
-        s.setData([
-          { time: sortedTimes[0] as Time, value: spec.price },
-          { time: sortedTimes[sortedTimes.length - 1] as Time, value: spec.price },
-        ]);
-      }
+      s.setData([
+        { time: sortedTimes[0] as Time, value: spec.price },
+        { time: sortedTimes[sortedTimes.length - 1] as Time, value: spec.price },
+      ]);
       seriesRef = s;
     } else if ((spec.type === "trendline" || spec.type === "freehand") && spec.points && spec.points.length >= 2) {
       const s = chart.addSeries(LineSeries, {
@@ -1530,6 +1548,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
         onDrawingAdded?.();
         if (groupId) {
+          allPanesDrawings.set(groupId, { groupId, type: "hline", color: drawColor, price: priceCoord });
           window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
             detail: { originPaneId: paneId, groupId, type: "hline", color: drawColor, price: priceCoord },
           }));
@@ -1573,6 +1592,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           drawStateRef.current = { pending: false };
           onDrawingAdded?.();
           if (groupId) {
+            allPanesDrawings.set(groupId, { groupId, type: "trendline", color: drawColor, points });
             window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
               detail: { originPaneId: paneId, groupId, type: "trendline", color: drawColor, points },
             }));
@@ -1668,6 +1688,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
         onDrawingAdded?.();
         if (groupId) {
+          allPanesDrawings.set(groupId, { groupId, type: "freehand", color: drawColor, points });
           window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
             detail: { originPaneId: paneId, groupId, type: "freehand", color: drawColor, points },
           }));
@@ -2008,6 +2029,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     drawingsRef.current.splice(idx, 1);
     onDrawingDeleted?.();
     if (d.groupId) {
+      allPanesDrawings.delete(d.groupId);
       window.dispatchEvent(new CustomEvent("reit-viz-draw-delete", {
         detail: { groupId: d.groupId, originPaneId: paneId },
       }));
@@ -2054,6 +2076,22 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       window.removeEventListener("reit-viz-draw-delete", onDelete);
     };
   }, [paneId, addDrawingFromSpec, deleteDrawingsByGroup, onDrawingAdded]);
+
+  // Catch-up for panes added *after* an "all panes" drawing was made: once this
+  // pane's chart is ready (and its data has loaded, needed for hline ranges),
+  // render any registry drawing it doesn't already have. Re-runs on paneSeries so
+  // an hline that couldn't get a range on first pass renders when data arrives.
+  useEffect(() => {
+    if (!chartReady || allPanesDrawings.size === 0) return;
+    for (const [groupId, spec] of allPanesDrawings) {
+      if (drawingsRef.current.some((d) => d.groupId === groupId)) continue;
+      addDrawingFromSpec({
+        id: `${groupId}-${paneId}`, groupId, type: spec.type,
+        color: spec.color, price: spec.price, points: spec.points,
+      });
+      onDrawingAdded?.();
+    }
+  }, [chartReady, paneSeries, paneId, addDrawingFromSpec, onDrawingAdded]);
 
   // Eraser tool: click to delete nearest drawing
   useEffect(() => {
