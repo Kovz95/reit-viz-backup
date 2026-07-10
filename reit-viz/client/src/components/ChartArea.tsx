@@ -475,8 +475,11 @@ export default function ChartArea({
   const [measureShade, setMeasureShade] = useState(true);
   // Measure tool: snap endpoints to nearest data point (magnet mode)
   const [measureMagnet, setMeasureMagnet] = useState(false);
-  // Measure tool: mirror the measurement across all panes over the same time span
-  const [measureAll, setMeasureAll] = useState(false);
+  // "All panes" mode (applies to every drawing/measure tool): the active tool acts
+  // on every pane at the same time/price spot at once, not just the pane you click.
+  const [drawAll, setDrawAll] = useState(false);
+  const drawAllRef = useRef(drawAll);
+  drawAllRef.current = drawAll;
   // Fractal Anchor tool: period + timeframe applied when anchoring / editing fractal lines.
   const [fractalN, setFractalN] = useState(10);
   const [fractalTimeframe, setFractalTimeframe] = useState<"daily" | "weekly">("daily");
@@ -484,7 +487,7 @@ export default function ChartArea({
   // Changing the all-panes mode clears any current measurement (predictable reset).
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
-  }, [measureAll]);
+  }, [drawAll]);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
@@ -1066,10 +1069,16 @@ export default function ChartArea({
   // that pane's fractal lines. Auto-enables the indicator if it isn't on yet, using
   // the period + timeframe currently selected in the toolbar.
   const handleFractalAnchorPick = useCallback((paneId: number, date: string) => {
+    // "All panes" mode: anchor every pane's fractals at the same as-of date.
+    const ids = drawAllRef.current ? Array.from(paneRefs.current.keys()) : [paneId];
     setIndicatorsMap((prev) => {
-      const cur = prev[paneId] || {};
-      const fl = cur.fractalLines ?? { n: fractalN, timeframe: fractalTimeframe };
-      return { ...prev, [paneId]: { ...cur, fractalLines: { ...fl, anchorDate: date } } };
+      const next = { ...prev };
+      for (const id of ids) {
+        const cur = next[id] || {};
+        const fl = cur.fractalLines ?? { n: fractalN, timeframe: fractalTimeframe };
+        next[id] = { ...cur, fractalLines: { ...fl, anchorDate: date } };
+      }
+      return next;
     });
     setActiveTool("none");
   }, [setIndicatorsMap, fractalN, fractalTimeframe]);
@@ -1077,11 +1086,20 @@ export default function ChartArea({
   // Right-click-delete a fractal line: fractals are a paired indicator overlay, so
   // "deleting" turns the indicator off for that pane (drops both R and S lines).
   const handleDeleteFractal = useCallback((paneId: number) => {
+    // In "all panes" mode, deleting one pane's fractals drops them everywhere.
+    const ids = drawAllRef.current ? Array.from(paneRefs.current.keys()) : [paneId];
     setIndicatorsMap((prev) => {
-      const cur = prev[paneId];
-      if (!cur?.fractalLines) return prev;
-      const { fractalLines, ...rest } = cur;
-      return { ...prev, [paneId]: rest };
+      const next = { ...prev };
+      let changed = false;
+      for (const id of ids) {
+        const cur = next[id];
+        if (cur?.fractalLines) {
+          const { fractalLines, ...rest } = cur;
+          next[id] = rest;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
     });
   }, [setIndicatorsMap]);
 
@@ -2118,6 +2136,21 @@ export default function ChartArea({
           />
         )}
 
+        {/* Single pane vs. all panes — applies to every drawing/measure tool */}
+        {activeTool !== "none" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-6 px-2 text-[11px] gap-1 ${drawAll ? "border border-primary text-primary" : "text-muted-foreground"}`}
+            onClick={() => setDrawAll((v) => !v)}
+            title={drawAll ? "All panes — this tool applies to every pane at the same spot" : "Single pane — this tool applies only to the pane you click. Turn on to apply to all panes at once."}
+            data-testid="draw-all-toggle"
+          >
+            <Rows3 className="w-3 h-3" />
+            {drawAll ? "All panes" : "Single pane"}
+          </Button>
+        )}
+
         {activeTool === "measure" && (
           <Button
             variant="ghost"
@@ -2149,20 +2182,6 @@ export default function ChartArea({
           >
             <Magnet className="w-3 h-3" />
             Magnet
-          </Button>
-        )}
-
-        {activeTool === "measure" && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`h-6 px-2 text-[11px] gap-1 ${measureAll ? "border border-primary text-primary" : "text-muted-foreground"}`}
-            onClick={() => setMeasureAll((v) => !v)}
-            title={measureAll ? "All panes — mirroring the measurement across every plot" : "Measure the same time span across all panes at once"}
-            data-testid="measure-all-toggle"
-          >
-            <Rows3 className="w-3 h-3" />
-            All panes
           </Button>
         )}
 
@@ -2435,7 +2454,8 @@ export default function ChartArea({
                   drawColor={drawColor}
                   measureShade={measureShade}
                   measureMagnet={measureMagnet}
-                  measureAll={measureAll}
+                  measureAll={drawAll}
+                  drawAll={drawAll}
                   onCrosshairMove={(data) => handleCrosshairMove(pane.id, data)}
                   onDrawingAdded={bumpDrawingCount}
                   onDrawingDeleted={decrementDrawingCount}

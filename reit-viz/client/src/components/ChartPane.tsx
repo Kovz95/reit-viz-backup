@@ -139,6 +139,9 @@ interface Drawing {
   // For trendline / freehand: points
   points?: { time: string; price: number }[];
   seriesRef?: ISeriesApi<any>;
+  // Set when drawn in "all panes" mode: the same groupId is shared by the mirror
+  // copies on every other pane, so deleting one deletes them all.
+  groupId?: string;
 }
 
 export interface ChartPaneHandle {
@@ -164,6 +167,9 @@ interface ChartPaneProps {
   measureMagnet?: boolean;
   /** Measure tool: mirror the measurement across all panes over the same time span. */
   measureAll?: boolean;
+  /** "All panes" mode: mirror drawings (hline/trendline/freehand) and fractal
+   *  anchoring onto every pane at the same time/price spot. */
+  drawAll?: boolean;
   onCrosshairMove?: (data: { time: string; values: Record<string, number> } | null) => void;
   onDrawingAdded?: () => void;
   onDrawingDeleted?: () => void;
@@ -707,6 +713,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   measureShade = true,
   measureMagnet = false,
   measureAll = false,
+  drawAll = false,
   onCrosshairMove,
   onDrawingAdded,
   onDrawingDeleted,
@@ -826,6 +833,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Latest all-panes-toggle value.
   const measureAllRef = useRef(measureAll);
   measureAllRef.current = measureAll;
+
+  const drawAllRef = useRef(drawAll);
+  drawAllRef.current = drawAll;
   const [measureBox, setMeasureBox] = useState<{
     clientX: number;
     clientY: number;
@@ -1413,6 +1423,52 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   }, [activeTool, chartReady]);
 
   // Handle drawing clicks via LWC subscribeClick (more reliable than raw DOM click)
+  // Create a drawing series from a plain spec. Used both to render "all panes"
+  // mirror copies broadcast from other panes and (indirectly) to keep a single
+  // code path for the hline/trendline/freehand geometry.
+  const addDrawingFromSpec = useCallback((spec: {
+    id: string;
+    groupId?: string;
+    type: Drawing["type"];
+    color: string;
+    price?: number;
+    points?: { time: string; price: number }[];
+  }) => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    let seriesRef: ISeriesApi<any> | undefined;
+    if (spec.type === "hline" && spec.price != null) {
+      const s = chart.addSeries(LineSeries, {
+        color: spec.color, lineWidth: 2, lineStyle: LineStyle.Dashed, title: "",
+        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      // Span this pane's own full time range at the shared price level.
+      const allTimes = paneSeries.flatMap((ps) => ps.data.map((d) => d.time));
+      const sortedTimes = [...new Set(allTimes)].sort();
+      if (sortedTimes.length >= 2) {
+        s.setData([
+          { time: sortedTimes[0] as Time, value: spec.price },
+          { time: sortedTimes[sortedTimes.length - 1] as Time, value: spec.price },
+        ]);
+      }
+      seriesRef = s;
+    } else if ((spec.type === "trendline" || spec.type === "freehand") && spec.points && spec.points.length >= 2) {
+      const s = chart.addSeries(LineSeries, {
+        color: spec.color, lineWidth: 2, lineStyle: LineStyle.Solid, title: "",
+        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      s.setData(spec.points.map((p) => ({ time: p.time as Time, value: p.price })));
+      seriesRef = s;
+    }
+    if (!seriesRef) return;
+    drawingsRef.current.push({
+      id: spec.id, groupId: spec.groupId, type: spec.type, color: spec.color,
+      price: spec.price, points: spec.points, seriesRef,
+    });
+  }, [paneSeries]);
+
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
@@ -1463,14 +1519,21 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           ]);
         }
 
+        const groupId = drawAllRef.current ? `grp-${Date.now()}` : undefined;
         drawingsRef.current.push({
           id: drawId,
+          groupId,
           type: "hline",
           color: drawColor,
           price: priceCoord,
           seriesRef: hSeries,
         });
         onDrawingAdded?.();
+        if (groupId) {
+          window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
+            detail: { originPaneId: paneId, groupId, type: "hline", color: drawColor, price: priceCoord },
+          }));
+        }
       } else if (activeTool === "trendline") {
         if (!drawStateRef.current.pending) {
           // First click — store start point
@@ -1497,15 +1560,23 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             { time: timeStr as Time, value: priceCoord },
           ]);
 
+          const groupId = drawAllRef.current ? `grp-${Date.now()}` : undefined;
+          const points = [start, { time: timeStr, price: priceCoord }];
           drawingsRef.current.push({
             id: drawId,
+            groupId,
             type: "trendline",
             color: drawColor,
-            points: [start, { time: timeStr, price: priceCoord }],
+            points,
             seriesRef: tSeries,
           });
           drawStateRef.current = { pending: false };
           onDrawingAdded?.();
+          if (groupId) {
+            window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
+              detail: { originPaneId: paneId, groupId, type: "trendline", color: drawColor, points },
+            }));
+          }
         }
       }
     };
@@ -1585,14 +1656,22 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
       if (freehandPoints.length >= 2 && liveSeries) {
         const drawId = `draw-${Date.now()}`;
+        const groupId = drawAllRef.current ? `grp-${Date.now()}` : undefined;
+        const points = [...freehandPoints];
         drawingsRef.current.push({
           id: drawId,
+          groupId,
           type: "freehand",
           color: drawColor,
-          points: [...freehandPoints],
+          points,
           seriesRef: liveSeries,
         });
         onDrawingAdded?.();
+        if (groupId) {
+          window.dispatchEvent(new CustomEvent("reit-viz-draw-add", {
+            detail: { originPaneId: paneId, groupId, type: "freehand", color: drawColor, points },
+          }));
+        }
       } else if (liveSeries) {
         // Too few points — remove the series
         try { chart.removeSeries(liveSeries); } catch {}
@@ -1919,6 +1998,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   }, [getAnySeries]);
 
   // Remove a single drawing (its series + record) and notify the parent count.
+  // If it was drawn in "all panes" mode, tell the other panes to drop their copy.
   const deleteDrawingById = useCallback((id: string) => {
     const chart = chartRef.current;
     const idx = drawingsRef.current.findIndex((d) => d.id === id);
@@ -1927,7 +2007,53 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (d.seriesRef && chart) { try { chart.removeSeries(d.seriesRef); } catch {} }
     drawingsRef.current.splice(idx, 1);
     onDrawingDeleted?.();
+    if (d.groupId) {
+      window.dispatchEvent(new CustomEvent("reit-viz-draw-delete", {
+        detail: { groupId: d.groupId, originPaneId: paneId },
+      }));
+    }
   }, [onDrawingDeleted]);
+
+  // Remove every local drawing sharing a groupId (the "all panes" mirror copies),
+  // without re-broadcasting. Used when another pane originates the delete.
+  const deleteDrawingsByGroup = useCallback((groupId: string) => {
+    const chart = chartRef.current;
+    let removed = false;
+    for (let i = drawingsRef.current.length - 1; i >= 0; i--) {
+      const d = drawingsRef.current[i];
+      if (d.groupId === groupId) {
+        if (d.seriesRef && chart) { try { chart.removeSeries(d.seriesRef); } catch {} }
+        drawingsRef.current.splice(i, 1);
+        removed = true;
+      }
+    }
+    if (removed) onDrawingDeleted?.();
+  }, [onDrawingDeleted]);
+
+  // "All panes" wiring: mirror drawing create/delete broadcasts from other panes so
+  // the same line/trend/freehand appears — and disappears — on every pane at once.
+  useEffect(() => {
+    const onAdd = (ev: Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (!d || d.originPaneId === paneId || !drawAllRef.current) return;
+      addDrawingFromSpec({
+        id: `${d.groupId}-${paneId}`, groupId: d.groupId, type: d.type,
+        color: d.color, price: d.price, points: d.points,
+      });
+      onDrawingAdded?.();
+    };
+    const onDelete = (ev: Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (!d || d.originPaneId === paneId) return;
+      deleteDrawingsByGroup(d.groupId);
+    };
+    window.addEventListener("reit-viz-draw-add", onAdd);
+    window.addEventListener("reit-viz-draw-delete", onDelete);
+    return () => {
+      window.removeEventListener("reit-viz-draw-add", onAdd);
+      window.removeEventListener("reit-viz-draw-delete", onDelete);
+    };
+  }, [paneId, addDrawingFromSpec, deleteDrawingsByGroup, onDrawingAdded]);
 
   // Eraser tool: click to delete nearest drawing
   useEffect(() => {
