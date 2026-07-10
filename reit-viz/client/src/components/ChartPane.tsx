@@ -1466,6 +1466,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Create a drawing series from a plain spec. Used both to render "all panes"
   // mirror copies broadcast from other panes and (indirectly) to keep a single
   // code path for the hline/trendline/freehand geometry.
+  // Returns true only if a drawing was actually created — callers must gate their
+  // onDrawingAdded() count bump on this, or an early-return (e.g. a pane still
+  // loading its data) would inflate the count with no drawing to ever remove.
   const addDrawingFromSpec = useCallback((spec: {
     id: string;
     groupId?: string;
@@ -1473,9 +1476,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     color: string;
     price?: number;
     points?: { time: string; price: number }[];
-  }) => {
+  }): boolean => {
     const chart = chartRef.current;
-    if (!chart) return;
+    if (!chart) return false;
     let seriesRef: ISeriesApi<any> | undefined;
     if (spec.type === "hline" && spec.price != null) {
       // Span this pane's own full time range at the shared price level. If the
@@ -1483,7 +1486,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       // caller can retry once its series arrive — don't add an empty line.
       const allTimes = paneSeries.flatMap((ps) => ps.data.map((d) => d.time));
       const sortedTimes = [...new Set(allTimes)].sort();
-      if (sortedTimes.length < 2) return;
+      if (sortedTimes.length < 2) return false;
       const s = chart.addSeries(LineSeries, {
         color: spec.color, lineWidth: 2, lineStyle: LineStyle.Dashed, title: "",
         crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
@@ -1503,11 +1506,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       s.setData(spec.points.map((p) => ({ time: p.time as Time, value: p.price })));
       seriesRef = s;
     }
-    if (!seriesRef) return;
+    if (!seriesRef) return false;
     drawingsRef.current.push({
       id: spec.id, groupId: spec.groupId, type: spec.type, color: spec.color,
       price: spec.price, points: spec.points, seriesRef,
     });
+    return true;
   }, [paneSeries]);
 
   useEffect(() => {
@@ -2089,11 +2093,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const onAdd = (ev: Event) => {
       const d = (ev as CustomEvent).detail;
       if (!d || d.originPaneId === paneId || !drawAllRef.current) return;
-      addDrawingFromSpec({
+      const added = addDrawingFromSpec({
         id: `${d.groupId}-${paneId}`, groupId: d.groupId, type: d.type,
         color: d.color, price: d.price, points: d.points,
       });
-      onDrawingAdded?.();
+      if (added) onDrawingAdded?.();
     };
     const onDeleteAll = (ev: Event) => {
       const d = (ev as CustomEvent).detail;
@@ -2116,11 +2120,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!chartReady || allPanesDrawings.size === 0) return;
     for (const [groupId, spec] of allPanesDrawings) {
       if (drawingsRef.current.some((d) => d.groupId === groupId)) continue;
-      addDrawingFromSpec({
+      const added = addDrawingFromSpec({
         id: `${groupId}-${paneId}`, groupId, type: spec.type,
         color: spec.color, price: spec.price, points: spec.points,
       });
-      onDrawingAdded?.();
+      if (added) onDrawingAdded?.();
     }
   }, [chartReady, paneSeries, paneId, addDrawingFromSpec, onDrawingAdded]);
 
