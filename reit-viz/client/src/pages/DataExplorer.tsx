@@ -173,31 +173,55 @@ function formatValue(val: number | null, metric: string): string {
   return scaled.toFixed(4);
 }
 
+// Fixed widths (px) so the horizontal virtualizer can compute which columns are
+// on screen, size the spacer cells, and keep the total table width constant.
+const COL_W = 120;
+const DATE_W = 128; // sticky Date / stat-label column
+
+// The set of metric columns currently within the horizontal viewport (plus
+// overscan), and the spacer widths standing in for the off-screen columns on
+// each side. `idx` is the column's index into displayMetrics/row.values.
+interface ColWindow {
+  cols: { m: string; idx: number }[];
+  leftPad: number;
+  rightPad: number;
+}
+
 interface DataRowProps {
   row: { dateIdx: number; date: string; values: (number | null)[] };
-  displayMetrics: string[];
+  colWindow: ColWindow;
   pinnedMetrics: Set<string>;
   rowHeight: number;
 }
 
-// One body row, memoized. During a scroll only the few rows entering/leaving the
-// viewport get new props (row/displayMetrics/pinnedMetrics references are stable
-// otherwise), so the ~40 visible rows no longer all re-render every frame — the
-// main cause of the scroll lag on this ~125-column table.
-const DataRow = memo(function DataRow({ row, displayMetrics, pinnedMetrics, rowHeight }: DataRowProps) {
+// One body row, memoized and horizontally virtualized. Only the ~14 columns in
+// view render (the rest collapse into two spacer cells), and during a vertical
+// scroll only the few rows entering/leaving get new props — so instead of
+// ~40 rows × 124 cols we paint ~40 × ~18 cells, the fix for the scroll lag.
+const DataRow = memo(function DataRow({ row, colWindow, pinnedMetrics, rowHeight }: DataRowProps) {
+  const { cols, leftPad, rightPad } = colWindow;
   return (
     <tr className="hover:bg-accent/20" style={{ height: rowHeight }}>
-      <td className="sticky left-0 z-10 bg-card px-2 py-0.5 font-mono text-muted-foreground border-r border-b border-border/30 tabular-nums">
+      <td
+        className="sticky left-0 z-10 bg-card px-2 py-0.5 font-mono text-muted-foreground border-r border-b border-border/30 tabular-nums whitespace-nowrap overflow-hidden"
+        style={{ width: DATE_W, maxWidth: DATE_W }}
+      >
         {row.date}
       </td>
-      {row.values.map((val, i) => (
-        <td
-          key={i}
-          className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 ${pinnedMetrics.has(displayMetrics[i]) ? "bg-primary/5" : ""} ${val !== null && val < 0 ? "text-red-400" : ""}`}
-        >
-          {formatValue(val, displayMetrics[i])}
-        </td>
-      ))}
+      {leftPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: leftPad }} />}
+      {cols.map(({ m, idx }) => {
+        const val = row.values[idx];
+        return (
+          <td
+            key={idx}
+            style={{ width: COL_W, maxWidth: COL_W }}
+            className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 overflow-hidden ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${val !== null && val < 0 ? "text-red-400" : ""}`}
+          >
+            {formatValue(val, m)}
+          </td>
+        );
+      })}
+      {rightPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: rightPad }} />}
     </tr>
   );
 });
@@ -224,14 +248,20 @@ export default function DataExplorer() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
   const ROW_HEIGHT = 20;
-  const OVERSCAN = 12;
+  const OVERSCAN = 8;
+  const COL_OVERSCAN = 3;
   const [scrollTop, setScrollTop] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
+  const [containerWidth, setContainerWidth] = useState(1200);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    const update = () => setContainerHeight(el.clientHeight);
+    const update = () => {
+      setContainerHeight(el.clientHeight);
+      setContainerWidth(el.clientWidth);
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -244,6 +274,7 @@ export default function DataExplorer() {
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       setScrollTop(el.scrollTop);
+      setScrollLeft(el.scrollLeft);
     });
   }, []);
 
@@ -510,6 +541,24 @@ export default function DataExplorer() {
 
   const activeMeta = tickers.find((t) => t.ticker === activeTicker);
 
+  // Horizontal virtualization: which metric columns are on screen right now.
+  // colStart/colEnd are quantized to whole columns, and colWindow is memoized on
+  // them (NOT raw scrollLeft) so it keeps a STABLE reference while you scroll
+  // within a column — the browser native-scrolls those pixels and we only
+  // re-render when a column boundary is crossed. The overscan covers the sticky
+  // Date column's width, so the window never drops a genuinely-visible column.
+  const nMetrics = displayMetrics.length;
+  const colStart = Math.max(0, Math.floor(scrollLeft / COL_W) - COL_OVERSCAN);
+  const colEnd = Math.min(nMetrics, Math.ceil((scrollLeft + containerWidth) / COL_W) + COL_OVERSCAN);
+  const colWindow = useMemo<ColWindow>(() => {
+    const cols: { m: string; idx: number }[] = [];
+    for (let i = colStart; i < colEnd; i++) cols.push({ m: displayMetrics[i], idx: i });
+    return { cols, leftPad: colStart * COL_W, rightPad: (nMetrics - colEnd) * COL_W };
+  }, [displayMetrics, colStart, colEnd, nMetrics]);
+  // Full scrollable content width (all columns), independent of what's rendered,
+  // so the horizontal scrollbar stays put while columns virtualize in and out.
+  const tableWidth = DATE_W + nMetrics * COL_W;
+
   // Virtual scroll
   const totalRows = tableRows.length;
   const totalHeight = totalRows * ROW_HEIGHT;
@@ -525,18 +574,23 @@ export default function DataExplorer() {
     () => (
       <thead className="sticky top-0 bg-card z-20">
         <tr>
-          <th className="sticky left-0 z-30 bg-card text-left px-2 py-1.5 font-semibold text-muted-foreground border-b border-r border-border min-w-[90px]">
+          <th
+            className="sticky left-0 z-30 bg-card text-left px-2 py-1.5 font-semibold text-muted-foreground border-b border-r border-border overflow-hidden"
+            style={{ width: DATE_W, maxWidth: DATE_W }}
+          >
             Date
           </th>
-          {displayMetrics.map((m) => (
+          {colWindow.leftPad > 0 && <td aria-hidden className="bg-card border-b border-border" style={{ width: colWindow.leftPad }} />}
+          {colWindow.cols.map(({ m }) => (
             <th
               key={m}
-              className="text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap min-w-[80px] group cursor-default bg-card"
-              style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null) }}
+              title={m}
+              className="text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap group cursor-default bg-card overflow-hidden"
+              style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null) }}
             >
               <div className="flex items-center justify-end gap-1">
                 <button
-                  className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity"
+                  className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity flex-shrink-0"
                   onClick={() => togglePin(m)}
                   title={pinnedMetrics.has(m) ? "Unpin" : "Pin to left"}
                 >
@@ -546,10 +600,11 @@ export default function DataExplorer() {
                     <Pin className="w-2.5 h-2.5" />
                   )}
                 </button>
-                <span className="text-[10px]">{m}</span>
+                <span className="text-[10px] truncate">{m}</span>
               </div>
             </th>
           ))}
+          {colWindow.rightPad > 0 && <td aria-hidden className="bg-card border-b border-border" style={{ width: colWindow.rightPad }} />}
         </tr>
         {showStats && (
           <>
@@ -563,7 +618,8 @@ export default function DataExplorer() {
             >
               <th
                 scope="row"
-                className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${statsExpanded ? "border-b border-border/30" : "border-b-2 border-b-border"}`}
+                className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-muted-foreground border-r border-border whitespace-nowrap overflow-hidden ${statsExpanded ? "border-b border-border/30" : "border-b-2 border-b-border"}`}
+                style={{ width: DATE_W, maxWidth: DATE_W }}
                 title={statsExpanded ? "Collapse statistics" : "Expand statistics"}
               >
                 <div className="flex items-center gap-1">
@@ -616,18 +672,20 @@ export default function DataExplorer() {
                   )}
                 </div>
               </th>
-              {displayMetrics.map((m, i) => {
-                const s = columnStats[i];
+              {colWindow.leftPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.leftPad }} />}
+              {colWindow.cols.map(({ m, idx }) => {
+                const s = columnStats[idx];
                 return (
                   <td
-                    key={m}
-                    className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap bg-card transition-[filter] group-hover/sttoggle:brightness-125 ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"}`}
-                    style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(0.6)) }}
+                    key={idx}
+                    style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(0.6)) }}
+                    className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap bg-card overflow-hidden transition-[filter] group-hover/sttoggle:brightness-125 ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"}`}
                   >
                     {!statsExpanded && s ? formatStat(s, previewStat, m) : ""}
                   </td>
                 );
               })}
+              {colWindow.rightPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.rightPad }} />}
             </tr>
             {statsExpanded &&
               STAT_ROWS.map((sr, rowI) => {
@@ -641,23 +699,26 @@ export default function DataExplorer() {
                   >
                     <th
                       scope="row"
-                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap ${isMedian ? "font-semibold text-foreground" : "font-medium text-muted-foreground"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/30"}`}
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap overflow-hidden ${isMedian ? "font-semibold text-foreground" : "font-medium text-muted-foreground"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/30"}`}
+                      style={{ width: DATE_W, maxWidth: DATE_W }}
                       title={`${sr.label} over last ${lookbackKey}`}
                     >
                       {sr.label}
                     </th>
-                    {displayMetrics.map((m, i) => {
-                      const s = columnStats[i];
+                    {colWindow.leftPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.leftPad }} />}
+                    {colWindow.cols.map(({ m, idx }) => {
+                      const s = columnStats[idx];
                       return (
                         <td
-                          key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"}`}
-                          style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(isMedian ? 0.8 : 0.4)) }}
+                          key={idx}
+                          style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(isMedian ? 0.8 : 0.4)) }}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card overflow-hidden ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"}`}
                         >
                           {s ? formatStat(s, sr.key, m) : ""}
                         </td>
                       );
                     })}
+                    {colWindow.rightPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.rightPad }} />}
                   </tr>
                 );
               })}
@@ -674,7 +735,8 @@ export default function DataExplorer() {
                   >
                     <th
                       scope="row"
-                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap ${isCurrent ? "font-bold text-foreground border-t border-t-border/60" : "font-semibold text-foreground/80"} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap overflow-hidden ${isCurrent ? "font-bold text-foreground border-t border-t-border/60" : "font-semibold text-foreground/80"} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                      style={{ width: DATE_W, maxWidth: DATE_W }}
                       title={
                         sr.key === "pct"
                           ? `Percentile rank of the current value within the last ${lookbackKey}`
@@ -683,8 +745,15 @@ export default function DataExplorer() {
                     >
                       {sr.label}
                     </th>
-                    {displayMetrics.map((m, i) => {
-                      const s = columnStats[i];
+                    {colWindow.leftPad > 0 && (
+                      <td
+                        aria-hidden
+                        className={`bg-card ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"}`}
+                        style={{ width: colWindow.leftPad }}
+                      />
+                    )}
+                    {colWindow.cols.map(({ m, idx }) => {
+                      const s = columnStats[idx];
                       const pct = s?.percentile ?? null;
                       const heatColor = pctHeatColor(pct);
                       const heatBg = pctHeatBg(pct);
@@ -698,9 +767,11 @@ export default function DataExplorer() {
                           : "text-muted-foreground/90";
                       return (
                         <td
-                          key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${weight} ${base}`}
+                          key={idx}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card overflow-hidden ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${weight} ${base}`}
                           style={{
+                            width: COL_W,
+                            maxWidth: COL_W,
                             color: heatColor,
                             backgroundImage: cellTint(
                               heatBg,
@@ -718,6 +789,13 @@ export default function DataExplorer() {
                         </td>
                       );
                     })}
+                    {colWindow.rightPad > 0 && (
+                      <td
+                        aria-hidden
+                        className={`bg-card ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"}`}
+                        style={{ width: colWindow.rightPad }}
+                      />
+                    )}
                   </tr>
                 );
               })}
@@ -725,7 +803,7 @@ export default function DataExplorer() {
         )}
       </thead>
     ),
-    [displayMetrics, pinnedMetrics, showStats, statsExpanded, lookbackKey, previewStat, previewPickerOpen, columnStats]
+    [colWindow, pinnedMetrics, showStats, statsExpanded, lookbackKey, previewStat, previewPickerOpen, columnStats]
   );
 
   return (
@@ -999,7 +1077,10 @@ export default function DataExplorer() {
           onScroll={handleScroll}
           className="flex-1 overflow-auto min-h-0"
         >
-          <table className="w-full text-[11px] border-separate border-spacing-0">
+          <table
+            className="text-[11px] border-separate border-spacing-0"
+            style={{ tableLayout: "fixed", width: tableWidth }}
+          >
             {tableHeader}
             <tbody>
               {paddingTop > 0 && (
@@ -1011,7 +1092,7 @@ export default function DataExplorer() {
                 <DataRow
                   key={row.dateIdx}
                   row={row}
-                  displayMetrics={displayMetrics}
+                  colWindow={colWindow}
                   pinnedMetrics={pinnedMetrics}
                   rowHeight={ROW_HEIGHT}
                 />
