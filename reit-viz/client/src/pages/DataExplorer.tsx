@@ -16,6 +16,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   X,
   Download,
 } from "lucide-react";
@@ -107,6 +108,7 @@ export default function DataExplorer() {
   const [visibleMetrics, setVisibleMetrics] = useState<Set<string> | null>(null);
   const [columnSearch, setColumnSearch] = useState("");
   const [showStats, setShowStats] = useState(true);
+  const [statsExpanded, setStatsExpanded] = useState(true);
   const [lookbackKey, setLookbackKey] = useState("1Y");
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -142,9 +144,10 @@ export default function DataExplorer() {
       pinnedMetrics: [...pinnedMetrics],
       visibleMetrics: visibleMetrics ? [...visibleMetrics] : null,
       showStats,
+      statsExpanded,
       lookbackKey,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, lookbackKey]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, statsExpanded, lookbackKey]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -157,6 +160,7 @@ export default function DataExplorer() {
       setVisibleMetrics(new Set(saved.visibleMetrics));
     }
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
+    if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
   }, []);
 
@@ -669,33 +673,75 @@ export default function DataExplorer() {
                   </th>
                 ))}
               </tr>
-              {showStats &&
-                STAT_ROWS.map((sr, rowI) => (
+              {showStats && (
+                <>
+                  {/* Collapsible header — click to expand/collapse the stat rows.
+                      When collapsed, previews the median per column so the single
+                      row still reads as data rather than a blank band. */}
                   <tr
-                    key={sr.key}
-                    className="bg-muted/40"
-                    data-testid={`data-stat-row-${sr.key}`}
+                    className="bg-muted/60 cursor-pointer select-none hover:bg-muted/80"
+                    onClick={() => setStatsExpanded((v) => !v)}
+                    data-testid="data-stats-toggle-row"
                   >
                     <th
                       scope="row"
-                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
-                      title={`${sr.label} over last ${lookbackKey}`}
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${statsExpanded ? "border-b border-border/30" : "border-b-2 border-b-border"}`}
+                      title={statsExpanded ? "Collapse statistics" : "Expand statistics"}
                     >
-                      {sr.label}
+                      <div className="flex items-center gap-1">
+                        {statsExpanded ? (
+                          <ChevronDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3" />
+                        )}
+                        <span>Stats</span>
+                        <span className="font-normal text-muted-foreground/70">{lookbackKey}</span>
+                        {!statsExpanded && (
+                          <span className="font-normal text-muted-foreground/50">· median</span>
+                        )}
+                      </div>
                     </th>
                     {displayMetrics.map((m, i) => {
                       const s = columnStats[i];
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
                         >
-                          {s ? formatValue(s[sr.key], m) : ""}
+                          {!statsExpanded && s ? formatValue(s.median, m) : ""}
                         </td>
                       );
                     })}
                   </tr>
-                ))}
+                  {statsExpanded &&
+                    STAT_ROWS.map((sr, rowI) => (
+                      <tr
+                        key={sr.key}
+                        className="bg-muted/40"
+                        data-testid={`data-stat-row-${sr.key}`}
+                      >
+                        <th
+                          scope="row"
+                          className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                          title={`${sr.label} over last ${lookbackKey}`}
+                        >
+                          {sr.label}
+                        </th>
+                        {displayMetrics.map((m, i) => {
+                          const s = columnStats[i];
+                          return (
+                            <td
+                              key={m}
+                              className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                            >
+                              {s ? formatValue(s[sr.key], m) : ""}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                </>
+              )}
             </thead>
             <tbody>
               {paddingTop > 0 && (
