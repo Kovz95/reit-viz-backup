@@ -40,10 +40,57 @@ const PinOffIcon = createLucideIcon("PinOff", [
   }],
 ]);
 
+const SigmaIcon = createLucideIcon("Sigma", [
+  ["path", {
+    d: "M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a2 2 0 0 1 0 2.4l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2",
+    key: "sigma1",
+  }],
+]);
+
 interface TickerEntry {
   ticker: string;
   name?: string;
   subindustry?: string;
+}
+
+// Lookback presets for the per-column summary statistics.
+const LOOKBACK_PRESETS: { key: string; years: number | null }[] = [
+  { key: "1Y", years: 1 },
+  { key: "2Y", years: 2 },
+  { key: "5Y", years: 5 },
+  { key: "10Y", years: 10 },
+  { key: "All", years: null },
+];
+
+type StatKey = "mean" | "median" | "min" | "p25" | "p75" | "max";
+const STAT_ROWS: { key: StatKey; label: string }[] = [
+  { key: "mean", label: "Mean" },
+  { key: "median", label: "Median" },
+  { key: "min", label: "Min" },
+  { key: "p25", label: "25th %" },
+  { key: "p75", label: "75th %" },
+  { key: "max", label: "Max" },
+];
+
+const MS_PER_DAY = 86400000;
+
+// Linear-interpolated quantile (matches Distributions.tsx convention).
+function quantile(sorted: number[], q: number): number {
+  if (!sorted.length) return NaN;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+interface ColumnStat {
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  p25: number;
+  p75: number;
 }
 
 export default function DataExplorer() {
@@ -59,6 +106,8 @@ export default function DataExplorer() {
   const [sortAsc, setSortAsc] = useState(false);
   const [visibleMetrics, setVisibleMetrics] = useState<Set<string> | null>(null);
   const [columnSearch, setColumnSearch] = useState("");
+  const [showStats, setShowStats] = useState(true);
+  const [lookbackKey, setLookbackKey] = useState("1Y");
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
@@ -92,8 +141,10 @@ export default function DataExplorer() {
       sortAsc,
       pinnedMetrics: [...pinnedMetrics],
       visibleMetrics: visibleMetrics ? [...visibleMetrics] : null,
+      showStats,
+      lookbackKey,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, lookbackKey]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -105,6 +156,8 @@ export default function DataExplorer() {
     } else if (Array.isArray(saved.visibleMetrics)) {
       setVisibleMetrics(new Set(saved.visibleMetrics));
     }
+    if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
+    if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
   }, []);
 
   usePageState("data-explorer", getState, restoreState);
@@ -224,6 +277,48 @@ export default function DataExplorer() {
       values: metricMaps.map((m) => m.get(dateIdx) ?? null),
     }));
   }, [dates, displayMetrics, rawData, sortAsc]);
+
+  // Per-column summary statistics over the selected lookback window.
+  // Values are the raw (unscaled) metric values; they're formatted for display
+  // by formatValue() at render time, exactly like the cells below.
+  const columnStats = useMemo<(ColumnStat | null)[]>(() => {
+    if (displayMetrics.length === 0) return [];
+    const years = LOOKBACK_PRESETS.find((p) => p.key === lookbackKey)?.years ?? null;
+    let cutoff = -Infinity;
+    if (years !== null && dates.length > 0) {
+      const last = new Date(dates[dates.length - 1]).getTime();
+      if (!Number.isNaN(last)) cutoff = last - years * 365 * MS_PER_DAY;
+    }
+    return displayMetrics.map((m) => {
+      const pairs = rawData[m];
+      if (!pairs || pairs.length === 0) return null;
+      const vals: number[] = [];
+      for (const [idx, val] of pairs) {
+        if (val === null || !Number.isFinite(val)) continue;
+        if (cutoff !== -Infinity) {
+          const ds = dates[idx];
+          if (!ds) continue;
+          const t = new Date(ds).getTime();
+          if (Number.isNaN(t) || t < cutoff) continue;
+        }
+        vals.push(val);
+      }
+      if (vals.length === 0) return null;
+      vals.sort((a, b) => a - b);
+      const n = vals.length;
+      let sum = 0;
+      for (const v of vals) sum += v;
+      return {
+        count: n,
+        mean: sum / n,
+        median: quantile(vals, 0.5),
+        min: vals[0],
+        max: vals[n - 1],
+        p25: quantile(vals, 0.25),
+        p75: quantile(vals, 0.75),
+      };
+    });
+  }, [displayMetrics, rawData, dates, lookbackKey]);
 
   const formatValue = (val: number | null, metric: string): string => {
     if (val === null) return "";
@@ -469,6 +564,43 @@ export default function DataExplorer() {
           </PopoverContent>
         </Popover>
 
+        {/* Stats toggle */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`h-7 px-2 text-[10px] gap-1 ${showStats ? "text-primary" : ""}`}
+          onClick={() => setShowStats((v) => !v)}
+          title="Show per-column summary statistics"
+          data-testid="data-stats-toggle"
+        >
+          <SigmaIcon className="w-3 h-3" />
+          Stats
+        </Button>
+
+        {/* Lookback presets (window for the summary statistics) */}
+        {showStats && (
+          <div
+            className="flex items-center rounded-md border border-border overflow-hidden"
+            title="Look-back window for the summary statistics"
+            data-testid="data-lookback-presets"
+          >
+            {LOOKBACK_PRESETS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setLookbackKey(p.key)}
+                className={`px-1.5 h-7 text-[10px] tabular-nums transition-colors ${
+                  lookbackKey === p.key
+                    ? "bg-primary text-primary-foreground"
+                    : "hover:bg-accent/50 text-muted-foreground"
+                }`}
+                data-testid={`data-lookback-${p.key}`}
+              >
+                {p.key}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Sort toggle */}
         <Button
           variant="ghost"
@@ -537,6 +669,33 @@ export default function DataExplorer() {
                   </th>
                 ))}
               </tr>
+              {showStats &&
+                STAT_ROWS.map((sr, rowI) => (
+                  <tr
+                    key={sr.key}
+                    className="bg-muted/40"
+                    data-testid={`data-stat-row-${sr.key}`}
+                  >
+                    <th
+                      scope="row"
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                      title={`${sr.label} over last ${lookbackKey}`}
+                    >
+                      {sr.label}
+                    </th>
+                    {displayMetrics.map((m, i) => {
+                      const s = columnStats[i];
+                      return (
+                        <td
+                          key={m}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                        >
+                          {s ? formatValue(s[sr.key], m) : ""}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
             </thead>
             <tbody>
               {paddingTop > 0 && (
