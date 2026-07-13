@@ -110,6 +110,8 @@ export default function DataExplorer() {
   const [showStats, setShowStats] = useState(true);
   const [statsExpanded, setStatsExpanded] = useState(true);
   const [lookbackKey, setLookbackKey] = useState("1Y");
+  const [previewStat, setPreviewStat] = useState<StatKey>("median");
+  const [previewPickerOpen, setPreviewPickerOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
@@ -146,8 +148,9 @@ export default function DataExplorer() {
       showStats,
       statsExpanded,
       lookbackKey,
+      previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, statsExpanded, lookbackKey]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, statsExpanded, lookbackKey, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -162,6 +165,7 @@ export default function DataExplorer() {
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
+    if (STAT_ROWS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
   }, []);
 
   usePageState("data-explorer", getState, restoreState);
@@ -697,7 +701,44 @@ export default function DataExplorer() {
                         <span>Stats</span>
                         <span className="font-normal text-muted-foreground/70">{lookbackKey}</span>
                         {!statsExpanded && (
-                          <span className="font-normal text-muted-foreground/50">· median</span>
+                          <>
+                            <span className="font-normal text-muted-foreground/50">·</span>
+                            <Popover open={previewPickerOpen} onOpenChange={setPreviewPickerOpen}>
+                              <PopoverTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="font-normal text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-0.5"
+                                  title="Choose which statistic to preview"
+                                  data-testid="data-preview-stat-picker"
+                                >
+                                  {STAT_ROWS.find((s) => s.key === previewStat)?.label ?? previewStat}
+                                  <ChevronsUpDown className="w-2.5 h-2.5 opacity-60" />
+                                </button>
+                              </PopoverTrigger>
+                              <PopoverContent
+                                align="start"
+                                className="w-32 p-1"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {STAT_ROWS.map((sr) => (
+                                  <button
+                                    key={sr.key}
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPreviewStat(sr.key);
+                                      setPreviewPickerOpen(false);
+                                    }}
+                                    className={`w-full text-left px-2 py-1 text-[11px] rounded hover:bg-accent/50 ${previewStat === sr.key ? "text-primary font-medium" : ""}`}
+                                    data-testid={`data-preview-stat-${sr.key}`}
+                                  >
+                                    {sr.label}
+                                  </button>
+                                ))}
+                              </PopoverContent>
+                            </Popover>
+                          </>
                         )}
                       </div>
                     </th>
@@ -708,7 +749,7 @@ export default function DataExplorer() {
                           key={m}
                           className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
                         >
-                          {!statsExpanded && s ? formatValue(s.median, m) : ""}
+                          {!statsExpanded && s ? formatValue(s[previewStat], m) : ""}
                         </td>
                       );
                     })}
