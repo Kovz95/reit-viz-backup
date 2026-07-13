@@ -1,6 +1,6 @@
 // Reconstructed from recovered-bundle/DataExplorer-Y0Xg6AZ4.js on 2026-06-11
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from "react";
 import { createLucideIcon } from "@/lib/createLucideIcon";
 import { usePageState } from "@/lib/pageState";
 import { getTickers } from "@/lib/dataService";
@@ -104,6 +104,23 @@ const rgbStr = (c: number[]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 // Continuous cool→neutral→warm bar for the legend, matching the text ramp exactly.
 const HEAT_GRADIENT_CSS = `linear-gradient(to right, ${rgbStr(HEAT_COOL)}, ${rgbStr(HEAT_MID)} 50%, ${rgbStr(HEAT_WARM)})`;
 
+// --- Sticky-header cell backgrounds -----------------------------------------
+// The stat/header rows live in a `position: sticky` <thead>. With
+// `border-collapse`, a row-group's (and row's) background does NOT reliably
+// paint behind sticky rows, so translucent row tints let the scrolling body
+// bleed through ("transparent window"), and recompositing translucent sticky
+// layers every scroll frame is expensive. Fix: give every header cell an OPAQUE
+// bg-card base and layer each tint on top as a solid-color background-image, so
+// tints blend over the opaque base instead of revealing the body. Colors use
+// theme HSL vars so this stays correct if the palette changes.
+const solidLayer = (c: string) => `linear-gradient(${c}, ${c})`;
+function cellTint(...layers: (string | null | undefined | false)[]): string | undefined {
+  const f = layers.filter(Boolean) as string[];
+  return f.length ? f.map(solidLayer).join(", ") : undefined;
+}
+const mutedTint = (a: number) => `hsl(var(--muted) / ${a})`;
+const primaryTint = (a: number) => `hsl(var(--primary) / ${a})`;
+
 // Continuous text color for the percentile: a smooth ramp from the neutral mid
 // at the median out to blue at the bottom and rose at the top — no visible steps
 // between buckets. Returns undefined when there's no percentile.
@@ -142,6 +159,48 @@ interface ColumnStat {
   current: number | null;
   percentile: number | null;
 }
+
+// Formats a raw metric value for display (scaling + %/decimal rules). Pure and
+// module-level so the memoized row can call it without a component closure.
+function formatValue(val: number | null, metric: string): string {
+  if (val === null) return "";
+  const multiplier = metricMultiplier(metric);
+  const scaled = val * multiplier;
+  if (isPercentMetric(metric)) return scaled.toFixed(2) + "%";
+  if (Math.abs(scaled) >= 1e3)
+    return scaled.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (Math.abs(scaled) >= 1) return scaled.toFixed(2);
+  return scaled.toFixed(4);
+}
+
+interface DataRowProps {
+  row: { dateIdx: number; date: string; values: (number | null)[] };
+  displayMetrics: string[];
+  pinnedMetrics: Set<string>;
+  rowHeight: number;
+}
+
+// One body row, memoized. During a scroll only the few rows entering/leaving the
+// viewport get new props (row/displayMetrics/pinnedMetrics references are stable
+// otherwise), so the ~40 visible rows no longer all re-render every frame — the
+// main cause of the scroll lag on this ~125-column table.
+const DataRow = memo(function DataRow({ row, displayMetrics, pinnedMetrics, rowHeight }: DataRowProps) {
+  return (
+    <tr className="hover:bg-accent/20" style={{ height: rowHeight }}>
+      <td className="sticky left-0 z-10 bg-card px-2 py-0.5 font-mono text-muted-foreground border-r border-b border-border/30 tabular-nums">
+        {row.date}
+      </td>
+      {row.values.map((val, i) => (
+        <td
+          key={i}
+          className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 ${pinnedMetrics.has(displayMetrics[i]) ? "bg-primary/5" : ""} ${val !== null && val < 0 ? "text-red-400" : ""}`}
+        >
+          {formatValue(val, displayMetrics[i])}
+        </td>
+      ))}
+    </tr>
+  );
+});
 
 export default function DataExplorer() {
   const [tickers, setTickers] = useState<TickerEntry[]>([]);
@@ -397,17 +456,6 @@ export default function DataExplorer() {
     });
   }, [displayMetrics, rawData, dates, lookbackKey]);
 
-  const formatValue = (val: number | null, metric: string): string => {
-    if (val === null) return "";
-    const multiplier = metricMultiplier(metric);
-    const scaled = val * multiplier;
-    if (isPercentMetric(metric)) return scaled.toFixed(2) + "%";
-    if (Math.abs(scaled) >= 1e3)
-      return scaled.toLocaleString(undefined, { maximumFractionDigits: 2 });
-    if (Math.abs(scaled) >= 1) return scaled.toFixed(2);
-    return scaled.toFixed(4);
-  };
-
   // Formats one stat cell. "current" reuses the value formatter; "pct" is the
   // percentile rank (0–100), shown as a plain integer independent of the metric.
   const formatStat = (s: ColumnStat, key: StatKey, metric: string): string => {
@@ -483,7 +531,8 @@ export default function DataExplorer() {
           {displayMetrics.map((m) => (
             <th
               key={m}
-              className={`text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap min-w-[80px] group cursor-default ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+              className="text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap min-w-[80px] group cursor-default bg-card"
+              style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null) }}
             >
               <div className="flex items-center justify-end gap-1">
                 <button
@@ -508,7 +557,7 @@ export default function DataExplorer() {
                 When collapsed, previews one statistic per column so the single
                 row still reads as data rather than a blank band. */}
             <tr
-              className="bg-muted/60 cursor-pointer select-none hover:bg-muted/80"
+              className="group/sttoggle cursor-pointer select-none"
               onClick={() => setStatsExpanded((v) => !v)}
               data-testid="data-stats-toggle-row"
             >
@@ -572,7 +621,8 @@ export default function DataExplorer() {
                 return (
                   <td
                     key={m}
-                    className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                    className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap bg-card transition-[filter] group-hover/sttoggle:brightness-125 ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"}`}
+                    style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(0.6)) }}
                   >
                     {!statsExpanded && s ? formatStat(s, previewStat, m) : ""}
                   </td>
@@ -601,7 +651,8 @@ export default function DataExplorer() {
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"}`}
+                          style={{ backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(isMedian ? 0.8 : 0.4)) }}
                         >
                           {s ? formatStat(s, sr.key, m) : ""}
                         </td>
@@ -648,8 +699,15 @@ export default function DataExplorer() {
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${weight} ${base}`}
-                          style={{ color: heatColor, backgroundColor: heatBg }}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${weight} ${base}`}
+                          style={{
+                            color: heatColor,
+                            backgroundImage: cellTint(
+                              heatBg,
+                              pinnedMetrics.has(m) ? primaryTint(0.05) : null,
+                              primaryTint(isCurrent ? 0.1 : 0.04)
+                            ),
+                          }}
                           title={
                             pct !== null
                               ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackKey}`
@@ -941,7 +999,7 @@ export default function DataExplorer() {
           onScroll={handleScroll}
           className="flex-1 overflow-auto min-h-0"
         >
-          <table className="w-full text-[11px] border-collapse">
+          <table className="w-full text-[11px] border-separate border-spacing-0">
             {tableHeader}
             <tbody>
               {paddingTop > 0 && (
@@ -950,23 +1008,13 @@ export default function DataExplorer() {
                 </tr>
               )}
               {visibleRows.map((row) => (
-                <tr
+                <DataRow
                   key={row.dateIdx}
-                  className="hover:bg-accent/20 border-b border-border/30"
-                  style={{ height: ROW_HEIGHT }}
-                >
-                  <td className="sticky left-0 z-10 bg-card px-2 py-0.5 font-mono text-muted-foreground border-r border-border tabular-nums">
-                    {row.date}
-                  </td>
-                  {row.values.map((val, i) => (
-                    <td
-                      key={i}
-                      className={`text-right px-2 py-0.5 font-mono tabular-nums ${pinnedMetrics.has(displayMetrics[i]) ? "bg-primary/5" : ""} ${val !== null && val < 0 ? "text-red-400" : ""}`}
-                    >
-                      {formatValue(val, displayMetrics[i])}
-                    </td>
-                  ))}
-                </tr>
+                  row={row}
+                  displayMetrics={displayMetrics}
+                  pinnedMetrics={pinnedMetrics}
+                  rowHeight={ROW_HEIGHT}
+                />
               ))}
               {paddingBottom > 0 && (
                 <tr style={{ height: paddingBottom }}>
