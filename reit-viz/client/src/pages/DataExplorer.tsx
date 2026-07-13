@@ -580,32 +580,36 @@ export default function DataExplorer() {
               })}
             </tr>
             {statsExpanded &&
-              STAT_ROWS.map((sr, rowI) => (
-                <tr
-                  key={sr.key}
-                  className="bg-muted/40"
-                  data-testid={`data-stat-row-${sr.key}`}
-                >
-                  <th
-                    scope="row"
-                    className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b border-b-border/60" : "border-b border-border/30"}`}
-                    title={`${sr.label} over last ${lookbackKey}`}
+              STAT_ROWS.map((sr, rowI) => {
+                const isMedian = sr.key === "median";
+                const isLast = rowI === STAT_ROWS.length - 1;
+                return (
+                  <tr
+                    key={sr.key}
+                    className={isMedian ? "bg-muted/80" : "bg-muted/40"}
+                    data-testid={`data-stat-row-${sr.key}`}
                   >
-                    {sr.label}
-                  </th>
-                  {displayMetrics.map((m, i) => {
-                    const s = columnStats[i];
-                    return (
-                      <td
-                        key={m}
-                        className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b border-b-border/60" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
-                      >
-                        {s ? formatStat(s, sr.key, m) : ""}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+                    <th
+                      scope="row"
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap ${isMedian ? "font-semibold text-foreground" : "font-medium text-muted-foreground"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/30"}`}
+                      title={`${sr.label} over last ${lookbackKey}`}
+                    >
+                      {sr.label}
+                    </th>
+                    {displayMetrics.map((m, i) => {
+                      const s = columnStats[i];
+                      return (
+                        <td
+                          key={m}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                        >
+                          {s ? formatStat(s, sr.key, m) : ""}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             {/* Where the latest value sits vs. the window above. */}
             {statsExpanded &&
               POSITION_ROWS.map((sr, rowI) => {
