@@ -100,6 +100,9 @@ function quantile(sorted: number[], q: number): number {
 const HEAT_WARM = [251, 113, 133]; // top of the range
 const HEAT_COOL = [96, 165, 250]; // bottom of the range
 const HEAT_MID = [148, 163, 184]; // ~50th percentile
+const rgbStr = (c: number[]) => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+// Continuous cool→neutral→warm bar for the legend, matching the text ramp exactly.
+const HEAT_GRADIENT_CSS = `linear-gradient(to right, ${rgbStr(HEAT_COOL)}, ${rgbStr(HEAT_MID)} 50%, ${rgbStr(HEAT_WARM)})`;
 
 // Continuous text color for the percentile: a smooth ramp from the neutral mid
 // at the median out to blue at the bottom and rose at the top — no visible steps
@@ -887,10 +890,7 @@ export default function DataExplorer() {
             <span className="text-[9px] text-muted-foreground/70 leading-none">Low</span>
             <div
               className="h-2 w-14 rounded-sm border border-border/40"
-              style={{
-                background:
-                  "linear-gradient(to right, rgba(96,165,250,0.55), rgba(96,165,250,0.12) 35%, transparent 50%, rgba(251,113,133,0.12) 65%, rgba(251,113,133,0.55))",
-              }}
+              style={{ background: HEAT_GRADIENT_CSS }}
             />
             <span className="text-[9px] text-muted-foreground/70 leading-none">High</span>
           </div>
