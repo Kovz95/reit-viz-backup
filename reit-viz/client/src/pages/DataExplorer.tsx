@@ -104,6 +104,19 @@ function pctHeatClass(pct: number | null): string {
   return "";
 }
 
+// Continuous, subtle background wash matching pctHeatClass: warm (rose) toward
+// the top of the range, cool (blue) toward the bottom, fading to nothing at the
+// median. Alpha scales with distance from the 50th percentile. Returns undefined
+// in the neutral band so the cell keeps its default (or pinned) background.
+function pctHeatBg(pct: number | null): string | undefined {
+  if (pct === null) return undefined;
+  const dist = Math.abs(pct - 50) / 50; // 0 at median, 1 at either extreme
+  if (dist < 0.05) return undefined;
+  const alpha = (dist * 0.16).toFixed(3);
+  const rgb = pct >= 50 ? "251, 113, 133" : "96, 165, 250"; // rose-400 / blue-400
+  return `rgba(${rgb}, ${alpha})`;
+}
+
 interface ColumnStat {
   count: number;
   mean: number;
@@ -606,11 +619,13 @@ export default function DataExplorer() {
                       const s = columnStats[i];
                       const pct = s?.percentile ?? null;
                       const heat = pctHeatClass(pct);
+                      const heatBg = pctHeatBg(pct);
                       const base = sr.key === "pct" ? "text-muted-foreground/90" : "text-foreground/80";
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${heat || base}`}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${heat || base}`}
+                          style={heatBg ? { backgroundColor: heatBg } : undefined}
                           title={
                             pct !== null
                               ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackKey}`
