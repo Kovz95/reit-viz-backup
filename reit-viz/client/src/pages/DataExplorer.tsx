@@ -63,7 +63,7 @@ const LOOKBACK_PRESETS: { key: string; years: number | null }[] = [
   { key: "All", years: null },
 ];
 
-type StatKey = "mean" | "median" | "min" | "p25" | "p75" | "max";
+type StatKey = "mean" | "median" | "min" | "p25" | "p75" | "max" | "current" | "pct";
 const STAT_ROWS: { key: StatKey; label: string }[] = [
   { key: "mean", label: "Mean" },
   { key: "median", label: "Median" },
@@ -72,6 +72,13 @@ const STAT_ROWS: { key: StatKey; label: string }[] = [
   { key: "p75", label: "75th %" },
   { key: "max", label: "Max" },
 ];
+// Where the latest value sits relative to the summary window above. Rendered as
+// a separate group below STAT_ROWS with a divider; also offered in the preview picker.
+const POSITION_ROWS: { key: StatKey; label: string }[] = [
+  { key: "current", label: "Current" },
+  { key: "pct", label: "%ile" },
+];
+const PREVIEW_STATS = [...STAT_ROWS, ...POSITION_ROWS];
 
 const MS_PER_DAY = 86400000;
 
@@ -92,6 +99,10 @@ interface ColumnStat {
   max: number;
   p25: number;
   p75: number;
+  // Latest value in the full series and where it ranks (0–100) within the
+  // lookback window — recomputed whenever the ticker or window changes.
+  current: number | null;
+  percentile: number | null;
 }
 
 export default function DataExplorer() {
@@ -165,7 +176,7 @@ export default function DataExplorer() {
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
-    if (STAT_ROWS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
+    if (PREVIEW_STATS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
   }, []);
 
   usePageState("data-explorer", getState, restoreState);
@@ -301,8 +312,15 @@ export default function DataExplorer() {
       const pairs = rawData[m];
       if (!pairs || pairs.length === 0) return null;
       const vals: number[] = [];
+      // Latest finite value in the full series (independent of the window).
+      let curIdx = -1;
+      let current: number | null = null;
       for (const [idx, val] of pairs) {
         if (val === null || !Number.isFinite(val)) continue;
+        if (idx > curIdx) {
+          curIdx = idx;
+          current = val;
+        }
         if (cutoff !== -Infinity) {
           const ds = dates[idx];
           if (!ds) continue;
@@ -316,6 +334,17 @@ export default function DataExplorer() {
       const n = vals.length;
       let sum = 0;
       for (const v of vals) sum += v;
+      // Mid-rank percentile of the current value within the window.
+      let percentile: number | null = null;
+      if (current !== null) {
+        let below = 0;
+        let equal = 0;
+        for (const v of vals) {
+          if (v < current) below++;
+          else if (v === current) equal++;
+        }
+        percentile = ((below + equal / 2) / n) * 100;
+      }
       return {
         count: n,
         mean: sum / n,
@@ -324,6 +353,8 @@ export default function DataExplorer() {
         max: vals[n - 1],
         p25: quantile(vals, 0.25),
         p75: quantile(vals, 0.75),
+        current,
+        percentile,
       };
     });
   }, [displayMetrics, rawData, dates, lookbackKey]);
@@ -337,6 +368,14 @@ export default function DataExplorer() {
       return scaled.toLocaleString(undefined, { maximumFractionDigits: 2 });
     if (Math.abs(scaled) >= 1) return scaled.toFixed(2);
     return scaled.toFixed(4);
+  };
+
+  // Formats one stat cell. "current" reuses the value formatter; "pct" is the
+  // percentile rank (0–100), shown as a plain integer independent of the metric.
+  const formatStat = (s: ColumnStat, key: StatKey, metric: string): string => {
+    if (key === "current") return s.current === null ? "" : formatValue(s.current, metric);
+    if (key === "pct") return s.percentile === null ? "" : Math.round(s.percentile).toString();
+    return formatValue(s[key], metric);
   };
 
   const handleExportCsv = () => {
@@ -393,6 +432,191 @@ export default function DataExplorer() {
   const visibleRows = tableRows.slice(startRow, endRow);
   const paddingTop = startRow * ROW_HEIGHT;
   const paddingBottom = Math.max(0, totalHeight - endRow * ROW_HEIGHT);
+
+  // The header (column labels + stat rows) is independent of scroll position, so
+  // memoize it — otherwise every scroll frame rebuilt ~7 rows × N columns of cells.
+  const tableHeader = useMemo(
+    () => (
+      <thead className="sticky top-0 bg-card z-20">
+        <tr>
+          <th className="sticky left-0 z-30 bg-card text-left px-2 py-1.5 font-semibold text-muted-foreground border-b border-r border-border min-w-[90px]">
+            Date
+          </th>
+          {displayMetrics.map((m) => (
+            <th
+              key={m}
+              className={`text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap min-w-[80px] group cursor-default ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+            >
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity"
+                  onClick={() => togglePin(m)}
+                  title={pinnedMetrics.has(m) ? "Unpin" : "Pin to left"}
+                >
+                  {pinnedMetrics.has(m) ? (
+                    <PinOffIcon className="w-2.5 h-2.5" />
+                  ) : (
+                    <Pin className="w-2.5 h-2.5" />
+                  )}
+                </button>
+                <span className="text-[10px]">{m}</span>
+              </div>
+            </th>
+          ))}
+        </tr>
+        {showStats && (
+          <>
+            {/* Collapsible header — click to expand/collapse the stat rows.
+                When collapsed, previews one statistic per column so the single
+                row still reads as data rather than a blank band. */}
+            <tr
+              className="bg-muted/60 cursor-pointer select-none hover:bg-muted/80"
+              onClick={() => setStatsExpanded((v) => !v)}
+              data-testid="data-stats-toggle-row"
+            >
+              <th
+                scope="row"
+                className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${statsExpanded ? "border-b border-border/30" : "border-b-2 border-b-border"}`}
+                title={statsExpanded ? "Collapse statistics" : "Expand statistics"}
+              >
+                <div className="flex items-center gap-1">
+                  {statsExpanded ? (
+                    <ChevronDown className="w-3 h-3" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3" />
+                  )}
+                  <span>Stats</span>
+                  <span className="font-normal text-muted-foreground/70">{lookbackKey}</span>
+                  {!statsExpanded && (
+                    <>
+                      <span className="font-normal text-muted-foreground/50">·</span>
+                      <Popover open={previewPickerOpen} onOpenChange={setPreviewPickerOpen}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-normal text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-0.5"
+                            title="Choose which statistic to preview"
+                            data-testid="data-preview-stat-picker"
+                          >
+                            {PREVIEW_STATS.find((s) => s.key === previewStat)?.label ?? previewStat}
+                            <ChevronsUpDown className="w-2.5 h-2.5 opacity-60" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          align="start"
+                          className="w-32 p-1"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {PREVIEW_STATS.map((sr) => (
+                            <button
+                              key={sr.key}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPreviewStat(sr.key);
+                                setPreviewPickerOpen(false);
+                              }}
+                              className={`w-full text-left px-2 py-1 text-[11px] rounded hover:bg-accent/50 ${previewStat === sr.key ? "text-primary font-medium" : ""}`}
+                              data-testid={`data-preview-stat-${sr.key}`}
+                            >
+                              {sr.label}
+                            </button>
+                          ))}
+                        </PopoverContent>
+                      </Popover>
+                    </>
+                  )}
+                </div>
+              </th>
+              {displayMetrics.map((m, i) => {
+                const s = columnStats[i];
+                return (
+                  <td
+                    key={m}
+                    className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                  >
+                    {!statsExpanded && s ? formatStat(s, previewStat, m) : ""}
+                  </td>
+                );
+              })}
+            </tr>
+            {statsExpanded &&
+              STAT_ROWS.map((sr, rowI) => (
+                <tr
+                  key={sr.key}
+                  className="bg-muted/40"
+                  data-testid={`data-stat-row-${sr.key}`}
+                >
+                  <th
+                    scope="row"
+                    className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b border-b-border/60" : "border-b border-border/30"}`}
+                    title={`${sr.label} over last ${lookbackKey}`}
+                  >
+                    {sr.label}
+                  </th>
+                  {displayMetrics.map((m, i) => {
+                    const s = columnStats[i];
+                    return (
+                      <td
+                        key={m}
+                        className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b border-b-border/60" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
+                      >
+                        {s ? formatStat(s, sr.key, m) : ""}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            {/* Where the latest value sits vs. the window above. */}
+            {statsExpanded &&
+              POSITION_ROWS.map((sr, rowI) => {
+                const isLast = rowI === POSITION_ROWS.length - 1;
+                return (
+                  <tr
+                    key={sr.key}
+                    className="bg-primary/[0.04]"
+                    data-testid={`data-stat-row-${sr.key}`}
+                  >
+                    <th
+                      scope="row"
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-foreground/80 border-r border-border whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                      title={
+                        sr.key === "pct"
+                          ? `Percentile rank of the current value within the last ${lookbackKey}`
+                          : `Latest value`
+                      }
+                    >
+                      {sr.label}
+                    </th>
+                    {displayMetrics.map((m, i) => {
+                      const s = columnStats[i];
+                      const pct = sr.key === "pct" ? s?.percentile ?? null : null;
+                      const extreme = pct !== null && (pct >= 90 || pct <= 10);
+                      return (
+                        <td
+                          key={m}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${
+                            sr.key === "pct"
+                              ? extreme
+                                ? "text-amber-400 font-semibold"
+                                : "text-foreground/70"
+                              : "text-foreground/80"
+                          }`}
+                        >
+                          {s ? formatStat(s, sr.key, m) : ""}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+          </>
+        )}
+      </thead>
+    ),
+    [displayMetrics, pinnedMetrics, showStats, statsExpanded, lookbackKey, previewStat, previewPickerOpen, columnStats]
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -650,140 +874,7 @@ export default function DataExplorer() {
           className="flex-1 overflow-auto min-h-0"
         >
           <table className="w-full text-[11px] border-collapse">
-            <thead className="sticky top-0 bg-card z-20">
-              <tr>
-                <th className="sticky left-0 z-30 bg-card text-left px-2 py-1.5 font-semibold text-muted-foreground border-b border-r border-border min-w-[90px]">
-                  Date
-                </th>
-                {displayMetrics.map((m) => (
-                  <th
-                    key={m}
-                    className={`text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap min-w-[80px] group cursor-default ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
-                  >
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity"
-                        onClick={() => togglePin(m)}
-                        title={pinnedMetrics.has(m) ? "Unpin" : "Pin to left"}
-                      >
-                        {pinnedMetrics.has(m) ? (
-                          <PinOffIcon className="w-2.5 h-2.5" />
-                        ) : (
-                          <Pin className="w-2.5 h-2.5" />
-                        )}
-                      </button>
-                      <span className="text-[10px]">{m}</span>
-                    </div>
-                  </th>
-                ))}
-              </tr>
-              {showStats && (
-                <>
-                  {/* Collapsible header — click to expand/collapse the stat rows.
-                      When collapsed, previews the median per column so the single
-                      row still reads as data rather than a blank band. */}
-                  <tr
-                    className="bg-muted/60 cursor-pointer select-none hover:bg-muted/80"
-                    onClick={() => setStatsExpanded((v) => !v)}
-                    data-testid="data-stats-toggle-row"
-                  >
-                    <th
-                      scope="row"
-                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${statsExpanded ? "border-b border-border/30" : "border-b-2 border-b-border"}`}
-                      title={statsExpanded ? "Collapse statistics" : "Expand statistics"}
-                    >
-                      <div className="flex items-center gap-1">
-                        {statsExpanded ? (
-                          <ChevronDown className="w-3 h-3" />
-                        ) : (
-                          <ChevronRight className="w-3 h-3" />
-                        )}
-                        <span>Stats</span>
-                        <span className="font-normal text-muted-foreground/70">{lookbackKey}</span>
-                        {!statsExpanded && (
-                          <>
-                            <span className="font-normal text-muted-foreground/50">·</span>
-                            <Popover open={previewPickerOpen} onOpenChange={setPreviewPickerOpen}>
-                              <PopoverTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="font-normal text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-0.5"
-                                  title="Choose which statistic to preview"
-                                  data-testid="data-preview-stat-picker"
-                                >
-                                  {STAT_ROWS.find((s) => s.key === previewStat)?.label ?? previewStat}
-                                  <ChevronsUpDown className="w-2.5 h-2.5 opacity-60" />
-                                </button>
-                              </PopoverTrigger>
-                              <PopoverContent
-                                align="start"
-                                className="w-32 p-1"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {STAT_ROWS.map((sr) => (
-                                  <button
-                                    key={sr.key}
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setPreviewStat(sr.key);
-                                      setPreviewPickerOpen(false);
-                                    }}
-                                    className={`w-full text-left px-2 py-1 text-[11px] rounded hover:bg-accent/50 ${previewStat === sr.key ? "text-primary font-medium" : ""}`}
-                                    data-testid={`data-preview-stat-${sr.key}`}
-                                  >
-                                    {sr.label}
-                                  </button>
-                                ))}
-                              </PopoverContent>
-                            </Popover>
-                          </>
-                        )}
-                      </div>
-                    </th>
-                    {displayMetrics.map((m, i) => {
-                      const s = columnStats[i];
-                      return (
-                        <td
-                          key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
-                        >
-                          {!statsExpanded && s ? formatValue(s[previewStat], m) : ""}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                  {statsExpanded &&
-                    STAT_ROWS.map((sr, rowI) => (
-                      <tr
-                        key={sr.key}
-                        className="bg-muted/40"
-                        data-testid={`data-stat-row-${sr.key}`}
-                      >
-                        <th
-                          scope="row"
-                          className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-medium text-[10px] text-muted-foreground border-r border-border whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
-                          title={`${sr.label} over last ${lookbackKey}`}
-                        >
-                          {sr.label}
-                        </th>
-                        {displayMetrics.map((m, i) => {
-                          const s = columnStats[i];
-                          return (
-                            <td
-                              key={m}
-                              className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap ${rowI === STAT_ROWS.length - 1 ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""}`}
-                            >
-                              {s ? formatValue(s[sr.key], m) : ""}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                </>
-              )}
-            </thead>
+            {tableHeader}
             <tbody>
               {paddingTop > 0 && (
                 <tr style={{ height: paddingTop }}>
