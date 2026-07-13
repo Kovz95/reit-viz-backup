@@ -861,6 +861,25 @@ export default function DataExplorer() {
           </div>
         )}
 
+        {/* Heat legend — explains the percentile coloring on the Current/%ile rows */}
+        {showStats && (
+          <div
+            className="flex items-center gap-1"
+            title="Heat on the Current & %ile rows shows where the latest value sits within its look-back range: blue = low (near the bottom), rose = high (near the top), neutral in the middle."
+            data-testid="data-heat-legend"
+          >
+            <span className="text-[9px] text-muted-foreground/70 leading-none">Low</span>
+            <div
+              className="h-2 w-14 rounded-sm border border-border/40"
+              style={{
+                background:
+                  "linear-gradient(to right, rgba(96,165,250,0.55), rgba(96,165,250,0.12) 35%, transparent 50%, rgba(251,113,133,0.12) 65%, rgba(251,113,133,0.55))",
+              }}
+            />
+            <span className="text-[9px] text-muted-foreground/70 leading-none">High</span>
+          </div>
+        )}
+
         {/* Sort toggle */}
         <Button
           variant="ghost"
