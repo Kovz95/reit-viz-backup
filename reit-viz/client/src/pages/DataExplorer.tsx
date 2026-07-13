@@ -7,6 +7,7 @@ import { getTickers } from "@/lib/dataService";
 import { getDates } from "@/lib/dataService";
 import { getTickerRaw } from "@/lib/dataService";
 import { metricMultiplier, isPercentMetric } from "@/lib/dataService";
+import { categorizeMetric, groupMetricsByCategory } from "@/lib/metricCategories";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,15 @@ import {
 } from "lucide-react";
 import { ArrowUpDown } from "lucide-react";
 import { Pin } from "lucide-react";
+
+const LayersIcon = createLucideIcon("Layers", [
+  ["path", {
+    d: "M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z",
+    key: "layers1",
+  }],
+  ["path", { d: "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12", key: "layers2" }],
+  ["path", { d: "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17", key: "layers3" }],
+]);
 
 const Columns2Icon = createLucideIcon("Columns2", [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
@@ -250,6 +260,8 @@ export default function DataExplorer() {
   const [loading, setLoading] = useState(false);
   const [pinnedMetrics, setPinnedMetrics] = useState<Set<string>>(new Set(["close"]));
   const [metricFilter, setMetricFilter] = useState("");
+  const [groupFilter, setGroupFilter] = useState<string | null>(null);
+  const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [sortAsc, setSortAsc] = useState(false);
   const [visibleMetrics, setVisibleMetrics] = useState<Set<string> | null>(null);
@@ -300,12 +312,13 @@ export default function DataExplorer() {
       sortAsc,
       pinnedMetrics: [...pinnedMetrics],
       visibleMetrics: visibleMetrics ? [...visibleMetrics] : null,
+      groupFilter,
       showStats,
       statsExpanded,
       lookbackKey,
       previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, showStats, statsExpanded, lookbackKey, previewStat]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilter, showStats, statsExpanded, lookbackKey, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -317,6 +330,7 @@ export default function DataExplorer() {
     } else if (Array.isArray(saved.visibleMetrics)) {
       setVisibleMetrics(new Set(saved.visibleMetrics));
     }
+    if (typeof saved.groupFilter === "string" || saved.groupFilter === null) setGroupFilter(saved.groupFilter);
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
@@ -363,53 +377,21 @@ export default function DataExplorer() {
     [rawData]
   );
 
-  const METRIC_GROUPS: Record<string, string[]> = {
-    Price: ["close", "open", "high", "low"],
-    Valuation: [
-      "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2",
-      "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate",
-    ],
-    Yields: ["FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2", "Dividend Yield"],
-    Estimates: [
-      "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2", "AFFO FY1", "AFFO FY2",
-      "EBITDA FY1", "EBITDA FY2", "Sales FY1", "Sales FY2",
-    ],
-    LTM: ["EPS LTM", "FFO LTM", "AFFO LTM", "EBITDA LTM", "Sales LTM", "EPS FY0", "FFO FY0", "AFFO FY0"],
-    Growth: [
-      "FY1 EPS Growth", "FY2 EPS Growth", "FY1 FFO Growth", "FY2 FFO Growth",
-      "FY1 AFFO Growth", "FY2 AFFO Growth",
-    ],
-    Performance: [
-      "52wk High", "52wk Low", "% off 52wk High", "% off 52wk Low",
-      "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
-    ],
-    "Short Interest": ["Short Interest%", "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M"],
-    Volatility: [
-      "HV 30D", "HV 60D", "HV 90D", "HV 180D", "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
-    ],
-    Other: [
-      "Dividend", "Enterprise Value", "Buy Ratings", "Hold Ratings", "Sell Ratings", "Bull%", "Bear%",
-    ],
-  };
+  // Metric categories present for this ticker, using the SAME rule-based
+  // categorizer as the Charts tab so groups read identically across the app.
+  const availableGroups = useMemo(() => groupMetricsByCategory(allMetrics), [allMetrics]);
 
-  const groupedMetrics = useMemo(() => {
-    const knownSet = new Set<string>();
-    const result: [string, string[]][] = [];
+  const groupedMetrics = useMemo<[string, string[]][]>(() => {
     const q = columnSearch.trim().toLowerCase();
     const matchQ = (m: string) => !q || m.toLowerCase().includes(q);
-
-    for (const [group, cols] of Object.entries(METRIC_GROUPS)) {
-      const matching = cols.filter((m) => allMetrics.includes(m) && matchQ(m));
-      if (matching.length) result.push([group, matching]);
-      for (const m of cols) knownSet.add(m);
-    }
-    const uncategorized = allMetrics.filter((m) => !knownSet.has(m) && matchQ(m));
-    if (uncategorized.length) result.push(["Uncategorized", uncategorized]);
-    return result;
-  }, [allMetrics, columnSearch]);
+    return availableGroups
+      .map(({ category, metrics }) => [category, metrics.filter(matchQ)] as [string, string[]])
+      .filter(([, ms]) => ms.length > 0);
+  }, [availableGroups, columnSearch]);
 
   const displayMetrics = useMemo(() => {
     let cols = visibleMetrics ? allMetrics.filter((m) => visibleMetrics.has(m)) : allMetrics;
+    if (groupFilter) cols = cols.filter((m) => categorizeMetric(m) === groupFilter);
     if (metricFilter) {
       const q = metricFilter.toLowerCase();
       cols = cols.filter((m) => m.toLowerCase().includes(q));
@@ -417,7 +399,7 @@ export default function DataExplorer() {
     const pinned = cols.filter((m) => pinnedMetrics.has(m));
     const rest = cols.filter((m) => !pinnedMetrics.has(m));
     return [...pinned, ...rest];
-  }, [allMetrics, visibleMetrics, metricFilter, pinnedMetrics]);
+  }, [allMetrics, visibleMetrics, groupFilter, metricFilter, pinnedMetrics]);
 
   const tableRows = useMemo(() => {
     if (dates.length === 0 || displayMetrics.length === 0) return [];
@@ -919,6 +901,56 @@ export default function DataExplorer() {
         )}
 
         <div className="flex-1" />
+
+        {/* Group filter — show only one metric category (same categories as Charts) */}
+        <Popover open={groupPickerOpen} onOpenChange={setGroupPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant={groupFilter ? "secondary" : "ghost"}
+              size="sm"
+              className={`h-7 px-2 text-[10px] gap-1 ${groupFilter ? "text-primary" : ""}`}
+              title="Filter columns to one metric category"
+              data-testid="data-group-filter"
+            >
+              <LayersIcon className="w-3 h-3" />
+              {groupFilter ?? "All groups"}
+              <ChevronsUpDown className="w-2.5 h-2.5 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[220px] p-1" align="end">
+            <button
+              className={`w-full flex items-center justify-between px-2 py-1 text-xs rounded hover:bg-accent/50 ${!groupFilter ? "text-primary font-medium" : ""}`}
+              onClick={() => {
+                setGroupFilter(null);
+                setGroupPickerOpen(false);
+              }}
+              data-testid="data-group-all"
+            >
+              <span>All groups</span>
+              {!groupFilter && <Check className="w-3 h-3" />}
+            </button>
+            <div className="my-1 border-t border-border/40" />
+            <div className="max-h-[320px] overflow-y-auto">
+              {availableGroups.map(({ category, metrics }) => (
+                <button
+                  key={category}
+                  className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-xs rounded hover:bg-accent/50 ${groupFilter === category ? "text-primary font-medium" : ""}`}
+                  onClick={() => {
+                    setGroupFilter(category);
+                    setGroupPickerOpen(false);
+                  }}
+                  data-testid={`data-group-${category}`}
+                >
+                  <span className="truncate text-left">{category}</span>
+                  <span className="flex items-center gap-1 flex-shrink-0">
+                    <span className="text-[10px] text-muted-foreground tabular-nums">{metrics.length}</span>
+                    {groupFilter === category && <Check className="w-3 h-3" />}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         {/* Metric filter */}
         <div className="relative">
