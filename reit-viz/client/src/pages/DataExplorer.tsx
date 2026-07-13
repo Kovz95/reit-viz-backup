@@ -95,26 +95,35 @@ function quantile(sorted: number[], q: number): number {
 // hot (near the top of its range) → warm, cold (near the bottom) → cool, neutral
 // in the middle. Shared by the Current and %ile rows so both read the same way.
 // Returns "" for the neutral band so callers keep their base color.
-function pctHeatClass(pct: number | null): string {
-  if (pct === null) return "";
-  if (pct >= 90) return "text-rose-400 font-semibold";
-  if (pct >= 70) return "text-amber-400";
-  if (pct <= 10) return "text-blue-400 font-semibold";
-  if (pct <= 30) return "text-sky-400";
-  return "";
+// Endpoints for the percentile heat ramp (Tailwind rose-400 / blue-400) and a
+// neutral slate mid-point that stays readable on the dark table.
+const HEAT_WARM = [251, 113, 133]; // top of the range
+const HEAT_COOL = [96, 165, 250]; // bottom of the range
+const HEAT_MID = [148, 163, 184]; // ~50th percentile
+
+// Continuous text color for the percentile: a smooth ramp from the neutral mid
+// at the median out to blue at the bottom and rose at the top — no visible steps
+// between buckets. Returns undefined when there's no percentile.
+function pctHeatColor(pct: number | null): string | undefined {
+  if (pct === null) return undefined;
+  const d = (pct - 50) / 50; // -1 (low) .. 0 (median) .. 1 (high)
+  const end = d >= 0 ? HEAT_WARM : HEAT_COOL;
+  const t = Math.min(1, Math.abs(d));
+  const c = HEAT_MID.map((m, i) => Math.round(m + (end[i] - m) * t));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
-// Continuous, subtle background wash matching pctHeatClass: warm (rose) toward
-// the top of the range, cool (blue) toward the bottom, fading to nothing at the
-// median. Alpha scales with distance from the 50th percentile. Returns undefined
-// in the neutral band so the cell keeps its default (or pinned) background.
+// Continuous background wash matching pctHeatColor: warm (rose) toward the top,
+// cool (blue) toward the bottom, fading to nothing at the median. Alpha scales
+// smoothly with distance from the 50th percentile. Returns undefined in the
+// neutral band so the cell keeps its default (or pinned) background.
 function pctHeatBg(pct: number | null): string | undefined {
   if (pct === null) return undefined;
   const dist = Math.abs(pct - 50) / 50; // 0 at median, 1 at either extreme
-  if (dist < 0.05) return undefined;
+  if (dist < 0.02) return undefined;
   const alpha = (dist * 0.16).toFixed(3);
-  const rgb = pct >= 50 ? "251, 113, 133" : "96, 165, 250"; // rose-400 / blue-400
-  return `rgba(${rgb}, ${alpha})`;
+  const [r, g, b] = pct >= 50 ? HEAT_WARM : HEAT_COOL;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 interface ColumnStat {
@@ -618,14 +627,21 @@ export default function DataExplorer() {
                     {displayMetrics.map((m, i) => {
                       const s = columnStats[i];
                       const pct = s?.percentile ?? null;
-                      const heat = pctHeatClass(pct);
+                      const heatColor = pctHeatColor(pct);
                       const heatBg = pctHeatBg(pct);
-                      const base = sr.key === "pct" ? "text-muted-foreground/90" : "text-foreground/80";
+                      // Keep the Current row a touch heavier so values stay prominent;
+                      // fall back to the theme text token only when there's no heat.
+                      const weight = sr.key === "pct" ? "" : "font-medium";
+                      const base = heatColor
+                        ? ""
+                        : sr.key === "pct"
+                          ? "text-muted-foreground/90"
+                          : "text-foreground/80";
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${heat || base}`}
-                          style={heatBg ? { backgroundColor: heatBg } : undefined}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${weight} ${base}`}
+                          style={{ color: heatColor, backgroundColor: heatBg }}
                           title={
                             pct !== null
                               ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackKey}`
