@@ -614,15 +614,16 @@ export default function DataExplorer() {
             {statsExpanded &&
               POSITION_ROWS.map((sr, rowI) => {
                 const isLast = rowI === POSITION_ROWS.length - 1;
+                const isCurrent = sr.key === "current";
                 return (
                   <tr
                     key={sr.key}
-                    className="bg-primary/[0.04]"
+                    className={isCurrent ? "bg-primary/10" : "bg-primary/[0.04]"}
                     data-testid={`data-stat-row-${sr.key}`}
                   >
                     <th
                       scope="row"
-                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 font-semibold text-[10px] text-foreground/80 border-r border-border whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
+                      className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap ${isCurrent ? "font-bold text-foreground border-t border-t-border/60" : "font-semibold text-foreground/80"} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/30"}`}
                       title={
                         sr.key === "pct"
                           ? `Percentile rank of the current value within the last ${lookbackKey}`
@@ -636,18 +637,18 @@ export default function DataExplorer() {
                       const pct = s?.percentile ?? null;
                       const heatColor = pctHeatColor(pct);
                       const heatBg = pctHeatBg(pct);
-                      // Keep the Current row a touch heavier so values stay prominent;
+                      // Current values are the headline: bolder and full-strength;
                       // fall back to the theme text token only when there's no heat.
-                      const weight = sr.key === "pct" ? "" : "font-medium";
+                      const weight = isCurrent ? "font-semibold" : "";
                       const base = heatColor
                         ? ""
-                        : sr.key === "pct"
-                          ? "text-muted-foreground/90"
-                          : "text-foreground/80";
+                        : isCurrent
+                          ? "text-foreground"
+                          : "text-muted-foreground/90";
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${weight} ${base}`}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) && !heatBg ? "bg-primary/5" : ""} ${weight} ${base}`}
                           style={{ color: heatColor, backgroundColor: heatBg }}
                           title={
                             pct !== null
