@@ -260,7 +260,9 @@ export default function DataExplorer() {
   const [loading, setLoading] = useState(false);
   const [pinnedMetrics, setPinnedMetrics] = useState<Set<string>>(new Set(["close"]));
   const [metricFilter, setMetricFilter] = useState("");
-  const [groupFilter, setGroupFilter] = useState<string | null>(null);
+  // Group filter is remembered PER TICKER, so switching symbols restores each
+  // one's last-selected category.
+  const [groupFilterByTicker, setGroupFilterByTicker] = useState<Record<string, string | null>>({});
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [sortAsc, setSortAsc] = useState(false);
@@ -312,13 +314,13 @@ export default function DataExplorer() {
       sortAsc,
       pinnedMetrics: [...pinnedMetrics],
       visibleMetrics: visibleMetrics ? [...visibleMetrics] : null,
-      groupFilter,
+      groupFilterByTicker,
       showStats,
       statsExpanded,
       lookbackKey,
       previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilter, showStats, statsExpanded, lookbackKey, previewStat]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackKey, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -330,7 +332,12 @@ export default function DataExplorer() {
     } else if (Array.isArray(saved.visibleMetrics)) {
       setVisibleMetrics(new Set(saved.visibleMetrics));
     }
-    if (typeof saved.groupFilter === "string" || saved.groupFilter === null) setGroupFilter(saved.groupFilter);
+    if (saved.groupFilterByTicker && typeof saved.groupFilterByTicker === "object") {
+      setGroupFilterByTicker(saved.groupFilterByTicker);
+    } else if (typeof saved.groupFilter === "string" && saved.activeTicker) {
+      // Migrate the older single-value format onto its ticker.
+      setGroupFilterByTicker({ [saved.activeTicker]: saved.groupFilter });
+    }
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
@@ -360,6 +367,14 @@ export default function DataExplorer() {
   }, [activeTicker]);
 
   const tickerIndex = tickers.findIndex((t) => t.ticker === activeTicker);
+
+  // The active ticker's remembered group filter, and a setter that writes it back
+  // to that ticker's slot so each symbol keeps its own selection.
+  const groupFilter = groupFilterByTicker[activeTicker] ?? null;
+  const setGroupFilter = useCallback(
+    (g: string | null) => setGroupFilterByTicker((prev) => ({ ...prev, [activeTicker]: g })),
+    [activeTicker]
+  );
 
   const filteredTickers = useMemo(() => {
     if (!tickerSearch) return tickers;

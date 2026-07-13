@@ -2,7 +2,7 @@
 // usePageState: saves/restores page state to sessionStorage on mount/unmount.
 // Used by DataExplorer, ShortInterest, Universe, Valuation.
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 const PAGE_STATE_PREFIX = "reit-viz:page:";
 
@@ -18,6 +18,13 @@ export function usePageState(
   getState: () => unknown,
   restoreState: (s: unknown) => void
 ): void {
+  // getState is typically a useCallback that changes identity as state changes.
+  // Keep a ref to the latest one so the unmount save reads CURRENT state — a
+  // plain closure would capture the first render's getState (all defaults) and
+  // persist nothing.
+  const getStateRef = useRef(getState);
+  getStateRef.current = getState;
+
   // Restore on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -37,7 +44,7 @@ export function usePageState(
     return () => {
       if (typeof window === "undefined") return;
       try {
-        const state = getState();
+        const state = getStateRef.current();
         if (state == null) return;
         window.sessionStorage.setItem(PAGE_STATE_PREFIX + key, JSON.stringify(state));
       } catch {
