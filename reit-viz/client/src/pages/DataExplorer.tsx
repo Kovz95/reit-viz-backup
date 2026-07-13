@@ -91,6 +91,19 @@ function quantile(sorted: number[], q: number): number {
   return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
+// Diverging "temperature" tint for how the current value ranks in its window:
+// hot (near the top of its range) → warm, cold (near the bottom) → cool, neutral
+// in the middle. Shared by the Current and %ile rows so both read the same way.
+// Returns "" for the neutral band so callers keep their base color.
+function pctHeatClass(pct: number | null): string {
+  if (pct === null) return "";
+  if (pct >= 90) return "text-rose-400 font-semibold";
+  if (pct >= 70) return "text-amber-400";
+  if (pct <= 10) return "text-blue-400 font-semibold";
+  if (pct <= 30) return "text-sky-400";
+  return "";
+}
+
 interface ColumnStat {
   count: number;
   mean: number;
@@ -591,18 +604,18 @@ export default function DataExplorer() {
                     </th>
                     {displayMetrics.map((m, i) => {
                       const s = columnStats[i];
-                      const pct = sr.key === "pct" ? s?.percentile ?? null : null;
-                      const extreme = pct !== null && (pct >= 90 || pct <= 10);
+                      const pct = s?.percentile ?? null;
+                      const heat = pctHeatClass(pct);
+                      const base = sr.key === "pct" ? "text-muted-foreground/90" : "text-foreground/80";
                       return (
                         <td
                           key={m}
-                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${
-                            sr.key === "pct"
-                              ? extreme
-                                ? "text-amber-400 font-semibold"
-                                : "text-foreground/70"
-                              : "text-foreground/80"
-                          }`}
+                          className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${heat || base}`}
+                          title={
+                            pct !== null
+                              ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackKey}`
+                              : undefined
+                          }
                         >
                           {s ? formatStat(s, sr.key, m) : ""}
                         </td>
