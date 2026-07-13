@@ -187,6 +187,30 @@ interface ColWindow {
   rightPad: number;
 }
 
+// One body cell, memoized on its primitive inputs. When the horizontal window
+// shifts by a column, the ~16 columns that stay visible keep identical props
+// (value/metric/pinned), so React skips re-rendering them — only the single
+// entering column actually renders. This is what makes horizontal scrolling
+// cheap despite every row re-rendering when the window shifts.
+const DataCell = memo(function DataCell({
+  value,
+  metric,
+  pinned,
+}: {
+  value: number | null;
+  metric: string;
+  pinned: boolean;
+}) {
+  return (
+    <td
+      style={{ width: COL_W, maxWidth: COL_W }}
+      className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 overflow-hidden ${pinned ? "bg-primary/5" : ""} ${value !== null && value < 0 ? "text-red-400" : ""}`}
+    >
+      {formatValue(value, metric)}
+    </td>
+  );
+});
+
 interface DataRowProps {
   row: { dateIdx: number; date: string; values: (number | null)[] };
   colWindow: ColWindow;
@@ -209,18 +233,9 @@ const DataRow = memo(function DataRow({ row, colWindow, pinnedMetrics, rowHeight
         {row.date}
       </td>
       {leftPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: leftPad }} />}
-      {cols.map(({ m, idx }) => {
-        const val = row.values[idx];
-        return (
-          <td
-            key={idx}
-            style={{ width: COL_W, maxWidth: COL_W }}
-            className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 overflow-hidden ${pinnedMetrics.has(m) ? "bg-primary/5" : ""} ${val !== null && val < 0 ? "text-red-400" : ""}`}
-          >
-            {formatValue(val, m)}
-          </td>
-        );
-      })}
+      {cols.map(({ m, idx }) => (
+        <DataCell key={idx} value={row.values[idx]} metric={m} pinned={pinnedMetrics.has(m)} />
+      ))}
       {rightPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: rightPad }} />}
     </tr>
   );
@@ -249,7 +264,8 @@ export default function DataExplorer() {
   const rafRef = useRef<number | null>(null);
   const ROW_HEIGHT = 20;
   const OVERSCAN = 8;
-  const COL_OVERSCAN = 3;
+  const COL_OVERSCAN = 2;
+  const COL_BLOCK = 3; // re-window (and re-render) only every N columns of h-scroll
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
@@ -548,8 +564,14 @@ export default function DataExplorer() {
   // re-render when a column boundary is crossed. The overscan covers the sticky
   // Date column's width, so the window never drops a genuinely-visible column.
   const nMetrics = displayMetrics.length;
-  const colStart = Math.max(0, Math.floor(scrollLeft / COL_W) - COL_OVERSCAN);
-  const colEnd = Math.min(nMetrics, Math.ceil((scrollLeft + containerWidth) / COL_W) + COL_OVERSCAN);
+  // Quantize the window to blocks of COL_BLOCK columns so colStart/colEnd only
+  // change once every few columns of horizontal scroll (the browser native-
+  // scrolls the pixels between re-renders). Rendered width = block + viewport +
+  // 2·overscan columns — barely wider than a tight window, so vertical stays cheap.
+  const visCols = Math.ceil(containerWidth / COL_W);
+  const colBlock = Math.floor(scrollLeft / (COL_W * COL_BLOCK)) * COL_BLOCK;
+  const colStart = Math.max(0, colBlock - COL_OVERSCAN);
+  const colEnd = Math.min(nMetrics, colBlock + COL_BLOCK + visCols + COL_OVERSCAN);
   const colWindow = useMemo<ColWindow>(() => {
     const cols: { m: string; idx: number }[] = [];
     for (let i = colStart; i < colEnd; i++) cols.push({ m: displayMetrics[i], idx: i });
