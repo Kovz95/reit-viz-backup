@@ -396,13 +396,19 @@ export default function DataExplorer() {
   // categorizer as the Charts tab so groups read identically across the app.
   const availableGroups = useMemo(() => groupMetricsByCategory(allMetrics), [allMetrics]);
 
+  // The column picker defaults to the active group filter's category, so you
+  // toggle within the group you're actually viewing (with "All groups" in the
+  // picker to see everything).
   const groupedMetrics = useMemo<[string, string[]][]>(() => {
     const q = columnSearch.trim().toLowerCase();
     const matchQ = (m: string) => !q || m.toLowerCase().includes(q);
-    return availableGroups
+    const scoped = groupFilter
+      ? availableGroups.filter((g) => g.category === groupFilter)
+      : availableGroups;
+    return scoped
       .map(({ category, metrics }) => [category, metrics.filter(matchQ)] as [string, string[]])
       .filter(([, ms]) => ms.length > 0);
-  }, [availableGroups, columnSearch]);
+  }, [availableGroups, columnSearch, groupFilter]);
 
   const displayMetrics = useMemo(() => {
     let cols = visibleMetrics ? allMetrics.filter((m) => visibleMetrics.has(m)) : allMetrics;
@@ -1001,10 +1007,24 @@ export default function DataExplorer() {
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-[400px] p-0" align="end">
+            {groupFilter && (
+              <div className="px-2 py-1.5 border-b border-border/40 flex items-center gap-1.5 text-[10px]">
+                <LayersIcon className="w-3 h-3 text-primary flex-shrink-0" />
+                <span className="text-muted-foreground">Group:</span>
+                <span className="font-medium text-foreground truncate">{groupFilter}</span>
+                <button
+                  className="ml-auto text-primary hover:underline whitespace-nowrap"
+                  onClick={() => setGroupFilter(null)}
+                  data-testid="data-picker-all-groups"
+                >
+                  All groups
+                </button>
+              </div>
+            )}
             <div className="p-2 border-b border-border/40 flex items-center gap-2">
               <Search className="w-3 h-3 text-muted-foreground flex-shrink-0" />
               <Input
-                placeholder="Search columns..."
+                placeholder={groupFilter ? `Search ${groupFilter}...` : "Search columns..."}
                 value={columnSearch}
                 onChange={(e) => setColumnSearch(e.target.value)}
                 className="h-7 text-xs flex-1"
