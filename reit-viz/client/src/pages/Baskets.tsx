@@ -23,7 +23,7 @@ export default function Baskets() {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto bg-background">
+    <div className="h-full overflow-y-auto bg-background">
       <div className="max-w-4xl mx-auto p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-4">
           <FolderOpen className="w-5 h-5 text-amber-400" />

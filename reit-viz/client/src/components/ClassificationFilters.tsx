@@ -126,12 +126,15 @@ export function FilterDropdown({
   selected,
   onChange,
   testId,
+  counts,
 }: {
   label: string;
   options: string[];
   selected: Set<string>;
   onChange: (next: Set<string>) => void;
   testId: string;
+  /** Optional per-option ticker count, shown right-aligned next to each option. */
+  counts?: Record<string, number>;
 }) {
   const [open, setOpen] = useState(false);
   const [ddSearch, setDdSearch] = useState("");
@@ -218,7 +221,12 @@ export function FilterDropdown({
                 <span className="w-3 h-3 flex items-center justify-center flex-shrink-0">
                   {selected.has(opt) && <Check className="w-3 h-3 text-primary" />}
                 </span>
-                <span className="truncate text-left">{opt}</span>
+                <span className="truncate text-left flex-1">{opt}</span>
+                {counts && counts[opt] != null && (
+                  <span className="flex-shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                    {counts[opt]}
+                  </span>
+                )}
               </button>
             ))}
             {filteredOptions.length === 0 && (

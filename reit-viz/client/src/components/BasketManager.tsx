@@ -186,6 +186,21 @@ function BasketCard({
     return out;
   }, [tickers]);
 
+  // Ticker count per group value, shown next to each option.
+  const classCounts = useMemo(() => {
+    const counts = {
+      economy: {}, sector: {}, subsector: {},
+      industryGroup: {}, industry: {}, subindustry: {},
+    } as Record<ClassKey, Record<string, number>>;
+    for (const t of tickers) {
+      for (const { key } of CLASS_LEVELS) {
+        const v = (t as any)[key];
+        if (v) counts[key][v] = (counts[key][v] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [tickers]);
+
   const anyClassSelected = useMemo(
     () => CLASS_LEVELS.some(({ key }) => classFilters[key].size > 0),
     [classFilters],
@@ -496,6 +511,7 @@ function BasketCard({
                         key={key}
                         label={label}
                         options={classOptions[key]}
+                        counts={classCounts[key]}
                         selected={classFilters[key]}
                         onChange={(next) => setClassFilters((f) => ({ ...f, [key]: next }))}
                         testId={`basket-${basket.id}-class-${key}`}
