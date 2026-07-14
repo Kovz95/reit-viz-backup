@@ -269,9 +269,10 @@ export default function DataExplorer() {
   const [loading, setLoading] = useState(false);
   const [pinnedMetrics, setPinnedMetrics] = useState<Set<string>>(new Set(["close"]));
   const [metricFilter, setMetricFilter] = useState("");
-  // Group filter is remembered PER TICKER, so switching symbols restores each
-  // one's last-selected category.
+  // Group filter is remembered PER TICKER; a ticker you haven't touched inherits
+  // the last-used selection (lastGroupFilter) rather than snapping to a default.
   const [groupFilterByTicker, setGroupFilterByTicker] = useState<Record<string, string | null>>({});
+  const [lastGroupFilter, setLastGroupFilter] = useState<string | null>(null);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [sortAsc, setSortAsc] = useState(false);
@@ -279,8 +280,10 @@ export default function DataExplorer() {
   const [columnSearch, setColumnSearch] = useState("");
   const [showStats, setShowStats] = useState(true);
   const [statsExpanded, setStatsExpanded] = useState(true);
-  // Lookback (preset/custom + custom value/unit) is remembered PER TICKER.
+  // Lookback (preset/custom + value/unit) is remembered PER TICKER; an untouched
+  // ticker inherits the last-used window (lastLookback).
   const [lookbackByTicker, setLookbackByTicker] = useState<Record<string, Lookback>>({});
+  const [lastLookback, setLastLookback] = useState<Lookback>(DEFAULT_LOOKBACK);
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
   const [previewStat, setPreviewStat] = useState<StatKey>("median");
   const [previewPickerOpen, setPreviewPickerOpen] = useState(false);
@@ -326,12 +329,14 @@ export default function DataExplorer() {
       pinnedMetrics: [...pinnedMetrics],
       visibleMetrics: visibleMetrics ? [...visibleMetrics] : null,
       groupFilterByTicker,
+      lastGroupFilter,
       showStats,
       statsExpanded,
       lookbackByTicker,
+      lastLookback,
       previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackByTicker, previewStat]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, lastGroupFilter, showStats, statsExpanded, lookbackByTicker, lastLookback, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -349,6 +354,9 @@ export default function DataExplorer() {
       // Migrate the older single-value format onto its ticker.
       setGroupFilterByTicker({ [saved.activeTicker]: saved.groupFilter });
     }
+    if (typeof saved.lastGroupFilter === "string" || saved.lastGroupFilter === null) {
+      setLastGroupFilter(saved.lastGroupFilter);
+    }
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (saved.lookbackByTicker && typeof saved.lookbackByTicker === "object") {
@@ -361,6 +369,13 @@ export default function DataExplorer() {
           value: typeof saved.customValue === "number" && saved.customValue > 0 ? saved.customValue : 3,
           unit: saved.customUnit === "M" ? "M" : "Y",
         },
+      });
+    }
+    if (saved.lastLookback && typeof saved.lastLookback === "object" && typeof saved.lastLookback.key === "string") {
+      setLastLookback({
+        key: saved.lastLookback.key,
+        value: typeof saved.lastLookback.value === "number" && saved.lastLookback.value > 0 ? saved.lastLookback.value : 3,
+        unit: saved.lastLookback.unit === "M" ? "M" : "Y",
       });
     }
     if (PREVIEW_STATS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
@@ -390,26 +405,35 @@ export default function DataExplorer() {
 
   const tickerIndex = tickers.findIndex((t) => t.ticker === activeTicker);
 
-  // The active ticker's remembered group filter, and a setter that writes it back
-  // to that ticker's slot so each symbol keeps its own selection.
-  const groupFilter = groupFilterByTicker[activeTicker] ?? null;
+  // The active ticker's group filter: its own if it has one (checked with `in`
+  // so an explicit "All groups"/null still wins), else the last-used selection.
+  // Setting it records both the per-ticker slot and the new last-used value.
+  const groupFilter = activeTicker in groupFilterByTicker
+    ? groupFilterByTicker[activeTicker]
+    : lastGroupFilter;
   const setGroupFilter = useCallback(
-    (g: string | null) => setGroupFilterByTicker((prev) => ({ ...prev, [activeTicker]: g })),
+    (g: string | null) => {
+      setGroupFilterByTicker((prev) => ({ ...prev, [activeTicker]: g }));
+      setLastGroupFilter(g);
+    },
     [activeTicker]
   );
 
-  // The active ticker's remembered lookback, with setters that patch just that
-  // ticker's slot. lookbackKey/customValue/customUnit stay the same names the
-  // rest of the component/JSX already use.
-  const lookback = lookbackByTicker[activeTicker] ?? DEFAULT_LOOKBACK;
+  // The active ticker's lookback: its own if set, else the last-used window.
+  // lookbackKey/customValue/customUnit keep the names the rest of the JSX uses.
+  const lookback = lookbackByTicker[activeTicker] ?? lastLookback;
   const { key: lookbackKey, value: customValue, unit: customUnit } = lookback;
   const patchLookback = useCallback(
-    (patch: Partial<Lookback>) =>
+    (patch: Partial<Lookback>) => {
+      // Functional updates so value+key patches in one tick compose correctly;
+      // an untouched ticker starts from lastLookback rather than the default.
       setLookbackByTicker((prev) => ({
         ...prev,
-        [activeTicker]: { ...(prev[activeTicker] ?? DEFAULT_LOOKBACK), ...patch },
-      })),
-    [activeTicker]
+        [activeTicker]: { ...(prev[activeTicker] ?? lastLookback), ...patch },
+      }));
+      setLastLookback((prev) => ({ ...prev, ...patch }));
+    },
+    [activeTicker, lastLookback]
   );
   const setLookbackKey = useCallback((key: string) => patchLookback({ key }), [patchLookback]);
   const setCustomValue = useCallback((value: number) => patchLookback({ value }), [patchLookback]);
