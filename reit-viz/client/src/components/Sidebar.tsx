@@ -739,6 +739,26 @@ export default function Sidebar({
                   L+Dot
                 </Button>
               </div>
+              {/* Background grid line prominence */}
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                  Grid lines
+                </div>
+                <div className="flex gap-1">
+                  {(["off", "normal", "bold"] as const).map((g) => (
+                    <Button
+                      key={g}
+                      variant={(chartConfig.gridProminence ?? "normal") === g ? "default" : "secondary"}
+                      size="sm"
+                      className="flex-1 h-7 text-xs capitalize"
+                      onClick={() => onChartConfigChange({ ...chartConfig, gridProminence: g })}
+                      data-testid={`btn-grid-${g}`}
+                    >
+                      {g}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

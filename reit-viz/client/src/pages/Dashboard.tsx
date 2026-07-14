@@ -47,6 +47,8 @@ export interface PlottedSeries {
 export interface ChartConfig {
   chartType: "candlestick" | "line" | "line-scatter";
   showVolume: boolean;
+  /** Prominence of the chart background grid lines. */
+  gridProminence?: "off" | "normal" | "bold";
 }
 
 export interface PaneInfo {
@@ -393,6 +395,7 @@ export default function Dashboard() {
   const [chartConfig, setChartConfig] = useState<ChartConfig>({
     chartType: "candlestick",
     showVolume: false,
+    gridProminence: "normal",
   });
   const [crosshairTime, setCrosshairTime] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<string>(DEFAULT_VIEW);

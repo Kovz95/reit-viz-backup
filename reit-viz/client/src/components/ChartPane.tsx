@@ -237,6 +237,14 @@ interface ChartPaneProps {
   onClearColorBy?: () => void;
 }
 
+// Background grid line color by the user's prominence setting. "normal" is a
+// touch brighter than the old hardcoded value; "bold" is clearly visible.
+export function gridColorFor(prominence?: "off" | "normal" | "bold"): string {
+  if (prominence === "off") return "rgba(255,255,255,0)";
+  if (prominence === "bold") return "rgba(255,255,255,0.14)";
+  return "rgba(255,255,255,0.06)";
+}
+
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
 type SubChartType = "rsi" | "macd" | "ha" | "atr" | "roc" | "stochastic" | "obv";
 
@@ -251,6 +259,7 @@ function SubIndicatorChart({
   onToggleMaximize,
   height,
   onResizeStart,
+  gridColor,
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
@@ -264,6 +273,7 @@ function SubIndicatorChart({
   onToggleMaximize?: () => void;
   height?: number;
   onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
+  gridColor: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -292,8 +302,8 @@ function SubIndicatorChart({
         fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.03)" },
-        horzLines: { color: "rgba(255,255,255,0.03)" },
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -679,7 +689,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, fullDates, activeIndicators, type, baseLabel, parentChart, IC]);
+  }, [closeData, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor]);
 
   // Resize
   useEffect(() => {
@@ -1186,8 +1196,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
         },
         grid: {
-          vertLines: { color: "rgba(255,255,255,0.04)" },
-          horzLines: { color: "rgba(255,255,255,0.04)" },
+          vertLines: { color: gridColorFor(chartConfig.gridProminence) },
+          horzLines: { color: gridColorFor(chartConfig.gridProminence) },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
@@ -1447,6 +1457,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       });
     } catch {}
   }, [logScale, chartReady]);
+
+  // Background grid line prominence — applied live so the toggle updates the
+  // main chart without recreating it (sub-charts pick it up via their gridColor prop).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady) return;
+    const c = gridColorFor(chartConfig.gridProminence);
+    try {
+      chart.applyOptions({
+        grid: { vertLines: { color: c }, horzLines: { color: c } },
+      });
+    } catch {}
+  }, [chartConfig.gridProminence, chartReady]);
 
   // Quarter shading — attach/detach inside the series rendering effect
   // (handled below in the main Sync series useEffect since it needs a series ref)
@@ -3644,6 +3667,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               onToggleMaximize={() => setMaxSub((cur) => (cur === st ? null : st))}
               height={subHeights[st]}
               onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}
+              gridColor={gridColorFor(chartConfig.gridProminence)}
             />
           </div>
         );
