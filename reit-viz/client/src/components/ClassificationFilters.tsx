@@ -223,7 +223,7 @@ export function FilterDropdown({
                 </span>
                 <span className="truncate text-left flex-1">{opt}</span>
                 {counts && counts[opt] != null && (
-                  <span className="flex-shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                  <span className="flex-shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary">
                     {counts[opt]}
                   </span>
                 )}

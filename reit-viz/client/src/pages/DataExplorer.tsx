@@ -1038,7 +1038,9 @@ export default function DataExplorer() {
                 >
                   <span className="truncate text-left">{category}</span>
                   <span className="flex items-center gap-1 flex-shrink-0">
-                    <span className="text-[10px] text-muted-foreground tabular-nums">{metrics.length}</span>
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary">
+                      {metrics.length}
+                    </span>
                     {groupFilter === category && <Check className="w-3 h-3" />}
                   </span>
                 </button>
