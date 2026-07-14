@@ -73,6 +73,15 @@ const LOOKBACK_PRESETS: { key: string; years: number | null }[] = [
   { key: "All", years: null },
 ];
 
+// The full lookback selection, remembered per ticker (preset key or "Custom",
+// plus the custom value/unit).
+interface Lookback {
+  key: string;
+  value: number;
+  unit: "Y" | "M";
+}
+const DEFAULT_LOOKBACK: Lookback = { key: "1Y", value: 3, unit: "Y" };
+
 type StatKey = "mean" | "median" | "min" | "p25" | "p75" | "max" | "current" | "pct";
 const STAT_ROWS: { key: StatKey; label: string }[] = [
   { key: "mean", label: "Mean" },
@@ -270,9 +279,8 @@ export default function DataExplorer() {
   const [columnSearch, setColumnSearch] = useState("");
   const [showStats, setShowStats] = useState(true);
   const [statsExpanded, setStatsExpanded] = useState(true);
-  const [lookbackKey, setLookbackKey] = useState("1Y"); // preset key or "Custom"
-  const [customValue, setCustomValue] = useState(3);
-  const [customUnit, setCustomUnit] = useState<"Y" | "M">("Y");
+  // Lookback (preset/custom + custom value/unit) is remembered PER TICKER.
+  const [lookbackByTicker, setLookbackByTicker] = useState<Record<string, Lookback>>({});
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
   const [previewStat, setPreviewStat] = useState<StatKey>("median");
   const [previewPickerOpen, setPreviewPickerOpen] = useState(false);
@@ -320,12 +328,10 @@ export default function DataExplorer() {
       groupFilterByTicker,
       showStats,
       statsExpanded,
-      lookbackKey,
-      customValue,
-      customUnit,
+      lookbackByTicker,
       previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackKey, customValue, customUnit, previewStat]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackByTicker, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -345,9 +351,18 @@ export default function DataExplorer() {
     }
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
-    if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
-    if (typeof saved.customValue === "number" && saved.customValue > 0) setCustomValue(saved.customValue);
-    if (saved.customUnit === "Y" || saved.customUnit === "M") setCustomUnit(saved.customUnit);
+    if (saved.lookbackByTicker && typeof saved.lookbackByTicker === "object") {
+      setLookbackByTicker(saved.lookbackByTicker);
+    } else if (saved.activeTicker && typeof saved.lookbackKey === "string") {
+      // Migrate the older global lookback onto its ticker.
+      setLookbackByTicker({
+        [saved.activeTicker]: {
+          key: saved.lookbackKey,
+          value: typeof saved.customValue === "number" && saved.customValue > 0 ? saved.customValue : 3,
+          unit: saved.customUnit === "M" ? "M" : "Y",
+        },
+      });
+    }
     if (PREVIEW_STATS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
   }, []);
 
@@ -382,6 +397,23 @@ export default function DataExplorer() {
     (g: string | null) => setGroupFilterByTicker((prev) => ({ ...prev, [activeTicker]: g })),
     [activeTicker]
   );
+
+  // The active ticker's remembered lookback, with setters that patch just that
+  // ticker's slot. lookbackKey/customValue/customUnit stay the same names the
+  // rest of the component/JSX already use.
+  const lookback = lookbackByTicker[activeTicker] ?? DEFAULT_LOOKBACK;
+  const { key: lookbackKey, value: customValue, unit: customUnit } = lookback;
+  const patchLookback = useCallback(
+    (patch: Partial<Lookback>) =>
+      setLookbackByTicker((prev) => ({
+        ...prev,
+        [activeTicker]: { ...(prev[activeTicker] ?? DEFAULT_LOOKBACK), ...patch },
+      })),
+    [activeTicker]
+  );
+  const setLookbackKey = useCallback((key: string) => patchLookback({ key }), [patchLookback]);
+  const setCustomValue = useCallback((value: number) => patchLookback({ value }), [patchLookback]);
+  const setCustomUnit = useCallback((unit: "Y" | "M") => patchLookback({ unit }), [patchLookback]);
 
   const filteredTickers = useMemo(() => {
     if (!tickerSearch) return tickers;
