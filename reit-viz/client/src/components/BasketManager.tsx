@@ -23,7 +23,6 @@ import {
 import { useBaskets, type Basket } from "@/lib/useBaskets";
 import {
   FilterDropdown,
-  applyClassFilters,
   emptyClassFilters,
   type ClassFilters,
 } from "./ClassificationFilters";
@@ -192,14 +191,25 @@ function BasketCard({
     [classFilters],
   );
 
-  // Symbols matching the selected levels that aren't already in the basket.
+  // Symbols to add: the UNION of every selected group (across any level) — so
+  // picking several groups (e.g. two subindustries, or a sector + an industry)
+  // adds all their tickers, not just the ones common to all. Excludes symbols
+  // already in the basket.
   const groupMatches = useMemo(() => {
     if (!anyClassSelected) return [] as string[];
-    const filtered = applyClassFilters(tickers as any[], classFilters, "", new Set());
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const r of filtered) {
-      const up = String(r.ticker).toUpperCase();
+    for (const t of tickers) {
+      let hit = false;
+      for (const { key } of CLASS_LEVELS) {
+        const sel = classFilters[key];
+        if (sel.size > 0 && sel.has((t as any)[key])) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit) continue;
+      const up = String(t.ticker).toUpperCase();
       if (!selectedSet.has(up) && !seen.has(up)) {
         seen.add(up);
         out.push(up);
@@ -506,7 +516,7 @@ function BasketCard({
                     <span className="text-[10px] text-muted-foreground">
                       {anyClassSelected
                         ? `${groupMatches.length} new match${groupMatches.length === 1 ? "" : "es"}`
-                        : "Pick one or more levels"}
+                        : "Pick one or more groups (multi-select) to add them all"}
                     </span>
                     {anyClassSelected && (
                       <button
