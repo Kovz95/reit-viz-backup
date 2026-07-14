@@ -270,7 +270,10 @@ export default function DataExplorer() {
   const [columnSearch, setColumnSearch] = useState("");
   const [showStats, setShowStats] = useState(true);
   const [statsExpanded, setStatsExpanded] = useState(true);
-  const [lookbackKey, setLookbackKey] = useState("1Y");
+  const [lookbackKey, setLookbackKey] = useState("1Y"); // preset key or "Custom"
+  const [customValue, setCustomValue] = useState(3);
+  const [customUnit, setCustomUnit] = useState<"Y" | "M">("Y");
+  const [customPickerOpen, setCustomPickerOpen] = useState(false);
   const [previewStat, setPreviewStat] = useState<StatKey>("median");
   const [previewPickerOpen, setPreviewPickerOpen] = useState(false);
 
@@ -318,9 +321,11 @@ export default function DataExplorer() {
       showStats,
       statsExpanded,
       lookbackKey,
+      customValue,
+      customUnit,
       previewStat,
     }),
-    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackKey, previewStat]
+    [activeTicker, sortAsc, pinnedMetrics, visibleMetrics, groupFilterByTicker, showStats, statsExpanded, lookbackKey, customValue, customUnit, previewStat]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -341,6 +346,8 @@ export default function DataExplorer() {
     if (typeof saved.showStats === "boolean") setShowStats(saved.showStats);
     if (typeof saved.statsExpanded === "boolean") setStatsExpanded(saved.statsExpanded);
     if (typeof saved.lookbackKey === "string") setLookbackKey(saved.lookbackKey);
+    if (typeof saved.customValue === "number" && saved.customValue > 0) setCustomValue(saved.customValue);
+    if (saved.customUnit === "Y" || saved.customUnit === "M") setCustomUnit(saved.customUnit);
     if (PREVIEW_STATS.some((s) => s.key === saved.previewStat)) setPreviewStat(saved.previewStat);
   }, []);
 
@@ -449,11 +456,18 @@ export default function DataExplorer() {
   // by formatValue() at render time, exactly like the cells below.
   const columnStats = useMemo<(ColumnStat | null)[]>(() => {
     if (displayMetrics.length === 0) return [];
-    const years = LOOKBACK_PRESETS.find((p) => p.key === lookbackKey)?.years ?? null;
+    // Window length in days: from a preset (N years) or a custom value/unit.
+    let days: number | null;
+    if (lookbackKey === "Custom") {
+      days = customValue > 0 ? customValue * (customUnit === "Y" ? 365 : 30.44) : null;
+    } else {
+      const years = LOOKBACK_PRESETS.find((p) => p.key === lookbackKey)?.years ?? null;
+      days = years === null ? null : years * 365;
+    }
     let cutoff = -Infinity;
-    if (years !== null && dates.length > 0) {
+    if (days !== null && dates.length > 0) {
       const last = new Date(dates[dates.length - 1]).getTime();
-      if (!Number.isNaN(last)) cutoff = last - years * 365 * MS_PER_DAY;
+      if (!Number.isNaN(last)) cutoff = last - days * MS_PER_DAY;
     }
     return displayMetrics.map((m) => {
       const pairs = rawData[m];
@@ -504,7 +518,11 @@ export default function DataExplorer() {
         percentile,
       };
     });
-  }, [displayMetrics, rawData, dates, lookbackKey]);
+  }, [displayMetrics, rawData, dates, lookbackKey, customValue, customUnit]);
+
+  // Short label for the active window, shown on the Stats row and in tooltips
+  // (e.g. "1Y", "All", or a custom "18M" / "3Y").
+  const lookbackLabel = lookbackKey === "Custom" ? `${customValue}${customUnit}` : lookbackKey;
 
   // Formats one stat cell. "current" reuses the value formatter; "pct" is the
   // percentile rank (0–100), shown as a plain integer independent of the metric.
@@ -654,7 +672,7 @@ export default function DataExplorer() {
                     <ChevronRight className="w-3 h-3" />
                   )}
                   <span>Stats</span>
-                  <span className="font-normal text-muted-foreground/70">{lookbackKey}</span>
+                  <span className="font-normal text-muted-foreground/70">{lookbackLabel}</span>
                   {!statsExpanded && (
                     <>
                       <span className="font-normal text-muted-foreground/50">·</span>
@@ -726,7 +744,7 @@ export default function DataExplorer() {
                       scope="row"
                       className={`sticky left-0 z-30 bg-muted text-left px-2 py-0.5 text-[10px] border-r border-border whitespace-nowrap overflow-hidden ${isMedian ? "font-semibold text-foreground" : "font-medium text-muted-foreground"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/30"}`}
                       style={{ width: DATE_W, maxWidth: DATE_W }}
-                      title={`${sr.label} over last ${lookbackKey}`}
+                      title={`${sr.label} over last ${lookbackLabel}`}
                     >
                       {sr.label}
                     </th>
@@ -764,7 +782,7 @@ export default function DataExplorer() {
                       style={{ width: DATE_W, maxWidth: DATE_W }}
                       title={
                         sr.key === "pct"
-                          ? `Percentile rank of the current value within the last ${lookbackKey}`
+                          ? `Percentile rank of the current value within the last ${lookbackLabel}`
                           : `Latest value`
                       }
                     >
@@ -806,7 +824,7 @@ export default function DataExplorer() {
                           }}
                           title={
                             pct !== null
-                              ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackKey}`
+                              ? `${m}: ${Math.round(pct)}th percentile over last ${lookbackLabel}`
                               : undefined
                           }
                         >
@@ -828,7 +846,7 @@ export default function DataExplorer() {
         )}
       </thead>
     ),
-    [colWindow, pinnedMetrics, showStats, statsExpanded, lookbackKey, previewStat, previewPickerOpen, columnStats]
+    [colWindow, pinnedMetrics, showStats, statsExpanded, lookbackLabel, previewStat, previewPickerOpen, columnStats]
   );
 
   return (
@@ -1107,6 +1125,62 @@ export default function DataExplorer() {
                 {p.key}
               </button>
             ))}
+            {/* Custom look-back — pick any value + unit (years/months) */}
+            <Popover open={customPickerOpen} onOpenChange={setCustomPickerOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  onClick={() => setLookbackKey("Custom")}
+                  className={`px-1.5 h-7 text-[10px] tabular-nums border-l border-border transition-colors ${
+                    lookbackKey === "Custom"
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-accent/50 text-muted-foreground"
+                  }`}
+                  title="Custom look-back window"
+                  data-testid="data-lookback-custom"
+                >
+                  {lookbackKey === "Custom" ? lookbackLabel : "Custom"}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-auto p-2">
+                <div className="flex flex-col gap-2">
+                  <span className="text-[10px] text-muted-foreground">Look-back window</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-muted-foreground">Last</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={customValue}
+                      onChange={(e) => {
+                        const v = Math.max(1, Math.floor(Number(e.target.value) || 0));
+                        setCustomValue(v);
+                        setLookbackKey("Custom");
+                      }}
+                      className="h-7 w-16 text-xs tabular-nums"
+                      data-testid="data-custom-value"
+                    />
+                    <div className="flex items-center rounded-md border border-border overflow-hidden">
+                      {(["Y", "M"] as const).map((u) => (
+                        <button
+                          key={u}
+                          onClick={() => {
+                            setCustomUnit(u);
+                            setLookbackKey("Custom");
+                          }}
+                          className={`px-2 h-7 text-[10px] transition-colors ${
+                            customUnit === u
+                              ? "bg-primary text-primary-foreground"
+                              : "hover:bg-accent/50 text-muted-foreground"
+                          }`}
+                          data-testid={`data-custom-unit-${u}`}
+                        >
+                          {u === "Y" ? "Years" : "Months"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
 
