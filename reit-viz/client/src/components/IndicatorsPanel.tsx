@@ -17,6 +17,12 @@ import type { ActiveIndicators, IndicatorOverlay } from "./ChartPane";
 import { FindBestMAPanel } from "./FindBestMAPanel";
 import type { PaneInfo } from "@/pages/Dashboard";
 import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
+import {
+  ALL_REGISTRY_INDICATORS,
+  resolveParams,
+  type IndicatorDef,
+  type RegistryIndicatorState,
+} from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import PatternsPanel from "./PatternsPanel";
@@ -42,6 +48,7 @@ const INDICATOR_SECTIONS = [
   "Overlays",
   "Volume",
   "Trend",
+  "More Indicators",
   "Statistical",
   "Indicator Overlays",
 ] as const;
@@ -227,6 +234,85 @@ function HeikinAshiControls({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Auto-generated controls for registry-driven indicators (see
+ *  indicatorRegistry.ts). One row per indicator with a toggle + numeric param
+ *  inputs, grouped by category. Adding an indicator to the registry makes it
+ *  appear here with no edits to this file. */
+function RegistryIndicatorControls({
+  activeIndicators,
+  onChange,
+}: {
+  activeIndicators: ActiveIndicators;
+  onChange: (i: ActiveIndicators) => void;
+}) {
+  const reg = activeIndicators.registry ?? {};
+  const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
+    const cur = reg[id] ?? {};
+    onChange({ ...activeIndicators, registry: { ...reg, [id]: { ...cur, ...patch } } });
+  };
+  const setParam = (def: IndicatorDef, key: string, value: number) => {
+    const cur = reg[def.id] ?? {};
+    update(def.id, { params: { ...(cur.params ?? {}), [key]: value } });
+  };
+
+  const categories: string[] = [];
+  for (const d of ALL_REGISTRY_INDICATORS) if (!categories.includes(d.category)) categories.push(d.category);
+
+  return (
+    <div className="space-y-4">
+      {categories.map((cat) => (
+        <div key={cat} className="space-y-3">
+          <div className="text-[9px] text-muted-foreground/70 font-semibold uppercase tracking-wider">{cat}</div>
+          {ALL_REGISTRY_INDICATORS.filter((d) => d.category === cat).map((def) => {
+            const st = reg[def.id];
+            const enabled = !!st?.enabled;
+            const p = resolveParams(def, st);
+            return (
+              <div key={def.id} className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-baseline gap-1.5">
+                    <Label className="text-xs font-medium">{def.label}</Label>
+                    <span className="text-[9px] text-muted-foreground/50">
+                      {def.renderTarget === "pane" ? "sub-pane" : "overlay"}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={enabled}
+                    onCheckedChange={(on) => update(def.id, { enabled: on })}
+                    data-testid={`toggle-${def.id}`}
+                  />
+                </div>
+                {enabled && def.params.length > 0 && (
+                  <div className="flex flex-wrap gap-x-2 gap-y-1 items-center pl-0.5">
+                    {def.params.map((pr) => (
+                      <div key={pr.key} className="flex items-center gap-1">
+                        <span className="text-[9px] text-muted-foreground/70">{pr.label}</span>
+                        <Input
+                          type="number"
+                          className="h-6 w-14 text-[10px] px-1.5"
+                          value={p[pr.key]}
+                          min={pr.min}
+                          max={pr.max}
+                          step={pr.step ?? 1}
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            if (Number.isFinite(v)) setParam(def, pr.key, v);
+                          }}
+                          data-testid={`param-${def.id}-${pr.key}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -964,6 +1050,22 @@ export default function IndicatorsPanel({
             />
           </div>
           </>)}
+        </div>
+
+        {/* ───── More Indicators (registry-driven) ───── */}
+        <div className="border-t border-border pt-3">
+          <SectionHeader
+            title="More Indicators"
+            collapsed={isCollapsed("More Indicators")}
+            onToggle={() => toggleSection("More Indicators")}
+            className="mb-3"
+          />
+          {!isCollapsed("More Indicators") && (
+            <RegistryIndicatorControls
+              activeIndicators={activeIndicators}
+              onChange={setActiveIndicators}
+            />
+          )}
         </div>
 
         {/* ───── Statistical ───── */}

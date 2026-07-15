@@ -30,7 +30,14 @@ import {
   computeStochastic,
   computeOBV,
 } from "@/lib/indicators";
-import type { HASmoothConfig } from "@/lib/indicators";
+import type { HASmoothConfig, OhlcBar } from "@/lib/indicators";
+import {
+  PANE_INDICATORS,
+  OVERLAY_INDICATORS,
+  getIndicatorDef,
+  resolveParams,
+  type RegistryIndicatorState,
+} from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { computeFractalTrendlines, resampleWeekly } from "@/lib/fractalTrendlines";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
@@ -128,6 +135,10 @@ export interface ActiveIndicators {
   /** Fibonacci retracement levels from the recent swing. */
   fibLevels?: boolean;
   indicatorOverlays?: IndicatorOverlay[];
+  /** Generic state for registry-driven indicators (see indicatorRegistry.ts),
+   *  keyed by indicator id. Each new indicator is one entry here at runtime —
+   *  no typed field per indicator. */
+  registry?: Record<string, RegistryIndicatorState>;
 }
 
 interface Drawing {
@@ -246,11 +257,14 @@ export function gridColorFor(prominence?: "off" | "normal" | "bold"): string {
 }
 
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
-type SubChartType = "rsi" | "macd" | "ha" | "atr" | "roc" | "stochastic" | "obv";
+// Built-in ids plus any registry pane-indicator id (see indicatorRegistry.ts),
+// so the union is widened to string.
+type SubChartType = "rsi" | "macd" | "ha" | "atr" | "roc" | "stochastic" | "obv" | string;
 
 function SubIndicatorChart({
   type,
   closeData,
+  ohlcBars,
   fullDates,
   activeIndicators,
   parentChart,
@@ -263,6 +277,9 @@ function SubIndicatorChart({
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
+  /** Raw price OHLC bars for the active ticker — used by registry pane
+   *  indicators (ADX, CCI, …) that need real high/low, not close-only. */
+  ohlcBars: OhlcBar[];
   /** Global trading-date axis — used for the invisible spacer so the sub-chart
    *  shares identical logical indices with the parent pane (see below). */
   fullDates: string[];
@@ -542,6 +559,42 @@ function SubIndicatorChart({
       }
     }
 
+    // ── Registry-driven pane indicators (ADX, CCI, Williams %R, Aroon, …) ──
+    // Any sub-chart whose `type` is a registry id renders here generically:
+    // compute on real OHLC, draw its series, add reference lines. No per-
+    // indicator branch — the descriptor's renderPane does the work.
+    const regDef = getIndicatorDef(type);
+    if (regDef?.renderPane && ohlcBars.length > 0) {
+      const params = resolveParams(regDef, activeIndicators.registry?.[type]);
+      regDef.renderPane(
+        {
+          chart,
+          colors: IC as unknown as Record<string, string>,
+          baseLabel,
+          register: (s) => {
+            subSeriesList.push(s);
+            if (!firstSubSeries) firstSubSeries = s;
+          },
+          refLine: (level, color, first, last) => {
+            const ref = chart.addSeries(LineSeries, {
+              color,
+              lineWidth: 1,
+              lineStyle: LineStyle.Dotted,
+              title: "",
+              crosshairMarkerVisible: false,
+            });
+            ref.setData([
+              { time: first as Time, value: level },
+              { time: last as Time, value: level },
+            ]);
+          },
+        },
+        ohlcBars,
+        params,
+      );
+      chart.timeScale().fitContent();
+    }
+
     // Sync time scale with parent
     if (parentChart) {
       const syncToSub = (range: any) => {
@@ -689,7 +742,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor]);
+  }, [closeData, ohlcBars, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor]);
 
   // Resize
   useEffect(() => {
@@ -706,7 +759,7 @@ function SubIndicatorChart({
 
   const label = type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
     : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic"
-    : type === "obv" ? "OBV" : type;
+    : type === "obv" ? "OBV" : (getIndicatorDef(type)?.label ?? type);
 
   return (
     <div
@@ -2561,6 +2614,28 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
       }
 
+      // ── Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku) ──
+      // These need real OHLC, so they compute on the `ohlcData` prop (the same
+      // bars the candlestick uses) rather than the close-only pane series.
+      if (Array.isArray(ohlcData) && ohlcData.length > 0) {
+        const bars = ohlcData as OhlcBar[];
+        const octx = {
+          chart,
+          colors: IC as unknown as Record<string, string>,
+          baseLabel,
+          register: (s: ISeriesApi<any>) => indicatorSeriesRef.current.push(s),
+        };
+        for (const def of OVERLAY_INDICATORS) {
+          if (!def.renderOverlay) continue;
+          if (!activeIndicators.registry?.[def.id]?.enabled) continue;
+          try {
+            def.renderOverlay(octx, bars, resolveParams(def, activeIndicators.registry[def.id]));
+          } catch {
+            // Never let one indicator's failure blank the whole chart.
+          }
+        }
+      }
+
       // ATR, ROC, Stochastic, OBV are rendered in separate sub-charts below (see SubIndicatorChart)
       // RSI, MACD, and Heikin-Ashi are rendered in separate sub-charts below (see SubIndicatorChart)
 
@@ -3433,6 +3508,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   if (typeof activeIndicators.roc === "number") subCharts.push("roc");
   if (activeIndicators.stochastic) subCharts.push("stochastic");
   if (activeIndicators.obv) subCharts.push("obv");
+  // Registry-driven sub-pane indicators (see indicatorRegistry.ts).
+  for (const def of PANE_INDICATORS) {
+    if (activeIndicators.registry?.[def.id]?.enabled) subCharts.push(def.id);
+  }
+
+  // Raw price OHLC bars for registry pane indicators (need real high/low).
+  const ohlcBars: OhlcBar[] = Array.isArray(ohlcData) ? (ohlcData as OhlcBar[]) : [];
 
   // Close data for sub-charts: use the first visible series data
   const primaryForSub = paneSeries.find((s) => s.visible && s.data.length > 0);
@@ -3659,6 +3741,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             <SubIndicatorChart
               type={st}
               closeData={subCloseData}
+              ohlcBars={ohlcBars}
               fullDates={fullDates}
               activeIndicators={activeIndicators}
               parentChart={chartRef.current}

@@ -557,6 +557,457 @@ export function computeOBV(
   return result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// OHLC-based indicators
+//
+// The Charts pane carries real open/high/low/close per bar (the `ohlcData`
+// prop), so these compute over an `OhlcBar[]` rather than the close-only
+// `DataPoint[]` the older indicators use. They are the accurate versions of
+// range/channel/trend indicators that can't be derived from close alone.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface OhlcBar {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+/** Wilder True Range per bar: max(H-L, |H-prevClose|, |L-prevClose|).
+ *  tr[0] = H-L of the first bar (no prior close). Returned array is aligned
+ *  1:1 with `bars` (same length, same index). */
+function trueRange(bars: OhlcBar[]): number[] {
+  const tr: number[] = [];
+  for (let i = 0; i < bars.length; i++) {
+    const h = bars[i].high;
+    const l = bars[i].low;
+    if (i === 0) {
+      tr.push(h - l);
+    } else {
+      const pc = bars[i - 1].close;
+      tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+    }
+  }
+  return tr;
+}
+
+/** Accurate ATR from real high/low/close (Wilder smoothing). Unlike the
+ *  close-only `computeATR`, this uses the full true range. */
+export function computeATRFromOHLC(bars: OhlcBar[], period = 14): DataPoint[] {
+  const n = bars.length;
+  if (n < period + 1) return [];
+  const tr = trueRange(bars);
+
+  const result: DataPoint[] = [];
+  // Seed with the simple average of the first `period` true ranges (indices
+  // 1..period — skip tr[0] which has no prior close), emitted at bars[period].
+  let atr = 0;
+  for (let i = 1; i <= period; i++) atr += tr[i];
+  atr /= period;
+  result.push({ time: bars[period].time, value: atr });
+
+  for (let i = period + 1; i < n; i++) {
+    atr = (atr * (period - 1) + tr[i]) / period;
+    result.push({ time: bars[i].time, value: atr });
+  }
+  return result;
+}
+
+/** ADX / DMI (Wilder). Returns +DI, -DI (directional indicators) and ADX
+ *  (trend strength), all 0..100. */
+export function computeADX(
+  bars: OhlcBar[],
+  period = 14,
+): { adx: DataPoint[]; plusDI: DataPoint[]; minusDI: DataPoint[] } {
+  const n = bars.length;
+  if (n < period + 1) return { adx: [], plusDI: [], minusDI: [] };
+
+  // Per-bar TR / +DM / -DM for i >= 1 (need a prior bar).
+  const tr: number[] = [];
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const h = bars[i].high;
+    const l = bars[i].low;
+    const pc = bars[i - 1].close;
+    tr.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+    const up = h - bars[i - 1].high;
+    const down = bars[i - 1].low - l;
+    plusDM.push(up > down && up > 0 ? up : 0);
+    minusDM.push(down > up && down > 0 ? down : 0);
+  }
+  // tr[k] corresponds to bars[k + 1].
+  const len = tr.length;
+  if (len < period) return { adx: [], plusDI: [], minusDI: [] };
+
+  let trS = 0;
+  let pS = 0;
+  let mS = 0;
+  for (let i = 0; i < period; i++) {
+    trS += tr[i];
+    pS += plusDM[i];
+    mS += minusDM[i];
+  }
+
+  const plusDI: DataPoint[] = [];
+  const minusDI: DataPoint[] = [];
+  const dxArr: DataPoint[] = [];
+  const emit = (trIdx: number) => {
+    const pdi = trS === 0 ? 0 : (100 * pS) / trS;
+    const mdi = trS === 0 ? 0 : (100 * mS) / trS;
+    const time = bars[trIdx + 1].time;
+    plusDI.push({ time, value: pdi });
+    minusDI.push({ time, value: mdi });
+    const sum = pdi + mdi;
+    dxArr.push({ time, value: sum === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / sum });
+  };
+  emit(period - 1);
+  for (let i = period; i < len; i++) {
+    // Wilder smoothing: subtract the running average, add the new value.
+    trS = trS - trS / period + tr[i];
+    pS = pS - pS / period + plusDM[i];
+    mS = mS - mS / period + minusDM[i];
+    emit(i);
+  }
+
+  const adx: DataPoint[] = [];
+  if (dxArr.length >= period) {
+    let a = 0;
+    for (let i = 0; i < period; i++) a += dxArr[i].value;
+    a /= period;
+    adx.push({ time: dxArr[period - 1].time, value: a });
+    for (let i = period; i < dxArr.length; i++) {
+      a = (a * (period - 1) + dxArr[i].value) / period;
+      adx.push({ time: dxArr[i].time, value: a });
+    }
+  }
+  return { adx, plusDI, minusDI };
+}
+
+/** Commodity Channel Index. Oscillator centered on 0, typically read against
+ *  ±100. */
+export function computeCCI(bars: OhlcBar[], period = 20): DataPoint[] {
+  const n = bars.length;
+  if (n < period) return [];
+  const tp = bars.map((b) => (b.high + b.low + b.close) / 3);
+  const result: DataPoint[] = [];
+  for (let i = period - 1; i < n; i++) {
+    let sma = 0;
+    for (let j = 0; j < period; j++) sma += tp[i - j];
+    sma /= period;
+    let md = 0;
+    for (let j = 0; j < period; j++) md += Math.abs(tp[i - j] - sma);
+    md /= period;
+    const cci = md === 0 ? 0 : (tp[i] - sma) / (0.015 * md);
+    result.push({ time: bars[i].time, value: cci });
+  }
+  return result;
+}
+
+/** Williams %R. Ranges -100 (oversold) .. 0 (overbought). */
+export function computeWilliamsR(bars: OhlcBar[], period = 14): DataPoint[] {
+  const n = bars.length;
+  if (n < period) return [];
+  const result: DataPoint[] = [];
+  for (let i = period - 1; i < n; i++) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = 0; j < period; j++) {
+      if (bars[i - j].high > hh) hh = bars[i - j].high;
+      if (bars[i - j].low < ll) ll = bars[i - j].low;
+    }
+    const range = hh - ll;
+    result.push({
+      time: bars[i].time,
+      value: range === 0 ? -50 : (-100 * (hh - bars[i].close)) / range,
+    });
+  }
+  return result;
+}
+
+/** Aroon Up / Aroon Down, 0..100. Measures how recently the highest high /
+ *  lowest low occurred within the lookback (period + 1 bars). */
+export function computeAroon(
+  bars: OhlcBar[],
+  period = 14,
+): { up: DataPoint[]; down: DataPoint[] } {
+  const n = bars.length;
+  const up: DataPoint[] = [];
+  const down: DataPoint[] = [];
+  if (n < period + 1) return { up, down };
+  for (let i = period; i < n; i++) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    let hIdx = 0;
+    let lIdx = 0;
+    // j = bars since the current bar (0 = current). Strict compares keep the
+    // most-recent extreme on ties (smaller j wins).
+    for (let j = 0; j <= period; j++) {
+      const h = bars[i - j].high;
+      const l = bars[i - j].low;
+      if (h > hh) {
+        hh = h;
+        hIdx = j;
+      }
+      if (l < ll) {
+        ll = l;
+        lIdx = j;
+      }
+    }
+    up.push({ time: bars[i].time, value: (100 * (period - hIdx)) / period });
+    down.push({ time: bars[i].time, value: (100 * (period - lIdx)) / period });
+  }
+  return { up, down };
+}
+
+/** Supertrend. Trend-following overlay line that flips side when price closes
+ *  through it. `trend` is +1 (bullish, line below price) or -1 (bearish). */
+export interface SupertrendPoint {
+  time: string;
+  value: number;
+  trend: 1 | -1;
+}
+export function computeSupertrend(
+  bars: OhlcBar[],
+  period = 10,
+  mult = 3,
+): SupertrendPoint[] {
+  const atr = computeATRFromOHLC(bars, period);
+  if (atr.length === 0) return [];
+  const atrMap = new Map(atr.map((d) => [d.time, d.value]));
+
+  const result: SupertrendPoint[] = [];
+  let longStopPrev = NaN;
+  let shortStopPrev = NaN;
+  let dir: 1 | -1 = 1;
+  let prevClose = NaN;
+  for (let i = 0; i < bars.length; i++) {
+    const a = atrMap.get(bars[i].time);
+    if (a === undefined) {
+      prevClose = bars[i].close;
+      continue;
+    }
+    const hl2 = (bars[i].high + bars[i].low) / 2;
+    let longStop = hl2 - mult * a;
+    let shortStop = hl2 + mult * a;
+    if (!Number.isNaN(longStopPrev)) {
+      longStop = prevClose > longStopPrev ? Math.max(longStop, longStopPrev) : longStop;
+      shortStop = prevClose < shortStopPrev ? Math.min(shortStop, shortStopPrev) : shortStop;
+      dir =
+        dir === -1 && bars[i].close > shortStopPrev
+          ? 1
+          : dir === 1 && bars[i].close < longStopPrev
+            ? -1
+            : dir;
+    } else {
+      dir = 1;
+    }
+    result.push({ time: bars[i].time, value: dir === 1 ? longStop : shortStop, trend: dir });
+    longStopPrev = longStop;
+    shortStopPrev = shortStop;
+    prevClose = bars[i].close;
+  }
+  return result;
+}
+
+/** Parabolic SAR (Wilder). Dots below price in an uptrend, above in a
+ *  downtrend; `trend` is +1 / -1. */
+export interface PSARPoint {
+  time: string;
+  value: number;
+  trend: 1 | -1;
+}
+export function computePSAR(
+  bars: OhlcBar[],
+  step = 0.02,
+  maxStep = 0.2,
+): PSARPoint[] {
+  const n = bars.length;
+  if (n < 2) return [];
+  const result: PSARPoint[] = [];
+  let uptrend = bars[1].close >= bars[0].close;
+  let sar = uptrend ? bars[0].low : bars[0].high;
+  let ep = uptrend ? bars[0].high : bars[0].low; // extreme point
+  let af = step; // acceleration factor
+
+  for (let i = 1; i < n; i++) {
+    const h = bars[i].high;
+    const l = bars[i].low;
+    let next = sar + af * (ep - sar);
+
+    if (uptrend) {
+      // SAR can't exceed the prior two lows.
+      next = Math.min(next, bars[i - 1].low, i >= 2 ? bars[i - 2].low : bars[i - 1].low);
+      if (l < next) {
+        // Reverse to downtrend.
+        uptrend = false;
+        next = ep;
+        ep = l;
+        af = step;
+      } else if (h > ep) {
+        ep = h;
+        af = Math.min(af + step, maxStep);
+      }
+    } else {
+      next = Math.max(next, bars[i - 1].high, i >= 2 ? bars[i - 2].high : bars[i - 1].high);
+      if (h > next) {
+        uptrend = true;
+        next = ep;
+        ep = h;
+        af = step;
+      } else if (l < ep) {
+        ep = l;
+        af = Math.min(af + step, maxStep);
+      }
+    }
+    sar = next;
+    result.push({ time: bars[i].time, value: sar, trend: uptrend ? 1 : -1 });
+  }
+  return result;
+}
+
+/** Keltner Channels: EMA basis with ATR-scaled bands. */
+export function computeKeltner(
+  bars: OhlcBar[],
+  period = 20,
+  mult = 2,
+  atrPeriod = 10,
+): { basis: DataPoint[]; upper: DataPoint[]; lower: DataPoint[] } {
+  const close: DataPoint[] = bars.map((b) => ({ time: b.time, value: b.close }));
+  const basisArr = computeEMA(close, period);
+  const atr = computeATRFromOHLC(bars, atrPeriod);
+  const atrMap = new Map(atr.map((d) => [d.time, d.value]));
+
+  const basis: DataPoint[] = [];
+  const upper: DataPoint[] = [];
+  const lower: DataPoint[] = [];
+  for (const b of basisArr) {
+    const a = atrMap.get(b.time);
+    if (a === undefined) continue;
+    basis.push(b);
+    upper.push({ time: b.time, value: b.value + mult * a });
+    lower.push({ time: b.time, value: b.value - mult * a });
+  }
+  return { basis, upper, lower };
+}
+
+/** Donchian Channels: highest high / lowest low over the period, plus midline. */
+export function computeDonchian(
+  bars: OhlcBar[],
+  period = 20,
+): { upper: DataPoint[]; lower: DataPoint[]; mid: DataPoint[] } {
+  const n = bars.length;
+  const upper: DataPoint[] = [];
+  const lower: DataPoint[] = [];
+  const mid: DataPoint[] = [];
+  if (n < period) return { upper, lower, mid };
+  for (let i = period - 1; i < n; i++) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = 0; j < period; j++) {
+      if (bars[i - j].high > hh) hh = bars[i - j].high;
+      if (bars[i - j].low < ll) ll = bars[i - j].low;
+    }
+    upper.push({ time: bars[i].time, value: hh });
+    lower.push({ time: bars[i].time, value: ll });
+    mid.push({ time: bars[i].time, value: (hh + ll) / 2 });
+  }
+  return { upper, lower, mid };
+}
+
+/**
+ * Ichimoku Kinko Hyo. Returns the five component lines computed at their
+ * source bar (no displacement applied here). The render layer shifts
+ * leadA/leadB forward and lagging backward by `displacement` bars along the
+ * date axis, and fills the kumo cloud between leadA and leadB.
+ *
+ *   conversion (Tenkan) = midpoint of high/low over `conv`
+ *   base       (Kijun)  = midpoint of high/low over `base`
+ *   leadA (Senkou A)    = (conversion + base) / 2         → +displacement
+ *   leadB (Senkou B)    = midpoint of high/low over `spanB` → +displacement
+ *   lagging (Chikou)    = close                           → -displacement
+ */
+export function computeIchimoku(
+  bars: OhlcBar[],
+  conv = 9,
+  base = 26,
+  spanB = 52,
+  displacement = 26,
+): {
+  conversion: DataPoint[];
+  base: DataPoint[];
+  leadA: DataPoint[];
+  leadB: DataPoint[];
+  lagging: DataPoint[];
+  displacement: number;
+} {
+  const n = bars.length;
+  const midpoint = (i: number, len: number): number => {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = 0; j < len; j++) {
+      if (bars[i - j].high > hh) hh = bars[i - j].high;
+      if (bars[i - j].low < ll) ll = bars[i - j].low;
+    }
+    return (hh + ll) / 2;
+  };
+
+  const conversion: DataPoint[] = [];
+  const baseLine: DataPoint[] = [];
+  const leadA: DataPoint[] = [];
+  const leadB: DataPoint[] = [];
+  const lagging: DataPoint[] = [];
+
+  for (let i = 0; i < n; i++) {
+    lagging.push({ time: bars[i].time, value: bars[i].close });
+    const c = i >= conv - 1 ? midpoint(i, conv) : undefined;
+    const b = i >= base - 1 ? midpoint(i, base) : undefined;
+    if (c !== undefined) conversion.push({ time: bars[i].time, value: c });
+    if (b !== undefined) baseLine.push({ time: bars[i].time, value: b });
+    if (c !== undefined && b !== undefined) {
+      leadA.push({ time: bars[i].time, value: (c + b) / 2 });
+    }
+    if (i >= spanB - 1) leadB.push({ time: bars[i].time, value: midpoint(i, spanB) });
+  }
+
+  return { conversion, base: baseLine, leadA, leadB, lagging, displacement };
+}
+
+/**
+ * Slow Stochastic (OHLC). Raw %K = stochastic of close within the high/low
+ * range over `kPeriod`, smoothed by SMA-`slowing` (the "slow" step, default 3),
+ * then %D = SMA(slow %K, `dPeriod`). Read against the 80/20 bands.
+ */
+export function computeSlowStochastic(
+  bars: OhlcBar[],
+  kPeriod = 14,
+  dPeriod = 3,
+  slowing = 3,
+): { k: DataPoint[]; d: DataPoint[] } {
+  const n = bars.length;
+  if (n < kPeriod) return { k: [], d: [] };
+
+  const rawK: DataPoint[] = [];
+  for (let i = kPeriod - 1; i < n; i++) {
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let j = 0; j < kPeriod; j++) {
+      if (bars[i - j].high > hh) hh = bars[i - j].high;
+      if (bars[i - j].low < ll) ll = bars[i - j].low;
+    }
+    const range = hh - ll;
+    rawK.push({
+      time: bars[i].time,
+      value: range === 0 ? 50 : ((bars[i].close - ll) / range) * 100,
+    });
+  }
+
+  const slowK = computeSMA(rawK, slowing);
+  const dLine = computeSMA(slowK, dPeriod);
+  return { k: slowK, d: dLine };
+}
+
 export function computeCorrelation(seriesA: DataPoint[], seriesB: DataPoint[], window: number): DataPoint[] {
   // Align series by date
   const mapB = new Map(seriesB.map(d => [d.time, d.value]));
