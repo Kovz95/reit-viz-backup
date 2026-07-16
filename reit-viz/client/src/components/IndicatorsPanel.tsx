@@ -23,7 +23,7 @@ import {
   type IndicatorDef,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
-import { INDICATOR_COLORS, MA_LINE_STYLES, type MaLineStyle } from "@/lib/chartColors";
+import { INDICATOR_COLORS, MA_LINE_STYLES, MA_LINE_STYLE_LABELS, type MaLineStyle } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import PatternsPanel from "./PatternsPanel";
 
@@ -1460,9 +1460,20 @@ function WidthCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: s
   );
 }
 
-/** Compact click-to-cycle line-style control (solid→dashed→dotted). The preview
- *  renders a short rule in the current style + the indicator's colour. Drives the
- *  same store as the colour/width controls, so changes persist with the workspace. */
+// SVG dash pattern per style, mirroring lightweight-charts' rendering (dotted
+// styles use round caps so a zero-length dash draws a dot).
+const STYLE_PREVIEW: Record<MaLineStyle, { dash?: string; cap: "butt" | "round" }> = {
+  solid: { cap: "butt" },
+  dashed: { dash: "4 3", cap: "butt" },
+  dotted: { dash: "0.1 3", cap: "round" },
+  largeDashed: { dash: "8 4", cap: "butt" },
+  sparseDotted: { dash: "0.1 6", cap: "round" },
+};
+
+/** Compact click-to-cycle line-style control (solid → dashed → dotted → large
+ *  dashed → sparse dotted). The preview renders a short rule in the current
+ *  style + the indicator's colour. Drives the same store as the colour/width
+ *  controls, so changes persist with the workspace. */
 function StyleCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
   const { styles, setStyle, colors } = useIndicatorColors();
   const cur: MaLineStyle = styles[colorKey] ?? "solid";
@@ -1470,18 +1481,27 @@ function StyleCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: s
     const i = MA_LINE_STYLES.indexOf(cur);
     setStyle(colorKey, MA_LINE_STYLES[(i + 1) % MA_LINE_STYLES.length]);
   };
+  const pv = STYLE_PREVIEW[cur];
   return (
     <button
       type="button"
       onClick={next}
-      title={`${label} line style: ${cur} — click to cycle solid / dashed / dotted`}
+      title={`${label} line style: ${MA_LINE_STYLE_LABELS[cur]} — click to cycle`}
       data-testid={`style-cycle-${colorKey}`}
       className="relative flex items-center justify-center w-5 h-4 rounded border border-border/50 hover:border-foreground/60 transition-colors shrink-0"
     >
-      <span
-        className="block w-3"
-        style={{ borderTopWidth: 2, borderTopStyle: cur, borderTopColor: colors[colorKey] }}
-      />
+      <svg width="14" height="4" viewBox="0 0 14 4" aria-hidden="true">
+        <line
+          x1="0.5"
+          y1="2"
+          x2="13.5"
+          y2="2"
+          stroke={colors[colorKey]}
+          strokeWidth="2"
+          strokeLinecap={pv.cap}
+          strokeDasharray={pv.dash}
+        />
+      </svg>
     </button>
   );
 }

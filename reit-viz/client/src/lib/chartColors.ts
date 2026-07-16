@@ -44,8 +44,16 @@ export const INDICATOR_WIDTHS: Record<string, number> = {
 // Line style for the moving-average overlays. Stored as a readable token and
 // mapped to lightweight-charts' LineStyle enum at render time. Defaults match
 // what the MA lines shipped with (only SMA was dashed).
-export type MaLineStyle = "solid" | "dashed" | "dotted";
-export const MA_LINE_STYLES: MaLineStyle[] = ["solid", "dashed", "dotted"];
+export type MaLineStyle = "solid" | "dashed" | "dotted" | "largeDashed" | "sparseDotted";
+export const MA_LINE_STYLES: MaLineStyle[] = ["solid", "dashed", "dotted", "largeDashed", "sparseDotted"];
+/** Human-readable labels for tooltips. */
+export const MA_LINE_STYLE_LABELS: Record<MaLineStyle, string> = {
+  solid: "solid",
+  dashed: "dashed",
+  dotted: "dotted",
+  largeDashed: "large dashed",
+  sparseDotted: "sparse dotted",
+};
 export const INDICATOR_LINE_STYLES: Record<string, MaLineStyle> = {
   sma: "dashed",
   ema: "solid",

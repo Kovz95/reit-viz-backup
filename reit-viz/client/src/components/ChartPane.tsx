@@ -261,7 +261,13 @@ export function gridColorFor(prominence?: "off" | "normal" | "bold"): string {
 
 /** Map a moving-average line-style token to lightweight-charts' LineStyle enum. */
 function maLineStyle(token?: string): LineStyle {
-  return token === "dashed" ? LineStyle.Dashed : token === "dotted" ? LineStyle.Dotted : LineStyle.Solid;
+  switch (token) {
+    case "dashed": return LineStyle.Dashed;
+    case "dotted": return LineStyle.Dotted;
+    case "largeDashed": return LineStyle.LargeDashed;
+    case "sparseDotted": return LineStyle.SparseDotted;
+    default: return LineStyle.Solid;
+  }
 }
 
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
