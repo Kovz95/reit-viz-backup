@@ -111,12 +111,13 @@ function MaRow({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {hasColor && <ColorSwatch colorKey={colorKey as IndicatorColorKey} label={label} compact />}
           {hasColor && <WidthCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           {hasColor && <StyleCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           {hasColor && <OpacityCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
-          <Label className="text-xs font-medium">{label}</Label>
+          {hasColor && <GradientToggle colorKey={colorKey as IndicatorColorKey} label={label} />}
+          <Label className="text-xs font-medium ml-0.5">{label}</Label>
         </div>
         <Switch
           checked={active !== undefined}
@@ -1547,6 +1548,30 @@ function OpacityCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label:
   );
 }
 
+/** Compact toggle for gradient mode. The preview is a bar fading from a faint to a
+ *  full version of the indicator's colour, matching the drawn comet-trail gradient.
+ *  Highlighted when on. Drives the same store as the other line controls. */
+function GradientToggle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
+  const { gradients, setGradient, colors } = useIndicatorColors();
+  const on = !!gradients[colorKey];
+  const c = colors[colorKey];
+  return (
+    <button
+      type="button"
+      onClick={() => setGradient(colorKey, !on)}
+      title={`${label} line gradient: ${on ? "on" : "off"} — click to toggle`}
+      data-testid={`gradient-toggle-${colorKey}`}
+      aria-pressed={on}
+      className={`relative flex items-center justify-center w-5 h-4 rounded border transition-colors shrink-0 ${on ? "border-foreground/70 ring-1 ring-foreground/30" : "border-border/50 hover:border-foreground/60"}`}
+    >
+      <span
+        className="block w-3 h-2 rounded-sm"
+        style={{ backgroundImage: `linear-gradient(to right, ${rgbaFromHex(c, 0.12)}, ${c})` }}
+      />
+    </button>
+  );
+}
+
 function ColorSwatch({ colorKey, label, compact = false }: { colorKey: IndicatorColorKey; label: string; compact?: boolean }) {
   const { colors, setColor, resetColor, overrides } = useIndicatorColors();
   const current = colors[colorKey];
@@ -1608,12 +1633,13 @@ function ColorSwatch({ colorKey, label, compact = false }: { colorKey: Indicator
 
 export function IndicatorColorEditor() {
   const [open, setOpen] = useState(false);
-  const { resetAll, overrides, widthOverrides, styleOverrides, opacityOverrides } = useIndicatorColors();
+  const { resetAll, overrides, widthOverrides, styleOverrides, opacityOverrides, gradientOverrides } = useIndicatorColors();
   const hasOverrides =
     Object.keys(overrides).length > 0 ||
     Object.keys(widthOverrides).length > 0 ||
     Object.keys(styleOverrides).length > 0 ||
-    Object.keys(opacityOverrides).length > 0;
+    Object.keys(opacityOverrides).length > 0 ||
+    Object.keys(gradientOverrides).length > 0;
 
   return (
     <div className="border-t border-border pt-3">

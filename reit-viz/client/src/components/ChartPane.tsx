@@ -41,6 +41,7 @@ import {
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { computeFractalTrendlines, resampleWeekly } from "@/lib/fractalTrendlines";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
+import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
@@ -267,6 +268,18 @@ function maLineStyle(token?: string): LineStyle {
     case "largeDashed": return LineStyle.LargeDashed;
     case "sparseDotted": return LineStyle.SparseDotted;
     default: return LineStyle.Solid;
+  }
+}
+
+/** Canvas dash pattern (px) for an MA line-style token, scaled by width — used by
+ *  the gradient primitive so a gradient line keeps its chosen dash pattern. */
+function maDashArray(token: string | undefined, w: number): number[] {
+  switch (token) {
+    case "dashed": return [w * 4, w * 3];
+    case "dotted": return [w, w * 2];
+    case "largeDashed": return [w * 8, w * 4];
+    case "sparseDotted": return [w, w * 5];
+    default: return [];
   }
 }
 
@@ -873,7 +886,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
-  const { colors: IC, widths: IC_W, styles: IC_S, opacities: IC_O } = useIndicatorColors();
+  const { colors: IC, widths: IC_W, styles: IC_S, opacities: IC_O, gradients: IC_G } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   // Geometry of the fractal indicator lines (resistance/support), kept alongside
   // indicatorSeriesRef so right-click can hit-test them — they're indicator
@@ -2527,18 +2540,43 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       // Short label for indicator titles so you know what series the indicator is computed on
       const baseLabel = primarySeries.metric === "close" ? "" : ` (${primarySeries.metric})`;
 
+      // When an MA has gradient mode on, its solid line is hidden (`lineVisible:
+      // false`, so the crosshair marker / last-value tag / legend still work) and a
+      // GradientLinePrimitive strokes it faint→full along the time axis instead.
+      const attachGradient = (
+        s: ISeriesApi<any>,
+        data: { time: any; value: number }[],
+        key: string,
+        colorHex: string,
+      ) => {
+        const w = IC_W[key] ?? 1;
+        const op = IC_O[key] ?? 1;
+        (s as any).attachPrimitive(
+          new GradientLinePrimitive(data as any, {
+            color: colorHex,
+            width: w,
+            dash: maDashArray(IC_S[key], w),
+            startAlpha: op * 0.12,
+            endAlpha: op,
+          }),
+        );
+      };
+
       // ── SMA ──
       if (activeIndicators.sma) {
         const smaData = computeSMA(closeData, activeIndicators.sma);
         if (smaData.length > 0) {
+          const grad = !!IC_G.sma;
           const s = chart.addSeries(LineSeries, {
             color: withOpacity(IC.sma, IC_O.sma),
             lineWidth: IC_W.sma as any,
             title: `SMA ${activeIndicators.sma}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.sma),
+            lineVisible: !grad,
           });
           s.setData(smaData);
           indicatorSeriesRef.current.push(s);
+          if (grad) attachGradient(s, smaData, "sma", IC.sma);
         }
       }
 
@@ -2546,14 +2584,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (activeIndicators.ema) {
         const emaData = computeEMA(closeData, activeIndicators.ema);
         if (emaData.length > 0) {
+          const grad = !!IC_G.ema;
           const s = chart.addSeries(LineSeries, {
             color: withOpacity(IC.ema, IC_O.ema),
             lineWidth: IC_W.ema as any,
             title: `EMA ${activeIndicators.ema}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.ema),
+            lineVisible: !grad,
           });
           s.setData(emaData);
           indicatorSeriesRef.current.push(s);
+          if (grad) attachGradient(s, emaData, "ema", IC.ema);
         }
       }
 
@@ -2561,14 +2602,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (activeIndicators.hma) {
         const hmaData = computeHMA(closeData, activeIndicators.hma);
         if (hmaData.length > 0) {
+          const grad = !!IC_G.hma;
           const s = chart.addSeries(LineSeries, {
             color: withOpacity(IC.hma, IC_O.hma),
             lineWidth: IC_W.hma as any,
             title: `HMA ${activeIndicators.hma}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.hma),
+            lineVisible: !grad,
           });
           s.setData(hmaData);
           indicatorSeriesRef.current.push(s);
+          if (grad) attachGradient(s, hmaData, "hma", IC.hma);
         }
       }
 
@@ -2595,14 +2639,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           if (v != null && Number.isFinite(v)) maData.push({ time: closeData[i].time, value: v as number });
         }
         if (maData.length > 0) {
+          const grad = !!IC_G[field];
           const s = chart.addSeries(LineSeries, {
             color: withOpacity(color, IC_O[field]),
             lineWidth: (IC_W[field] ?? width) as any,
             title: `${maType} ${period}${baseLabel}`,
             lineStyle: maLineStyle(IC_S[field]),
+            lineVisible: !grad,
           });
           s.setData(maData);
           indicatorSeriesRef.current.push(s);
+          if (grad) attachGradient(s, maData, field as string, color);
         }
       }
 
@@ -3059,7 +3106,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else

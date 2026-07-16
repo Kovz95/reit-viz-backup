@@ -16,6 +16,7 @@ export type IndicatorColorOverrides = Partial<Record<IndicatorColorKey, string>>
 export type IndicatorWidthOverrides = Partial<Record<IndicatorColorKey, number>>;
 export type IndicatorStyleOverrides = Partial<Record<IndicatorColorKey, MaLineStyle>>;
 export type IndicatorOpacityOverrides = Partial<Record<IndicatorColorKey, number>>;
+export type IndicatorGradientOverrides = Partial<Record<IndicatorColorKey, boolean>>;
 
 interface IndicatorColorsCtx {
   /** Merged colours: user overrides on top of defaults */
@@ -26,6 +27,8 @@ interface IndicatorColorsCtx {
   styles: Record<string, MaLineStyle>;
   /** User opacity overrides (0–1); absent key means fully opaque */
   opacities: Record<string, number>;
+  /** User gradient flags; absent/false key means a solid line */
+  gradients: Record<string, boolean>;
   /** Set a single colour override */
   setColor: (key: IndicatorColorKey, color: string) => void;
   /** Set a single line-width override (px, clamped 1–4) */
@@ -34,6 +37,8 @@ interface IndicatorColorsCtx {
   setStyle: (key: IndicatorColorKey, style: MaLineStyle) => void;
   /** Set a single line-opacity override (clamped 0–1) */
   setOpacity: (key: IndicatorColorKey, opacity: number) => void;
+  /** Toggle the gradient flag for one indicator */
+  setGradient: (key: IndicatorColorKey, on: boolean) => void;
   /** Reset one colour back to its default */
   resetColor: (key: IndicatorColorKey) => void;
   /** Reset one line width back to its default */
@@ -42,7 +47,7 @@ interface IndicatorColorsCtx {
   resetStyle: (key: IndicatorColorKey) => void;
   /** Reset one line opacity back to its default */
   resetOpacity: (key: IndicatorColorKey) => void;
-  /** Reset all colours, widths, styles AND opacities to defaults */
+  /** Reset all colours, widths, styles, opacities AND gradients to defaults */
   resetAll: () => void;
   /** The raw user colour overrides (for serialisation) */
   overrides: IndicatorColorOverrides;
@@ -52,6 +57,8 @@ interface IndicatorColorsCtx {
   styleOverrides: IndicatorStyleOverrides;
   /** The raw user opacity overrides (for serialisation) */
   opacityOverrides: IndicatorOpacityOverrides;
+  /** The raw user gradient flags (for serialisation) */
+  gradientOverrides: IndicatorGradientOverrides;
 }
 
 const IndicatorColorsContext = createContext<IndicatorColorsCtx>({
@@ -59,10 +66,12 @@ const IndicatorColorsContext = createContext<IndicatorColorsCtx>({
   widths: { ...INDICATOR_WIDTHS },
   styles: { ...INDICATOR_LINE_STYLES },
   opacities: {},
+  gradients: {},
   setColor: () => {},
   setWidth: () => {},
   setStyle: () => {},
   setOpacity: () => {},
+  setGradient: () => {},
   resetColor: () => {},
   resetWidth: () => {},
   resetStyle: () => {},
@@ -72,18 +81,21 @@ const IndicatorColorsContext = createContext<IndicatorColorsCtx>({
   widthOverrides: {},
   styleOverrides: {},
   opacityOverrides: {},
+  gradientOverrides: {},
 });
 
 const WORKSPACE_KEY = "indicatorColors";
 const WIDTH_WORKSPACE_KEY = "indicatorWidths";
 const STYLE_WORKSPACE_KEY = "indicatorStyles";
 const OPACITY_WORKSPACE_KEY = "indicatorOpacities";
+const GRADIENT_WORKSPACE_KEY = "indicatorGradients";
 
 export function IndicatorColorsProvider({ children }: { children: React.ReactNode }) {
   const [overrides, setOverrides] = useState<IndicatorColorOverrides>({});
   const [widthOverrides, setWidthOverrides] = useState<IndicatorWidthOverrides>({});
   const [styleOverrides, setStyleOverrides] = useState<IndicatorStyleOverrides>({});
   const [opacityOverrides, setOpacityOverrides] = useState<IndicatorOpacityOverrides>({});
+  const [gradientOverrides, setGradientOverrides] = useState<IndicatorGradientOverrides>({});
   const ws = useWorkspaceContext();
   // Keep a ref to ws to avoid depending on the context object in effects.
   // ws changes identity every time cacheVersion bumps (i.e. on every pushState),
@@ -104,6 +116,8 @@ export function IndicatorColorsProvider({ children }: { children: React.ReactNod
       if (cachedS) setStyleOverrides(cachedS);
       const cachedO = wsRef.current.getCachedState(OPACITY_WORKSPACE_KEY);
       if (cachedO) setOpacityOverrides(cachedO);
+      const cachedG = wsRef.current.getCachedState(GRADIENT_WORKSPACE_KEY);
+      if (cachedG) setGradientOverrides(cachedG);
     }
     initialRestoreDone.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,6 +135,8 @@ export function IndicatorColorsProvider({ children }: { children: React.ReactNod
       if (cachedS) setStyleOverrides(cachedS);
       const cachedO = wsRef.current.getCachedState(OPACITY_WORKSPACE_KEY);
       if (cachedO) setOpacityOverrides(cachedO);
+      const cachedG = wsRef.current.getCachedState(GRADIENT_WORKSPACE_KEY);
+      if (cachedG) setGradientOverrides(cachedG);
     }
   }, [ws.restoreGen]);
 
@@ -141,10 +157,15 @@ export function IndicatorColorsProvider({ children }: { children: React.ReactNod
     wsRef.current.pushState(OPACITY_WORKSPACE_KEY, opacityOverrides);
   }, [opacityOverrides]);
 
+  useEffect(() => {
+    wsRef.current.pushState(GRADIENT_WORKSPACE_KEY, gradientOverrides);
+  }, [gradientOverrides]);
+
   const colors = { ...INDICATOR_COLORS, ...overrides } as typeof INDICATOR_COLORS;
   const widths = { ...INDICATOR_WIDTHS, ...widthOverrides };
   const styles = { ...INDICATOR_LINE_STYLES, ...styleOverrides };
   const opacities = { ...opacityOverrides };
+  const gradients = { ...gradientOverrides };
 
   const setColor = useCallback((key: IndicatorColorKey, color: string) => {
     setOverrides((prev) => ({ ...prev, [key]: color }));
@@ -162,6 +183,17 @@ export function IndicatorColorsProvider({ children }: { children: React.ReactNod
   const setOpacity = useCallback((key: IndicatorColorKey, opacity: number) => {
     const o = Math.max(0, Math.min(1, opacity));
     setOpacityOverrides((prev) => ({ ...prev, [key]: o }));
+  }, []);
+
+  const setGradient = useCallback((key: IndicatorColorKey, on: boolean) => {
+    setGradientOverrides((prev) => {
+      if (!on) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: true };
+    });
   }, []);
 
   const resetColor = useCallback((key: IndicatorColorKey) => {
@@ -201,11 +233,12 @@ export function IndicatorColorsProvider({ children }: { children: React.ReactNod
     setWidthOverrides({});
     setStyleOverrides({});
     setOpacityOverrides({});
+    setGradientOverrides({});
   }, []);
 
   return (
     <IndicatorColorsContext.Provider
-      value={{ colors, widths, styles, opacities, setColor, setWidth, setStyle, setOpacity, resetColor, resetWidth, resetStyle, resetOpacity, resetAll, overrides, widthOverrides, styleOverrides, opacityOverrides }}
+      value={{ colors, widths, styles, opacities, gradients, setColor, setWidth, setStyle, setOpacity, setGradient, resetColor, resetWidth, resetStyle, resetOpacity, resetAll, overrides, widthOverrides, styleOverrides, opacityOverrides, gradientOverrides }}
     >
       {children}
     </IndicatorColorsContext.Provider>
