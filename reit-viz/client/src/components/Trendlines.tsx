@@ -39,6 +39,7 @@ import {
   weeklyDownsample,
   getTickerRawWorkbook,
 } from "@/lib/dataService";
+import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { usePersistedState } from "@/lib/persistedState";
 import { createDateRangeFromPreset } from "@/lib/forwardReturns";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -650,7 +651,11 @@ export function TrendlinesSubPanel(): ReactElement {
   } = useUniverse();
 
   useEffect(() => {
-    getDates().then((d: any) => setAllTickers(d)).catch(() => {});
+    // allTickers holds ticker metadata (used by the ticker pickers, the basket
+    // picker, and classification filters). Load the workbook ticker list — NOT
+    // getDates(), whose string[] of dates has no .ticker and crashes the basket
+    // picker with "Cannot read properties of undefined (reading 'toUpperCase')".
+    fetchWorkbookTickers().then((t: any) => setAllTickers(t)).catch(() => {});
   }, []);
 
   // Mode state

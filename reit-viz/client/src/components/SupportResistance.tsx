@@ -10,6 +10,7 @@ import { BasketPicker } from "@/components/BasketPicker";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { getDates, getTickerRaw, filterByDateRange } from "@/lib/dataService";
+import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { emptyClassFilters } from "@/lib/classificationFilters";
 import { filterTickersByClassification } from "@/lib/classificationFilters";
@@ -498,7 +499,11 @@ export default function SupportResistance() {
   const tickersFiltered = useMemo(() => universeTickers ? allTickers.filter((t: any) => universeTickers.has(t.ticker)) : allTickers, [allTickers, universeTickers]);
 
   useEffect(() => {
-    getDates().then((d: any) => setAllTickers(d));
+    // allTickers holds ticker metadata (ticker pickers, basket picker,
+    // classification filters). Load the workbook ticker list — NOT getDates(),
+    // whose string[] of dates has no .ticker and crashes the basket picker with
+    // "Cannot read properties of undefined (reading 'toUpperCase')".
+    fetchWorkbookTickers().then((t: any) => setAllTickers(t)).catch(() => {});
   }, []);
 
   // Mode

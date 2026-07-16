@@ -9,6 +9,7 @@ import { ClassificationFiltersWithSource } from "@/components/ClassificationFilt
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { BasketPicker } from "@/components/BasketPicker";
 import { getDates, getTickerRaw, filterByDateRange, weeklyDownsample, getTickerRawWorkbook } from "@/lib/dataService";
+import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { usePersistedState } from "@/lib/persistedState";
 import { createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -569,7 +570,11 @@ export default function Trendlines() {
   } = useUniverse();
 
   useEffect(() => {
-    getDates().then((d: any) => setAllTickers(d)).catch(() => {});
+    // allTickers holds ticker metadata (ticker pickers, basket picker,
+    // classification filters). Load the workbook ticker list — NOT getDates(),
+    // whose string[] of dates has no .ticker and crashes the basket picker with
+    // "Cannot read properties of undefined (reading 'toUpperCase')".
+    fetchWorkbookTickers().then((t: any) => setAllTickers(t)).catch(() => {});
   }, []);
 
   // Mode state
