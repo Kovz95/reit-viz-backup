@@ -102,10 +102,19 @@ function MaRow({
     if (active !== undefined) onToggle(n);
   };
 
+  // Each MA's colour key is its lowercased label (sma, ema, dema, …). Show an
+  // inline colour dot so the line colour is editable right where it's toggled;
+  // it drives the same store as the "Colors" section, so both stay in sync.
+  const colorKey = label.toLowerCase();
+  const hasColor = colorKey in INDICATOR_COLORS;
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <Label className="text-xs font-medium">{label}</Label>
+        <div className="flex items-center gap-1.5">
+          {hasColor && <ColorSwatch colorKey={colorKey as IndicatorColorKey} label={label} compact />}
+          <Label className="text-xs font-medium">{label}</Label>
+        </div>
         <Switch
           checked={active !== undefined}
           onCheckedChange={(on) => onToggle(on ? len : undefined)}
@@ -1429,31 +1438,57 @@ function IndicatorOverlays({
 }
 
 // ── Compact colour swatch + picker ──
-function ColorSwatch({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
+function ColorSwatch({ colorKey, label, compact = false }: { colorKey: IndicatorColorKey; label: string; compact?: boolean }) {
   const { colors, setColor, resetColor, overrides } = useIndicatorColors();
   const current = colors[colorKey];
   const isOverridden = colorKey in overrides;
 
+  const swatch = (
+    <label className="relative cursor-pointer shrink-0" title={`Change ${label} colour`}>
+      <span
+        className={`block ${compact ? "w-3 h-3" : "w-4 h-4"} rounded border border-border/50`}
+        style={{ backgroundColor: current }}
+      />
+      <input
+        type="color"
+        value={current.startsWith("rgba") || current.startsWith("#") ? (current.startsWith("#") ? current.slice(0, 7) : "#888888") : current}
+        onChange={(e) => setColor(colorKey, e.target.value)}
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        data-testid={`color-input-${colorKey}`}
+      />
+    </label>
+  );
+
+  // Compact: just the dot (+ a reset affordance on hover if overridden), for use
+  // inline next to a control that already renders the label.
+  if (compact) {
+    return (
+      <span className="flex items-center gap-1 group">
+        {swatch}
+        {isOverridden && (
+          <button
+            onClick={() => resetColor(colorKey)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
+            title="Reset colour to default"
+            data-testid={`color-reset-${colorKey}`}
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+          </button>
+        )}
+      </span>
+    );
+  }
+
   return (
     <div className="flex items-center gap-1.5 group">
-      <label className="relative cursor-pointer" title={`Change ${label} colour`}>
-        <span
-          className="block w-4 h-4 rounded border border-border/50"
-          style={{ backgroundColor: current }}
-        />
-        <input
-          type="color"
-          value={current.startsWith("rgba") || current.startsWith("#") ? (current.startsWith("#") ? current.slice(0, 7) : "#888888") : current}
-          onChange={(e) => setColor(colorKey, e.target.value)}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-        />
-      </label>
+      {swatch}
       <span className="text-[9px] text-muted-foreground flex-1 leading-tight break-words" title={label}>{label}</span>
       {isOverridden && (
         <button
           onClick={() => resetColor(colorKey)}
           className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
           title="Reset to default"
+          data-testid={`color-reset-${colorKey}`}
         >
           <RotateCcw className="w-2.5 h-2.5" />
         </button>
