@@ -787,11 +787,11 @@ export default function Dashboard() {
       // Rebuilt panes reuse pane ids 1..N, so any per-pane indicator state left
       // in indicatorsMap would silently re-attach to the new panes — that's how
       // stray indicators (e.g. the registry ones) "come up by default" on a
-      // freshly-picked preset. Wipe indicator/color-by state for a true reset.
+      // freshly-picked preset. Wipe indicator state for a true reset. (color-by
+      // is intentionally left intact so it persists across preset picks.)
       if (viewName) {
         extraMetricsRef.current = [];
         setIndicatorsMap({});
-        setColorByMap({});
       }
       const effectiveMetrics = [
         ...metrics,
