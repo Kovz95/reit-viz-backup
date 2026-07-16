@@ -104,8 +104,11 @@ export interface ActiveIndicators {
   sma?: number;
   ema?: number;
   hma?: number;
-  // Extended moving-average overlays (periods); driven by the Find Best MA panel.
+  // Extended moving-average overlays (periods); toggleable from the Moving
+  // Averages section and also driven by the Find Best MA panel.
   wma?: number;
+  dema?: number;
+  tema?: number;
   kama?: number;
   frama?: number;
   t3?: number;
@@ -2536,13 +2539,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
       // ── Extended MAs (WMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA), driven by Find Best MA ──
       const EXTRA_MA: Array<[keyof ActiveIndicators, MaType, number, string]> = [
-        ["wma", "WMA", 1, IC.sma],
-        ["kama", "KAMA", 2, IC.ema],
-        ["frama", "FRAMA", 2, IC.hma],
-        ["t3", "T3", 2, IC.ema],
-        ["alma", "ALMA", 1, IC.sma],
-        ["lsma", "LSMA", 1, IC.hma],
-        ["slsma", "SLSMA", 2, IC.ema],
+        ["wma", "WMA", 1, IC.wma],
+        ["dema", "DEMA", 2, IC.dema],
+        ["tema", "TEMA", 2, IC.tema],
+        ["kama", "KAMA", 2, IC.kama],
+        ["frama", "FRAMA", 2, IC.frama],
+        ["t3", "T3", 2, IC.t3],
+        ["alma", "ALMA", 1, IC.alma],
+        ["lsma", "LSMA", 1, IC.lsma],
+        ["slsma", "SLSMA", 2, IC.slsma],
       ];
       const closeVals = closeData.map((d) => d.value as number);
       for (const [field, maType, width, color] of EXTRA_MA) {

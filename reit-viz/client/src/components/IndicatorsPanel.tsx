@@ -522,6 +522,78 @@ export default function IndicatorsPanel({
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, hma: v })}
             />
 
+            <MaRow
+              label="WMA"
+              presets={[9, 20, 50, 100]}
+              defaultLen={20}
+              active={activeIndicators.wma}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, wma: v })}
+            />
+
+            <MaRow
+              label="DEMA"
+              presets={[9, 21, 50, 100]}
+              defaultLen={21}
+              active={activeIndicators.dema}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, dema: v })}
+            />
+
+            <MaRow
+              label="TEMA"
+              presets={[9, 21, 50, 100]}
+              defaultLen={21}
+              active={activeIndicators.tema}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, tema: v })}
+            />
+
+            <MaRow
+              label="KAMA"
+              presets={[10, 20, 50, 100]}
+              defaultLen={20}
+              active={activeIndicators.kama}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, kama: v })}
+            />
+
+            <MaRow
+              label="FRAMA"
+              presets={[16, 26, 50, 100]}
+              defaultLen={26}
+              active={activeIndicators.frama}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, frama: v })}
+            />
+
+            <MaRow
+              label="T3"
+              presets={[5, 10, 21, 50]}
+              defaultLen={10}
+              active={activeIndicators.t3}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, t3: v })}
+            />
+
+            <MaRow
+              label="ALMA"
+              presets={[9, 21, 50, 100]}
+              defaultLen={21}
+              active={activeIndicators.alma}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, alma: v })}
+            />
+
+            <MaRow
+              label="LSMA"
+              presets={[14, 25, 50, 100]}
+              defaultLen={25}
+              active={activeIndicators.lsma}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, lsma: v })}
+            />
+
+            <MaRow
+              label="SLSMA"
+              presets={[14, 25, 50, 100]}
+              defaultLen={25}
+              active={activeIndicators.slsma}
+              onToggle={(v) => setActiveIndicators({ ...activeIndicators, slsma: v })}
+            />
+
             <FindBestMAPanel
               ticker={activeTicker}
               activeIndicators={activeIndicators}
@@ -1425,6 +1497,15 @@ export function IndicatorColorEditor() {
               <ColorSwatch colorKey="sma" label="SMA" />
               <ColorSwatch colorKey="ema" label="EMA" />
               <ColorSwatch colorKey="hma" label="HMA" />
+              <ColorSwatch colorKey="wma" label="WMA" />
+              <ColorSwatch colorKey="dema" label="DEMA" />
+              <ColorSwatch colorKey="tema" label="TEMA" />
+              <ColorSwatch colorKey="kama" label="KAMA" />
+              <ColorSwatch colorKey="frama" label="FRAMA" />
+              <ColorSwatch colorKey="t3" label="T3" />
+              <ColorSwatch colorKey="alma" label="ALMA" />
+              <ColorSwatch colorKey="lsma" label="LSMA" />
+              <ColorSwatch colorKey="slsma" label="SLSMA" />
               <ColorSwatch colorKey="vwap" label="VWAP" />
             </div>
           </div>

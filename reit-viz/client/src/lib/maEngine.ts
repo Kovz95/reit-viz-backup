@@ -4,11 +4,11 @@
 // stub only covered 6 types; this is the faithful superset.
 
 export type MaType =
-  | "SMA" | "EMA" | "WMA" | "HMA" | "KAMA"
+  | "SMA" | "EMA" | "WMA" | "HMA" | "DEMA" | "TEMA" | "KAMA"
   | "FRAMA" | "T3" | "ALMA" | "LSMA" | "SLSMA";
 
 export const MA_TYPES: MaType[] =
-  ["SMA", "EMA", "WMA", "HMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"];
+  ["SMA", "EMA", "WMA", "HMA", "DEMA", "TEMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"];
 
 export interface MaOptions {
   highs?: number[];
@@ -175,12 +175,7 @@ export function t3Series(values: number[], period: number, volumeFactor = 0.7, s
   const out: Series = new Array(s).fill(null);
   if (s === 0 || period < 1) return out;
   const k = 2 / (period + 1);
-  const ema = (arr: number[]): number[] => {
-    const a = new Array(arr.length);
-    a[0] = arr[0];
-    for (let j = 1; j < arr.length; j++) a[j] = k * arr[j] + (1 - k) * a[j - 1];
-    return a;
-  };
+  const ema = (arr: number[]): number[] => emaChain(arr, k);
   const e1 = ema(input);
   const e2 = ema(e1);
   const e3 = ema(e2);
@@ -196,6 +191,42 @@ export function t3Series(values: number[], period: number, volumeFactor = 0.7, s
   const c4 = 1 + 3 * b + b3 + 3 * b2;
   const start = Math.min(s, 3 * period);
   for (let i = start; i < s; i++) out[i] = c1 * e6[i] + c2 * e5[i] + c3 * e4[i] + c4 * e3[i];
+  return out;
+}
+
+// Recursive EMA seeded at arr[0] — the smoothing chain T3/DEMA/TEMA are built on.
+// Kept separate from `emaSeries` (which seeds with an SMA and left-pads nulls) so
+// the chained stages stay index-aligned with the input.
+function emaChain(arr: number[], k: number): number[] {
+  const a = new Array(arr.length);
+  a[0] = arr[0];
+  for (let j = 1; j < arr.length; j++) a[j] = k * arr[j] + (1 - k) * a[j - 1];
+  return a;
+}
+
+// DEMA = 2*EMA(n) - EMA(EMA(n))
+export function demaSeries(values: number[], period: number): Series {
+  const s = values.length;
+  const out: Series = new Array(s).fill(null);
+  if (s === 0 || period < 1) return out;
+  const k = 2 / (period + 1);
+  const e1 = emaChain(values, k);
+  const e2 = emaChain(e1, k);
+  // Blank the warmup: the chain needs ~2 EMA lengths before it means anything.
+  for (let i = Math.min(s, 2 * period); i < s; i++) out[i] = 2 * e1[i] - e2[i];
+  return out;
+}
+
+// TEMA = 3*EMA(n) - 3*EMA(EMA(n)) + EMA(EMA(EMA(n)))
+export function temaSeries(values: number[], period: number): Series {
+  const s = values.length;
+  const out: Series = new Array(s).fill(null);
+  if (s === 0 || period < 1) return out;
+  const k = 2 / (period + 1);
+  const e1 = emaChain(values, k);
+  const e2 = emaChain(e1, k);
+  const e3 = emaChain(e2, k);
+  for (let i = Math.min(s, 3 * period); i < s; i++) out[i] = 3 * e1[i] - 3 * e2[i] + e3[i];
   return out;
 }
 
@@ -280,6 +311,8 @@ export function computeMaByType(
     case "EMA": return emaSeries(values, period);
     case "WMA": return wmaSeries(values, period);
     case "HMA": return hmaSeries(values, period);
+    case "DEMA": return demaSeries(values, period);
+    case "TEMA": return temaSeries(values, period);
     case "KAMA": return kamaSeries(values, period);
     case "T3": {
       const vf = opts?.t3VolumeFactor ?? 0.7;
