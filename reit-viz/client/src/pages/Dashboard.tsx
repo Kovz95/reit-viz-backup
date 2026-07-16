@@ -784,7 +784,15 @@ export default function Dashboard() {
       // Picking a preset explicitly (viewName passed) starts from a clean
       // template. Company switches (carousel arrows / ticker dropdown pass no
       // viewName) keep any series the user added on top of the preset.
-      if (viewName) extraMetricsRef.current = [];
+      // Rebuilt panes reuse pane ids 1..N, so any per-pane indicator state left
+      // in indicatorsMap would silently re-attach to the new panes — that's how
+      // stray indicators (e.g. the registry ones) "come up by default" on a
+      // freshly-picked preset. Wipe indicator/color-by state for a true reset.
+      if (viewName) {
+        extraMetricsRef.current = [];
+        setIndicatorsMap({});
+        setColorByMap({});
+      }
       const effectiveMetrics = [
         ...metrics,
         ...extraMetricsRef.current.filter((m) => !metrics.includes(m)),
