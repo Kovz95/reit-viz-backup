@@ -23,6 +23,24 @@ export function getSeriesColor(index: number): string {
 }
 
 // Indicator colors
+// Default line thickness (px, 1–4) for the moving-average overlays. User
+// overrides live in IndicatorColorsContext; these are the fall-back defaults
+// and match the widths the MA lines shipped with.
+export const INDICATOR_WIDTHS: Record<string, number> = {
+  sma: 1,
+  ema: 1,
+  hma: 2,
+  wma: 1,
+  dema: 2,
+  tema: 2,
+  kama: 2,
+  frama: 2,
+  t3: 2,
+  alma: 1,
+  lsma: 1,
+  slsma: 2,
+};
+
 export const INDICATOR_COLORS = {
   sma: '#f59e0b',
   ema: '#a855f7',

@@ -113,6 +113,7 @@ function MaRow({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           {hasColor && <ColorSwatch colorKey={colorKey as IndicatorColorKey} label={label} compact />}
+          {hasColor && <WidthCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           <Label className="text-xs font-medium">{label}</Label>
         </div>
         <Switch
@@ -1438,6 +1439,26 @@ function IndicatorOverlays({
 }
 
 // ── Compact colour swatch + picker ──
+/** Compact click-to-cycle line-thickness control (1→2→3→4→1). The preview bar
+ *  renders at the current thickness in the indicator's own colour, so it shows
+ *  both the width and the colour at a glance. Drives the same store as the
+ *  colour swatch, so changes persist with the workspace. */
+function WidthCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
+  const { widths, setWidth, colors } = useIndicatorColors();
+  const w = widths[colorKey] ?? 1;
+  return (
+    <button
+      type="button"
+      onClick={() => setWidth(colorKey, w >= 4 ? 1 : w + 1)}
+      title={`${label} line thickness: ${w}px — click to cycle 1–4`}
+      data-testid={`width-cycle-${colorKey}`}
+      className="relative flex items-center justify-center w-5 h-4 rounded border border-border/50 hover:border-foreground/60 transition-colors shrink-0"
+    >
+      <span className="block w-3 rounded-full" style={{ height: `${w}px`, backgroundColor: colors[colorKey] }} />
+    </button>
+  );
+}
+
 function ColorSwatch({ colorKey, label, compact = false }: { colorKey: IndicatorColorKey; label: string; compact?: boolean }) {
   const { colors, setColor, resetColor, overrides } = useIndicatorColors();
   const current = colors[colorKey];
@@ -1499,8 +1520,8 @@ function ColorSwatch({ colorKey, label, compact = false }: { colorKey: Indicator
 
 export function IndicatorColorEditor() {
   const [open, setOpen] = useState(false);
-  const { resetAll, overrides } = useIndicatorColors();
-  const hasOverrides = Object.keys(overrides).length > 0;
+  const { resetAll, overrides, widthOverrides } = useIndicatorColors();
+  const hasOverrides = Object.keys(overrides).length > 0 || Object.keys(widthOverrides).length > 0;
 
   return (
     <div className="border-t border-border pt-3">

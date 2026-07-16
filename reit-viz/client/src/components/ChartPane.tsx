@@ -840,7 +840,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
-  const { colors: IC } = useIndicatorColors();
+  const { colors: IC, widths: IC_W } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   // Geometry of the fractal indicator lines (resistance/support), kept alongside
   // indicatorSeriesRef so right-click can hit-test them — they're indicator
@@ -2500,7 +2500,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (smaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.sma,
-            lineWidth: 1,
+            lineWidth: IC_W.sma as any,
             title: `SMA ${activeIndicators.sma}${baseLabel}`,
             lineStyle: LineStyle.Dashed,
           });
@@ -2515,7 +2515,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (emaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.ema,
-            lineWidth: 1,
+            lineWidth: IC_W.ema as any,
             title: `EMA ${activeIndicators.ema}${baseLabel}`,
           });
           s.setData(emaData);
@@ -2529,7 +2529,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (hmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.hma,
-            lineWidth: 2,
+            lineWidth: IC_W.hma as any,
             title: `HMA ${activeIndicators.hma}${baseLabel}`,
           });
           s.setData(hmaData);
@@ -2562,7 +2562,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (maData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color,
-            lineWidth: width as any,
+            lineWidth: (IC_W[field] ?? width) as any,
             title: `${maType} ${period}${baseLabel}`,
           });
           s.setData(maData);
@@ -3023,7 +3023,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else
