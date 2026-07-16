@@ -259,6 +259,11 @@ export function gridColorFor(prominence?: "off" | "normal" | "bold"): string {
   return "rgba(255,255,255,0.06)";
 }
 
+/** Map a moving-average line-style token to lightweight-charts' LineStyle enum. */
+function maLineStyle(token?: string): LineStyle {
+  return token === "dashed" ? LineStyle.Dashed : token === "dotted" ? LineStyle.Dotted : LineStyle.Solid;
+}
+
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
 // Built-in ids plus any registry pane-indicator id (see indicatorRegistry.ts),
 // so the union is widened to string.
@@ -840,7 +845,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
-  const { colors: IC, widths: IC_W } = useIndicatorColors();
+  const { colors: IC, widths: IC_W, styles: IC_S } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   // Geometry of the fractal indicator lines (resistance/support), kept alongside
   // indicatorSeriesRef so right-click can hit-test them — they're indicator
@@ -2502,7 +2507,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             color: IC.sma,
             lineWidth: IC_W.sma as any,
             title: `SMA ${activeIndicators.sma}${baseLabel}`,
-            lineStyle: LineStyle.Dashed,
+            lineStyle: maLineStyle(IC_S.sma),
           });
           s.setData(smaData);
           indicatorSeriesRef.current.push(s);
@@ -2517,6 +2522,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             color: IC.ema,
             lineWidth: IC_W.ema as any,
             title: `EMA ${activeIndicators.ema}${baseLabel}`,
+            lineStyle: maLineStyle(IC_S.ema),
           });
           s.setData(emaData);
           indicatorSeriesRef.current.push(s);
@@ -2531,6 +2537,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             color: IC.hma,
             lineWidth: IC_W.hma as any,
             title: `HMA ${activeIndicators.hma}${baseLabel}`,
+            lineStyle: maLineStyle(IC_S.hma),
           });
           s.setData(hmaData);
           indicatorSeriesRef.current.push(s);
@@ -2564,6 +2571,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             color,
             lineWidth: (IC_W[field] ?? width) as any,
             title: `${maType} ${period}${baseLabel}`,
+            lineStyle: maLineStyle(IC_S[field]),
           });
           s.setData(maData);
           indicatorSeriesRef.current.push(s);
@@ -3023,7 +3031,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else

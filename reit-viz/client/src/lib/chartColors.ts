@@ -41,6 +41,26 @@ export const INDICATOR_WIDTHS: Record<string, number> = {
   slsma: 2,
 };
 
+// Line style for the moving-average overlays. Stored as a readable token and
+// mapped to lightweight-charts' LineStyle enum at render time. Defaults match
+// what the MA lines shipped with (only SMA was dashed).
+export type MaLineStyle = "solid" | "dashed" | "dotted";
+export const MA_LINE_STYLES: MaLineStyle[] = ["solid", "dashed", "dotted"];
+export const INDICATOR_LINE_STYLES: Record<string, MaLineStyle> = {
+  sma: "dashed",
+  ema: "solid",
+  hma: "solid",
+  wma: "solid",
+  dema: "solid",
+  tema: "solid",
+  kama: "solid",
+  frama: "solid",
+  t3: "solid",
+  alma: "solid",
+  lsma: "solid",
+  slsma: "solid",
+};
+
 export const INDICATOR_COLORS = {
   sma: '#f59e0b',
   ema: '#a855f7',

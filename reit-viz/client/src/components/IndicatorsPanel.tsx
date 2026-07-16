@@ -23,7 +23,7 @@ import {
   type IndicatorDef,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
-import { INDICATOR_COLORS } from "@/lib/chartColors";
+import { INDICATOR_COLORS, MA_LINE_STYLES, type MaLineStyle } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import PatternsPanel from "./PatternsPanel";
 
@@ -114,6 +114,7 @@ function MaRow({
         <div className="flex items-center gap-1.5">
           {hasColor && <ColorSwatch colorKey={colorKey as IndicatorColorKey} label={label} compact />}
           {hasColor && <WidthCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
+          {hasColor && <StyleCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           <Label className="text-xs font-medium">{label}</Label>
         </div>
         <Switch
@@ -1459,6 +1460,32 @@ function WidthCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: s
   );
 }
 
+/** Compact click-to-cycle line-style control (solid→dashed→dotted). The preview
+ *  renders a short rule in the current style + the indicator's colour. Drives the
+ *  same store as the colour/width controls, so changes persist with the workspace. */
+function StyleCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
+  const { styles, setStyle, colors } = useIndicatorColors();
+  const cur: MaLineStyle = styles[colorKey] ?? "solid";
+  const next = () => {
+    const i = MA_LINE_STYLES.indexOf(cur);
+    setStyle(colorKey, MA_LINE_STYLES[(i + 1) % MA_LINE_STYLES.length]);
+  };
+  return (
+    <button
+      type="button"
+      onClick={next}
+      title={`${label} line style: ${cur} — click to cycle solid / dashed / dotted`}
+      data-testid={`style-cycle-${colorKey}`}
+      className="relative flex items-center justify-center w-5 h-4 rounded border border-border/50 hover:border-foreground/60 transition-colors shrink-0"
+    >
+      <span
+        className="block w-3"
+        style={{ borderTopWidth: 2, borderTopStyle: cur, borderTopColor: colors[colorKey] }}
+      />
+    </button>
+  );
+}
+
 function ColorSwatch({ colorKey, label, compact = false }: { colorKey: IndicatorColorKey; label: string; compact?: boolean }) {
   const { colors, setColor, resetColor, overrides } = useIndicatorColors();
   const current = colors[colorKey];
@@ -1520,8 +1547,11 @@ function ColorSwatch({ colorKey, label, compact = false }: { colorKey: Indicator
 
 export function IndicatorColorEditor() {
   const [open, setOpen] = useState(false);
-  const { resetAll, overrides, widthOverrides } = useIndicatorColors();
-  const hasOverrides = Object.keys(overrides).length > 0 || Object.keys(widthOverrides).length > 0;
+  const { resetAll, overrides, widthOverrides, styleOverrides } = useIndicatorColors();
+  const hasOverrides =
+    Object.keys(overrides).length > 0 ||
+    Object.keys(widthOverrides).length > 0 ||
+    Object.keys(styleOverrides).length > 0;
 
   return (
     <div className="border-t border-border pt-3">
