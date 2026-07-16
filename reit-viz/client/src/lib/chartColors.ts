@@ -41,6 +41,9 @@ export const INDICATOR_WIDTHS: Record<string, number> = {
   slsma: 2,
 };
 
+// Opacity presets the MA line-opacity control cycles through (1 = fully opaque).
+export const MA_OPACITY_STEPS: number[] = [1, 0.75, 0.5, 0.25];
+
 // Line style for the moving-average overlays. Stored as a readable token and
 // mapped to lightweight-charts' LineStyle enum at render time. Defaults match
 // what the MA lines shipped with (only SMA was dashed).

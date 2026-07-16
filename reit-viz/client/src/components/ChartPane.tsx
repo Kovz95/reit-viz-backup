@@ -270,6 +270,28 @@ function maLineStyle(token?: string): LineStyle {
   }
 }
 
+/** Apply an alpha (0–1) to a hex or rgb(a) colour, returning an rgba() string.
+ *  Undefined/≥1 opacity returns the colour unchanged. */
+function withOpacity(color: string, opacity?: number): string {
+  if (opacity === undefined || opacity >= 1) return color;
+  const a = Math.max(0, opacity);
+  if (color.startsWith("#")) {
+    let hex = color.slice(1);
+    if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  const m = color.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const p = m[1].split(",").map((s) => s.trim());
+    const a0 = p[3] !== undefined ? parseFloat(p[3]) : 1;
+    return `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${a0 * a})`;
+  }
+  return color;
+}
+
 // ── Sub-chart for oscillators/indicators (RSI, MACD, HA) rendered below the main chart ──
 // Built-in ids plus any registry pane-indicator id (see indicatorRegistry.ts),
 // so the union is widened to string.
@@ -851,7 +873,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
-  const { colors: IC, widths: IC_W, styles: IC_S } = useIndicatorColors();
+  const { colors: IC, widths: IC_W, styles: IC_S, opacities: IC_O } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   // Geometry of the fractal indicator lines (resistance/support), kept alongside
   // indicatorSeriesRef so right-click can hit-test them — they're indicator
@@ -2510,7 +2532,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         const smaData = computeSMA(closeData, activeIndicators.sma);
         if (smaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
-            color: IC.sma,
+            color: withOpacity(IC.sma, IC_O.sma),
             lineWidth: IC_W.sma as any,
             title: `SMA ${activeIndicators.sma}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.sma),
@@ -2525,7 +2547,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         const emaData = computeEMA(closeData, activeIndicators.ema);
         if (emaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
-            color: IC.ema,
+            color: withOpacity(IC.ema, IC_O.ema),
             lineWidth: IC_W.ema as any,
             title: `EMA ${activeIndicators.ema}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.ema),
@@ -2540,7 +2562,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         const hmaData = computeHMA(closeData, activeIndicators.hma);
         if (hmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
-            color: IC.hma,
+            color: withOpacity(IC.hma, IC_O.hma),
             lineWidth: IC_W.hma as any,
             title: `HMA ${activeIndicators.hma}${baseLabel}`,
             lineStyle: maLineStyle(IC_S.hma),
@@ -2574,7 +2596,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
         if (maData.length > 0) {
           const s = chart.addSeries(LineSeries, {
-            color,
+            color: withOpacity(color, IC_O[field]),
             lineWidth: (IC_W[field] ?? width) as any,
             title: `${maType} ${period}${baseLabel}`,
             lineStyle: maLineStyle(IC_S[field]),
@@ -3037,7 +3059,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else

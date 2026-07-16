@@ -23,7 +23,7 @@ import {
   type IndicatorDef,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
-import { INDICATOR_COLORS, MA_LINE_STYLES, MA_LINE_STYLE_LABELS, type MaLineStyle } from "@/lib/chartColors";
+import { INDICATOR_COLORS, MA_LINE_STYLES, MA_LINE_STYLE_LABELS, MA_OPACITY_STEPS, type MaLineStyle } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import PatternsPanel from "./PatternsPanel";
 
@@ -115,6 +115,7 @@ function MaRow({
           {hasColor && <ColorSwatch colorKey={colorKey as IndicatorColorKey} label={label} compact />}
           {hasColor && <WidthCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           {hasColor && <StyleCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
+          {hasColor && <OpacityCycle colorKey={colorKey as IndicatorColorKey} label={label} />}
           <Label className="text-xs font-medium">{label}</Label>
         </div>
         <Switch
@@ -1506,6 +1507,46 @@ function StyleCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: s
   );
 }
 
+/** Convert a hex colour + alpha (0–1) to an rgba() string (for the preview). */
+function rgbaFromHex(color: string, a: number): string {
+  if (!color.startsWith("#")) return color;
+  let h = color.slice(1);
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/** Compact click-to-cycle line-opacity control (100 → 75 → 50 → 25%). The preview
+ *  shows the indicator's colour at the current alpha over a checkerboard, so the
+ *  transparency is literally visible. Drives the same store as the other line
+ *  controls, so changes persist with the workspace. */
+function OpacityCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
+  const { opacities, setOpacity, colors } = useIndicatorColors();
+  const o = opacities[colorKey] ?? 1;
+  const next = () => {
+    const i = MA_OPACITY_STEPS.findIndex((s) => Math.abs(s - o) < 0.01);
+    setOpacity(colorKey, MA_OPACITY_STEPS[i < 0 ? 0 : (i + 1) % MA_OPACITY_STEPS.length]);
+  };
+  return (
+    <button
+      type="button"
+      onClick={next}
+      title={`${label} line opacity: ${Math.round(o * 100)}% — click to cycle`}
+      data-testid={`opacity-cycle-${colorKey}`}
+      className="relative flex items-center justify-center w-5 h-4 rounded border border-border/50 hover:border-foreground/60 transition-colors shrink-0"
+    >
+      <span
+        className="relative block w-3 h-3 rounded-sm overflow-hidden"
+        style={{ background: "repeating-conic-gradient(#94a3b8 0% 25%, #475569 0% 50%) 50% / 6px 6px" }}
+      >
+        <span className="absolute inset-0" style={{ backgroundColor: rgbaFromHex(colors[colorKey], o) }} />
+      </span>
+    </button>
+  );
+}
+
 function ColorSwatch({ colorKey, label, compact = false }: { colorKey: IndicatorColorKey; label: string; compact?: boolean }) {
   const { colors, setColor, resetColor, overrides } = useIndicatorColors();
   const current = colors[colorKey];
@@ -1567,11 +1608,12 @@ function ColorSwatch({ colorKey, label, compact = false }: { colorKey: Indicator
 
 export function IndicatorColorEditor() {
   const [open, setOpen] = useState(false);
-  const { resetAll, overrides, widthOverrides, styleOverrides } = useIndicatorColors();
+  const { resetAll, overrides, widthOverrides, styleOverrides, opacityOverrides } = useIndicatorColors();
   const hasOverrides =
     Object.keys(overrides).length > 0 ||
     Object.keys(widthOverrides).length > 0 ||
-    Object.keys(styleOverrides).length > 0;
+    Object.keys(styleOverrides).length > 0 ||
+    Object.keys(opacityOverrides).length > 0;
 
   return (
     <div className="border-t border-border pt-3">
