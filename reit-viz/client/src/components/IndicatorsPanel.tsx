@@ -1548,9 +1548,10 @@ function OpacityCycle({ colorKey, label }: { colorKey: IndicatorColorKey; label:
   );
 }
 
-/** Compact toggle for gradient mode. The preview is a bar fading from a faint to a
- *  full version of the indicator's colour, matching the drawn comet-trail gradient.
- *  Highlighted when on. Drives the same store as the other line controls. */
+/** Compact toggle for value-gradient mode. The preview is a bar fading vertically
+ *  from a faint (low) to a full (high) version of the indicator's colour, matching
+ *  the drawn by-value gradient. Highlighted when on. Drives the same store as the
+ *  other line controls. */
 function GradientToggle({ colorKey, label }: { colorKey: IndicatorColorKey; label: string }) {
   const { gradients, setGradient, colors } = useIndicatorColors();
   const on = !!gradients[colorKey];
@@ -1559,14 +1560,14 @@ function GradientToggle({ colorKey, label }: { colorKey: IndicatorColorKey; labe
     <button
       type="button"
       onClick={() => setGradient(colorKey, !on)}
-      title={`${label} line gradient: ${on ? "on" : "off"} — click to toggle`}
+      title={`${label} value gradient: ${on ? "on" : "off"} — click to toggle`}
       data-testid={`gradient-toggle-${colorKey}`}
       aria-pressed={on}
       className={`relative flex items-center justify-center w-5 h-4 rounded border transition-colors shrink-0 ${on ? "border-foreground/70 ring-1 ring-foreground/30" : "border-border/50 hover:border-foreground/60"}`}
     >
       <span
-        className="block w-3 h-2 rounded-sm"
-        style={{ backgroundImage: `linear-gradient(to right, ${rgbaFromHex(c, 0.12)}, ${c})` }}
+        className="block w-3 h-3 rounded-sm"
+        style={{ backgroundImage: `linear-gradient(to top, ${rgbaFromHex(c, 0.12)}, ${c})` }}
       />
     </button>
   );

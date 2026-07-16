@@ -1,9 +1,11 @@
 /**
- * GradientLinePrimitive — strokes a moving-average polyline with a horizontal
- * (time-axis) alpha gradient, so the line fades from faint on the oldest data to
- * full colour on the newest ("comet trail"). lightweight-charts' LineSeries only
- * takes a single solid colour, so the gradient is drawn by this custom series
- * primitive instead (same ISeriesPrimitive pattern as IchimokuCloudPrimitive).
+ * GradientLinePrimitive — strokes a moving-average polyline with a vertical
+ * (value-axis) alpha gradient: the line is faint where its value is low (bottom
+ * of the pane) and full colour where its value is high (top). Because the
+ * gradient runs down the pane height, each point of the line is coloured by its
+ * on-screen height — i.e. by its value. lightweight-charts' LineSeries only takes
+ * a single solid colour, so this custom series primitive draws it instead (same
+ * ISeriesPrimitive pattern as IchimokuCloudPrimitive).
  *
  * Attach it to a LineSeries created with `lineVisible: false` — the series still
  * feeds the crosshair marker, last-value tag, legend and price line, while the
@@ -24,9 +26,9 @@ export interface GradientLineOptions {
   width: number;
   /** Canvas dash pattern in px ([] = solid). */
   dash: number[];
-  /** Alpha at the oldest (left) end, 0–1. */
+  /** Alpha at low values (bottom of the pane), 0–1. */
   startAlpha: number;
-  /** Alpha at the newest (right) end, 0–1. */
+  /** Alpha at high values (top of the pane), 0–1. */
   endAlpha: number;
 }
 
@@ -84,14 +86,14 @@ class GradientLineRenderer {
       ctx.lineCap = "round";
       if (this._opts.dash.length) ctx.setLineDash(this._opts.dash);
 
-      // Anchor the gradient to the visible pane width (not the data extent, which
-      // can be mostly off-screen), so it always fades across the current view:
-      // faint at the left edge, full colour at the right edge.
-      const paneW: number = scope.mediaSize.width;
-      if (paneW > 0) {
-        const grad = ctx.createLinearGradient(0, 0, paneW, 0);
-        grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${this._opts.startAlpha})`);
-        grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, ${this._opts.endAlpha})`);
+      // Anchor the gradient to the visible pane HEIGHT so each point is coloured by
+      // its value: full colour at the top (high values), faint at the bottom (low
+      // values). Canvas y grows downward, so stop 0 (y=0, top) is the full end.
+      const paneH: number = scope.mediaSize.height;
+      if (paneH > 0) {
+        const grad = ctx.createLinearGradient(0, 0, 0, paneH);
+        grad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${this._opts.endAlpha})`);
+        grad.addColorStop(1, `rgba(${r}, ${g}, ${b}, ${this._opts.startAlpha})`);
         ctx.strokeStyle = grad;
       } else {
         ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${this._opts.endAlpha})`;

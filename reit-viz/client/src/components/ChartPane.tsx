@@ -2542,7 +2542,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
       // When an MA has gradient mode on, its solid line is hidden (`lineVisible:
       // false`, so the crosshair marker / last-value tag / legend still work) and a
-      // GradientLinePrimitive strokes it faint→full along the time axis instead.
+      // GradientLinePrimitive strokes it faint→full by value instead (low values
+      // faint at the bottom of the pane, high values full at the top).
       const attachGradient = (
         s: ISeriesApi<any>,
         data: { time: any; value: number }[],
