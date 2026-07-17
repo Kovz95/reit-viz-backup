@@ -7,6 +7,7 @@ import { useSessionState } from "@/lib/sessionState";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -130,6 +131,9 @@ export default function ValuationResidence() {
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
 
+  // Country/exchange filter (workbook universe has no geo — resolved via geo map).
+  const geo = useGeoFilter(tickers, "residence-geo");
+
   // Cascading options for each classification dropdown: each level's choices are
   // the distinct values present under the coarser selections above it.
   const classOptions = useMemo(() => {
@@ -202,7 +206,8 @@ export default function ValuationResidence() {
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
     let r = rows.filter((x) =>
-      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key]));
+      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
+      && geo.matchesGeo(x.meta.ticker));
     if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       // Keep low-sample tails out of the top of a forward-return sort (both directions).
@@ -216,7 +221,7 @@ export default function ValuationResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters]);
+  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -384,6 +389,10 @@ export default function ValuationResidence() {
             </Select>
           </div>
         ))}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Geography</div>
+          <div className="flex items-center gap-1.5 h-7">{geo.geoFilterUI}</div>
+        </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Group by</div>
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupLevel)}>

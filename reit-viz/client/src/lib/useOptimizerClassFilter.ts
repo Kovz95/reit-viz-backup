@@ -10,6 +10,7 @@ import ClassificationFilters, {
 } from "@/components/ClassificationFilters";
 import type { ClassFilters } from "@/components/ClassificationFilters";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 
 type UniverseSource = "workbook" | "global";
 
@@ -67,28 +68,37 @@ export function useOptimizerClassFilter(
     [source, globalActive, metas, tickers]
   );
 
+  // Country/exchange geo filter, derived from the active universe pool.
+  const geo = useGeoFilter(pool, `${testIdPrefix}-geo`);
+
   const filteredTickers = useMemo(
-    () => (active ? applyClassFilters(pool, classFilters, search, manualTickers) : tickers),
-    [pool, tickers, active, classFilters, search, manualTickers]
+    () =>
+      active
+        ? geo.filterByGeo(applyClassFilters(pool, classFilters, search, manualTickers))
+        : tickers,
+    [pool, tickers, active, classFilters, search, manualTickers, geo.filterByGeo]
   );
 
   const hasActiveFilters =
     Object.values(classFilters).some((s: any) => s.size > 0) ||
     search !== "" ||
-    manualTickers.size > 0;
+    manualTickers.size > 0 ||
+    geo.hasActiveGeo;
 
   const reset = useCallback(() => {
     setClassFilters(emptyClassFilters());
     setSearch("");
     setManualTickers(new Set());
-  }, []);
+    geo.reset();
+  }, [geo.reset]);
 
   const setSource = useCallback((s: UniverseSource) => {
     setSourceState(s);
     setClassFilters(emptyClassFilters());
     setSearch("");
     setManualTickers(new Set());
-  }, []);
+    geo.reset();
+  }, [geo.reset]);
 
   const workbookCount = tickers.length;
 
@@ -164,6 +174,7 @@ export function useOptimizerClassFilter(
         totalCount: pool.length,
         testIdPrefix,
         tickerPoolOverride: source === "global" ? pool : undefined,
+        extraFilters: geo.geoFilterUI,
       })
     : null;
 

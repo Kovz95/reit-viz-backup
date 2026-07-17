@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getMetricTrailing } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import RerateMetricPicker from "@/components/RerateMetricPicker";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -28,6 +29,17 @@ const GROUP_LEVELS = [
   { value: "subindustry", label: "Subindustry" },
 ] as const;
 type GroupLevel = typeof GROUP_LEVELS[number]["value"];
+
+// The six classification levels offered as filter dropdowns, coarse → fine.
+const CLASS_FILTER_DEFS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+const DEFAULT_CLASS_FILTERS: Record<string, string> = Object.fromEntries(CLASS_FILTER_DEFS.map((d) => [d.key, "all"]));
 
 // ── formatting / color helpers ─────────────────────────────────────────────
 const fmtMult = (v: number, inverse: boolean) =>
@@ -76,6 +88,16 @@ export default function ValuationReRating() {
   const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:rerate:lookbackDays", 1260);
   const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("reit-viz:rerate:groupBy", "none");
   const [search, setSearch] = useState("");
+  const [classFilters, setClassFilters] = usePersistedState<Record<string, string>>("reit-viz:rerate:classFilters", DEFAULT_CLASS_FILTERS);
+  // Changing a coarser level resets the finer ones (they may no longer apply).
+  const setClassFilter = (key: string, value: string) => {
+    const idx = CLASS_FILTER_DEFS.findIndex((d) => d.key === key);
+    setClassFilters((prev) => {
+      const next = { ...prev, [key]: value };
+      for (let i = idx + 1; i < CLASS_FILTER_DEFS.length; i++) next[CLASS_FILTER_DEFS[i].key] = "all";
+      return next;
+    });
+  };
   // Sort = one metric's one stat (sortMetric null → sort by Ticker).
   const [sortCol, setSortCol] = useState<SortCol>("toRich");
   const [sortMetric, setSortMetric] = useState<string | null>(null);
@@ -95,6 +117,22 @@ export default function ValuationReRating() {
     [filteredTickersList],
   );
   const tickerKey = useMemo(() => tickers.map((t) => t.ticker).sort().join(","), [tickers]);
+
+  // Country/exchange filter (workbook universe has no geo — resolved via geo map).
+  const geo = useGeoFilter(tickers, "rerate-geo");
+
+  // Cascading options for each classification dropdown: each level's choices are
+  // the distinct values present under the coarser selections above it.
+  const classOptions = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    CLASS_FILTER_DEFS.forEach((d, i) => {
+      const coarser = CLASS_FILTER_DEFS.slice(0, i);
+      const pool = tickers.filter((t) =>
+        coarser.every((c) => classFilters[c.key] === "all" || (t as any)[c.key] === classFilters[c.key]));
+      out[d.key] = ["all", ...Array.from(new Set(pool.map((t) => (t as any)[d.key]).filter(Boolean))).sort()];
+    });
+    return out;
+  }, [tickers, classFilters]);
 
   // Fetch each ticker's trailing history for EVERY selected metric (batched),
   // keyed on the metric set + lookback + universe. Shape: metricKey → ticker → vals.
@@ -147,7 +185,10 @@ export default function ValuationReRating() {
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = q ? rows.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q)) : rows;
+    let r = rows.filter((x) =>
+      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
+      && geo.matchesGeo(x.meta.ticker));
+    if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       const av = sortValueOf(a), bv = sortValueOf(b);
       const cmp = typeof av === "string" || typeof bv === "string"
@@ -156,7 +197,7 @@ export default function ValuationReRating() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir]);
+  }, [rows, search, sortCol, effSortMetric, sortDir, classFilters, geo.matchesGeo]);
 
   // When grouping, partition the already-sorted rows by the chosen classification
   // (rows keep their sort order within each group; groups are ordered A→Z).
@@ -311,6 +352,21 @@ export default function ValuationReRating() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+        {CLASS_FILTER_DEFS.map((d) => (
+          <div key={d.key}>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{d.label}</div>
+            <Select value={classFilters[d.key]} onValueChange={(v) => setClassFilter(d.key, v)}>
+              <SelectTrigger className={`h-7 w-32 text-xs ${classFilters[d.key] !== "all" ? "border-primary/60 text-primary" : ""}`}><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-72">
+                {classOptions[d.key].map((s) => <SelectItem key={s} value={s} className="text-xs">{s === "all" ? "All" : s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Geography</div>
+          <div className="flex items-center gap-1.5 h-7">{geo.geoFilterUI}</div>
         </div>
         <div className="flex-1 min-w-[120px]">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Search</div>

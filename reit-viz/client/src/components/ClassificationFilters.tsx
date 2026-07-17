@@ -351,6 +351,9 @@ export interface ClassificationFiltersProps {
   testIdPrefix?: string;
   /** Optional ticker pool to filter against instead of the default workbook universe */
   tickerPoolOverride?: any[];
+  /** Optional extra filter controls rendered right after the classification
+   *  dropdowns (e.g. Country / Exchange geo filters). */
+  extraFilters?: React.ReactNode;
 }
 
 export default function ClassificationFilters({
@@ -364,6 +367,7 @@ export default function ClassificationFilters({
   totalCount,
   children,
   testIdPrefix = "clf",
+  extraFilters,
 }: ClassificationFiltersProps) {
   // Fetch ticker metadata for filter options
   const { data: tickersMeta } = useQuery({
@@ -425,6 +429,9 @@ export default function ClassificationFilters({
           testId={`${testIdPrefix}-filter-${key}`}
         />
       ))}
+
+      {/* Extra filter controls (e.g. Country / Exchange) */}
+      {extraFilters}
 
       <div className="h-4 w-px bg-border mx-0.5" />
 

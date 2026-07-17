@@ -6,6 +6,7 @@ import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
 import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
 import { Loader2 } from "lucide-react";
 import { useUniverseDefaults } from "@/lib/universeDefaults";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { P as PlayIcon } from "@/lib/play";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 
@@ -458,14 +459,19 @@ export default function Distributions() {
     }
   }, [universeMode, baskets, selectedBasket]);
 
+  const geo = useGeoFilter(allTickers, "dist-geo");
+
   const universeTickers = useMemo(() => {
-    if (universeMode === "workbook") return allTickers.map(t => t.ticker);
-    if (universeMode === "basket") {
+    let base: string[];
+    if (universeMode === "workbook") base = allTickers.map(t => t.ticker);
+    else if (universeMode === "basket") {
       const b = baskets.find(b => b.id === selectedBasket);
-      return b ? b.tickers : [];
+      base = b ? b.tickers : [];
+    } else {
+      base = allTickers.filter(t => String(t[classKey] ?? "") === classValue).map(t => t.ticker);
     }
-    return allTickers.filter(t => String(t[classKey] ?? "") === classValue).map(t => t.ticker);
-  }, [universeMode, allTickers, baskets, selectedBasket, classKey, classValue]);
+    return base.filter(t => geo.matchesGeo(t));
+  }, [universeMode, allTickers, baskets, selectedBasket, classKey, classValue, geo.matchesGeo]);
 
   const runAnalysis = useCallback(async () => {
     const runId = ++runIdRef.current;
@@ -600,6 +606,10 @@ export default function Distributions() {
               </>
             )}
             <span className="text-foreground/40 font-mono ml-1">{universeTickers.length} tickers</span>
+          </div>
+          <div className="flex items-center gap-1.5 border-l border-border/30 pl-2 ml-1">
+            <span className="text-foreground/60 font-mono uppercase tracking-wide">Geo</span>
+            {geo.geoFilterUI}
           </div>
           <div className="flex items-center gap-1 border-l border-border/30 pl-2 ml-1">
             <span className="text-foreground/60 font-mono uppercase tracking-wide">Window</span>
