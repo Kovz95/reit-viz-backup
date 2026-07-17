@@ -22,6 +22,7 @@ import { pct } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -307,7 +308,7 @@ export default function MomentumOptimizer() {
       }
       if (globalIndices.length < 252) return null;
     } else {
-      const raw = await getTickerRaw(ticker);
+      const raw = await fetchTickerOHLCV(ticker);
       if (!raw || (raw as any).adjCloses.length < 252) return null;
       const filtered = (filterByDateRange as any)(raw, dateRange);
       const dates = filtered.dates.slice(0, filtered.adjCloses.length);
@@ -551,7 +552,7 @@ export default function MomentumOptimizer() {
               if (idx != null && idx >= 0) { globalIndices.push(idx); closes.push(wb.closes[i]); }
             }
           } else {
-            const raw = await getTickerRaw(entry.ticker);
+            const raw = await fetchTickerOHLCV(entry.ticker);
             if (!raw || (raw as any).adjCloses.length < 252) continue;
             const filtered = (filterByDateRange as any)(raw, dateRange);
             const dates = filtered.dates.slice(0, filtered.adjCloses.length);

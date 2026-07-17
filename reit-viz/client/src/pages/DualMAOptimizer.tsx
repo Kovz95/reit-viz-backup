@@ -1,7 +1,8 @@
 // Reconstructed from recovered-bundle/DualMAOptimizer-Cbga92QD.js on 2026-06-11
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { getTickers, getDates, getTickerRaw } from "@/lib/dataService";
+import { getTickers, getDates } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
@@ -620,7 +621,7 @@ export default function DualMAOptimizer() {
           if (!ws || ws.closes.length < 50) continue;
           prices = ws.closes;
         } else {
-          const raw = await getTickerRaw(item.ticker);
+          const raw = await fetchTickerOHLCV(item.ticker);
           if (!raw || raw.adjCloses.length < 50) continue;
           prices = filterByDateRange(raw, dateRange).adjCloses;
         }
@@ -663,7 +664,7 @@ export default function DualMAOptimizer() {
           prices = ohlc.closes;
         } else {
           const first = basketTickers[0];
-          const raw = await getTickerRaw(first);
+          const raw = await fetchTickerOHLCV(first);
           if (!raw || raw.adjCloses.length < 50) { setEvaluating(false); return; }
           prices = filterByDateRange(raw, dateRange).adjCloses;
         }
@@ -675,7 +676,7 @@ export default function DualMAOptimizer() {
           if (!ws || ws.closes.length < 50) { setEvaluating(false); return; }
           prices = ws.closes;
         } else {
-          const raw = await getTickerRaw(ticker);
+          const raw = await fetchTickerOHLCV(ticker);
           if (!raw || raw.adjCloses.length < 50) { setEvaluating(false); return; }
           prices = filterByDateRange(raw, dateRange).adjCloses;
         }

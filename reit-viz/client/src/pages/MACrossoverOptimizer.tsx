@@ -28,6 +28,7 @@ import {
   refreshTickerData,
   CLASSIFICATION_DIMENSION_KEYS,
 } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import {
   fetchInputSeries,
   filterByDateRange,
@@ -846,7 +847,7 @@ async function fetchTickerPriceData(
       : null;
   }
   try {
-    const raw = await getTickerRaw(ticker);
+    const raw = await fetchTickerOHLCV(ticker);
     const c = filterByDateRange(raw, dateRange ?? null);
     if (c.adjCloses.length > 0) {
       const n = c.adjCloses.length;

@@ -17,12 +17,13 @@ import {
   isBasketTicker,
   RANK_BY_OPTIONS,
 } from "@/lib/forwardReturns";
-import { createDateRange } from "@/lib/optimizerInputSeries";
+import { createDateRange, filterByDateRange } from "@/lib/optimizerInputSeries";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
-import { getTickers, getDates, getTickerRaw, filterByDateRange } from "@/lib/dataService";
+import { getTickers, getDates, getTickerRaw } from "@/lib/dataService";
 import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
 import { weeklyDownsample, weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
@@ -345,7 +346,7 @@ export default function TVAOptimizer() {
       if (runMode === "pair") {
         const ratio = await getYahooPairsRatio(pairTickerA, pairTickerB, globalDates);
         if (!ratio || ratio.indices.length < MIN_HISTORY_DAILY) { setEvaluating(false); return; }
-        const rawA = await (getTickerRaw as any)(pairTickerA);
+        const rawA = await (fetchTickerOHLCV as any)(pairTickerA);
         if (!rawA) { setEvaluating(false); return; }
         const filteredA = (filterByDateRange as any)(rawA, dateRange);
         const volMap = new Map<string, number>();
@@ -369,7 +370,7 @@ export default function TVAOptimizer() {
           for (let i = 0; i < globalDates.length; i++) idxMap.set(globalDates[i], i);
           globalIndices = dates.map((d: string) => idxMap.get(d) ?? -1);
         } else {
-          const raw = await (getTickerRaw as any)(basketTickers[0]);
+          const raw = await (fetchTickerOHLCV as any)(basketTickers[0]);
           if (!raw) { setEvaluating(false); return; }
           const filtered = (filterByDateRange as any)(raw, dateRange);
           if (filtered.adjCloses.length < MIN_HISTORY_DAILY) { setEvaluating(false); return; }
@@ -390,7 +391,7 @@ export default function TVAOptimizer() {
       } else {
         const ticker = runMode === "single" ? selectedTicker : (filteredAllTickers[0]?.ticker ?? "");
         if (!ticker) { setEvaluating(false); return; }
-        const raw = await (getTickerRaw as any)(ticker);
+        const raw = await (fetchTickerOHLCV as any)(ticker);
         if (!raw) { setEvaluating(false); return; }
         const filtered = (filterByDateRange as any)(raw, dateRange);
         if (filtered.adjCloses.length < MIN_HISTORY_DAILY) { setEvaluating(false); return; }
@@ -503,7 +504,7 @@ export default function TVAOptimizer() {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient pair history" });
             setProgress({ current: s + 1, total: tickerEntries.length }); continue;
           }
-          const rawA = await (getTickerRaw as any)(legA);
+          const rawA = await (fetchTickerOHLCV as any)(legA);
           if (!rawA) {
             allSkipped.push({ ticker: entry.ticker, reason: `no leg A data (${legA})` });
             setProgress({ current: s + 1, total: tickerEntries.length }); continue;
@@ -531,7 +532,7 @@ export default function TVAOptimizer() {
           workPrices = data.closes; workVolumes = data.volumes; dailyPrices = data.closes;
           rawVolumes2 = data.volumes; workDates = data.priceDates; workGlobalIndices = [];
         } else {
-          const raw = await (getTickerRaw as any)(entry.ticker);
+          const raw = await (fetchTickerOHLCV as any)(entry.ticker);
           if (!raw) {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient history" });
             setProgress({ current: s + 1, total: tickerEntries.length }); continue;
@@ -648,7 +649,7 @@ export default function TVAOptimizer() {
           try {
             const gDates = globalDates.length > 0 ? globalDates : await (getDates as any)();
             if (globalDates.length === 0) globalDates.push(...gDates);
-            const raw2 = await (getTickerRaw as any)(entry.ticker);
+            const raw2 = await (fetchTickerOHLCV as any)(entry.ticker);
             finalDates = raw2 ? raw2.dates : workDates;
             const gMap = new Map<string, number>();
             for (let i = 0; i < gDates.length; i++) gMap.set(gDates[i], i);

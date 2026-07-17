@@ -19,6 +19,7 @@ import type { SignalSummary, CompositeScore } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, createDateRange, defaultInputSelection, resampleWeekly } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -728,7 +729,7 @@ export default function HarsiOptimizer() {
     globalIndices: number[];
   } | null> {
     try {
-      const raw = await getTickerRaw(ticker);
+      const raw = await fetchTickerOHLCV(ticker);
       const filtered: any = (filterByDateRange as any)(raw, dr ?? null);
       const adjCloses: number[] = filtered.adjCloses;
       const closes: number[] = filtered.closes;

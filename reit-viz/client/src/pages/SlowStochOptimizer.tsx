@@ -21,6 +21,7 @@ import type { ForwardReturnProfile, SignalSummary, CompositeScore, HorizonLabel 
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, resampleWeekly, createDateRange, defaultInputSelection, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -425,7 +426,7 @@ async function fetchTickerSeries(
   dateRange: any
 ): Promise<SeriesData | null> {
   try {
-    const raw = await getTickerRaw(ticker);
+    const raw = await fetchTickerOHLCV(ticker);
     const filtered = filterByDateRange(raw, dateRange ?? null);
     const n = filtered.adjCloses.length;
     const adjFactor = filtered.closes.map((c: number, i: number) => {

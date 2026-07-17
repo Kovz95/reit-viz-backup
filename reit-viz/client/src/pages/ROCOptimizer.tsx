@@ -18,6 +18,7 @@ import { useFrequency } from "@/lib/useFrequency";
 import { getTickers, getDates, getGroupMedianByIndex } from "@/lib/dataService";
 import { filterByDateRange, fetchInputSeries } from "@/lib/optimizerInputSeries";
 import { getTickerRaw } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { defaultInputSelection } from "@/lib/optimizerInputSeries";
 import { DATE_PRESETS, createDateRangeFromPreset } from "@/lib/forwardReturns";
 import { downsampleWeekly, mapWeeklyIndexToDaily } from "@/lib/weeklyDownsample";
@@ -473,7 +474,7 @@ async function fetchTickerPriceData(
       : null;
   }
   try {
-    const raw = await getTickerRaw(ticker);
+    const raw = await fetchTickerOHLCV(ticker);
     const filtered = filterByDateRange(raw, dateRange ?? null);
     if (filtered.adjCloses.length > 0) {
       const n = filtered.adjCloses.length;

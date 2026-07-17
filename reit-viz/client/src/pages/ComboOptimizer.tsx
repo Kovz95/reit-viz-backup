@@ -10,6 +10,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useUniverse } from "@/lib/universeContext";
 import { getTickers, getDates } from "@/lib/dataService";
 import { getTickerRaw } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { refreshTickerData } from "@/lib/dataService";
 import { isBasketTicker, defaultInputSelection } from "@/lib/optimizerInputSeries";
 import { weeklyDownsample as weeklyDownsampleFn } from "@/lib/weeklyDownsample";
@@ -390,7 +391,7 @@ async function loadTickerData(
     };
   }
   try {
-    const raw = await getTickerRaw(ticker) as any;
+    const raw = await fetchTickerOHLCV(ticker) as any;
     if (raw.adjCloses.length > 0) {
       const n = raw.adjCloses.length;
       const rawHighs = raw.highs ?? raw.adjCloses;

@@ -26,7 +26,8 @@ import {
   defaultInputSelection,
   isBasketTicker,
 } from "@/lib/optimizerInputSeries";
-import { getTickers, getDates, getTickerRaw } from "@/lib/dataService";
+import { getTickers, getDates } from "@/lib/dataService";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -394,7 +395,7 @@ export default function RSIRegimeOptimizer() {
               }
             }
           } else {
-            const raw = await getTickerRaw(ticker.ticker);
+            const raw = await fetchTickerOHLCV(ticker.ticker);
             if (!raw || (raw as any).adjCloses.length < 252) continue;
             const filtered = (filterByDateRange as any)(raw, dateRange);
             if (!filtered || filtered.adjCloses.length < 252) continue;
@@ -781,7 +782,7 @@ export default function RSIRegimeOptimizer() {
               }
             }
           } else {
-            const raw = await getTickerRaw(t0);
+            const raw = await fetchTickerOHLCV(t0);
             if (!raw || (raw as any).adjCloses.length < 252) {
               setEvaluating(false);
               return;
@@ -826,7 +827,7 @@ export default function RSIRegimeOptimizer() {
             }
           }
         } else {
-          const raw = await getTickerRaw(tickerSym);
+          const raw = await fetchTickerOHLCV(tickerSym);
           if (!raw || (raw as any).adjCloses.length < 252) return;
           const filtered = (filterByDateRange as any)(raw, dateRange);
           if (!filtered || filtered.adjCloses.length < 252) return;
