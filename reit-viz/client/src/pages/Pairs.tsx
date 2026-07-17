@@ -111,7 +111,7 @@ function expandingMeanStdBands(
 }
 
 // Default visible chart IDs (core 6)
-const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter", "signalAnalyzer"]);
+const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter", "residence", "signalAnalyzer"]);
 
 // All chart definitions with labels for the picker
 const CHART_DEFS: { id: string; label: string; group: string }[] = [
@@ -128,6 +128,7 @@ const CHART_DEFS: { id: string; label: string; group: string }[] = [
   { id: "betaAdjSpread", label: "Beta-Adj Spread", group: "Stats" },
   { id: "rollingR2", label: "Rolling R²", group: "Stats" },
   { id: "olsScatter", label: "OLS Scatter", group: "Stats" },
+  { id: "residence", label: "% Residence Days", group: "Stats" },
   { id: "signalAnalyzer", label: "Predictive Signals", group: "Stats" },
 ];
 
@@ -488,6 +489,242 @@ function SignalAnalyzerChart({
           {analysis.firstDate} → {analysis.lastDate} ({analysis.n.toLocaleString()} days).
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── % Residence Days (how long the pair sits in each z / percentile band) ──
+// For a mean-reverting pair, the ratio's z-score (or rolling percentile) is the
+// natural coordinate. This panel answers "what fraction of trading days has
+// A/B spent stretched vs. mean-reverted?" and, for the extreme tails, how long
+// each excursion typically lasts (median dwell in days).
+type ResidenceBasis = "zscore" | "percentile";
+
+interface ResBand {
+  label: string;
+  lo: number; // inclusive
+  hi: number; // exclusive (use Infinity for the top band)
+  color: string;
+}
+
+// Z-score bands: both tails are "stretched" (reversion setups); centre is calm.
+const Z_RES_BANDS: ResBand[] = [
+  { label: "≤ −2σ", lo: -Infinity, hi: -2, color: "#0ea5e9" },
+  { label: "−2 to −1σ", lo: -2, hi: -1, color: "#38bdf8" },
+  { label: "−1 to 0σ", lo: -1, hi: 0, color: "#475569" },
+  { label: "0 to +1σ", lo: 0, hi: 1, color: "#475569" },
+  { label: "+1 to +2σ", lo: 1, hi: 2, color: "#fb7185" },
+  { label: "≥ +2σ", lo: 2, hi: Infinity, color: "#f43f5e" },
+];
+
+// Percentile bands mirror the app-wide Residence tab (richness 0–100).
+const PCT_RES_BANDS: ResBand[] = [
+  { label: "0–10", lo: -Infinity, hi: 10, color: "#0ea5e9" },
+  { label: "10–25", lo: 10, hi: 25, color: "#38bdf8" },
+  { label: "25–50", lo: 25, hi: 50, color: "#475569" },
+  { label: "50–75", lo: 50, hi: 75, color: "#475569" },
+  { label: "75–90", lo: 75, hi: 90, color: "#fb7185" },
+  { label: "90–100", lo: 90, hi: Infinity, color: "#f43f5e" },
+];
+
+function resMedian(xs: number[]): number {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+// Count + median duration (trading days) of consecutive runs where pred holds.
+function resExcursions(values: number[], pred: (v: number) => boolean) {
+  const durations: number[] = [];
+  let run = 0;
+  for (const v of values) {
+    if (Number.isFinite(v) && pred(v)) run++;
+    else if (run > 0) { durations.push(run); run = 0; }
+  }
+  if (run > 0) durations.push(run);
+  return { count: durations.length, medDur: resMedian(durations) };
+}
+
+function bandIndexOf(v: number, bands: ResBand[]): number {
+  for (let i = 0; i < bands.length; i++) {
+    if (v >= bands[i].lo && v < bands[i].hi) return i;
+  }
+  return -1;
+}
+
+function PairResidenceChart({
+  zScore,
+  percentileRank,
+  tickerA,
+  tickerB,
+  zWindow,
+  isMaximized,
+  onMaximize,
+}: {
+  zScore: DataPoint[];
+  percentileRank: DataPoint[];
+  tickerA: string;
+  tickerB: string;
+  zWindow: number;
+  isMaximized: boolean;
+  onMaximize: (id: string | null) => void;
+}) {
+  const [basis, setBasis] = useState<ResidenceBasis>("zscore");
+
+  const res = useMemo(() => {
+    const bands = basis === "zscore" ? Z_RES_BANDS : PCT_RES_BANDS;
+    const src = basis === "zscore" ? zScore : percentileRank;
+    const values = src.map((d) => d.value).filter((v) => Number.isFinite(v));
+    const n = values.length;
+    if (n === 0) return null;
+
+    const counts = new Array(bands.length).fill(0);
+    for (const v of values) {
+      const bi = bandIndexOf(v, bands);
+      if (bi >= 0) counts[bi]++;
+    }
+    const pct = counts.map((c) => (c / n) * 100);
+
+    // Tail dwell: extreme low band (index 0) and extreme high band (last).
+    const lowBand = bands[0];
+    const highBand = bands[bands.length - 1];
+    const lowEx = resExcursions(values, (v) => v >= lowBand.lo && v < lowBand.hi);
+    const highEx = resExcursions(values, (v) => v >= highBand.lo && v < highBand.hi);
+
+    const current = values[values.length - 1];
+    const currentIdx = bandIndexOf(current, bands);
+
+    return { bands, counts, pct, n, current, currentIdx, lowEx, highEx };
+  }, [basis, zScore, percentileRank]);
+
+  const fmtPct = (v: number) => (Number.isFinite(v) ? `${v.toFixed(1)}%` : "—");
+  const fmtDur = (v: number) => (Number.isFinite(v) ? `${v.toFixed(0)}d` : "—");
+  const fmtCur = (v: number) =>
+    Number.isFinite(v) ? (basis === "zscore" ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}σ` : `${v.toFixed(0)}`) : "—";
+
+  return (
+    <div
+      className={`flex flex-col ${
+        isMaximized ? "fixed inset-0 z-50 bg-background" : "w-full h-full border border-border/30 min-h-0 overflow-hidden"
+      }`}
+      onDoubleClick={() => onMaximize(isMaximized ? null : "residence")}
+    >
+      <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
+        <Layers className="w-3 h-3 text-emerald-400" />
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+          % Residence Days — {tickerA}/{tickerB}
+        </span>
+        <div className="flex items-center gap-0.5 ml-2">
+          {(["zscore", "percentile"] as ResidenceBasis[]).map((b) => (
+            <button
+              key={b}
+              onClick={(e) => { e.stopPropagation(); setBasis(b); }}
+              data-testid={`pairs-residence-basis-${b}`}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-medium border transition-colors ${
+                basis === b
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card/30 text-muted-foreground border-border/40 hover:border-border"
+              }`}
+            >
+              {b === "zscore" ? `Z (${zWindow}d)` : "Pctile"}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1" />
+        <Button
+          variant="ghost" size="sm" className="h-5 w-5 p-0"
+          onClick={(e) => { e.stopPropagation(); onMaximize(isMaximized ? null : "residence"); }}
+          title={isMaximized ? "Restore" : "Maximize"}
+        >
+          {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+        </Button>
+      </div>
+
+      {!res ? (
+        <div className="flex items-center justify-center h-full text-muted-foreground text-xs px-3">
+          No overlapping history to compute residence.
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3 text-xs">
+          {/* Segmented occupancy bar */}
+          <div className="space-y-1">
+            <div className="flex h-6 w-full rounded overflow-hidden border border-border/40">
+              {res.pct.map((p, i) =>
+                p > 0 ? (
+                  <div
+                    key={i}
+                    className="h-full flex items-center justify-center overflow-hidden"
+                    style={{ width: `${p}%`, backgroundColor: res.bands[i].color, opacity: i === res.currentIdx ? 1 : 0.72 }}
+                    title={`${res.bands[i].label}: ${fmtPct(p)} (${res.counts[i]}d)`}
+                  >
+                    {p >= 8 && <span className="text-[9px] font-mono text-white/90">{p.toFixed(0)}%</span>}
+                  </div>
+                ) : null,
+              )}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              Currently{" "}
+              <span className="font-semibold text-foreground">{fmtCur(res.current)}</span>
+              {res.currentIdx >= 0 && (
+                <> · band <span className="font-semibold" style={{ color: res.bands[res.currentIdx].color }}>{res.bands[res.currentIdx].label}</span></>
+              )}{" "}
+              · {res.n.toLocaleString()} trading days
+            </div>
+          </div>
+
+          {/* Per-band table */}
+          <div className="overflow-x-auto border border-border/30 rounded">
+            <table className="w-full text-[10px] font-mono">
+              <thead className="bg-card/40 text-muted-foreground">
+                <tr>
+                  <th className="text-left px-2 py-1.5">Band</th>
+                  <th className="text-right px-2 py-1.5">Days</th>
+                  <th className="text-right px-2 py-1.5">% of history</th>
+                </tr>
+              </thead>
+              <tbody>
+                {res.bands.map((b, i) => (
+                  <tr
+                    key={b.label}
+                    className={`border-t border-border/20 ${i === res.currentIdx ? "bg-emerald-500/10" : ""}`}
+                    data-testid={`pairs-residence-row-${i}`}
+                  >
+                    <td className="px-2 py-1 text-foreground/90">
+                      <span className="inline-block w-2 h-2 rounded-sm mr-1.5 align-middle" style={{ backgroundColor: b.color }} />
+                      {i === res.currentIdx && <span className="text-emerald-400 mr-1">▶</span>}
+                      {b.label}
+                    </td>
+                    <td className="px-2 py-1 text-right text-foreground/80">{res.counts[i].toLocaleString()}</td>
+                    <td className="px-2 py-1 text-right text-foreground/90">{fmtPct(res.pct[i])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Tail dwell */}
+          <div className="grid grid-cols-2 gap-2">
+            <SignalStat
+              label={`${res.bands[0].label} · dwell`}
+              value={`${fmtDur(res.lowEx.medDur)} × ${res.lowEx.count}`}
+              valueClass="text-sky-400"
+            />
+            <SignalStat
+              label={`${res.bands[res.bands.length - 1].label} · dwell`}
+              value={`${fmtDur(res.highEx.medDur)} × ${res.highEx.count}`}
+              valueClass="text-rose-400"
+            />
+          </div>
+
+          <div className="text-[9.5px] text-muted-foreground/70 leading-snug px-1">
+            % of trading days the {tickerA}/{tickerB} ratio spent in each{" "}
+            {basis === "zscore" ? `${zWindow}-day z-score` : "rolling-percentile"} band. <span className="font-semibold">Dwell</span> ={" "}
+            median run length × number of excursions into that tail. A pair that spends little time in the middle and reverts
+            quickly from the tails is a cleaner mean-reversion candidate.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2948,11 +3185,12 @@ export default function Pairs() {
             : enabledCharts;
           const isMaxMode = maximizedChart !== null;
           const showOlsScatter = visibleChartIds.has("olsScatter") && (maximizedChart === null || maximizedChart === "olsScatter");
+          const showResidence = visibleChartIds.has("residence") && (maximizedChart === null || maximizedChart === "residence");
           const showSignalAnalyzer = visibleChartIds.has("signalAnalyzer") && (maximizedChart === null || maximizedChart === "signalAnalyzer");
           const visibleExtraOlsZ = extraOlsZPlots.filter(
             (row) => maximizedChart === null || maximizedChart === `olsResidZ_extra_${row.id}`,
           );
-          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0) + (showSignalAnalyzer ? 1 : 0) + visibleExtraOlsZ.length;
+          const totalItems = visibleCharts.length + (showOlsScatter ? 1 : 0) + (showResidence ? 1 : 0) + (showSignalAnalyzer ? 1 : 0) + visibleExtraOlsZ.length;
           // In maximized mode, fill the entire container
           // Otherwise use a scrollable grid with minimum chart heights
           const containerStyle: React.CSSProperties = isMaxMode
@@ -3014,6 +3252,18 @@ export default function Pairs() {
                       tickerA={tickerA}
                       tickerB={tickerB}
                       isMaximized={maximizedChart === "olsScatter"}
+                      onMaximize={setMaximizedChart}
+                    />
+                  )}
+                  {/* % Residence Days panel */}
+                  {pairsData && showResidence && (
+                    <PairResidenceChart
+                      zScore={pairsData.zScore}
+                      percentileRank={pairsData.percentileRank}
+                      tickerA={tickerA}
+                      tickerB={tickerB}
+                      zWindow={zWindow}
+                      isMaximized={maximizedChart === "residence"}
                       onMaximize={setMaximizedChart}
                     />
                   )}
