@@ -9,8 +9,10 @@ import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
-import { getDates, getTickerRaw, filterByDateRange } from "@/lib/dataService";
+import { getDates } from "@/lib/dataService";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
+import { sliceDateRange } from "@/lib/sliceDateRange";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { emptyClassFilters } from "@/lib/classificationFilters";
 import { filterTickersByClassification } from "@/lib/classificationFilters";
@@ -719,9 +721,9 @@ export default function SupportResistance() {
           dates = ratio.indices.map((idx: number) => allDates[idx] || "");
           currentPrice = closes[closes.length - 1];
         } else {
-          const raw = await getTickerRaw(item.ticker);
-          if (!raw) { failures.push({ ticker: item.ticker, reason: "no data" }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
-          const filtered = filterByDateRange(raw, dateRange);
+          const ohlcv = await fetchTickerOHLCV(item.ticker);
+          if (!ohlcv || ohlcv.closes.length === 0) { failures.push({ ticker: item.ticker, reason: "no data" }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
+          const filtered = sliceDateRange(ohlcv, dateRange);
           const n = filtered.adjCloses.length;
           if (n < MIN_BARS) { failures.push({ ticker: item.ticker, reason: `only ${n} bars (need ${MIN_BARS})` }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
           closes = filtered.adjCloses;

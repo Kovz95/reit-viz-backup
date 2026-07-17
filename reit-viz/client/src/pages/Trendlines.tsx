@@ -8,8 +8,10 @@ import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { BasketPicker } from "@/components/BasketPicker";
-import { getDates, getTickerRaw, filterByDateRange, weeklyDownsample, getTickerRawWorkbook } from "@/lib/dataService";
+import { getDates, weeklyDownsample, getTickerRawWorkbook } from "@/lib/dataService";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
+import { sliceDateRange } from "@/lib/sliceDateRange";
 import { usePersistedState } from "@/lib/persistedState";
 import { createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -844,9 +846,9 @@ export default function Trendlines() {
           }
           closes = wb.closes; highs = wb.highs; lows = wb.lows; dates = wb.priceDates; rawCloses = wb.closes.slice();
         } else {
-          const raw = await getTickerRaw(item.ticker);
-          if (!raw) { failures.push({ ticker: item.ticker, reason: "no data" }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
-          const filtered = filterByDateRange(raw, dateRange);
+          const ohlcv = await fetchTickerOHLCV(item.ticker);
+          if (!ohlcv || ohlcv.closes.length === 0) { failures.push({ ticker: item.ticker, reason: "no data" }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
+          const filtered = sliceDateRange(ohlcv, dateRange);
           const n = filtered.adjCloses.length;
           if (n < MIN_BARS) { failures.push({ ticker: item.ticker, reason: `only ${n} bars (need ${MIN_BARS})` }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
           closes = filtered.adjCloses;
