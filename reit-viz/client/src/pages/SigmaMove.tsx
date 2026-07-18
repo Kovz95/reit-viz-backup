@@ -1558,6 +1558,45 @@ export default function SigmaMove() {
       URL.revokeObjectURL(url);
       return;
     }
+    if (isPeriodMode) {
+      const headers = [
+        "ticker", "name", "last_close", "window_start_close", "dollar_change", "pct_change_window",
+        "log_return_window", "sigma_daily", "sigma_annualized", "sigma_move", "sigma_ewma_daily",
+        "sigma_ewma_annualized", "sigma_move_ewma", "percentile", "percentile_n", "hv_window",
+      ];
+      const dataRows = sortedPeriodRows.map((r) => [
+        r.ticker,
+        `"${r.name.replace(/"/g, '""')}"`,
+        r.last ?? "",
+        r.previousClose ?? "",
+        r.dollarChange ?? "",
+        r.pctChangeN ?? "",
+        r.logReturnN ?? "",
+        r.sigmaDaily ?? "",
+        r.sigmaAnnualized ?? "",
+        r.sigmaMove ?? "",
+        r.sigmaEwmaDaily ?? "",
+        r.sigmaEwmaAnnualized ?? "",
+        r.sigmaMoveEwma ?? "",
+        r.percentile ?? "",
+        r.percentileN ?? 0,
+        r.hvWindow,
+      ]);
+      const comments = [
+        "# Sigma Move — Period mode (trailing-window move, historical closes only)",
+        `# Window: ${periodWindow} bar${periodWindow === 1 ? "" : "s"}  |  Vol lookback: ${lookbackDays}d`,
+        `# Universe: ${periodRows.length} tickers`,
+      ];
+      const csv = [...comments, headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sigma-move-period-${periodWindow}b-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
     const headers = [
       "ticker", "name", "last", "previous_close", "dollar_change", "pct_change",
       "log_return_today", "log_return_n", "pct_change_n", "sigma_daily", "sigma_annualized",
@@ -1601,8 +1640,12 @@ export default function SigmaMove() {
     URL.revokeObjectURL(url);
   }, [
     isEarningsMode,
+    isPeriodMode,
     sortedLiveRows,
     sortedEarningsRows,
+    sortedPeriodRows,
+    periodRows.length,
+    periodWindow,
     fetchedAt,
     marketState,
     liveRows.length,
@@ -1873,7 +1916,7 @@ export default function SigmaMove() {
             size="sm"
             className="h-7 gap-1 text-[11px]"
             onClick={exportCsv}
-            disabled={isEarningsMode ? earningsRows.length === 0 : liveRows.length === 0}
+            disabled={isEarningsMode ? earningsRows.length === 0 : isPeriodMode ? periodRows.length === 0 : liveRows.length === 0}
             data-testid="export-csv"
           >
             <Download className="w-3 h-3" />

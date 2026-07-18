@@ -577,6 +577,26 @@ export default function LevelsAndTrendlines() {
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [detectorCollapsed, setDetectorCollapsed] = useState(false);
   const [screenerCollapsed, setScreenerCollapsed] = useState(false);
+
+  const exportScreenerCsv = useCallback((rows: CrossResult[]) => {
+    if (rows.length === 0) return;
+    const headers = [
+      "ticker", "kind", "subtype", "direction", "candles_ago", "cross_date",
+      "close_at_cross", "level_at_cross", "current_price", "distance_pct", "vol_ratio", "score",
+    ];
+    const dataRows = rows.map((r) => [
+      r.ticker, r.kind, `"${r.subtype.replace(/"/g, '""')}"`, r.direction, r.candlesAgo, r.crossDate,
+      r.closeAtCross, r.levelValueAtCross, r.currentPrice, r.distancePct, r.volRatio ?? "", r.score,
+    ]);
+    const csv = [headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crossing-screener-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
   const [selectedLevelIdxs, setSelectedLevelIdxs] = useState<Record<string, Set<number>>>({});
   const [selectedLineIdxs, setSelectedLineIdxs] = useState<Record<string, Set<number>>>({});
   const [levelSort, setLevelSort] = useState({ key: "score", dir: "desc" });
@@ -1613,20 +1633,32 @@ export default function LevelsAndTrendlines() {
 
         {/* ── Crossing Screener results ── */}
         <div className="border border-border rounded">
-          <button
-            type="button"
-            onClick={() => setScreenerCollapsed((c) => !c)}
-            className={`w-full flex items-center justify-between px-2 py-1 bg-card/50 hover:bg-card/80 transition-colors ${screenerCollapsed ? "" : "border-b border-border"}`}
-            data-testid="cs-screener-collapse"
-          >
-            <span className="text-[11px] font-bold flex items-center gap-1.5">
-              <span className="font-mono text-muted-foreground">{screenerCollapsed ? "▸" : "▾"}</span>
-              Crossing Screener: {volFilteredResults.length} signal{volFilteredResults.length === 1 ? "" : "s"}
-              {minVolX > 0 && results.length > volFilteredResults.length && (<span className="ml-2 text-[10px] text-amber-400">({results.length - volFilteredResults.length} hidden by Vol× ≥ {minVolX})</span>)}
-              {skipped.length > 0 && (<span className="ml-2 text-[10px] text-muted-foreground">({skipped.length} skipped)</span>)}
-            </span>
-            <span className="text-[10px] text-muted-foreground">{screenerCollapsed ? "click to expand" : "Crossings + breakouts · sorted by candles ago, then score"}</span>
-          </button>
+          <div className={`flex items-center bg-card/50 ${screenerCollapsed ? "" : "border-b border-border"}`}>
+            <button
+              type="button"
+              onClick={() => setScreenerCollapsed((c) => !c)}
+              className="flex-1 flex items-center justify-between px-2 py-1 hover:bg-card/80 transition-colors"
+              data-testid="cs-screener-collapse"
+            >
+              <span className="text-[11px] font-bold flex items-center gap-1.5">
+                <span className="font-mono text-muted-foreground">{screenerCollapsed ? "▸" : "▾"}</span>
+                Crossing Screener: {volFilteredResults.length} signal{volFilteredResults.length === 1 ? "" : "s"}
+                {minVolX > 0 && results.length > volFilteredResults.length && (<span className="ml-2 text-[10px] text-amber-400">({results.length - volFilteredResults.length} hidden by Vol× ≥ {minVolX})</span>)}
+                {skipped.length > 0 && (<span className="ml-2 text-[10px] text-muted-foreground">({skipped.length} skipped)</span>)}
+              </span>
+              <span className="text-[10px] text-muted-foreground">{screenerCollapsed ? "click to expand" : "Crossings + breakouts · sorted by candles ago, then score"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => exportScreenerCsv(sortedResults)}
+              disabled={sortedResults.length === 0}
+              className="mx-2 px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80 disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="cs-export-csv"
+              title="Export the current screener signals (after Vol× filter and sort) to CSV"
+            >
+              CSV
+            </button>
+          </div>
           {!screenerCollapsed && (results.length === 0 && !running ? (
             <div className="p-3 text-[11px] text-muted-foreground">No crossings or breakouts yet. Configure source, lookback, and methods, then click Run.</div>
           ) : (

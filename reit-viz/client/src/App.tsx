@@ -93,10 +93,6 @@ const SlowStochOptimizer = lazy(() => import("@/pages/SlowStochOptimizer"));
 const DualMAOptimizer = lazy(() => import("@/pages/DualMAOptimizer"));
 const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
 const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
-// Standalone Support / Resistance Detector page. The same component is also
-// embedded as a panel inside LevelsAndTrendlines; this wires the dedicated route.
-const SupportResistance = lazy(() => import("@/components/SupportResistance"));
-const Trendlines = lazy(() => import("@/pages/Trendlines"));
 const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
 const PriceAction = lazy(() => import("@/pages/PriceAction"));
 const ROCAnalysis = lazy(() => import("@/pages/ROCAnalysis"));
@@ -624,8 +620,6 @@ const PAGES = [
   { path: "/tva-optimizer", label: "TVA Optimizer" },
   { path: "/pca", label: "PCA" },
   { path: "/levels", label: "Levels & Trendlines" },
-  { path: "/support-resistance", label: "Support / Resistance" },
-  { path: "/trendlines", label: "Trendlines" },
   { path: "/auto-trendline-backtest", label: "Auto Trendline Backtest" },
   { path: "/price-action", label: "Price Action" },
   { path: "/roc-analysis", label: "ROC Deciles" },
@@ -753,8 +747,6 @@ function AppShell() {
               <Route path="/dual-ma-optimizer" component={DualMAOptimizer} />
               <Route path="/tva-optimizer" component={TVAOptimizer} />
               <Route path="/levels" component={LevelsAndTrendlines} />
-              <Route path="/support-resistance" component={SupportResistance} />
-              <Route path="/trendlines" component={Trendlines} />
               <Route path="/auto-trendline-backtest" component={AutoTrendlineBacktest} />
               <Route path="/price-action" component={PriceAction} />
               <Route path="/roc-analysis" component={ROCAnalysis} />
