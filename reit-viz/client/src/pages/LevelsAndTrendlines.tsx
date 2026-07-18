@@ -1445,67 +1445,77 @@ export default function LevelsAndTrendlines() {
                         {item.topLevels.length > 0 && (
                           <div>
                             <div className="text-[9px] font-mono text-muted-foreground mb-1 pt-1">Levels — top {item.topLevels.length} of {item.totalLevels}:</div>
-                            <table className="w-full text-[10px] font-mono border-collapse">
-                              <thead>
-                                <tr className="border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider">
-                                  <th className="py-1 px-1 w-6" />
-                                  <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("rank")} data-testid="sr-sort-rank">#{levelSI("rank")}</th>
-                                  <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("type")} data-testid="sr-sort-type">Type{levelSI("type")}</th>
-                                  <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("sr")} data-testid="sr-sort-sr">S/R{levelSI("sr")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("price")} data-testid="sr-sort-price">Level ${levelSI("price")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("dist")} data-testid="sr-sort-dist">Dist %{levelSI("dist")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("touches")} data-testid="sr-sort-touches">Touches{levelSI("touches")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("bounce")} data-testid="sr-sort-bounce">Bounce %{levelSI("bounce")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("avgBounce")} data-testid="sr-sort-avgBounce">Avg Bounce{levelSI("avgBounce")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("hold")} data-testid="sr-sort-hold">Hold %{levelSI("hold")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("days")} data-testid="sr-sort-days">Days Since{levelSI("days")}</th>
-                                  <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("score")} data-testid="sr-sort-score">Score{levelSI("score")}</th>
-                                  <th className="py-1 px-1 text-right">Action</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {(() => {
-                                  const rows = item.topLevels.map((level: any, originalIdx: number) => ({ level, originalIdx, dist: item.currentPrice > 0 ? (level.price - item.currentPrice) / item.currentPrice : 0, isResistance: level.price > item.currentPrice }));
-                                  const dirMult = levelSort.dir === "asc" ? 1 : -1;
-                                  rows.sort((a: any, b: any) => {
-                                    switch (levelSort.key) {
-                                      case "rank": return (a.originalIdx - b.originalIdx) * dirMult;
-                                      case "type": return levelLabel(a.level).localeCompare(levelLabel(b.level)) * dirMult;
-                                      case "sr": return ((a.isResistance ? 1 : 0) - (b.isResistance ? 1 : 0)) * dirMult;
-                                      case "price": return (a.level.price - b.level.price) * dirMult;
-                                      case "dist": return (a.dist - b.dist) * dirMult;
-                                      case "touches": return (a.level.touchCount - b.level.touchCount) * dirMult;
-                                      case "bounce": return (a.level.bounceReverseRate - b.level.bounceReverseRate) * dirMult;
-                                      case "avgBounce": return (a.level.avgBounceMagnitudePct - b.level.avgBounceMagnitudePct) * dirMult;
-                                      case "hold": return (a.level.holdRate - b.level.holdRate) * dirMult;
-                                      case "days": { const ad = a.level.daysSinceLastTouch ?? Number.POSITIVE_INFINITY, bd = b.level.daysSinceLastTouch ?? Number.POSITIVE_INFINITY; return (ad - bd) * dirMult; }
-                                      case "score": return (a.level.compositeScore - b.level.compositeScore) * dirMult;
-                                      default: return 0;
-                                    }
-                                  });
-                                  return rows.map(({ level, originalIdx, dist, isResistance }: any) => {
-                                    const isSelected = selLevelSet.has(originalIdx);
-                                    return (
-                                      <tr key={originalIdx} className={`border-b border-border/30 cursor-pointer transition-colors ${isSelected ? "bg-cyan-500/15 ring-1 ring-cyan-400/40" : "hover:bg-accent/10"}`} onClick={() => toggleLevelSelection(item.ticker, originalIdx)} data-testid={`sr-level-row-${originalIdx}`}>
-                                        <td className="py-1 px-1 text-center" onClick={(e) => { e.stopPropagation(); toggleLevelSelection(item.ticker, originalIdx); }}><input type="checkbox" checked={isSelected} readOnly className="cursor-pointer" data-testid={`sr-level-check-${originalIdx}`} /></td>
-                                        <td className="py-1 px-1 text-muted-foreground">{originalIdx + 1}</td>
-                                        <td className="py-1 px-1"><span className={`px-1 py-0.5 rounded text-[9px] font-bold ${level.type === "horizontal" ? "bg-blue-500/20 text-blue-400" : level.type === "ma" ? "bg-violet-500/20 text-violet-400" : "bg-amber-500/20 text-amber-400"}`}>{levelLabel(level)}</span></td>
-                                        <td className="py-1 px-1"><span className={`px-1 py-0.5 rounded text-[9px] font-bold ${isResistance ? "bg-red-500/20 text-red-400" : "bg-green-500/20 text-green-400"}`}>{isResistance ? "R" : "S"}</span></td>
-                                        <td className="py-1 px-1 text-right">${level.price.toFixed(2)}</td>
-                                        <td className={`py-1 px-1 text-right ${dist >= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(dist)}</td>
-                                        <td className="py-1 px-1 text-right">{level.touchCount}</td>
-                                        <td className="py-1 px-1 text-right">{(level.bounceReverseRate * 100).toFixed(1)}%</td>
-                                        <td className="py-1 px-1 text-right">{level.avgBounceMagnitudePct.toFixed(2)}%</td>
-                                        <td className="py-1 px-1 text-right">{(level.holdRate * 100).toFixed(1)}%</td>
-                                        <td className="py-1 px-1 text-right text-muted-foreground">{level.daysSinceLastTouch !== null ? `${level.daysSinceLastTouch}d` : "—"}</td>
-                                        <td className="py-1 px-1 text-right"><span className="px-1 py-0.5 rounded font-bold" style={{ backgroundColor: scoreBg(level.compositeScore) }}>{(level.compositeScore * 100).toFixed(1)}</span></td>
-                                        <td className="py-1 px-1 text-right"><button onClick={(e) => { e.stopPropagation(); sendLevelsToCharts(item.ticker, [level], item.pairA, item.pairB); }} className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300" data-testid={`sr-send-charts-${originalIdx}`}>→ Charts</button></td>
+                            {(() => {
+                              const allRows = item.topLevels.map((level: any, originalIdx: number) => ({ level, originalIdx, dist: item.currentPrice > 0 ? (level.price - item.currentPrice) / item.currentPrice : 0, isResistance: level.price > item.currentPrice }));
+                              const dirMult = levelSort.dir === "asc" ? 1 : -1;
+                              allRows.sort((a: any, b: any) => {
+                                switch (levelSort.key) {
+                                  case "rank": return (a.originalIdx - b.originalIdx) * dirMult;
+                                  case "type": return levelLabel(a.level).localeCompare(levelLabel(b.level)) * dirMult;
+                                  case "sr": return ((a.isResistance ? 1 : 0) - (b.isResistance ? 1 : 0)) * dirMult;
+                                  case "price": return (a.level.price - b.level.price) * dirMult;
+                                  case "dist": return (a.dist - b.dist) * dirMult;
+                                  case "touches": return (a.level.touchCount - b.level.touchCount) * dirMult;
+                                  case "bounce": return (a.level.bounceReverseRate - b.level.bounceReverseRate) * dirMult;
+                                  case "avgBounce": return (a.level.avgBounceMagnitudePct - b.level.avgBounceMagnitudePct) * dirMult;
+                                  case "hold": return (a.level.holdRate - b.level.holdRate) * dirMult;
+                                  case "days": { const ad = a.level.daysSinceLastTouch ?? Number.POSITIVE_INFINITY, bd = b.level.daysSinceLastTouch ?? Number.POSITIVE_INFINITY; return (ad - bd) * dirMult; }
+                                  case "score": return (a.level.compositeScore - b.level.compositeScore) * dirMult;
+                                  default: return 0;
+                                }
+                              });
+                              const groups = [
+                                { key: "horizontal", label: "Horizontal levels", rows: allRows.filter((r: any) => r.level.type === "horizontal") },
+                                { key: "ma", label: "Moving averages", rows: allRows.filter((r: any) => r.level.type === "ma") },
+                                { key: "fib", label: "Fibonacci retracements", rows: allRows.filter((r: any) => r.level.type === "fib") },
+                              ].filter((g) => g.rows.length > 0);
+                              return groups.map((g) => (
+                                <details key={g.key} open className="mb-1" data-testid={`lt-levels-group-${g.key}`}>
+                                  <summary className="cursor-pointer select-none text-[10px] font-mono font-bold text-muted-foreground hover:text-foreground py-0.5">{g.label} ({g.rows.length})</summary>
+                                  <table className="w-full text-[10px] font-mono border-collapse">
+                                    <thead>
+                                      <tr className="border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider">
+                                        <th className="py-1 px-1 w-6" />
+                                        <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("rank")} data-testid={`sr-sort-rank-${g.key}`}>#{levelSI("rank")}</th>
+                                        <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("type")} data-testid={`sr-sort-type-${g.key}`}>Type{levelSI("type")}</th>
+                                        <th className="text-left py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("sr")} data-testid={`sr-sort-sr-${g.key}`}>S/R{levelSI("sr")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("price")} data-testid={`sr-sort-price-${g.key}`}>Level ${levelSI("price")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("dist")} data-testid={`sr-sort-dist-${g.key}`}>Dist %{levelSI("dist")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("touches")} data-testid={`sr-sort-touches-${g.key}`}>Touches{levelSI("touches")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("bounce")} data-testid={`sr-sort-bounce-${g.key}`}>Bounce %{levelSI("bounce")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("avgBounce")} data-testid={`sr-sort-avgBounce-${g.key}`}>Avg Bounce{levelSI("avgBounce")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("hold")} data-testid={`sr-sort-hold-${g.key}`}>Hold %{levelSI("hold")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("days")} data-testid={`sr-sort-days-${g.key}`}>Days Since{levelSI("days")}</th>
+                                        <th className="text-right py-1 px-1 cursor-pointer hover:text-foreground select-none" onClick={() => toggleLevelSort("score")} data-testid={`sr-sort-score-${g.key}`}>Score{levelSI("score")}</th>
+                                        <th className="py-1 px-1 text-right">Action</th>
                                       </tr>
-                                    );
-                                  });
-                                })()}
-                              </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                      {g.rows.map(({ level, originalIdx, dist, isResistance }: any) => {
+                                        const isSelected = selLevelSet.has(originalIdx);
+                                        return (
+                                          <tr key={originalIdx} className={`border-b border-border/30 cursor-pointer transition-colors ${isSelected ? "bg-cyan-500/15 ring-1 ring-cyan-400/40" : "hover:bg-accent/10"}`} onClick={() => toggleLevelSelection(item.ticker, originalIdx)} data-testid={`sr-level-row-${originalIdx}`}>
+                                            <td className="py-1 px-1 text-center" onClick={(e) => { e.stopPropagation(); toggleLevelSelection(item.ticker, originalIdx); }}><input type="checkbox" checked={isSelected} readOnly className="cursor-pointer" data-testid={`sr-level-check-${originalIdx}`} /></td>
+                                            <td className="py-1 px-1 text-muted-foreground">{originalIdx + 1}</td>
+                                            <td className="py-1 px-1"><span className={`px-1 py-0.5 rounded text-[9px] font-bold ${level.type === "horizontal" ? "bg-blue-500/20 text-blue-400" : level.type === "ma" ? "bg-violet-500/20 text-violet-400" : "bg-amber-500/20 text-amber-400"}`}>{levelLabel(level)}</span></td>
+                                            <td className="py-1 px-1"><span className={`px-1 py-0.5 rounded text-[9px] font-bold ${isResistance ? "bg-red-500/20 text-red-400" : "bg-green-500/20 text-green-400"}`}>{isResistance ? "R" : "S"}</span></td>
+                                            <td className="py-1 px-1 text-right">${level.price.toFixed(2)}</td>
+                                            <td className={`py-1 px-1 text-right ${dist >= 0 ? "text-green-400" : "text-red-400"}`}>{pctSigned(dist)}</td>
+                                            <td className="py-1 px-1 text-right">{level.touchCount}</td>
+                                            <td className="py-1 px-1 text-right">{(level.bounceReverseRate * 100).toFixed(1)}%</td>
+                                            <td className="py-1 px-1 text-right">{level.avgBounceMagnitudePct.toFixed(2)}%</td>
+                                            <td className="py-1 px-1 text-right">{(level.holdRate * 100).toFixed(1)}%</td>
+                                            <td className="py-1 px-1 text-right text-muted-foreground">{level.daysSinceLastTouch !== null ? `${level.daysSinceLastTouch}d` : "—"}</td>
+                                            <td className="py-1 px-1 text-right"><span className="px-1 py-0.5 rounded font-bold" style={{ backgroundColor: scoreBg(level.compositeScore) }}>{(level.compositeScore * 100).toFixed(1)}</span></td>
+                                            <td className="py-1 px-1 text-right"><button onClick={(e) => { e.stopPropagation(); sendLevelsToCharts(item.ticker, [level], item.pairA, item.pairB); }} className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300" data-testid={`sr-send-charts-${originalIdx}`}>→ Charts</button></td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </details>
+                              ));
+                            })()}
                             <div className="flex items-center gap-2 text-[10px] mt-1 flex-wrap">
                               <span className="text-muted-foreground">Plotting {selectedLevels.length} of {item.topLevels.length} levels</span>
                               <button onClick={() => setSelectedLevelIdxs((prev) => ({ ...prev, [item.ticker]: new Set(item.topLevels.map((_: any, i: number) => i)) }))} className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:text-foreground" data-testid={`sr-select-all-${item.ticker}`}>Select all</button>
@@ -1519,6 +1529,8 @@ export default function LevelsAndTrendlines() {
                         {item.topLines.length > 0 && (
                           <div>
                             <div className="text-[9px] font-mono text-muted-foreground mb-1 pt-1">Trendlines — top {item.topLines.length} of {item.totalLines}:</div>
+                            <details open data-testid="lt-lines-group-diagonal">
+                            <summary className="cursor-pointer select-none text-[10px] font-mono font-bold text-muted-foreground hover:text-foreground py-0.5">Diagonal trendlines ({item.topLines.length})</summary>
                             <table className="w-full text-[10px] font-mono border-collapse">
                               <thead>
                                 <tr className="border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider">
@@ -1574,6 +1586,7 @@ export default function LevelsAndTrendlines() {
                                 })()}
                               </tbody>
                             </table>
+                            </details>
                             <div className="flex items-center gap-2 text-[10px] mt-1 flex-wrap">
                               <span className="text-muted-foreground">Plotting {selectedLines.length} of {item.topLines.length} trendlines</span>
                               <button onClick={() => setSelectedLineIdxs((prev) => ({ ...prev, [item.ticker]: new Set(item.topLines.map((_: any, i: number) => i)) }))} className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground hover:text-foreground" data-testid={`tl-select-all-${item.ticker}`}>Select all</button>
@@ -1617,47 +1630,67 @@ export default function LevelsAndTrendlines() {
           {!screenerCollapsed && (results.length === 0 && !running ? (
             <div className="p-3 text-[11px] text-muted-foreground">No crossings or breakouts yet. Configure source, lookback, and methods, then click Run.</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[11px]">
-                <thead className="bg-card/40 sticky top-0">
-                  <tr>
-                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
-                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Kind" columnKey="kind" sort={sort} /></th>
-                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Direction" columnKey="direction" sort={sort} /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Candles ago" columnKey="candlesAgo" sort={sort} align="right" /></th>
-                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Cross date" columnKey="crossDate" sort={sort} /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Close @ cross" columnKey="closeAtCross" sort={sort} align="right" /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Level @ cross" columnKey="levelValueAtCross" sort={sort} align="right" /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Current" columnKey="currentPrice" sort={sort} align="right" /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Dist from level" columnKey="distancePct" sort={sort} align="right" /></th>
-                    <th className="text-right px-2 py-1 font-mono" title="Cross-bar volume ÷ trailing 20-bar average volume. — when no volume data (e.g. pair ratios)."><SortHeader label="Vol×" columnKey="volRatio" sort={sort} align="right" /></th>
-                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Score" columnKey="score" sort={sort} align="right" /></th>
-                    <th className="px-2 py-1" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedResults.map((row, idx) => (
-                    <tr key={`${row.ticker}-${row.kind}-${idx}`} className="border-t border-border hover:bg-card/40" data-testid={`cs-row-${row.ticker}-${idx}`}>
-                      <td className="px-2 py-1 font-bold">{row.ticker}</td>
-                      <td className="px-2 py-1">{row.subtype}</td>
-                      <td className="px-2 py-1">
-                        <span className={row.direction === "up" ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"} title={row.direction === "up" ? "Close moved from below to above the level" : "Close moved from above to below the level"}>{row.direction === "up" ? "▲ up" : "▼ down"}</span>
-                      </td>
-                      <td className="px-2 py-1 text-right">{row.candlesAgo}</td>
-                      <td className="px-2 py-1">{row.crossDate}</td>
-                      <td className="px-2 py-1 text-right">{row.closeAtCross.toFixed(2)}</td>
-                      <td className="px-2 py-1 text-right">{row.levelValueAtCross.toFixed(2)}</td>
-                      <td className="px-2 py-1 text-right">{row.currentPrice.toFixed(2)}</td>
-                      <td className="px-2 py-1 text-right">{(row.distancePct * 100).toFixed(2)}%</td>
-                      <td className={`px-2 py-1 text-right ${row.volRatio != null && row.volRatio >= 2 ? "text-emerald-400 font-bold" : ""}`}>{row.volRatio != null ? `${row.volRatio.toFixed(1)}×` : "—"}</td>
-                      <td className="px-2 py-1 text-right" title={row.scoreNote}>{row.score.toFixed(2)}</td>
-                      <td className="px-2 py-1">
-                        <button onClick={() => handleSendCross(row)} className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30" data-testid={`cs-send-${row.ticker}-${idx}`} title="Send this level/line to the Charts tab as an overlay">→ Charts</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="overflow-x-auto p-1 space-y-1">
+              {(() => {
+                const categoryOf = (row: CrossResult): string =>
+                  row.kind === "trendline" ? "Diagonal trendlines"
+                    : row.kind === "breakout" ? (row.subtype.startsWith("New") ? "Donchian breakouts" : "Squeeze breakouts")
+                    : row.subtype.startsWith("MA") ? "Moving averages"
+                    : row.subtype.startsWith("Fib") ? "Fibonacci"
+                    : "Horizontal levels";
+                const ORDER = ["Horizontal levels", "Moving averages", "Fibonacci", "Diagonal trendlines", "Donchian breakouts", "Squeeze breakouts"];
+                const grouped = new Map<string, CrossResult[]>();
+                for (const r of sortedResults) { const c = categoryOf(r); if (!grouped.has(c)) grouped.set(c, []); grouped.get(c)!.push(r); }
+                return ORDER.filter((c) => grouped.has(c)).map((c) => {
+                  const rows = grouped.get(c)!;
+                  const slug = c.toLowerCase().replace(/[^a-z]+/g, "-");
+                  return (
+                    <details key={c} open data-testid={`cs-group-${slug}`}>
+                      <summary className="cursor-pointer select-none text-[10px] font-mono font-bold text-muted-foreground hover:text-foreground py-0.5">{c} ({rows.length})</summary>
+                      <table className="w-full text-[11px]">
+                        <thead className="bg-card/40">
+                          <tr>
+                            <th className="text-left px-2 py-1 font-mono"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
+                            <th className="text-left px-2 py-1 font-mono"><SortHeader label="Kind" columnKey="kind" sort={sort} /></th>
+                            <th className="text-left px-2 py-1 font-mono"><SortHeader label="Direction" columnKey="direction" sort={sort} /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Candles ago" columnKey="candlesAgo" sort={sort} align="right" /></th>
+                            <th className="text-left px-2 py-1 font-mono"><SortHeader label="Cross date" columnKey="crossDate" sort={sort} /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Close @ cross" columnKey="closeAtCross" sort={sort} align="right" /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Level @ cross" columnKey="levelValueAtCross" sort={sort} align="right" /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Current" columnKey="currentPrice" sort={sort} align="right" /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Dist from level" columnKey="distancePct" sort={sort} align="right" /></th>
+                            <th className="text-right px-2 py-1 font-mono" title="Cross-bar volume ÷ trailing 20-bar average volume. — when no volume data (e.g. pair ratios)."><SortHeader label="Vol×" columnKey="volRatio" sort={sort} align="right" /></th>
+                            <th className="text-right px-2 py-1 font-mono"><SortHeader label="Score" columnKey="score" sort={sort} align="right" /></th>
+                            <th className="px-2 py-1" />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((row, idx) => (
+                            <tr key={`${row.ticker}-${row.kind}-${idx}`} className="border-t border-border hover:bg-card/40" data-testid={`cs-row-${row.ticker}-${slug}-${idx}`}>
+                              <td className="px-2 py-1 font-bold">{row.ticker}</td>
+                              <td className="px-2 py-1">{row.subtype}</td>
+                              <td className="px-2 py-1">
+                                <span className={row.direction === "up" ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"} title={row.direction === "up" ? "Close moved from below to above the level" : "Close moved from above to below the level"}>{row.direction === "up" ? "▲ up" : "▼ down"}</span>
+                              </td>
+                              <td className="px-2 py-1 text-right">{row.candlesAgo}</td>
+                              <td className="px-2 py-1">{row.crossDate}</td>
+                              <td className="px-2 py-1 text-right">{row.closeAtCross.toFixed(2)}</td>
+                              <td className="px-2 py-1 text-right">{row.levelValueAtCross.toFixed(2)}</td>
+                              <td className="px-2 py-1 text-right">{row.currentPrice.toFixed(2)}</td>
+                              <td className="px-2 py-1 text-right">{(row.distancePct * 100).toFixed(2)}%</td>
+                              <td className={`px-2 py-1 text-right ${row.volRatio != null && row.volRatio >= 2 ? "text-emerald-400 font-bold" : ""}`}>{row.volRatio != null ? `${row.volRatio.toFixed(1)}×` : "—"}</td>
+                              <td className="px-2 py-1 text-right" title={row.scoreNote}>{row.score.toFixed(2)}</td>
+                              <td className="px-2 py-1">
+                                <button onClick={() => handleSendCross(row)} className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30" data-testid={`cs-send-${row.ticker}-${slug}-${idx}`} title="Send this level/line to the Charts tab as an overlay">→ Charts</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </details>
+                  );
+                });
+              })()}
             </div>
           ))}
         </div>
