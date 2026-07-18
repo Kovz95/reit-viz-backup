@@ -21,6 +21,7 @@ import { hitRateClass, formatPct, pfClass, pfTextColor, scoreTextColor, scoreBac
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { useFrequency, isValidFrequency } from "@/lib/useFrequency";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -189,9 +190,10 @@ export default function PairOptimizer() {
   const [clfFilters, setClfFilters] = useState<ClassFilters>(() => emptyClassFilters());
   const [clfSearch, setClfSearch] = useState("");
   const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
+  const geo = useGeoFilter(filteredTickers as any[], "pair-opt-clf-geo");
   const scanFilteredTickers = useMemo(
-    () => applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers),
-    [filteredTickers, clfFilters, clfSearch, clfManualTickers]
+    () => geo.filterByGeo(applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers)),
+    [filteredTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo]
   );
 
   const effectiveTickers = mode === "scan" ? scanFilteredTickers : filteredTickers;
@@ -588,6 +590,7 @@ export default function PairOptimizer() {
                 filteredCount={scanFilteredTickers.length}
                 totalCount={filteredTickers.length}
                 testIdPrefix="pair-opt-clf"
+                extraFilters={geo.geoFilterUI}
               />
             </div>
           )}

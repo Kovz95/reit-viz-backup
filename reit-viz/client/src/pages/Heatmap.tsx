@@ -13,6 +13,7 @@ import ClassificationFilters, {
   deserializeClassFilters,
   type ClassFilters,
 } from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useUniverse } from "@/lib/universeContext";
 import {
   Select,
@@ -362,12 +363,14 @@ export default function Heatmap() {
     return [...rows];
   }, [rows, reference, trailingMap, groupBy]);
 
+  const geo = useGeoFilter(enrichedRows, "heatmap-geo");
+
   // Filter
   const filtered = useMemo(() => {
     let base = enrichedRows;
     if (universeTickers) base = base.filter(r => universeTickers.has(r.ticker));
-    return applyClassFilters(base, classFilters, search, manualTickers);
-  }, [enrichedRows, classFilters, search, manualTickers, universeTickers]);
+    return geo.filterByGeo(applyClassFilters(base, classFilters, search, manualTickers));
+  }, [enrichedRows, classFilters, search, manualTickers, universeTickers, geo.filterByGeo]);
 
   // Sort
   const sorted = useMemo(() => {
@@ -543,6 +546,7 @@ export default function Heatmap() {
           filteredCount={sorted.length}
           totalCount={enrichedRows.length}
           testIdPrefix="heatmap"
+          extraFilters={geo.geoFilterUI}
         />
 
         <div className="mx-1 w-px h-4 bg-border" />

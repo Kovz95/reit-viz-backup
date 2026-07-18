@@ -8,6 +8,7 @@ import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { getDates } from "@/lib/dataService";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -498,7 +499,8 @@ export default function SupportResistance() {
     filteredCount: universeFilteredCount,
     totalCount: universeTotalCount,
   } = useUniverse();
-  const tickersFiltered = useMemo(() => universeTickers ? allTickers.filter((t: any) => universeTickers.has(t.ticker)) : allTickers, [allTickers, universeTickers]);
+  const geoUniverse = useGeoFilter(allTickers, "sr-universe-geo");
+  const tickersFiltered = useMemo(() => geoUniverse.filterByGeo(universeTickers ? allTickers.filter((t: any) => universeTickers.has(t.ticker)) : allTickers), [allTickers, universeTickers, geoUniverse.filterByGeo]);
 
   useEffect(() => {
     // allTickers holds ticker metadata (ticker pickers, basket picker,
@@ -519,14 +521,15 @@ export default function SupportResistance() {
   const { metas: globalMetas } = useGlobalUniverse();
   const [pcSearch, setPcSearch] = useState("");
   const [pcManualTickers, setPcManualTickers] = useState(() => new Set<string>());
+  const geoPairCombo = useGeoFilter(classSearch === "global" ? globalMetas : allTickers, "sr-paircombo-filter-geo");
 
   const MAX_PAIRS = 500;
   const MIN_PAIRS_WARNING = 50;
   const filteredPairLegs = useMemo(() => {
     const hasFilter = classFilters.economy.size + classFilters.sector.size + classFilters.subsector.size + classFilters.industryGroup.size + classFilters.industry.size + classFilters.subindustry.size + pcManualTickers.size + (pcSearch.trim().length > 0 ? 1 : 0) > 0;
-    if (!hasFilter) return [];
-    return filterTickersByClassification(classSearch === "global" ? globalMetas : allTickers, classFilters, pcSearch, pcManualTickers).map((t: any) => t.ticker.toUpperCase()).filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
-  }, [allTickers, globalMetas, classSearch, classFilters, pcSearch, pcManualTickers]);
+    if (!hasFilter && !geoPairCombo.hasActiveGeo) return [];
+    return geoPairCombo.filterByGeo(filterTickersByClassification(classSearch === "global" ? globalMetas : allTickers, classFilters, pcSearch, pcManualTickers)).map((t: any) => t.ticker.toUpperCase()).filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
+  }, [allTickers, globalMetas, classSearch, classFilters, pcSearch, pcManualTickers, geoPairCombo.filterByGeo]);
 
   const pairComboCount = useMemo(() => { const n = filteredPairLegs.length; return n >= 2 ? (n * (n - 1)) / 2 : 0; }, [filteredPairLegs]);
 
@@ -874,7 +877,7 @@ export default function SupportResistance() {
       {mode === "pairCombo" && (
         <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border bg-card/10 flex-shrink-0">
           <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">Pair legs</label>
-          <ClassificationFiltersWithSource workbookTickers={allTickers} filters={classFilters} onFiltersChange={setClassFilters} search={pcSearch} onSearchChange={setPcSearch} manualTickers={pcManualTickers} onManualTickersChange={setPcManualTickers} filteredCount={filteredPairLegs.length} totalCount={allTickers.length} testIdPrefix="sr-paircombo-filter" source={classSearch} onSourceChange={setClassSearch} />
+          <ClassificationFiltersWithSource workbookTickers={allTickers} filters={classFilters} onFiltersChange={setClassFilters} search={pcSearch} onSearchChange={setPcSearch} manualTickers={pcManualTickers} onManualTickersChange={setPcManualTickers} filteredCount={filteredPairLegs.length} totalCount={allTickers.length} testIdPrefix="sr-paircombo-filter" source={classSearch} onSourceChange={setClassSearch} extraFilters={geoPairCombo.geoFilterUI} />
           <span className="text-[10px] font-mono text-muted-foreground ml-auto">
             {filteredPairLegs.length < 2 ? <>Pick at least two legs to generate pairs.</> : <>{filteredPairLegs.length} legs → <span className="text-cyan-400 font-bold">{Math.min(pairComboCount, MAX_PAIRS)}</span> unordered pairs (A/B == B/A){" "}{pairComboCount > MAX_PAIRS && <span className="text-amber-400 font-bold">— capped at {MAX_PAIRS} (from {pairComboCount})</span>}{pairComboCount >= MIN_PAIRS_WARNING && pairComboCount <= MAX_PAIRS && <span className="ml-2 text-amber-400 font-bold" title="Each pair fetches two Yahoo series and runs full S/R detection. Large scans take a while.">⚠ large scan</span>}</>}
           </span>
@@ -886,7 +889,7 @@ export default function SupportResistance() {
         <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border bg-card/10 flex-shrink-0">
           <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">Universe</label>
           {/* @ts-ignore */}
-          <ClassificationFiltersWithSource filters={universeFilters} onFiltersChange={setUniverseFilters} search={universeSearch} onSearchChange={setUniverseSearch} manualTickers={universeManualTickers} onManualTickersChange={setUniverseManualTickers} filteredCount={universeFilteredCount} totalCount={universeTotalCount} testIdPrefix="sr-universe" />
+          <ClassificationFiltersWithSource filters={universeFilters} onFiltersChange={setUniverseFilters} search={universeSearch} onSearchChange={setUniverseSearch} manualTickers={universeManualTickers} onManualTickersChange={setUniverseManualTickers} filteredCount={universeFilteredCount} totalCount={universeTotalCount} testIdPrefix="sr-universe" extraFilters={geoUniverse.geoFilterUI} />
           <span className="text-[10px] font-mono text-muted-foreground ml-auto"><span className="text-foreground font-bold" data-testid="sr-universe-count">{tickersFiltered.length}</span> {`ticker${tickersFiltered.length === 1 ? "" : "s"} selected`}</span>
         </div>
       )}

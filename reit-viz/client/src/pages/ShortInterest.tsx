@@ -7,6 +7,7 @@ import { usePageState } from "@/lib/pageState";
 import { useQuery } from "@tanstack/react-query";
 import { applyClassFilters } from "@/lib/classificationFilters";
 import { ClassificationFilters } from "@/lib/classificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { getTickers, getDates, getMetricSeries } from "@/lib/dataService";
 import { getLatestMetricForAllTickers } from "@/lib/dataService";
 import { Button } from "@/components/ui/button";
@@ -224,12 +225,15 @@ export default function ShortInterest() {
     }));
   }, [siTickers, siMetrics, sparklineData]);
 
+  const geo = useGeoFilter(allRows, "si-geo");
+
   const filteredRows = useMemo(() => {
     let rows = allRows;
     if (universeTickers && universeTickers.size > 0) {
       rows = rows.filter((r) => universeTickers.has(r.ticker));
     }
     rows = applyClassFilters(rows as any[], classFilters, search, manualTickers) as unknown as SIRow[];
+    rows = geo.filterByGeo(rows);
     rows = [...rows].sort((a, b) => {
       const av = (a as any)[sortKey];
       const bv = (b as any)[sortKey];
@@ -241,7 +245,7 @@ export default function ShortInterest() {
       return sortAsc ? av - bv : bv - av;
     });
     return rows;
-  }, [allRows, classFilters, universeTickers, search, sortKey, sortAsc]);
+  }, [allRows, classFilters, universeTickers, search, sortKey, sortAsc, manualTickers, geo.filterByGeo]);
 
   const maxSI = useMemo(
     () => Math.max(...filteredRows.map((r) => r.siPct ?? 0), 1),
@@ -354,6 +358,7 @@ export default function ShortInterest() {
           totalCount={allRows.length}
           filteredCount={filteredRows.length}
           testIdPrefix="si"
+          extraFilters={geo.geoFilterUI}
         />
         <div className="flex items-center gap-2 ml-2 text-[10px]">
           <span className="text-muted-foreground">

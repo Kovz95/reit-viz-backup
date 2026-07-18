@@ -19,6 +19,9 @@ interface ClassificationFiltersWithSourceProps {
   source?: string;
   onSourceChange?: (source: string) => void;
   children?: React.ReactNode;
+  /** Extra filter controls (e.g. Country / Exchange geo dropdowns) rendered
+   *  right after the 6 classification dropdowns. */
+  extraFilters?: React.ReactNode;
 }
 
 export function ClassificationFiltersWithSource({
@@ -35,6 +38,7 @@ export function ClassificationFiltersWithSource({
   source: sourceProp,
   onSourceChange,
   children,
+  extraFilters,
 }: ClassificationFiltersWithSourceProps) {
   const [localSource, setLocalSource] = useState("workbook");
   const effectiveSource = sourceProp ?? localSource;
@@ -119,6 +123,7 @@ export function ClassificationFiltersWithSource({
         totalCount={effectiveSource === "global" ? globalTickerPool?.length ?? 0 : totalCount}
         testIdPrefix={testIdPrefix}
         tickerPoolOverride={globalTickerPool}
+        extraFilters={extraFilters}
       />
     </div>
   );

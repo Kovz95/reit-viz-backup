@@ -6,6 +6,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useLocation } from "wouter";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { filterTickersByClassification } from "@/lib/classificationFilters";
 import { emptyClassFilters } from "@/lib/dataService";
 import { getPairsData } from "@/lib/dataService";
@@ -332,13 +333,15 @@ export default function PairsScreener() {
 
   useEffect(() => () => { cancelRef.current = true; }, []);
 
+  const geo = useGeoFilter((source === "global" ? metas : filteredTickersList) as any[], "screener-paircombo-filter-geo");
   const pairComboTickers = useMemo(() => {
     const totalFilters = classFilters.economy.size + classFilters.sector.size + classFilters.subsector.size + classFilters.industryGroup.size + classFilters.industry.size + classFilters.subindustry.size + manualTickers.size + (classSearch.trim().length > 0 ? 1 : 0);
-    if (totalFilters === 0) return [];
+    if (totalFilters === 0 && !geo.hasActiveGeo) return [];
     return (filterTickersByClassification as any)(source === "global" ? metas : filteredTickersList, classFilters, classSearch, manualTickers)
       .map((t: any) => t.ticker.toUpperCase())
-      .filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
-  }, [filteredTickersList, metas, source, classFilters, classSearch, manualTickers]);
+      .filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i)
+      .filter((t: string) => geo.matchesGeo(t));
+  }, [filteredTickersList, metas, source, classFilters, classSearch, manualTickers, geo.matchesGeo, geo.hasActiveGeo]);
 
   const tickerList = useMemo(() =>
     scope === "pairCombo" ? pairComboTickers : filteredTickersList.map((t: any) => t.ticker),
@@ -584,6 +587,7 @@ export default function PairsScreener() {
             testIdPrefix="screener-paircombo-filter"
             source={source}
             onSourceChange={(s) => setSource(s as "workbook" | "global")}
+            extraFilters={geo.geoFilterUI}
           />
           <span className="text-[10px] font-mono text-muted-foreground ml-auto">
             {pairComboTickers.length < 2

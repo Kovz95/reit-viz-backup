@@ -36,6 +36,7 @@ import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories"
 import { filterScatterPoints } from "@/lib/filterHelpers";
 import { defaultClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/filterHelpers";
 import { ClassificationFiltersWithSource } from "@/lib/filterHelpers";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { CanvasDownloadButton } from "@/lib/exportMenu";
 import { fetchScatterData } from "@/lib/fetchWorkbookData";
 import { useUploadedMetricColumns } from "@/lib/workspaceState";
@@ -301,6 +302,9 @@ export default function Scatter() {
   const rawPoints: ScatterPoint[] = (queryData?.points ?? []) as unknown as ScatterPoint[];
   const resolvedDate: string = queryData?.resolvedDate ?? "";
 
+  // Country / Exchange geo filter (options derived from the full point pool).
+  const geo = useGeoFilter(rawPoints, "scatter-geo");
+
   const categoryValues = useMemo(() => {
     const vals = new Set(rawPoints.map((p: any) => p[colorBy]).filter(Boolean));
     return Array.from(vals).sort() as string[];
@@ -316,8 +320,9 @@ export default function Scatter() {
     let pts = rawPoints.filter((p) => p.x !== null && p.y !== null);
     if (universeTickers) pts = pts.filter((p) => universeTickers.has(p.ticker));
     pts = filterScatterPoints(pts, classFilters, searchText, manualTickers);
+    pts = geo.filterByGeo(pts);
     return pts;
-  }, [rawPoints, searchText, classFilters, manualTickers, universeTickers]);
+  }, [rawPoints, searchText, classFilters, manualTickers, universeTickers, geo.filterByGeo]);
 
   const transformedPoints = useMemo(
     () =>
@@ -1122,6 +1127,7 @@ export default function Scatter() {
           filteredCount={transformedPoints.length}
           totalCount={rawPoints.length}
           testIdPrefix="scatter"
+          extraFilters={geo.geoFilterUI}
         >
           {resolvedDate && (
             <span className="text-[10px] text-muted-foreground font-mono">{resolvedDate}</span>

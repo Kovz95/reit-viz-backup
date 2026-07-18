@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import ClassificationFilters from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import {
   Popover,
   PopoverContent,
@@ -1353,10 +1354,15 @@ export default function Screener() {
     queryFn: getTickers,
   });
 
+  // Country/Exchange geo filter, additive to the classification universe filter.
+  const geo = useGeoFilter(allTickers, "screener-universe-geo");
+
   const scopedTickers = useMemo(() => {
-    if (!universeTickers) return allTickers;
-    return allTickers.filter((t) => universeTickers.has(t.ticker));
-  }, [allTickers, universeTickers]);
+    const base = universeTickers
+      ? allTickers.filter((t) => universeTickers.has(t.ticker))
+      : allTickers;
+    return geo.filterByGeo(base);
+  }, [allTickers, universeTickers, geo.filterByGeo]);
 
   // ── Workspace persistence ──
   const serialize = useCallback(() => ({
@@ -2147,6 +2153,7 @@ export default function Screener() {
             filteredCount={filteredCount}
             totalCount={totalCount}
             testIdPrefix="screener-universe"
+            extraFilters={geo.geoFilterUI}
           />
         </div>
       )}

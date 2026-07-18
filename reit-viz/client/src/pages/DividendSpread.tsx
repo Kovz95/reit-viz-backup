@@ -9,6 +9,7 @@ import { ChevronLeft, TrendingUp, TrendingDown, Download, ExternalLink, ArrowUpD
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import ClassificationFilters from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import ExportMenu from "@/components/ExportMenu";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -463,10 +464,13 @@ export default function DividendSpread() {
     queryFn: () => loadSpreadData(treasuryId, lookback),
   });
 
+  const geo = useGeoFilter(allRows, "spread-geo");
+
   const sortedRows = useMemo(() => {
     let rows = allRows.filter(r => r.spread !== null);
     if (universeTickers) rows = rows.filter(r => universeTickers.has(r.ticker));
     rows = filterTickers(rows, classFilters, search, manualTickers);
+    rows = geo.filterByGeo(rows);
     rows.sort((a, b) => {
       const sentinel = sortDir === "asc" ? Infinity : -Infinity;
       const getValue = (row: SpreadRow) => {
@@ -489,7 +493,7 @@ export default function DividendSpread() {
       return sortDir === "asc" ? va - vb : vb - va;
     });
     return rows;
-  }, [allRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers]);
+  }, [allRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers, geo.filterByGeo]);
 
   const summary = useMemo(() => {
     const withZ = sortedRows.filter(r => r.zScore !== null);
@@ -623,6 +627,7 @@ export default function DividendSpread() {
           filteredCount={sortedRows.length}
           totalCount={allRows.length}
           testIdPrefix="spread"
+          extraFilters={geo.geoFilterUI}
         />
       </div>
       <div className="flex-1 overflow-auto">

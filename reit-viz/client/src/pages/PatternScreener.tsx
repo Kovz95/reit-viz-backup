@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -295,9 +296,10 @@ export default function PatternScreener() {
   const [clfFilters, setClfFilters] = useState<ClassFilters>(() => emptyClassFilters());
   const [clfSearch, setClfSearch] = useState("");
   const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
+  const geo = useGeoFilter(allTickers as any[], "ps-clf-geo");
   const universeFilteredTickers = useMemo(
-    () => applyClassFilters(allTickers as any[], clfFilters, clfSearch, clfManualTickers),
-    [allTickers, clfFilters, clfSearch, clfManualTickers]
+    () => geo.filterByGeo(applyClassFilters(allTickers as any[], clfFilters, clfSearch, clfManualTickers)),
+    [allTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo]
   );
 
   const [rows, setRows] = useState<ScreenerRow[]>([]);
@@ -697,6 +699,7 @@ export default function PatternScreener() {
                   filteredCount={universeFilteredTickers.length}
                   totalCount={allTickers.length}
                   testIdPrefix="ps-clf"
+                  extraFilters={geo.geoFilterUI}
                 />
                 <div className="text-[11px] text-muted-foreground">
                   {universeFilteredTickers.length} tickers selected

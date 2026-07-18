@@ -19,6 +19,7 @@ import { TrendingDown } from "@/lib/trending-down";
 import { ArrowUpDown } from "@/lib/arrow-up-down";
 import { SortAsc, SortDesc } from "lucide-react";
 import ClassificationFilters from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -430,6 +431,15 @@ export default function Performance() {
       : eventLoading;
 
   // ── Filtered & sorted rows ──
+  // Base (pre-filter) pool for the current view — feeds Country/Exchange options.
+  const geoBasePool = useMemo<any[]>(() => {
+    if (viewMode === "periods" || viewMode === "seasonality") return perfData || [];
+    if (viewMode === "monthly") return monthlyData || [];
+    if (viewMode === "seasonal-patterns") return seasonalData || [];
+    return eventData || [];
+  }, [perfData, monthlyData, seasonalData, eventData, viewMode]);
+  const geo = useGeoFilter(geoBasePool, "perf-geo");
+
   const displayRows = useMemo(() => {
     let rows: any[] = [];
     if (viewMode === "periods" || viewMode === "seasonality") rows = perfData || [];
@@ -441,7 +451,7 @@ export default function Performance() {
       rows = rows.filter((r: any) => universeTickers.has(r.ticker));
     }
 
-    return [...filterPerformanceData(rows, filters, searchText, manualTickers)].sort(
+    return [...geo.filterByGeo(filterPerformanceData(rows, filters, searchText, manualTickers))].sort(
       (a: any, b: any) => {
         let av: any, bv: any;
         if (viewMode === "events" && sortKey.startsWith("w_")) {
@@ -459,7 +469,7 @@ export default function Performance() {
         return sortAsc ? av - bv : bv - av;
       }
     );
-  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, eventStat]);
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, eventStat, geo.filterByGeo]);
 
   const handleSort = useCallback(
     (col: string) => {
@@ -753,6 +763,7 @@ export default function Performance() {
           filteredCount={displayRows.length}
           totalCount={totalRowCount}
           testIdPrefix="perf"
+          extraFilters={geo.geoFilterUI}
         />
       </div>
 

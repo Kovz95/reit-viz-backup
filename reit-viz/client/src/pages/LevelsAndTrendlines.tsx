@@ -19,6 +19,7 @@ import { g as getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { C as ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { u as useGlobalUniverse } from "@/lib/globalUniverse";
 import { filterTickersByClassification } from "@/lib/filterTickersByClassification";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import ClassificationFilters from "@/components/ClassificationFilters";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -172,11 +173,14 @@ function CrossingScreener() {
   const [skipped, setSkipped] = useState<SkippedEntry[]>([]);
   const cancelRef = useRef(false);
 
+  // Country/Exchange geo filter for the pairCombo universe.
+  const pcGeo = useGeoFilter(pcSource === "global" ? universeMetas : allTickers, "cs-paircombo-filter-geo");
+
   // ── pairCombo leg computation ──
   const pcLegs = useMemo(() => {
     if (source !== "pairCombo") return [];
-    const hasFilters =
-      pcFilters.economy.size +
+    const noFilters =
+      (pcFilters.economy.size +
         pcFilters.sector.size +
         pcFilters.subsector.size +
         pcFilters.industryGroup.size +
@@ -184,13 +188,13 @@ function CrossingScreener() {
         pcFilters.subindustry.size +
         pcManualTickers.size +
         (pcClassSearch.trim().length > 0 ? 1 : 0) ===
-      0;
-    if (hasFilters) return [];
+      0) && !pcGeo.hasActiveGeo;
+    if (noFilters) return [];
     const source_ = pcSource === "global" ? universeMetas : allTickers;
-    return filterTickersByClassification(source_, pcFilters, pcClassSearch, pcManualTickers)
+    return pcGeo.filterByGeo(filterTickersByClassification(source_, pcFilters, pcClassSearch, pcManualTickers))
       .map((t: any) => t.ticker.toUpperCase())
       .filter((t: string, idx: number, arr: string[]) => arr.indexOf(t) === idx);
-  }, [source, allTickers, universeMetas, pcSource, pcFilters, pcClassSearch, pcManualTickers]);
+  }, [source, allTickers, universeMetas, pcSource, pcFilters, pcClassSearch, pcManualTickers, pcGeo.filterByGeo, pcGeo.hasActiveGeo]);
 
   const pcPairCount = useMemo(() => {
     const n = pcLegs.length;
@@ -756,6 +760,7 @@ function CrossingScreener() {
               testIdPrefix="cs-paircombo-filter"
               source={pcSource}
               onSourceChange={setPcSource}
+              extraFilters={pcGeo.geoFilterUI}
             />
             <div className="text-[10px] text-muted-foreground">
               {pcLegs.length < 2 ? (

@@ -12,6 +12,7 @@ import ClassificationFilters, {
   deserializeClassFilters,
   type ClassFilters,
 } from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import {
@@ -162,13 +163,15 @@ export default function Ratings() {
     staleTime: 5 * 60_000,
   });
 
+  const geo = useGeoFilter(rawData ?? [], "ratings-geo");
+
   // ── Build rows ──
   const rows: RatingsRow[] = useMemo(() => {
     if (!rawData) return [];
     const activeSet = activeTickers ? new Set(activeTickers) : null;
 
     const universeFiltered = rawData.filter((t) => !activeSet || activeSet.has(t.ticker));
-    const classFiltered = applyClassFilters(universeFiltered, classFilters, search, manualTickers);
+    const classFiltered = geo.filterByGeo(applyClassFilters(universeFiltered, classFilters, search, manualTickers));
 
     return classFiltered
       .map((t) => {
@@ -206,7 +209,7 @@ export default function Ratings() {
         } as RatingsRow;
       })
       .filter((r) => r.totalCount > 0);
-  }, [rawData, activeTickers, classFilters, search, manualTickers]);
+  }, [rawData, activeTickers, classFilters, search, manualTickers, geo.filterByGeo]);
 
   // ── Sort ──
   const sortedRows = useMemo(() => {
@@ -451,6 +454,7 @@ export default function Ratings() {
           filteredCount={rows.length}
           totalCount={rawData?.length ?? 0}
           testIdPrefix="ratings"
+          extraFilters={geo.geoFilterUI}
         />
 
         <div className="ml-auto flex items-center gap-1">

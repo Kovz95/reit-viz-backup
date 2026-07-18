@@ -11,6 +11,7 @@ import ClassificationFilters, {
   deserializeClassFilters,
   type ClassFilters,
 } from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useUniverse } from "@/lib/universeContext";
 import {
   Select,
@@ -818,12 +819,15 @@ export default function Ranking() {
     });
   }, [rawRows, metrics, sparklineMap, metricWeights, metricDirections]);
 
+  const geo = useGeoFilter(compositeRows, "rank-geo");
+
   const sorted = useMemo(() => {
     let filtered = compositeRows.filter((r) =>
       metrics.some((m) => r.values[m] !== null)
     );
     if (universeTickers) filtered = filtered.filter(r => universeTickers.has(r.ticker));
     filtered = applyClassFilters(filtered, classFilters, search, manualTickers);
+    filtered = geo.filterByGeo(filtered);
 
     return filtered.sort((a, b) => {
       let av: number, bv: number;
@@ -842,7 +846,7 @@ export default function Ranking() {
       }
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, universeTickers]);
+  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, universeTickers, geo.filterByGeo]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -1424,6 +1428,7 @@ export default function Ranking() {
           filteredCount={sorted.length}
           totalCount={compositeRows.length}
           testIdPrefix="rank"
+          extraFilters={geo.geoFilterUI}
         >
           <Select value={groupBy} onValueChange={(v) => setGroupBy(v)}>
             <SelectTrigger className="h-6 w-auto min-w-[150px] text-[11px] gap-1">

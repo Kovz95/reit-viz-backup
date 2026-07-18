@@ -16,6 +16,7 @@ import { usePersistedState } from "@/lib/persistedState";
 import { createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { emptyClassFilters, filterTickersByClassification } from "@/lib/classificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { isBasketTicker } from "@/lib/basketUtils";
 import { InputSeriesSelector } from "@/lib/inputSeriesSelector";
 import { defaultInputSelection } from "@/lib/inputSeriesSelector";
@@ -592,19 +593,24 @@ export default function Trendlines() {
   const { metas: globalMetas } = useGlobalUniverse();
   const [basketTickers, setBasketTickers] = useState<string[]>([]);
 
+  // Country/Exchange geo filter for the pairCombo universe, derived from the
+  // active source pool.
+  const pairComboPool = sourceMode === "global" ? globalMetas : allTickers;
+  const geo = useGeoFilter(pairComboPool, "tl-paircombo-filter-geo");
+
   const MAX_PAIRS = 500;
   const MIN_PAIRS_WARNING = 50;
   const filteredPairLegs = useMemo(() => {
     const hasFilter =
       classFilters.economy.size + classFilters.sector.size + classFilters.subsector.size +
       classFilters.industryGroup.size + classFilters.industry.size + classFilters.subindustry.size +
-      manualTickers.size + (classSearch.trim().length > 0 ? 1 : 0) > 0;
+      manualTickers.size + (classSearch.trim().length > 0 ? 1 : 0) > 0 || geo.hasActiveGeo;
     if (!hasFilter) return [];
-    return filterTickersByClassification(
+    return geo.filterByGeo(filterTickersByClassification(
       sourceMode === "global" ? globalMetas : allTickers,
       classFilters, classSearch, manualTickers
-    ).map((t: any) => t.ticker.toUpperCase()).filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
-  }, [allTickers, globalMetas, sourceMode, classFilters, classSearch, manualTickers]);
+    )).map((t: any) => t.ticker.toUpperCase()).filter((t: string, i: number, arr: string[]) => arr.indexOf(t) === i);
+  }, [allTickers, globalMetas, sourceMode, classFilters, classSearch, manualTickers, geo.filterByGeo, geo.hasActiveGeo]);
 
   const pairComboCount = useMemo(() => {
     const n = filteredPairLegs.length;
@@ -1120,6 +1126,7 @@ export default function Trendlines() {
               testIdPrefix="tl-paircombo-filter"
               source={sourceMode}
               onSourceChange={setSourceMode}
+              extraFilters={geo.geoFilterUI}
             />
             <div className="text-[10px] text-muted-foreground">
               {filteredPairLegs.length < 2 ? (

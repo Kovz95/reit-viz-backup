@@ -13,6 +13,7 @@ import { usePairComboPicker } from "@/hooks/usePairComboPicker";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import {
   defaultFeatures,
   featurePresets,
@@ -1282,6 +1283,10 @@ export default function SimilarSetups() {
   );
   const [perTickerMode, setPerTickerMode] = React.useState(false);
 
+  // Country/Exchange geo filter for the industry classification bar.
+  const geoPool = classSource === "global" ? globalMetas : workbookTickers;
+  const geo = useGeoFilter(geoPool as any[], "ss-class-geo");
+
   // Industry ticker list
   const industryTickers = React.useMemo(() => {
     if (mode !== "industry") return [];
@@ -1295,14 +1300,16 @@ export default function SimilarSetups() {
         manualTickers.size +
         (industrySearch.trim().length > 0 ? 1 : 0) ===
       0;
-    if (hasFilters) return [];
-    return filterTickersByClassification(
-      classSource === "global" ? globalMetas : workbookTickers,
-      classFilters,
-      industrySearch,
-      manualTickers
+    if (hasFilters && !geo.hasActiveGeo) return [];
+    return geo.filterByGeo(
+      filterTickersByClassification(
+        classSource === "global" ? globalMetas : workbookTickers,
+        classFilters,
+        industrySearch,
+        manualTickers
+      )
     ).map((r: { ticker: string }) => r.ticker);
-  }, [mode, workbookTickers, globalMetas, classSource, classFilters, industrySearch, manualTickers]);
+  }, [mode, workbookTickers, globalMetas, classSource, classFilters, industrySearch, manualTickers, geo.filterByGeo]);
 
   const industryLabel = React.useMemo(() => {
     if (mode !== "industry") return "";
@@ -1843,6 +1850,7 @@ export default function SimilarSetups() {
               testIdPrefix="ss-class"
               source={classSource}
               onSourceChange={setClassSource}
+              extraFilters={geo.geoFilterUI}
             />
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] font-mono text-muted-foreground">
