@@ -189,6 +189,153 @@ function computeRegression(points: { x: number; y: number }[]): RegressionResult
 }
 
 // ---------------------------------------------------------------------------
+// Stats / ML helpers — all pure & deterministic (no Math.random / Date)
+// ---------------------------------------------------------------------------
+interface XY { x: number; y: number }
+
+// Cluster palette (reuse category colors)
+const CLUSTER_COLORS = CATEGORY_COLORS;
+
+// Deterministic PRNG (seeded) — Math.random is unavailable in this environment.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function sampleStdArr(vals: number[]): number {
+  const n = vals.length;
+  if (n < 2) return 0;
+  const m = vals.reduce((s, v) => s + v, 0) / n;
+  const v = vals.reduce((s, x) => s + (x - m) ** 2, 0) / (n - 1);
+  return Math.sqrt(v);
+}
+
+// k-means (k-means++ init, deterministic seed) over already-normalized coords.
+function kMeans(pts: XY[], k: number, seed = 0x9e3779b1): { labels: number[]; centroids: XY[] } {
+  const n = pts.length;
+  if (n === 0 || k < 1) return { labels: [], centroids: [] };
+  const K = Math.min(k, n);
+  const rng = mulberry32(seed ^ (n * 2654435761));
+  const centroids: XY[] = [{ ...pts[Math.floor(rng() * n) % n] }];
+  while (centroids.length < K) {
+    const d2 = pts.map((p) => {
+      let best = Infinity;
+      for (const c of centroids) { const dd = (p.x - c.x) ** 2 + (p.y - c.y) ** 2; if (dd < best) best = dd; }
+      return best;
+    });
+    const sum = d2.reduce((s, v) => s + v, 0);
+    if (sum <= 0) { centroids.push({ ...pts[centroids.length % n] }); continue; }
+    let r = rng() * sum, idx = 0;
+    for (; idx < n; idx++) { r -= d2[idx]; if (r <= 0) break; }
+    centroids.push({ ...pts[Math.min(idx, n - 1)] });
+  }
+  const labels = new Array(n).fill(0);
+  for (let iter = 0; iter < 60; iter++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      let best = 0, bestD = Infinity;
+      for (let c = 0; c < K; c++) {
+        const dd = (pts[i].x - centroids[c].x) ** 2 + (pts[i].y - centroids[c].y) ** 2;
+        if (dd < bestD) { bestD = dd; best = c; }
+      }
+      if (labels[i] !== best) { labels[i] = best; changed = true; }
+    }
+    const acc = Array.from({ length: K }, () => ({ x: 0, y: 0, n: 0 }));
+    for (let i = 0; i < n; i++) { const c = labels[i]; acc[c].x += pts[i].x; acc[c].y += pts[i].y; acc[c].n++; }
+    for (let c = 0; c < K; c++) if (acc[c].n > 0) centroids[c] = { x: acc[c].x / acc[c].n, y: acc[c].y / acc[c].n };
+    if (!changed && iter > 0) break;
+  }
+  return { labels, centroids };
+}
+
+// Andrew monotone-chain convex hull (returns hull vertices in input coords).
+function convexHull(points: XY[]): XY[] {
+  const pts = points.slice().sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  if (pts.length < 3) return pts;
+  const cross = (o: XY, a: XY, b: XY) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: XY[] = [];
+  for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+  const upper: XY[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
+}
+
+// LOESS (local linear, tricube weights) — returns a sorted smooth curve.
+function loessCurve(points: XY[], span: number, nOut = 64): XY[] {
+  const n = points.length;
+  if (n < 4) return [];
+  const pts = points.slice().sort((a, b) => a.x - b.x);
+  const xs = pts.map((p) => p.x);
+  const xMin = xs[0], xMax = xs[n - 1];
+  if (xMax - xMin < 1e-12) return [];
+  const k = Math.max(2, Math.floor(Math.min(1, Math.max(0.1, span)) * n));
+  const out: XY[] = [];
+  for (let i = 0; i < nOut; i++) {
+    const x0 = xMin + ((xMax - xMin) * i) / (nOut - 1);
+    const sorted = xs.map((x) => Math.abs(x - x0)).sort((a, b) => a - b);
+    const h = sorted[Math.min(k, n) - 1] || 1e-9;
+    let sw = 0, swx = 0, swy = 0, swxx = 0, swxy = 0;
+    for (let j = 0; j < n; j++) {
+      const d = Math.abs(pts[j].x - x0) / (h || 1e-9);
+      if (d >= 1) continue;
+      const w = (1 - d ** 3) ** 3;
+      sw += w; swx += w * pts[j].x; swy += w * pts[j].y; swxx += w * pts[j].x * pts[j].x; swxy += w * pts[j].x * pts[j].y;
+    }
+    if (sw === 0) continue;
+    const denom = sw * swxx - swx * swx;
+    const yhat = Math.abs(denom) < 1e-12
+      ? swy / sw
+      : (() => { const b = (sw * swxy - swx * swy) / denom; const a = (swy - b * swx) / sw; return a + b * x0; })();
+    out.push({ x: x0, y: yhat });
+  }
+  return out;
+}
+
+// Mahalanobis distance of each point from the joint centroid (2D).
+function mahalanobisDist(points: XY[]): number[] {
+  const n = points.length;
+  if (n < 3) return points.map(() => 0);
+  const mx = points.reduce((s, p) => s + p.x, 0) / n;
+  const my = points.reduce((s, p) => s + p.y, 0) / n;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of points) { sxx += (p.x - mx) ** 2; syy += (p.y - my) ** 2; sxy += (p.x - mx) * (p.y - my); }
+  sxx /= (n - 1); syy /= (n - 1); sxy /= (n - 1);
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-12) return points.map(() => 0);
+  const ixx = syy / det, iyy = sxx / det, ixy = -sxy / det;
+  return points.map((p) => {
+    const dx = p.x - mx, dy = p.y - my;
+    return Math.sqrt(Math.max(0, dx * dx * ixx + dy * dy * iyy + 2 * dx * dy * ixy));
+  });
+}
+
+// Inverse normal CDF (Acklam) — for confidence-band z, then bumped to a t-quantile.
+function invNorm(p: number): number {
+  if (p <= 0) return -6; if (p >= 1) return 6;
+  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+  const pl = 0.02425;
+  if (p < pl) { const q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+  if (p > 1 - pl) { const q = Math.sqrt(-2 * Math.log(1 - p)); return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+  const q = p - 0.5, r = q * q;
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+}
+function tCritical(conf: number, dof: number): number {
+  const z = invNorm(1 - (1 - conf) / 2);
+  if (dof >= 100) return z;
+  // Cornish–Fisher bump from z to Student-t
+  return z + (z ** 3 + z) / (4 * dof) + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96 * dof * dof);
+}
+
+// ---------------------------------------------------------------------------
 // Main Scatter page
 // ---------------------------------------------------------------------------
 export default function Scatter() {
@@ -230,6 +377,22 @@ export default function Scatter() {
   const [logY, setLogY] = useState(false);
   const [regressionLevel, setRegressionLevel] = useState("none");
 
+  // ── Stats / ML overlays ──
+  const [showKnn, setShowKnn] = useState(false);
+  const [knnK, setKnnK] = useState(5);
+  const [knnAnchor, setKnnAnchor] = useState<string | null>(null);
+  const [showKmeans, setShowKmeans] = useState(false);
+  const [kmeansK, setKmeansK] = useState(4);
+  const [showMahalanobis, setShowMahalanobis] = useState(false);
+  const [mahalThreshold, setMahalThreshold] = useState(2.5);
+  const [showHulls, setShowHulls] = useState(false);
+  const [showKde, setShowKde] = useState(false);
+  const [showLoess, setShowLoess] = useState(false);
+  const [loessSpan, setLoessSpan] = useState(0.5);
+  const [showConfBand, setShowConfBand] = useState(false);
+  const [confLevel, setConfLevel] = useState(95);
+  const [showMarginals, setShowMarginals] = useState(false);
+
   const getState = useCallback(
     () => ({
       metricX,
@@ -248,9 +411,13 @@ export default function Scatter() {
       logX,
       logY,
       regressionLevel,
+      showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
+      showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
     }),
     [metricX, metricY, metricZ, classFilters, manualTickers, colorBy, colorMode, colorMetric,
-      showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel]
+      showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel,
+      showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
+      showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -270,6 +437,20 @@ export default function Scatter() {
     if (saved.logX !== undefined) setLogX(saved.logX);
     if (saved.logY !== undefined) setLogY(saved.logY);
     if (saved.regressionLevel !== undefined) setRegressionLevel(saved.regressionLevel);
+    if (saved.showKnn !== undefined) setShowKnn(saved.showKnn);
+    if (saved.knnK !== undefined) setKnnK(saved.knnK);
+    if (saved.knnAnchor !== undefined) setKnnAnchor(saved.knnAnchor);
+    if (saved.showKmeans !== undefined) setShowKmeans(saved.showKmeans);
+    if (saved.kmeansK !== undefined) setKmeansK(saved.kmeansK);
+    if (saved.showMahalanobis !== undefined) setShowMahalanobis(saved.showMahalanobis);
+    if (saved.mahalThreshold !== undefined) setMahalThreshold(saved.mahalThreshold);
+    if (saved.showHulls !== undefined) setShowHulls(saved.showHulls);
+    if (saved.showKde !== undefined) setShowKde(saved.showKde);
+    if (saved.showLoess !== undefined) setShowLoess(saved.showLoess);
+    if (saved.loessSpan !== undefined) setLoessSpan(saved.loessSpan);
+    if (saved.showConfBand !== undefined) setShowConfBand(saved.showConfBand);
+    if (saved.confLevel !== undefined) setConfLevel(saved.confLevel);
+    if (saved.showMarginals !== undefined) setShowMarginals(saved.showMarginals);
   }, []);
 
   useWorkspaceState("scatter", getState, restoreState);
@@ -397,7 +578,84 @@ export default function Scatter() {
   const refX = refLineX !== "" ? parseFloat(refLineX) : null;
   const refY = refLineY !== "" ? parseFloat(refLineY) : null;
 
-  const margins = useMemo(() => ({ top: 20, right: 30, bottom: 50, left: 60 }), []);
+  const MARGINAL_SIZE = 46;
+  const margins = useMemo(
+    () => ({ top: 20 + (showMarginals ? MARGINAL_SIZE : 0), right: 30 + (showMarginals ? MARGINAL_SIZE : 0), bottom: 50, left: 60 }),
+    [showMarginals]
+  );
+
+  // σ-scale of each axis (data units) for distance-based methods & KDE bandwidth.
+  const axisStd = useMemo(() => {
+    const sx = sampleStdArr(transformedPoints.map((p) => p.x)) || 1;
+    const sy = sampleStdArr(transformedPoints.map((p) => p.y)) || 1;
+    return { sx, sy };
+  }, [transformedPoints]);
+
+  // k-Means clustering over σ-normalized coords → cluster per ticker + centroids (data coords).
+  const kmeansResult = useMemo(() => {
+    if (!showKmeans || transformedPoints.length < 2) return null;
+    const k = Math.max(1, Math.min(kmeansK, transformedPoints.length));
+    const norm = transformedPoints.map((p) => ({ x: p.x / axisStd.sx, y: p.y / axisStd.sy }));
+    const { labels, centroids } = kMeans(norm, k);
+    const clusterOf: Record<string, number> = {};
+    transformedPoints.forEach((p, i) => { clusterOf[p.ticker] = labels[i]; });
+    return { clusterOf, centroids: centroids.map((c) => ({ x: c.x * axisStd.sx, y: c.y * axisStd.sy })), k };
+  }, [showKmeans, kmeansK, transformedPoints, axisStd]);
+
+  // k-Nearest-Neighbors of the clicked anchor (σ-normalized Euclidean).
+  const knnResult = useMemo(() => {
+    if (!showKnn || !knnAnchor) return null;
+    const anchor = transformedPoints.find((p) => p.ticker === knnAnchor);
+    if (!anchor) return null;
+    const ax = anchor.x / axisStd.sx, ay = anchor.y / axisStd.sy;
+    const dists = transformedPoints
+      .filter((p) => p.ticker !== knnAnchor)
+      .map((p) => ({ ticker: p.ticker, d: Math.hypot(p.x / axisStd.sx - ax, p.y / axisStd.sy - ay) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, Math.max(1, knnK));
+    return { anchor: knnAnchor, neighbors: dists, neighborSet: new Set(dists.map((n) => n.ticker)) };
+  }, [showKnn, knnAnchor, knnK, transformedPoints, axisStd]);
+
+  // Mahalanobis outliers (scale-invariant, uses X/Y covariance).
+  const mahalResult = useMemo(() => {
+    if (!showMahalanobis || transformedPoints.length < 4) return null;
+    const dists = mahalanobisDist(transformedPoints.map((p) => ({ x: p.x, y: p.y })));
+    const flagged = new Set<string>();
+    transformedPoints.forEach((p, i) => { if (dists[i] > mahalThreshold) flagged.add(p.ticker); });
+    return { flagged };
+  }, [showMahalanobis, mahalThreshold, transformedPoints]);
+
+  // Convex hulls per current color-by classification group (data coords).
+  const hullsResult = useMemo(() => {
+    if (!showHulls) return null;
+    const groups: Record<string, XY[]> = {};
+    for (const p of transformedPoints) { const key = (p as any)[colorBy] || "Other"; (groups[key] ||= []).push({ x: p.x, y: p.y }); }
+    return Object.entries(groups)
+      .filter(([, pts]) => pts.length >= 3)
+      .map(([group, pts]) => ({ group, hull: convexHull(pts) }))
+      .sort((a, b) => a.group.localeCompare(b.group));
+  }, [showHulls, transformedPoints, colorBy]);
+
+  // LOESS smooth curve (data coords).
+  const loessResult = useMemo(
+    () => (!showLoess || transformedPoints.length < 6 ? null : loessCurve(transformedPoints.map((p) => ({ x: p.x, y: p.y })), loessSpan)),
+    [showLoess, transformedPoints, loessSpan]
+  );
+
+  // Confidence band around the OLS mean response.
+  const confBandResult = useMemo(() => {
+    if (!showConfBand || !overallRegression || transformedPoints.length < 4) return null;
+    const { slope, intercept } = overallRegression;
+    const n = transformedPoints.length;
+    const mx = transformedPoints.reduce((s, p) => s + p.x, 0) / n;
+    const ssxx = transformedPoints.reduce((s, p) => s + (p.x - mx) ** 2, 0);
+    let sse = 0;
+    for (const p of transformedPoints) { const r = p.y - (slope * p.x + intercept); sse += r * r; }
+    const dof = n - 2;
+    if (dof < 1 || ssxx <= 0) return null;
+    const se = Math.sqrt(sse / dof);
+    return { slope, intercept, se, t: tCritical(confLevel / 100, dof), mx, ssxx, n };
+  }, [showConfBand, overallRegression, transformedPoints, confLevel]);
 
   const naturalRange = useMemo(() => {
     if (transformedPoints.length === 0) return { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
@@ -520,6 +778,59 @@ export default function Scatter() {
     ctx.rect(margins.left, margins.top, plotW, plotH);
     ctx.clip();
 
+    // KDE density heat layer (under everything)
+    if (showKde && transformedPoints.length >= 5) {
+      const nP = transformedPoints.length;
+      const bwx = (1.06 * axisStd.sx * Math.pow(nP, -0.2)) || 1e-6;
+      const bwy = (1.06 * axisStd.sy * Math.pow(nP, -0.2)) || 1e-6;
+      const GN = 44;
+      const grid: number[] = new Array(GN * GN).fill(0);
+      let maxD = 0;
+      for (let gy = 0; gy < GN; gy++) {
+        const dataY = yMin + ((gy + 0.5) / GN) * (yMax - yMin);
+        for (let gx = 0; gx < GN; gx++) {
+          const dataX = xMin + ((gx + 0.5) / GN) * (xMax - xMin);
+          let d = 0;
+          for (const p of transformedPoints) {
+            const ux = (dataX - p.x) / bwx, uy = (dataY - p.y) / bwy;
+            d += Math.exp(-0.5 * (ux * ux + uy * uy));
+          }
+          grid[gy * GN + gx] = d;
+          if (d > maxD) maxD = d;
+        }
+      }
+      if (maxD > 0) {
+        const xEdge = (i: number) => tx(xMin + (i / GN) * (xMax - xMin));
+        const yEdge = (j: number) => ty(yMin + (j / GN) * (yMax - yMin));
+        for (let gy = 0; gy < GN; gy++) {
+          for (let gx = 0; gx < GN; gx++) {
+            const t = grid[gy * GN + gx] / maxD;
+            if (t < 0.08) continue;
+            const band = Math.ceil(t * 5) / 5; // quantize into contour-like bands
+            ctx.fillStyle = `rgba(14,165,233,${(0.05 + 0.32 * band).toFixed(3)})`;
+            const l = xEdge(gx), r = xEdge(gx + 1), b = yEdge(gy), tEdge = yEdge(gy + 1);
+            ctx.fillRect(l - 0.5, tEdge - 0.5, (r - l) + 1, (b - tEdge) + 1);
+          }
+        }
+      }
+    }
+
+    // Convex hulls per color-by group (under points)
+    if (hullsResult) {
+      hullsResult.forEach((h, idx) => {
+        if (h.hull.length < 3) return;
+        const base = GROUP_COLORS[idx % GROUP_COLORS.length];
+        ctx.beginPath();
+        h.hull.forEach((pt, i) => { const px = tx(pt.x), py = ty(pt.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+        ctx.closePath();
+        ctx.fillStyle = base.replace("0.7)", "0.08)");
+        ctx.fill();
+        ctx.strokeStyle = base.replace("0.7)", "0.55)");
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+    }
+
     // Quadrant lines
     if (showQuadrants) {
       ctx.setLineDash([6, 4]);
@@ -583,6 +894,27 @@ export default function Scatter() {
       ctx.fillText("Below = cheap", margins.left + 6, ty(midRegY) + 14);
     }
 
+    // Regression confidence band (mean-response CI around the OLS line)
+    if (confBandResult) {
+      const { slope, intercept, se, t, mx, ssxx, n: nB } = confBandResult;
+      const steps = 48;
+      const upper: [number, number][] = [];
+      const lower: [number, number][] = [];
+      for (let i = 0; i <= steps; i++) {
+        const xv = xMin + ((xMax - xMin) * i) / steps;
+        const yv = slope * xv + intercept;
+        const half = t * se * Math.sqrt(1 / nB + ((xv - mx) ** 2) / ssxx);
+        upper.push([tx(xv), ty(yv + half)]);
+        lower.push([tx(xv), ty(yv - half)]);
+      }
+      ctx.beginPath();
+      upper.forEach(([px, py], i) => (i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)));
+      for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i][0], lower[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(239,68,68,0.10)";
+      ctx.fill();
+    }
+
     // Group regressions
     if (showRegression && groupRegressions.length > 0) {
       let labelY = margins.top + 14;
@@ -621,6 +953,10 @@ export default function Scatter() {
     });
 
     const getPointColor = (p: ScatterPoint) => {
+      if (kmeansResult) {
+        const c = kmeansResult.clusterOf[p.ticker] ?? 0;
+        return CLUSTER_COLORS[c % CLUSTER_COLORS.length];
+      }
       if (colorMode === "metric" && colorMetricRange) {
         if (p.colorVal === null || p.colorVal === undefined) return "#64748b";
         const t = colorMetricRange.max === colorMetricRange.min
@@ -669,6 +1005,28 @@ export default function Scatter() {
         ctx.stroke();
       }
 
+      if (mahalResult?.flagged.has(p.ticker)) {
+        ctx.strokeStyle = "#d946ef";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 2]);
+        ctx.beginPath();
+        ctx.arc(px, py, radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (knnResult) {
+        if (p.ticker === knnResult.anchor) {
+          ctx.strokeStyle = "#fbbf24";
+          ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.arc(px, py, radius + 4, 0, Math.PI * 2); ctx.stroke();
+        } else if (knnResult.neighborSet.has(p.ticker)) {
+          ctx.strokeStyle = "#06b6d4";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(px, py, radius + 3, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+
       if (isHovered) {
         ctx.strokeStyle = "#fff";
         ctx.lineWidth = 2;
@@ -685,6 +1043,43 @@ export default function Scatter() {
         ctx.textAlign = "center";
         ctx.fillText(p.ticker, px, py - radius - 4);
       }
+    }
+
+    // KNN connector lines
+    if (knnResult) {
+      const anchorP = transformedPoints.find((p) => p.ticker === knnResult.anchor);
+      if (anchorP) {
+        const ax = tx(anchorP.x), ay = ty(anchorP.y);
+        ctx.strokeStyle = "rgba(6,182,212,0.5)";
+        ctx.lineWidth = 1;
+        for (const nb of knnResult.neighbors) {
+          const np = transformedPoints.find((p) => p.ticker === nb.ticker);
+          if (!np) continue;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tx(np.x), ty(np.y)); ctx.stroke();
+        }
+      }
+    }
+
+    // k-means centroids (diamond markers)
+    if (kmeansResult) {
+      kmeansResult.centroids.forEach((c, i) => {
+        const cx = tx(c.x), cy = ty(c.y);
+        ctx.fillStyle = CLUSTER_COLORS[i % CLUSTER_COLORS.length];
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - 7); ctx.lineTo(cx + 7, cy); ctx.lineTo(cx, cy + 7); ctx.lineTo(cx - 7, cy); ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      });
+    }
+
+    // LOESS smooth curve (over points)
+    if (loessResult && loessResult.length > 1) {
+      ctx.strokeStyle = "rgba(168,85,247,0.95)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      loessResult.forEach((pt, i) => { const px = tx(pt.x), py = ty(pt.y); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+      ctx.stroke();
     }
 
     // Hovered tooltip
@@ -750,11 +1145,43 @@ export default function Scatter() {
     }
 
     ctx.restore();
+
+    // Marginal histograms (in the top & right margins, outside the plot clip)
+    if (showMarginals && transformedPoints.length > 1) {
+      const BINS = 24;
+      const xSpanM = (xMax - xMin) || 1;
+      const ySpanM = (yMax - yMin) || 1;
+      // X histogram along the top strip
+      const binX = new Array(BINS).fill(0);
+      for (const p of transformedPoints) { let b = Math.floor(((p.x - xMin) / xSpanM) * BINS); b = Math.max(0, Math.min(BINS - 1, b)); binX[b]++; }
+      const maxX = Math.max(...binX, 1);
+      const areaH = MARGINAL_SIZE - 8;
+      const bwX = plotW / BINS;
+      ctx.fillStyle = "rgba(14,165,233,0.5)";
+      for (let b = 0; b < BINS; b++) {
+        const hgt = (binX[b] / maxX) * areaH;
+        ctx.fillRect(margins.left + b * bwX + 0.5, margins.top - 4 - hgt, bwX - 1, hgt);
+      }
+      // Y histogram along the right strip
+      const binY = new Array(BINS).fill(0);
+      for (const p of transformedPoints) { let b = Math.floor(((p.y - yMin) / ySpanM) * BINS); b = Math.max(0, Math.min(BINS - 1, b)); binY[b]++; }
+      const maxY = Math.max(...binY, 1);
+      const areaW = MARGINAL_SIZE - 8;
+      const rightX = margins.left + plotW + 4;
+      const bhY = plotH / BINS;
+      for (let b = 0; b < BINS; b++) {
+        const wdt = (binY[b] / maxY) * areaW;
+        const yTop = ty(yMin + ((b + 1) / BINS) * ySpanM);
+        ctx.fillRect(rightX, yTop, wdt, bhY - 1);
+      }
+    }
   }, [
     transformedPoints, metricX, metricY, metricZ, hoveredTicker, colorBy, categoryColorMap,
     bubbleSizeRange, showRegression, overallRegression, groupRegressions, showOutliers, outlierTickers,
     showQuadrants, refX, refY, activeRange, getScaleHelpers, margins, dragState, viewRange,
     logX, logY, colorMode, colorMetric, colorMetricRange,
+    kmeansResult, knnResult, mahalResult, hullsResult, loessResult, confBandResult,
+    showKde, showMarginals, axisStd,
   ]);
 
   // ---- Mouse handlers ----
@@ -828,7 +1255,10 @@ export default function Scatter() {
       const dw = Math.abs(drag.currentX - drag.startX);
       const dh = Math.abs(drag.currentY - drag.startY);
       if (dw < 5 && dh < 5) {
-        if (hoveredTicker) navigateToTicker(hoveredTicker);
+        if (hoveredTicker) {
+          if (showKnn) setKnnAnchor((prev) => (prev === hoveredTicker ? null : hoveredTicker));
+          else navigateToTicker(hoveredTicker);
+        }
         return;
       }
       const { fromCanvasX, fromCanvasY } = getScaleHelpers(w, h);
@@ -843,7 +1273,7 @@ export default function Scatter() {
       }
       setViewRange({ xMin: x1, xMax: x2, yMin: y1, yMax: y2 });
     },
-    [getScaleHelpers, viewRange, naturalRange, hoveredTicker]
+    [getScaleHelpers, viewRange, naturalRange, hoveredTicker, showKnn]
   );
 
   const handleWheel = useCallback(
@@ -1112,6 +1542,61 @@ export default function Scatter() {
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] text-muted-foreground">Log Y</span>
           <Switch checked={logY} onCheckedChange={setLogY} className="scale-75" />
+        </div>
+      </div>
+
+      {/* Toolbar row 2.5: Stats / ML overlays */}
+      <div className="flex items-center gap-3 px-3 py-1 border-b border-border/50 flex-wrap">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Stats / ML</span>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">KNN</span>
+          <Switch checked={showKnn} onCheckedChange={setShowKnn} className="scale-75" data-testid="scatter-knn" />
+          {showKnn && (
+            <>
+              <Input type="number" min={1} max={30} value={knnK} onChange={(e) => setKnnK(Math.max(1, Math.min(30, parseInt(e.target.value) || 5)))} className="h-6 w-[46px] text-[11px] bg-background" title="k neighbors" />
+              <span className="text-[10px] text-cyan-400 font-mono">{knnAnchor ? `→ ${knnAnchor}` : "click a point"}</span>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">k-Means</span>
+          <Switch checked={showKmeans} onCheckedChange={setShowKmeans} className="scale-75" data-testid="scatter-kmeans" />
+          {showKmeans && (
+            <Input type="number" min={2} max={12} value={kmeansK} onChange={(e) => setKmeansK(Math.max(1, Math.min(12, parseInt(e.target.value) || 4)))} className="h-6 w-[46px] text-[11px] bg-background" title="k clusters" />
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Mahalanobis</span>
+          <Switch checked={showMahalanobis} onCheckedChange={setShowMahalanobis} className="scale-75" data-testid="scatter-mahalanobis" />
+          {showMahalanobis && (
+            <Input type="number" step="0.1" min={0.5} value={mahalThreshold} onChange={(e) => setMahalThreshold(parseFloat(e.target.value) || 2.5)} className="h-6 w-[52px] text-[11px] bg-background" title="threshold" />
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Hulls</span>
+          <Switch checked={showHulls} onCheckedChange={setShowHulls} className="scale-75" data-testid="scatter-hulls" />
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Density</span>
+          <Switch checked={showKde} onCheckedChange={setShowKde} className="scale-75" data-testid="scatter-kde" />
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">LOESS</span>
+          <Switch checked={showLoess} onCheckedChange={setShowLoess} className="scale-75" data-testid="scatter-loess" />
+          {showLoess && (
+            <Input type="number" step="0.05" min={0.1} max={1} value={loessSpan} onChange={(e) => setLoessSpan(Math.max(0.1, Math.min(1, parseFloat(e.target.value) || 0.5)))} className="h-6 w-[52px] text-[11px] bg-background" title="span" />
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Conf band</span>
+          <Switch checked={showConfBand} onCheckedChange={setShowConfBand} className="scale-75" data-testid="scatter-confband" />
+          {showConfBand && (
+            <Input type="number" step="1" min={50} max={99.9} value={confLevel} onChange={(e) => setConfLevel(Math.max(50, Math.min(99.9, parseFloat(e.target.value) || 95)))} className="h-6 w-[52px] text-[11px] bg-background" title="confidence %" />
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Marginals</span>
+          <Switch checked={showMarginals} onCheckedChange={setShowMarginals} className="scale-75" data-testid="scatter-marginals" />
         </div>
       </div>
 
