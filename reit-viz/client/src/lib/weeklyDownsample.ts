@@ -27,11 +27,14 @@ export interface WeeklyResult {
  * Accepts either:
  *  - An array of OHLCVBar objects
  *  - A parallel-arrays object { dates, closes, adjCloses?, highs?, lows?, volumes? }
- * Second argument is optional and ignored (mode string preserved for call-site compat).
+ * Second argument is the bucket mode: "monthly" buckets by calendar month
+ * (flush on month change); anything else (incl. omitted/"weekly") keeps the
+ * default Friday-ending weekly buckets. Aggregation per bucket is identical:
+ * last close, max high, min low, first open, summed volume.
  */
 export function weeklyDownsample(
   bars: OHLCVBar[] | { dates: string[]; closes: number[]; adjCloses?: number[]; highs?: number[]; lows?: number[]; opens?: number[]; volumes?: number[] } | any,
-  _mode?: string
+  mode?: string
 ): WeeklyResult {
   // Normalise input into parallel arrays
   let dates: string[];
@@ -97,10 +100,20 @@ export function weeklyDownsample(
     weekStart = endIdx + 1;
   }
 
+  const monthly = mode === "monthly";
   for (let i = 0; i < n; i++) {
+    const isLastBar = i === n - 1;
+
+    if (monthly) {
+      // Calendar-month buckets: flush on the last bar of each month.
+      if (isLastBar || (dates[i + 1] || "").slice(0, 7) !== (dates[i] || "").slice(0, 7)) {
+        flush(i);
+      }
+      continue;
+    }
+
     const d = new Date(dates[i] + "T00:00:00Z");
     const dow = d.getUTCDay(); // 0=Sun, 5=Fri
-    const isLastBar = i === n - 1;
     const isFriday = dow === 5;
 
     if (isFriday || isLastBar) {

@@ -59,7 +59,7 @@ interface CrossResult {
   ticker: string;
   name: string;
   currentPrice: number;
-  kind: "level" | "trendline";
+  kind: "level" | "trendline" | "breakout";
   subtype: string;
   direction: "up" | "down";
   candlesAgo: number;
@@ -68,6 +68,10 @@ interface CrossResult {
   levelValueAtCross: number;
   distancePct: number;
   score: number;
+  /** Cross-bar volume ÷ its trailing 20-bar average (null when no volume data, e.g. pair ratios). */
+  volRatio?: number | null;
+  /** How the score was computed (title tooltip on the Score cell). */
+  scoreNote?: string;
   level?: any;
   trendline?: any;
   pairA?: string;
@@ -142,6 +146,64 @@ function getLevelLabel(level: any): string {
   if (level.type === "ma") return `MA: ${level.maType ?? "MA"}(${level.maPeriod ?? "?"})`;
   if (level.type === "fib") return `Fib ${((level.fibLevel ?? 0) * 100).toFixed(1)}%`;
   return "Horizontal";
+}
+
+// ─── Helpers (breakout detection — Donchian / squeeze / volume surge) ─────────
+
+/**
+ * For each index t, the max (isMax) or min of arr[t-N .. t-1] (the PRIOR N bars,
+ * excluding t itself). NaN while the window isn't full (t < N). Monotonic deque,
+ * O(n).
+ */
+function rollingExtremePrior(arr: number[], N: number, isMax: boolean): number[] {
+  const n = arr.length;
+  const out = new Array<number>(n).fill(NaN);
+  const deque: number[] = []; // indices with monotonically decreasing (max) / increasing (min) values
+  for (let i = 0; i < n; i++) {
+    const j = i - 1;
+    if (j >= 0 && Number.isFinite(arr[j])) {
+      while (deque.length && (isMax ? arr[deque[deque.length - 1]] <= arr[j] : arr[deque[deque.length - 1]] >= arr[j])) deque.pop();
+      deque.push(j);
+    }
+    while (deque.length && deque[0] < i - N) deque.shift();
+    if (i >= N && deque.length) out[i] = arr[deque[0]];
+  }
+  return out;
+}
+
+/** Rolling mean + population std of the trailing `w` bars (inclusive of t). NaN while t < w-1. */
+function rollingMeanStd(values: number[], w: number): { mean: number[]; sd: number[] } {
+  const n = values.length;
+  const mean = new Array<number>(n).fill(NaN);
+  const sd = new Array<number>(n).fill(NaN);
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < n; i++) {
+    const v = values[i];
+    sum += v; sumSq += v * v;
+    if (i >= w) { const o = values[i - w]; sum -= o; sumSq -= o * o; }
+    if (i >= w - 1 && Number.isFinite(sum)) {
+      const m = sum / w;
+      mean[i] = m;
+      sd[i] = Math.sqrt(Math.max(0, sumSq / w - m * m));
+    }
+  }
+  return { mean, sd };
+}
+
+/** Volume at idx ÷ average of the prior ≤20 bars' volumes. Null when volume data is missing/zero. */
+function volumeRatioAt(volumes: number[] | undefined, idx: number): number | null {
+  if (!volumes || idx < 1) return null;
+  const start = Math.max(0, idx - 20);
+  let sum = 0, cnt = 0;
+  for (let i = start; i < idx; i++) {
+    const v = volumes[i];
+    if (Number.isFinite(v) && v > 0) { sum += v; cnt++; }
+  }
+  if (cnt < 5) return null;
+  const avg = sum / cnt;
+  const v = volumes[idx];
+  if (!Number.isFinite(v) || v <= 0 || avg <= 0) return null;
+  return v / avg;
 }
 
 // ─── Helpers (presentation — replicated from the SR / Trendlines panels) ──────
@@ -420,11 +482,19 @@ export default function LevelsAndTrendlines() {
   const [scanMA, setScanMA] = useState(true);
   const [scanFib, setScanFib] = useState(true);
   const [scanTrendlines, setScanTrendlines] = useState(true);
+  const [scanDonchian, setScanDonchian] = useState(true);
+  const [donchianNs, setDonchianNs] = useState<number[]>([20, 55, 252]);
+  const [scanSqueeze, setScanSqueeze] = useState(true);
+  const [squeezePctile, setSqueezePctile] = useState(20);
   const anyLevelScan = scanHorizontal || scanMA || scanFib;
+  const anyBreakoutScan = (scanDonchian && donchianNs.length > 0) || scanSqueeze;
+  const anyDetector = anyLevelScan || scanTrendlines || anyBreakoutScan;
+  const toggleDonchianN = (n: number) => setDonchianNs((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
 
   // ── Shared params ──
   const [lookback, setLookback] = useState(1);
   const [minScore, setMinScore] = useState(0);
+  const [minVolX, setMinVolX] = useState(0);
   const [topN, setTopN] = useState(10);
   const [futureBars, setFutureBars] = useState(60);
 
@@ -541,7 +611,11 @@ export default function LevelsAndTrendlines() {
 
   // Crossing-screener table sort (header-click; "" keeps candles-ago-then-score order).
   const sort = useTableSort<CrossResult>("", "desc", "desc", "levels-crossings");
-  const sortedResults = sort.apply(results, (row, key) => {
+  const volFilteredResults = useMemo(
+    () => (minVolX > 0 ? results.filter((r) => r.volRatio != null && r.volRatio >= minVolX) : results),
+    [results, minVolX]
+  );
+  const sortedResults = sort.apply(volFilteredResults, (row, key) => {
     switch (key) {
       case "ticker": return row.ticker;
       case "kind": return row.subtype;
@@ -553,6 +627,7 @@ export default function LevelsAndTrendlines() {
       case "currentPrice": return row.currentPrice;
       case "distancePct": return row.distancePct;
       case "score": return row.score;
+      case "volRatio": return row.volRatio ?? null;
       default: return null;
     }
   });
@@ -630,6 +705,7 @@ export default function LevelsAndTrendlines() {
         pcClassSearch, pcManualTickersSer: Array.from(pcManualTickers), pcSource,
         datePreset, dateRange, timeframe,
         scanHorizontal, scanMA, scanFib, scanTrendlines,
+        scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX,
         lookback, minScore, topN, futureBars,
         srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList,
         tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken,
@@ -638,7 +714,7 @@ export default function LevelsAndTrendlines() {
         levelSort, lineSort, outerSort,
       };
     },
-    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort]
+    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -670,6 +746,11 @@ export default function LevelsAndTrendlines() {
     if (typeof state.scanMA === "boolean") setScanMA(state.scanMA);
     if (typeof state.scanFib === "boolean") setScanFib(state.scanFib);
     if (typeof state.scanTrendlines === "boolean") setScanTrendlines(state.scanTrendlines);
+    if (typeof state.scanDonchian === "boolean") setScanDonchian(state.scanDonchian);
+    if (Array.isArray(state.donchianNs)) setDonchianNs(state.donchianNs.filter((n: any) => typeof n === "number"));
+    if (typeof state.scanSqueeze === "boolean") setScanSqueeze(state.scanSqueeze);
+    if (typeof state.squeezePctile === "number") setSqueezePctile(state.squeezePctile);
+    if (typeof state.minVolX === "number") setMinVolX(state.minVolX);
     if (typeof state.lookback === "number") setLookback(state.lookback);
     if (typeof state.minScore === "number") setMinScore(state.minScore);
     if (typeof state.topN === "number") setTopN(state.topN);
@@ -710,7 +791,7 @@ export default function LevelsAndTrendlines() {
 
   // ── Run: detector + screener in one pass ──
   const handleRun = useCallback(async () => {
-    if ((!anyLevelScan && !scanTrendlines) || tickerList.length === 0 || lookback < 1 || !Number.isFinite(lookback)) return;
+    if (!anyDetector || tickerList.length === 0 || lookback < 1 || !Number.isFinite(lookback)) return;
     cancelRef.current = false;
     setRunning(true);
     setResults([]);
@@ -735,6 +816,7 @@ export default function LevelsAndTrendlines() {
         let closes: number[];
         let highs: number[];
         let lows: number[];
+        let volumes: number[] | undefined;
         let rawCloses: number[] | undefined;
         let barCount: number;
         let metric = "close";
@@ -764,6 +846,7 @@ export default function LevelsAndTrendlines() {
           closes = rangeIndices.map((v) => pairPrices[v]);
           highs = closes.slice();
           lows = closes.slice();
+          volumes = undefined; // ratio series has no volume
           rawCloses = closes.slice();
           barCount = closes.length;
           metric = "ratio";
@@ -778,19 +861,22 @@ export default function LevelsAndTrendlines() {
           lows = sliced.lows.map((l: number, idx: number) => { const c = sliced.closes[idx]; const ac = sliced.adjCloses[idx]; return c && c > 0 && Number.isFinite(c) && Number.isFinite(ac) ? l * (ac / c) : l; });
           dates = sliced.dates.slice(0, barCount);
           rawCloses = sliced.closes.slice(0, barCount);
+          volumes = Array.isArray(sliced.volumes) ? sliced.volumes.slice(0, barCount) : undefined;
         }
 
-        if (timeframe === "weekly") {
-          const weekly = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows }, "weekly");
-          if (weekly.closes.length < 30) { resultSkipped.push({ ticker: item.ticker, reason: `only ${weekly.closes.length} weekly bars (need 30)` }); setProgress({ current: i + 1, total: tickerList.length }); continue; }
-          // Downsample raw closes on the same weekly grid so send-to-Charts can map adj→raw.
-          let weeklyRaw: number[] | undefined;
-          if (rawCloses) { try { weeklyRaw = weeklyDownsample({ dates, closes: rawCloses, adjCloses: rawCloses, highs, lows }, "weekly").closes; } catch { weeklyRaw = undefined; } }
-          dates = weekly.dates;
-          closes = weekly.closes;
-          highs = weekly.highs;
-          lows = weekly.lows;
-          rawCloses = weeklyRaw && weeklyRaw.length === weekly.closes.length ? weeklyRaw : undefined;
+        if (timeframe === "weekly" || timeframe === "monthly") {
+          const minBucketBars = timeframe === "weekly" ? 30 : 24;
+          const ds = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows, volumes }, timeframe);
+          if (ds.closes.length < minBucketBars) { resultSkipped.push({ ticker: item.ticker, reason: `only ${ds.closes.length} ${timeframe} bars (need ${minBucketBars})` }); setProgress({ current: i + 1, total: tickerList.length }); continue; }
+          // Downsample raw closes on the same grid so send-to-Charts can map adj→raw.
+          let dsRaw: number[] | undefined;
+          if (rawCloses) { try { dsRaw = weeklyDownsample({ dates, closes: rawCloses, adjCloses: rawCloses, highs, lows }, timeframe).closes; } catch { dsRaw = undefined; } }
+          dates = ds.dates;
+          closes = ds.closes;
+          highs = ds.highs;
+          lows = ds.lows;
+          volumes = volumes ? ds.volumes : undefined; // summed per bucket; keep undefined when source had none
+          rawCloses = dsRaw && dsRaw.length === ds.closes.length ? dsRaw : undefined;
           barCount = closes.length;
         }
 
@@ -821,7 +907,7 @@ export default function LevelsAndTrendlines() {
               if (vc == null || vp == null) continue;
               const dir = detectCrossDirection(closes[idxPrev], closes[idxCurr], vp, vc);
               if (dir) {
-                crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "level", subtype: getLevelLabel(level), direction: dir, candlesAgo: lb + 1, crossDate: dates[idxCurr], closeAtCross: closes[idxCurr], levelValueAtCross: vc, distancePct: (currentPrice - currentVal) / currentVal, score: level.compositeScore, level, pairA: item.pairA, pairB: item.pairB });
+                crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "level", subtype: getLevelLabel(level), direction: dir, candlesAgo: lb + 1, crossDate: dates[idxCurr], closeAtCross: closes[idxCurr], levelValueAtCross: vc, distancePct: (currentPrice - currentVal) / currentVal, score: level.compositeScore, volRatio: volumeRatioAt(volumes, idxCurr), level, pairA: item.pairA, pairB: item.pairB });
                 break;
               }
             }
@@ -844,10 +930,75 @@ export default function LevelsAndTrendlines() {
               const vp = getTrendlineValue(tl, idxPrev);
               const dir = detectCrossDirection(closes[idxPrev], closes[idxCurr], vp, vc);
               if (dir) {
-                crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "trendline", subtype: `Trendline (${tl.kind})`, direction: dir, candlesAgo: lb + 1, crossDate: dates[idxCurr], closeAtCross: closes[idxCurr], levelValueAtCross: vc, distancePct: (currentPrice - currentTlVal) / currentTlVal, score: tl.compositeScore, trendline: tl, pairA: item.pairA, pairB: item.pairB });
+                crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "trendline", subtype: `Trendline (${tl.kind})`, direction: dir, candlesAgo: lb + 1, crossDate: dates[idxCurr], closeAtCross: closes[idxCurr], levelValueAtCross: vc, distancePct: (currentPrice - currentTlVal) / currentTlVal, score: tl.compositeScore, volRatio: volumeRatioAt(volumes, idxCurr), trendline: tl, pairA: item.pairA, pairB: item.pairB });
                 break;
               }
             }
+          }
+        }
+
+        // Donchian N-bar high/low breakouts (fresh crosses only)
+        if (scanDonchian && donchianNs.length > 0) {
+          for (const N of donchianNs) {
+            if (!Number.isFinite(N) || N < 2 || barCount <= N + 1) continue;
+            const label = `${N}d`;
+            const priorHigh = rollingExtremePrior(highs, N, true);
+            const priorLow = rollingExtremePrior(lows, N, false);
+            for (let lb = 0; lb < effectiveLookback; lb++) {
+              const t = barCount - 1 - lb;
+              if (t < N + 1) break;
+              const hi = priorHigh[t], hiPrev = priorHigh[t - 1];
+              const lo = priorLow[t], loPrev = priorLow[t - 1];
+              let dir: "up" | "down" | null = null;
+              let levelVal = NaN;
+              if (Number.isFinite(hi) && Number.isFinite(hiPrev) && closes[t] > hi && closes[t - 1] <= hiPrev) { dir = "up"; levelVal = hi; }
+              else if (Number.isFinite(lo) && Number.isFinite(loPrev) && closes[t] < lo && closes[t - 1] >= loPrev) { dir = "down"; levelVal = lo; }
+              if (!dir) continue;
+              const distPct = (closes[t] - levelVal) / levelVal;
+              const vr = volumeRatioAt(volumes, t);
+              const score = Math.min(1, Math.abs(distPct) * 10 + (vr != null && vr >= 2 ? 0.2 : 0));
+              if (score < minScore) break;
+              crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "breakout", subtype: dir === "up" ? `New ${label} High` : `New ${label} Low`, direction: dir, candlesAgo: lb + 1, crossDate: dates[t], closeAtCross: closes[t], levelValueAtCross: levelVal, distancePct: distPct, score, volRatio: vr, scoreNote: "score = min(1, |break distance| × 10 + 0.2 volume-surge bonus when Vol× ≥ 2)", pairA: item.pairA, pairB: item.pairB });
+              break; // most recent breakout per N
+            }
+          }
+        }
+
+        // Squeeze → expansion (Bollinger bandwidth compression then band break)
+        if (scanSqueeze && barCount >= 60) {
+          const { mean: sma20, sd: sd20 } = rollingMeanStd(closes, 20);
+          const bw = closes.map((_, t) => (Number.isFinite(sma20[t]) && sma20[t] > 0 && Number.isFinite(sd20[t]) ? (4 * sd20[t]) / sma20[t] : NaN));
+          const bwPct = new Array<number>(barCount).fill(NaN);
+          for (let t = 0; t < barCount; t++) {
+            if (!Number.isFinite(bw[t])) continue;
+            const start = Math.max(0, t - 125);
+            let below = 0, total = 0;
+            for (let k = start; k <= t; k++) { const v = bw[k]; if (Number.isFinite(v)) { total++; if (v <= bw[t]) below++; } }
+            if (total >= 40) bwPct[t] = (below / total) * 100;
+          }
+          for (let lb = 0; lb < effectiveLookback; lb++) {
+            const t = barCount - 1 - lb;
+            if (t < 20) break;
+            const upBand = sma20[t] + 2 * sd20[t];
+            const dnBand = sma20[t] - 2 * sd20[t];
+            if (!Number.isFinite(upBand) || !Number.isFinite(dnBand)) continue;
+            let hadSqueeze = false, minPct = 100;
+            for (let s = Math.max(0, t - 10); s <= t - 1; s++) {
+              if (Number.isFinite(bwPct[s]) && bwPct[s] <= squeezePctile) { hadSqueeze = true; if (bwPct[s] < minPct) minPct = bwPct[s]; }
+            }
+            if (!hadSqueeze) continue;
+            let dir: "up" | "down" | null = null;
+            let band = NaN;
+            if (closes[t] > upBand) { dir = "up"; band = upBand; }
+            else if (closes[t] < dnBand) { dir = "down"; band = dnBand; }
+            if (!dir) continue;
+            const distPct = (closes[t] - band) / band;
+            const vr = volumeRatioAt(volumes, t);
+            const tightBonus = Math.max(0, 1 - minPct / 100) * 0.5;
+            const score = Math.min(1, tightBonus + Math.abs(distPct) * 10);
+            if (score < minScore) break;
+            crossRows.push({ ticker: item.ticker, name: item.name || item.ticker, currentPrice, kind: "breakout", subtype: "Squeeze Breakout", direction: dir, candlesAgo: lb + 1, crossDate: dates[t], closeAtCross: closes[t], levelValueAtCross: band, distancePct: distPct, score, volRatio: vr, scoreNote: `score = min(1, tightness × 0.5 + |band-break distance| × 10); tightest bandwidth pctile in prior 10 bars = ${minPct.toFixed(0)}`, pairA: item.pairA, pairB: item.pairB });
+            break; // most recent squeeze breakout
           }
         }
 
@@ -868,7 +1019,7 @@ export default function LevelsAndTrendlines() {
     setSelectedLevelIdxs(Object.fromEntries(detRows.map((r) => [r.ticker, new Set([0])])));
     setSelectedLineIdxs(Object.fromEntries(detRows.map((r) => [r.ticker, new Set([0])])));
     setRunning(false);
-  }, [anyLevelScan, scanTrendlines, tickerList, lookback, dateRange, timeframe, srConfig, trendlineConfig, topN, minScore, source]);
+  }, [anyDetector, anyLevelScan, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, tickerList, lookback, dateRange, timeframe, srConfig, trendlineConfig, topN, minScore, source]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleStop = useCallback(() => { cancelRef.current = true; }, []);
@@ -946,6 +1097,9 @@ export default function LevelsAndTrendlines() {
       const det = detResults.find((d) => d.ticker === row.ticker);
       if (det) sendLinesToCharts(det, [row.trendline]);
       else sendLevelsToCharts(row.ticker, [], row.pairA, row.pairB); // fallback: nav only
+    } else if (row.kind === "breakout") {
+      // Send the broken level (prior N-bar extreme / Bollinger band) as a horizontal overlay.
+      sendLevelsToCharts(row.ticker, [{ type: "horizontal", price: row.levelValueAtCross, touchCount: 0, bounceReverseRate: 0, holdRate: 0, compositeScore: row.score }], row.pairA, row.pairB);
     }
   }, [detResults, sendLevelsToCharts, sendLinesToCharts]);
 
@@ -981,7 +1135,8 @@ export default function LevelsAndTrendlines() {
           <p className="text-[10px] text-muted-foreground">
             One pass detects horizontal S/R pivots, moving-average bounces, Fibonacci retracements, and diagonal
             trendlines for the selected source — drawn together on the merged chart below — and screens the same set
-            for recent crossings. Configure the source, methods, and detection knobs, then click Run.
+            for recent crossings and breakouts (fresh N-bar high/low breaks, squeeze → expansion moves), each with
+            volume-surge confirmation. Configure the source, methods, and detection knobs, then click Run.
           </p>
         </div>
 
@@ -1056,6 +1211,7 @@ export default function LevelsAndTrendlines() {
             <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 mt-0.5" data-testid="cs-timeframe">
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
             </select>
           </div>
           <div className="flex flex-col">
@@ -1071,6 +1227,10 @@ export default function LevelsAndTrendlines() {
             <input type="number" min={0} max={1} step={0.05} value={minScore} onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0 && v <= 1) setMinScore(v); }} className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 mt-0.5 w-20" data-testid="cs-minscore" />
           </div>
           <div className="flex flex-col">
+            <label className="text-[9px] uppercase text-muted-foreground tracking-wider" title="Hide screener rows whose cross-bar volume is below this multiple of its trailing 20-bar average. 0 = off. Rows without volume data (pair ratios) are hidden when the filter is on.">Min Vol×</label>
+            <input type="number" min={0} step={0.5} value={minVolX} onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0) setMinVolX(v); }} className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 mt-0.5 w-20" data-testid="cs-min-volx" />
+          </div>
+          <div className="flex flex-col">
             <label className="text-[9px] uppercase text-muted-foreground tracking-wider" title="Weekday bars to project horizontal/fib levels and trendlines into the future on the merged chart.">Project (bars)</label>
             <input type="number" min={0} max={500} value={futureBars} onChange={(e) => setFutureBars(Math.max(0, Math.min(500, parseInt(e.target.value) || 0)))} className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 mt-0.5 w-20" data-testid="lt-future-bars" />
           </div>
@@ -1080,7 +1240,7 @@ export default function LevelsAndTrendlines() {
             {running ? (
               <button onClick={handleStop} className="text-[11px] font-bold px-3 py-1 rounded bg-destructive text-destructive-foreground" data-testid="cs-stop">Stop</button>
             ) : (
-              <button onClick={handleRun} disabled={tickerList.length === 0 || (!anyLevelScan && !scanTrendlines)} title={!anyLevelScan && !scanTrendlines ? "Select at least one detector method" : undefined} className="text-[11px] font-bold px-4 py-1 rounded bg-primary text-primary-foreground disabled:opacity-50" data-testid="cs-run">Run</button>
+              <button onClick={handleRun} disabled={tickerList.length === 0 || !anyDetector} title={!anyDetector ? "Select at least one detector method" : undefined} className="text-[11px] font-bold px-4 py-1 rounded bg-primary text-primary-foreground disabled:opacity-50" data-testid="cs-run">Run</button>
             )}
           </div>
         </div>
@@ -1093,8 +1253,22 @@ export default function LevelsAndTrendlines() {
             <label className="flex items-center gap-1 text-[11px]" title="Moving-average bounce levels"><input type="checkbox" checked={scanMA} onChange={(e) => setScanMA(e.target.checked)} data-testid="cs-scan-ma" />Moving averages</label>
             <label className="flex items-center gap-1 text-[11px]" title="Fibonacci retracement levels"><input type="checkbox" checked={scanFib} onChange={(e) => setScanFib(e.target.checked)} data-testid="cs-scan-fib" />Fibonacci</label>
             <label className="flex items-center gap-1 text-[11px]" title="Diagonal trendlines (pivot-pair, fractals, or RANSAC)"><input type="checkbox" checked={scanTrendlines} onChange={(e) => setScanTrendlines(e.target.checked)} data-testid="cs-scan-trendlines" />Diagonal trendlines</label>
+            <label className="flex items-center gap-1 text-[11px]" title="Donchian breakout: close breaks above the prior N-bar high (or below the prior N-bar low) as a fresh cross."><input type="checkbox" checked={scanDonchian} onChange={(e) => setScanDonchian(e.target.checked)} data-testid="cs-scan-donchian" />N-bar high/low</label>
+            {scanDonchian && (
+              <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                {[{ n: 20, lbl: "20 (1mo)" }, { n: 55, lbl: "55" }, { n: 252, lbl: "252 (52wk)" }].map(({ n, lbl }) => (
+                  <label key={n} className="flex items-center gap-0.5" title={`Breakout of the prior ${n}-bar high/low`}><input type="checkbox" checked={donchianNs.includes(n)} onChange={() => toggleDonchianN(n)} data-testid={`cs-donchian-${n}`} />{lbl}</label>
+                ))}
+              </span>
+            )}
+            <label className="flex items-center gap-1 text-[11px]" title="Squeeze → expansion: Bollinger(20,2) bandwidth in the bottom percentile of its trailing 126 bars, followed by a close outside the band within 10 bars."><input type="checkbox" checked={scanSqueeze} onChange={(e) => setScanSqueeze(e.target.checked)} data-testid="cs-scan-squeeze" />Squeeze breakout</label>
+            {scanSqueeze && (
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground" title="Bandwidth percentile threshold that counts as a squeeze (lower = tighter).">
+                pctile ≤ <input type="number" min={1} max={50} step={1} value={squeezePctile} onChange={(e) => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && v >= 1 && v <= 50) setSqueezePctile(v); }} className="text-[10px] bg-background border border-border rounded px-1 py-0.5 w-12" data-testid="cs-squeeze-pctile" />
+              </span>
+            )}
             <span className="text-[10px] text-muted-foreground ml-1" data-testid="cs-detect-summary">
-              {[scanHorizontal && "Horizontal", scanMA && "MA", scanFib && "Fib", scanTrendlines && "Trendlines"].filter(Boolean).join(" · ") || <span className="text-amber-400">none selected</span>}
+              {[scanHorizontal && "Horizontal", scanMA && "MA", scanFib && "Fib", scanTrendlines && "Trendlines", scanDonchian && donchianNs.length > 0 && `Donchian ${donchianNs.join("/")}`, scanSqueeze && "Squeeze"].filter(Boolean).join(" · ") || <span className="text-amber-400">none selected</span>}
             </span>
           </div>
 
@@ -1415,13 +1589,14 @@ export default function LevelsAndTrendlines() {
         <div className="border border-border rounded">
           <div className="flex items-center justify-between px-2 py-1 bg-card/50 border-b border-border">
             <span className="text-[11px] font-bold">
-              Crossing Screener: {results.length} cross{results.length === 1 ? "" : "es"}
+              Crossing Screener: {volFilteredResults.length} signal{volFilteredResults.length === 1 ? "" : "s"}
+              {minVolX > 0 && results.length > volFilteredResults.length && (<span className="ml-2 text-[10px] text-amber-400">({results.length - volFilteredResults.length} hidden by Vol× ≥ {minVolX})</span>)}
               {skipped.length > 0 && (<span className="ml-2 text-[10px] text-muted-foreground">({skipped.length} skipped)</span>)}
             </span>
-            <span className="text-[10px] text-muted-foreground">Sorted by candles ago, then score</span>
+            <span className="text-[10px] text-muted-foreground">Crossings + breakouts · sorted by candles ago, then score</span>
           </div>
           {results.length === 0 && !running ? (
-            <div className="p-3 text-[11px] text-muted-foreground">No crossings yet. Configure source, lookback, and methods, then click Run.</div>
+            <div className="p-3 text-[11px] text-muted-foreground">No crossings or breakouts yet. Configure source, lookback, and methods, then click Run.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-[11px]">
@@ -1436,6 +1611,7 @@ export default function LevelsAndTrendlines() {
                     <th className="text-right px-2 py-1 font-mono"><SortHeader label="Level @ cross" columnKey="levelValueAtCross" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono"><SortHeader label="Current" columnKey="currentPrice" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono"><SortHeader label="Dist from level" columnKey="distancePct" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Cross-bar volume ÷ trailing 20-bar average volume. — when no volume data (e.g. pair ratios)."><SortHeader label="Vol×" columnKey="volRatio" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono"><SortHeader label="Score" columnKey="score" sort={sort} align="right" /></th>
                     <th className="px-2 py-1" />
                   </tr>
@@ -1454,7 +1630,8 @@ export default function LevelsAndTrendlines() {
                       <td className="px-2 py-1 text-right">{row.levelValueAtCross.toFixed(2)}</td>
                       <td className="px-2 py-1 text-right">{row.currentPrice.toFixed(2)}</td>
                       <td className="px-2 py-1 text-right">{(row.distancePct * 100).toFixed(2)}%</td>
-                      <td className="px-2 py-1 text-right">{row.score.toFixed(2)}</td>
+                      <td className={`px-2 py-1 text-right ${row.volRatio != null && row.volRatio >= 2 ? "text-emerald-400 font-bold" : ""}`}>{row.volRatio != null ? `${row.volRatio.toFixed(1)}×` : "—"}</td>
+                      <td className="px-2 py-1 text-right" title={row.scoreNote}>{row.score.toFixed(2)}</td>
                       <td className="px-2 py-1">
                         <button onClick={() => handleSendCross(row)} className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30" data-testid={`cs-send-${row.ticker}-${idx}`} title="Send this level/line to the Charts tab as an overlay">→ Charts</button>
                       </td>
