@@ -110,15 +110,29 @@ export function useWorkspaceTab(key: string, serialize: SerializeFn, restore: Re
   ctxRef.current = ctx;
   const restoreRef = useRef(restore);
   restoreRef.current = restore;
+  // Last pushed payload (JSON) — used to skip pushes whose content is unchanged.
+  // Several pages rebuild their serialize callback every render (unstable deps),
+  // which re-runs the push effect; pushState bumps the provider's cacheVersion
+  // state, re-rendering those pages and looping forever in dev ("Maximum update
+  // depth exceeded"). Comparing payloads breaks that cycle at the sink.
+  const lastPushedJson = useRef<string | null>(null);
+
+  const pushIfChanged = useCallback((payload: any) => {
+    let json: string | null = null;
+    try { json = JSON.stringify(payload); } catch { /* non-serializable — always push */ }
+    if (json !== null && json === lastPushedJson.current) return;
+    lastPushedJson.current = json;
+    ctxRef.current.pushState(key, payload);
+  }, [key]);
 
   const scheduleRestoredPush = useCallback((delayMs: number) => {
     if (deferredPushTimer.current) clearTimeout(deferredPushTimer.current);
     deferredPushTimer.current = setTimeout(() => {
       deferredPushTimer.current = null;
       suppressUntil.current = 0;
-      ctxRef.current.pushState(key, serializeRef.current());
+      pushIfChanged(serializeRef.current());
     }, delayMs);
-  }, [key]);
+  }, [pushIfChanged]);
 
   // On mount, restore from cache if available
   useEffect(() => {
@@ -149,11 +163,11 @@ export function useWorkspaceTab(key: string, serialize: SerializeFn, restore: Re
 
   // Push latest state into cache on every serialize change.
   // Depend ONLY on serialize — use ref for ctx to avoid re-running on
-  // cacheVersion changes.
+  // cacheVersion changes. pushIfChanged skips content-identical payloads.
   useEffect(() => {
     if (Date.now() < suppressUntil.current) return;
-    ctxRef.current.pushState(key, serialize());
-  }, [serialize, key]);
+    pushIfChanged(serialize());
+  }, [serialize, key, pushIfChanged]);
 
   // Push final snapshot on TRUE unmount only.
   useEffect(() => {
