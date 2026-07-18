@@ -56,6 +56,7 @@ import {
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import * as React from "react";
 import "@/lib/harsi";
 import "@/lib/tva";
@@ -1079,6 +1080,50 @@ export default function RSIRegimeOptimizer() {
     return list;
   }, [rankedResults, sortBy]);
 
+  // Click-to-sort on any data column. Initial key "" keeps the sortBy/RANK-BY order
+  // until the user clicks a header.
+  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const rowSummary = (row: (typeof sortedResults)[number]) => {
+    const bestCfg = row.configs.reduce(
+      (a, b) => (a.bestScore > b.bestScore ? a : b),
+      row.configs[0]
+    );
+    const summary = (
+      bestCfg?.categories.find((c) => c.category === bestCfg.bestCategory) ??
+      bestCfg?.categories.reduce(
+        (a, b) => (a.composite.score > b.composite.score ? a : b),
+        bestCfg.categories[0]
+      )
+    )?.summary;
+    return { bestCfg, summary };
+  };
+  const displayRows = sort.apply(sortedResults, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "rsi": return row.currentRSI;
+      case "currentSignal": return row.currentSignal;
+      case "bestSignal": return row.bestCategory;
+      case "score": return row.bestScore;
+      case "bestConfig": {
+        const { bestCfg } = rowSummary(row);
+        return bestCfg?.configLabel ?? null;
+      }
+      default: {
+        const { summary } = rowSummary(row);
+        if (!summary) return null;
+        if (key.startsWith("hit_")) {
+          const label = key.slice(4);
+          return returnMode === "band"
+            ? (summary as any).bandHitRate?.[label] ?? (summary.hitRate as Record<string, number>)[label]
+            : (summary.hitRate as Record<string, number>)[label];
+        }
+        if (key.startsWith("avg_")) return (summary.avgReturn as Record<string, number>)[key.slice(4)];
+        if (key.startsWith("pf_")) return (summary.profitFactor as Record<string, number>)[key.slice(3)];
+        return null;
+      }
+    }
+  });
+
   const handleExportCsv = () => {
     const horizons = FORWARD_HORIZONS.filter((_, i) => i >= 2);
     const rows = sortedResults.map((r) => {
@@ -1910,32 +1955,47 @@ export default function RSIRegimeOptimizer() {
                     <thead>
                       <tr className="bg-card text-muted-foreground">
                         <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">
-                          Ticker
+                          <SortHeader label="Ticker" columnKey="ticker" sort={sort} />
                         </th>
-                        <th className="text-center px-2 py-1 font-bold">RSI</th>
-                        <th className="text-center px-2 py-1 font-bold">Current Signal</th>
-                        <th className="text-center px-2 py-1 font-bold">Best Config</th>
-                        <th className="text-center px-2 py-1 font-bold">Best Signal</th>
+                        <th className="text-center px-2 py-1 font-bold">
+                          <SortHeader label="RSI" columnKey="rsi" sort={sort} align="center" />
+                        </th>
+                        <th className="text-center px-2 py-1 font-bold">
+                          <SortHeader label="Current Signal" columnKey="currentSignal" sort={sort} align="center" />
+                        </th>
+                        <th className="text-center px-2 py-1 font-bold">
+                          <SortHeader label="Best Config" columnKey="bestConfig" sort={sort} align="center" />
+                        </th>
+                        <th className="text-center px-2 py-1 font-bold">
+                          <SortHeader label="Best Signal" columnKey="bestSignal" sort={sort} align="center" />
+                        </th>
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map((h) => (
                           <th key={h.label} className="text-center px-2 py-1 font-bold">
-                            {returnMode === "band" ? "Band" : "Hit"} {h.label}
+                            <SortHeader
+                              label={`${returnMode === "band" ? "Band" : "Hit"} ${h.label}`}
+                              columnKey={`hit_${h.label}`}
+                              sort={sort}
+                              align="center"
+                            />
                           </th>
                         ))}
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map((h) => (
                           <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">
-                            Avg {h.label}
+                            <SortHeader label={`Avg ${h.label}`} columnKey={`avg_${h.label}`} sort={sort} align="center" />
                           </th>
                         ))}
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map((h) => (
                           <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">
-                            PF {h.label}
+                            <SortHeader label={`PF ${h.label}`} columnKey={`pf_${h.label}`} sort={sort} align="center" />
                           </th>
                         ))}
-                        <th className="text-center px-2 py-1 font-bold">Score</th>
+                        <th className="text-center px-2 py-1 font-bold">
+                          <SortHeader label="Score" columnKey="score" sort={sort} align="center" />
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedResults.map((row) => {
+                      {displayRows.map((row) => {
                         const isExpanded = expandedTicker === row.ticker;
                         const bestCfg = row.configs.reduce(
                           (a, b) => (a.bestScore > b.bestScore ? a : b),

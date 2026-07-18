@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
 import { getTickers, getTickersCacheSync } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -423,6 +424,19 @@ export function BasketMetricInspector({
 
   const aggregationKind = getAggregationKind(metric);
 
+  // Click-to-sort for the constituent table ("" = keep computed order until clicked).
+  const sort = useTableSort<ConstituentRow>("");
+  const displayRows = sort.apply(rows, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "value": return row.value;
+      case "asOf": return row.asOf;
+      case "weight": return row.weight;
+      case "contribution": return row.contribution;
+      default: return null;
+    }
+  });
+
   useEffect(() => {
     if (!open || !basket) return;
     let cancelled = false;
@@ -777,21 +791,28 @@ export function BasketMetricInspector({
               <table className="w-full text-[11px] font-mono">
                 <thead className="bg-muted/60 text-muted-foreground">
                   <tr>
-                    <th className="text-left px-2 py-1">Ticker</th>
-                    <th className="text-right px-2 py-1">Value</th>
-                    <th className="text-right px-2 py-1">As of</th>
-                    <th className="text-right px-2 py-1">Weight</th>
+                    <th className="text-left px-2 py-1"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
+                    <th className="text-right px-2 py-1"><SortHeader label="Value" columnKey="value" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1"><SortHeader label="As of" columnKey="asOf" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1"><SortHeader label="Weight" columnKey="weight" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1">
-                      {aggregationKind === "sum"
-                        ? "Adds"
-                        : aggregationKind === "harmonic"
-                          ? "w·(1/value)"
-                          : "w·value"}
+                      <SortHeader
+                        label={
+                          aggregationKind === "sum"
+                            ? "Adds"
+                            : aggregationKind === "harmonic"
+                              ? "w·(1/value)"
+                              : "w·value"
+                        }
+                        columnKey="contribution"
+                        sort={sort}
+                        align="right"
+                      />
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => {
+                  {displayRows.map((row) => {
                     const noData = !Number.isFinite(row.value);
                     const zeroWeight =
                       !noData && row.weight === 0 && aggregationKind !== "sum";

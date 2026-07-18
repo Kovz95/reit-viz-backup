@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Settings, Loader2, Download } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { driverScan } from "@/lib/driverScan";
 import { Play as PlayIcon } from "@/lib/icons";
 
@@ -572,17 +573,26 @@ function fmtNum(v: number, decimals = 2): string { return Number.isFinite(v) ? v
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function DecileTable({ title, rows, positive }: { title: string; rows: SnapshotRow[]; positive: boolean }) {
+  const sort = useTableSort<SnapshotRow>("", "desc");
+  const displayRows = sort.apply(rows, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "score": return row.score;
+      case "pctile": return row.scorePercentile;
+      default: return null;
+    }
+  });
   return (
     <div>
       <div className={cx("text-sm font-semibold mb-1", positive ? "text-green-600" : "text-red-600")}>{title}</div>
       <table className="w-full text-xs">
         <thead><tr className="text-left border-b">
-          <th className="p-1">Ticker</th>
-          <th className="p-1 text-right">Score</th>
-          <th className="p-1 text-right">Pctile</th>
+          <th className="p-1"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
+          <th className="p-1 text-right"><SortHeader label="Score" columnKey="score" sort={sort} align="right" /></th>
+          <th className="p-1 text-right"><SortHeader label="Pctile" columnKey="pctile" sort={sort} align="right" /></th>
         </tr></thead>
         <tbody>
-          {rows.map(row => (
+          {displayRows.map(row => (
             <tr key={row.ticker} className="border-b hover:bg-muted/50">
               <td className="p-1 font-mono">{row.ticker}</td>
               <td className="p-1 text-right">{fmtNum(row.score)}</td>
@@ -605,6 +615,15 @@ function UniverseRankingPanel({ snapshot, asOfDate }: { snapshot: SnapshotRow[];
     a.href = url; a.download = `rse-ranking-${asOfDate}.csv`; a.click(); URL.revokeObjectURL(url);
   };
   const decileSize = Math.ceil(snapshot.length / 10);
+  const rankSort = useTableSort<SnapshotRow>("", "desc");
+  const rankedRows = rankSort.apply(snapshot, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "score": return row.score;
+      case "pctile": return row.scorePercentile;
+      default: return null;
+    }
+  });
   return (
     <div className="bg-card border rounded-md p-4">
       <div className="flex items-center justify-between mb-3">
@@ -620,11 +639,11 @@ function UniverseRankingPanel({ snapshot, asOfDate }: { snapshot: SnapshotRow[];
         <div className="mt-2 max-h-[400px] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-card"><tr className="text-left border-b">
-              <th className="p-1">#</th><th className="p-1">Ticker</th>
-              <th className="p-1 text-right">Score</th><th className="p-1 text-right">Percentile</th>
+              <th className="p-1">#</th><th className="p-1"><SortHeader label="Ticker" columnKey="ticker" sort={rankSort} /></th>
+              <th className="p-1 text-right"><SortHeader label="Score" columnKey="score" sort={rankSort} align="right" /></th><th className="p-1 text-right"><SortHeader label="Percentile" columnKey="pctile" sort={rankSort} align="right" /></th>
             </tr></thead>
             <tbody>
-              {snapshot.map((row, idx) => (
+              {rankedRows.map((row, idx) => (
                 <tr key={row.ticker} className="border-b hover:bg-muted/50">
                   <td className="p-1">{idx + 1}</td>
                   <td className="p-1 font-mono">{row.ticker}</td>

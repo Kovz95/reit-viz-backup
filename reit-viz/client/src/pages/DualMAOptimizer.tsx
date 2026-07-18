@@ -715,6 +715,8 @@ export default function DualMAOptimizer() {
         case "profitFactor": va = ta.stats.profitFactor; vb = tb.stats.profitFactor; break;
         case "maxDD": va = ta.stats.maxDD; vb = tb.stats.maxDD; break;
         case "nTrades": va = ta.stats.nTrades; vb = tb.stats.nTrades; break;
+        case "meanRet": va = ta.stats.meanRet; vb = tb.stats.meanRet; break;
+        case "vsBH": va = ta.stats.totalReturn - ta.stats.buyHoldReturn; vb = tb.stats.totalReturn - tb.stats.buyHoldReturn; break;
         case "ticker": return sortAsc ? a.ticker.localeCompare(b.ticker) : b.ticker.localeCompare(a.ticker);
         default: va = ta.stats.sharpe; vb = tb.stats.sharpe;
       }
@@ -990,7 +992,9 @@ export default function DualMAOptimizer() {
                         <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("hitRate")}>
                           Hit% {sortIcon("hitRate")}
                         </th>
-                        <th className="text-center px-2 py-1 font-bold">Mean Ret</th>
+                        <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("meanRet")}>
+                          Mean Ret {sortIcon("meanRet")}
+                        </th>
                         <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("sharpe")}>
                           Sharpe {sortIcon("sharpe")}
                         </th>
@@ -1003,7 +1007,9 @@ export default function DualMAOptimizer() {
                         <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("totalReturn")}>
                           Total Ret {sortIcon("totalReturn")}
                         </th>
-                        <th className="text-center px-2 py-1 font-bold">vs B&H</th>
+                        <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("vsBH")}>
+                          vs B&H {sortIcon("vsBH")}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>

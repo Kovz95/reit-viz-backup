@@ -867,17 +867,46 @@ export default function SlowStochOptimizer() {
       ? enrichedResults.filter(e => e.tr.ticker.toLowerCase().includes(query) || (e.tr.name && e.tr.name.toLowerCase().includes(query)))
       : [...enrichedResults];
     const { col, dir } = runSort;
+    const useBand = returnMode === "band";
+    const bestOf = (e: typeof enrichedResults[number]) =>
+      e.longBest && e.shortBest
+        ? (e.longBest.score >= e.shortBest.score ? { side: "Long", ...e.longBest } : { side: "Short", ...e.shortBest })
+        : e.longBest ? { side: "Long", ...e.longBest }
+        : e.shortBest ? { side: "Short", ...e.shortBest }
+        : null;
+    const valueOf = (e: typeof enrichedResults[number]): number | string | null => {
+      if (col === "ticker") return e.tr.ticker;
+      if (col === "currentSignal") return e.tr.currentSignal;
+      if (col === "slowK") return e.tr.currentSlowK;
+      if (col === "slowD") return e.tr.currentSlowD;
+      if (col === "score") return Math.max(e.longBest?.score ?? -1, e.shortBest?.score ?? -1);
+      const best = bestOf(e);
+      if (!best) return null;
+      if (col === "sigs") return best.summary.count;
+      if (col === "bestConfig") return best.cfg.configLabel;
+      if (col === "side") return best.side;
+      if (col.startsWith("hit-")) {
+        const label = col.slice(4);
+        return useBand ? (best.summary.bandHitRate?.[label as HorizonLabel] ?? best.summary.hitRate[label as HorizonLabel]) : best.summary.hitRate[label as HorizonLabel];
+      }
+      if (col.startsWith("avg-")) return best.summary.avgReturn[col.slice(4) as HorizonLabel];
+      return null;
+    };
+    const isMissing = (v: number | string | null): boolean =>
+      v === null || v === undefined || (typeof v === "number" && !Number.isFinite(v));
     filtered.sort((a, b) => {
-      const aScore = Math.max(a.longBest?.score ?? -1, a.shortBest?.score ?? -1);
-      const bScore = Math.max(b.longBest?.score ?? -1, b.shortBest?.score ?? -1);
+      const av = valueOf(a), bv = valueOf(b);
+      const am = isMissing(av), bm = isMissing(bv);
+      if (am && bm) return 0;
+      if (am) return 1;   // missing always last, regardless of direction
+      if (bm) return -1;
       let d = 0;
-      if (col === "ticker") d = a.tr.ticker.localeCompare(b.tr.ticker);
-      else if (col === "currentSignal") d = a.tr.currentSignal.localeCompare(b.tr.currentSignal);
-      else d = aScore - bScore;
+      if (typeof av === "string" || typeof bv === "string") d = String(av).localeCompare(String(bv));
+      else d = (av as number) - (bv as number);
       return dir === "asc" ? d : -d;
     });
     return filtered;
-  }, [enrichedResults, runSort, filterText]);
+  }, [enrichedResults, runSort, filterText, returnMode]);
 
   const handleSort = (col: string) => {
     setRunSort(prev => prev.col === col ? { col, dir: prev.dir === "desc" ? "asc" : "desc" } : { col, dir: col === "ticker" ? "asc" : "desc" });
@@ -1295,17 +1324,37 @@ export default function SlowStochOptimizer() {
                     <th className="text-left px-3 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("ticker")}>
                       Ticker {runSort.col === "ticker" && (runSort.dir === "asc" ? "▲" : "▼")}
                     </th>
-                    <th className="text-left px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("currentSignal")}>Live Signal</th>
-                    <th className="text-right px-2 py-1.5">Slow K</th>
-                    <th className="text-right px-2 py-1.5">Slow D</th>
+                    <th className="text-left px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("currentSignal")}>
+                      Live Signal {runSort.col === "currentSignal" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
+                    <th className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("slowK")}>
+                      Slow K {runSort.col === "slowK" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
+                    <th className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("slowD")}>
+                      Slow D {runSort.col === "slowD" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
                     <th className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("score")}>
                       Score {runSort.col === "score" && (runSort.dir === "asc" ? "▲" : "▼")}
                     </th>
-                    <th className="text-left px-2 py-1.5">Best Config</th>
-                    <th className="text-left px-2 py-1.5">Side</th>
-                    <th className="text-right px-2 py-1.5">Sigs</th>
-                    {horizons.map((h: any) => <th key={h.label} className="text-right px-1.5 py-1.5">{h.label} hit</th>)}
-                    {horizons.map((h: any) => <th key={"avg" + h.label} className="text-right px-1.5 py-1.5">{h.label} avg</th>)}
+                    <th className="text-left px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("bestConfig")}>
+                      Best Config {runSort.col === "bestConfig" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
+                    <th className="text-left px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("side")}>
+                      Side {runSort.col === "side" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
+                    <th className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort("sigs")}>
+                      Sigs {runSort.col === "sigs" && (runSort.dir === "asc" ? "▲" : "▼")}
+                    </th>
+                    {horizons.map((h: any) => (
+                      <th key={h.label} className="text-right px-1.5 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort(`hit-${h.label}`)}>
+                        {h.label} hit {runSort.col === `hit-${h.label}` && (runSort.dir === "asc" ? "▲" : "▼")}
+                      </th>
+                    ))}
+                    {horizons.map((h: any) => (
+                      <th key={"avg" + h.label} className="text-right px-1.5 py-1.5 cursor-pointer hover:bg-accent" onClick={() => handleSort(`avg-${h.label}`)}>
+                        {h.label} avg {runSort.col === `avg-${h.label}` && (runSort.dir === "asc" ? "▲" : "▼")}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>

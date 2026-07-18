@@ -556,8 +556,23 @@ export default function AutoTrendlineBacktest() {
           av = a.n; bv = b.n; break;
         case "barsSinceLast":
           av = a.barsSinceLast; bv = b.barsSinceLast; break;
+        case "name":
+          av = a.name ?? ""; bv = b.name ?? ""; break;
+        case "kind":
+          av = CROSS_KIND_LABELS[a.kind] ?? a.kind; bv = CROSS_KIND_LABELS[b.kind] ?? b.kind; break;
+        case "direction":
+          av = a.direction; bv = b.direction; break;
+        case "lastSignalDate":
+          av = a.lastSignalDate ?? ""; bv = b.lastSignalDate ?? ""; break;
         default:
-          av = a.ticker; bv = b.ticker; break;
+          if (sortKey.startsWith("horizon_")) {
+            const label = sortKey.slice("horizon_".length);
+            av = a.hitRate[label] ?? -Infinity;
+            bv = b.hitRate[label] ?? -Infinity;
+          } else {
+            av = a.ticker; bv = b.ticker;
+          }
+          break;
       }
       return typeof av === "string" && typeof bv === "string"
         ? dir * av.localeCompare(bv)
@@ -1054,15 +1069,30 @@ export default function AutoTrendlineBacktest() {
                 >
                   Ticker{sortIndicator("ticker")}
                 </th>
-                <th className="text-left px-2 py-1.5">Name</th>
+                <th
+                  className="text-left px-2 py-1.5 cursor-pointer hover:bg-muted/50"
+                  onClick={() => handleSort("name")}
+                >
+                  Name{sortIndicator("name")}
+                </th>
                 <th
                   className="text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50"
                   onClick={() => handleSort("n")}
                 >
                   n{sortIndicator("n")}
                 </th>
-                <th className="text-left px-2 py-1.5">Cross Kind</th>
-                <th className="text-center px-2 py-1.5">Dir</th>
+                <th
+                  className="text-left px-2 py-1.5 cursor-pointer hover:bg-muted/50"
+                  onClick={() => handleSort("kind")}
+                >
+                  Cross Kind{sortIndicator("kind")}
+                </th>
+                <th
+                  className="text-center px-2 py-1.5 cursor-pointer hover:bg-muted/50"
+                  onClick={() => handleSort("direction")}
+                >
+                  Dir{sortIndicator("direction")}
+                </th>
                 <th
                   className="text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50"
                   onClick={() => handleSort("count")}
@@ -1076,7 +1106,12 @@ export default function AutoTrendlineBacktest() {
                 >
                   Bars Ago{sortIndicator("barsSinceLast")}
                 </th>
-                <th className="text-right px-2 py-1.5">Last Date</th>
+                <th
+                  className="text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50"
+                  onClick={() => handleSort("lastSignalDate")}
+                >
+                  Last Date{sortIndicator("lastSignalDate")}
+                </th>
                 <th
                   className="text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50"
                   onClick={() => handleSort("hitRate")}
@@ -1094,10 +1129,11 @@ export default function AutoTrendlineBacktest() {
                 {HORIZONS.map((h) => (
                   <th
                     key={h.label}
-                    className="text-right px-2 py-1.5"
-                    title={`Hit rate · avg return at ${h.label}`}
+                    className="text-right px-2 py-1.5 cursor-pointer hover:bg-muted/50"
+                    onClick={() => handleSort("horizon_" + h.label)}
+                    title={`Hit rate · avg return at ${h.label} (sorts by hit rate)`}
                   >
-                    {h.label}
+                    {h.label}{sortIndicator("horizon_" + h.label)}
                   </th>
                 ))}
                 <th

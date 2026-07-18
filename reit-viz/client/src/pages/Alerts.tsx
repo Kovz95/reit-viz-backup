@@ -6,6 +6,7 @@ import { createLucideIcon } from "@/lib/createLucideIcon";
 import { apiRequest } from "@/lib/apiRequest";
 import { getTickers, type TickerMeta } from "@/lib/dataService";
 import { groupMetricsRecord, DERIVED_METRICS } from "@/lib/metricCategories";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -131,6 +132,17 @@ interface AlertGroupProps {
 }
 
 function AlertGroup({ title, alerts, badgeClass, onToggle, onDelete, onReset }: AlertGroupProps) {
+  const sort = useTableSort<Alert>(""); // keep incoming order until a header is clicked
+  const sortedAlerts = sort.apply(alerts, (alert, key) => {
+    switch (key) {
+      case "ticker": return alert.ticker;
+      case "condition": return `${alert.metric} ${OPERATOR_LABELS[alert.operator] || alert.operator} ${alert.threshold}`;
+      case "label": return alert.label;
+      case "lastValue": return alert.triggeredValue != null ? parseFloat(alert.triggeredValue) : null;
+      case "triggered": return alert.triggeredAt ? new Date(alert.triggeredAt).getTime() : null;
+      default: return null;
+    }
+  });
   return (
     <div>
       <div className="flex items-center gap-2 mb-1.5">
@@ -144,19 +156,19 @@ function AlertGroup({ title, alerts, badgeClass, onToggle, onDelete, onReset }: 
           <thead>
             <tr className="bg-muted/20 border-b border-border">
               <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Ticker
+                <SortHeader label="Ticker" columnKey="ticker" sort={sort} />
               </th>
               <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Condition
+                <SortHeader label="Condition" columnKey="condition" sort={sort} />
               </th>
               <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Label
+                <SortHeader label="Label" columnKey="label" sort={sort} />
               </th>
               <th className="text-right px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Last Value
+                <SortHeader label="Last Value" columnKey="lastValue" sort={sort} align="right" />
               </th>
               <th className="text-right px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                Triggered
+                <SortHeader label="Triggered" columnKey="triggered" sort={sort} align="right" />
               </th>
               <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider w-[100px]">
                 Actions
@@ -164,7 +176,7 @@ function AlertGroup({ title, alerts, badgeClass, onToggle, onDelete, onReset }: 
             </tr>
           </thead>
           <tbody>
-            {alerts.map((alert) => (
+            {sortedAlerts.map((alert) => (
               <tr
                 key={alert.id}
                 className="border-b border-border/30 hover:bg-muted/10 transition-colors"

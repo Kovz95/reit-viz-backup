@@ -23,6 +23,7 @@ import { Download, Loader2, ExternalLink } from "lucide-react";
 import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
 import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { useUniverseSignature } from "@/lib/universeSignature";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
   createChart,
   CrosshairMode,
@@ -474,6 +475,7 @@ export default function PairRatios() {
   const [lookback, setLookback] = useState("252");
   const [zThreshold, setZThreshold] = useState(2);
   const [sortBy, setSortBy] = useState("zscore");
+  const headerSort = useTableSort<RatioPair>(""); // click-to-sort headers; "" = defer to sortBy dropdown
   const [showZScore, setShowZScore] = useState(true);
   const [selectedPair, setSelectedPair] = useState<RatioPair | null>(null);
   const [filterMode, setFilterMode] = useState("all");
@@ -698,12 +700,27 @@ export default function PairRatios() {
 
   useEffect(() => {
     setPage(0);
-  }, [filterMode, sortBy, metric, lookback, zThreshold, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
+  }, [filterMode, sortBy, headerSort.sortKey, headerSort.sortDir, metric, lookback, zThreshold, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]);
 
-  const totalPages = Math.max(1, Math.ceil(searchFilteredPairs.length / 100));
+  // Header click-sort applied to the FULL filtered list before paging; "" keeps
+  // the dropdown (sortBy) order until a column header is clicked.
+  const headerSortedPairs = headerSort.apply(searchFilteredPairs, (p, key) => {
+    switch (key) {
+      case "pair": return `${p.tickerA}/${p.tickerB}`;
+      case "ratio": return p.currentRatio;
+      case "zscore": return p.zScore;
+      case "mean": return p.mean;
+      case "std": return p.std;
+      case "chg30": return p.pctChange30d;
+      case "chg90": return p.pctChange90d;
+      default: return null;
+    }
+  });
+
+  const totalPages = Math.max(1, Math.ceil(headerSortedPairs.length / 100));
   const pagedPairs = useMemo(
-    () => searchFilteredPairs.slice(page * 100, (page + 1) * 100),
-    [searchFilteredPairs, page]
+    () => headerSortedPairs.slice(page * 100, (page + 1) * 100),
+    [headerSortedPairs, page]
   );
 
   const extremeCount = useMemo(
@@ -1123,13 +1140,13 @@ export default function PairRatios() {
               <table className="w-full table-fixed text-[11px] font-mono">
                 <thead className="sticky top-0 z-10 bg-card border-b border-border">
                   <tr>
-                    <th className="text-left px-3 py-2 font-semibold text-muted-foreground w-[140px]">Pair (A/B)</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[90px]">Ratio</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[70px]">Z-Score</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">Mean</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]">Std</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">30d Chg</th>
-                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]">90d Chg</th>
+                    <th className="text-left px-3 py-2 font-semibold text-muted-foreground w-[140px]"><SortHeader label="Pair (A/B)" columnKey="pair" sort={headerSort} /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[90px]"><SortHeader label="Ratio" columnKey="ratio" sort={headerSort} align="right" /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[70px]"><SortHeader label="Z-Score" columnKey="zscore" sort={headerSort} align="right" /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]"><SortHeader label="Mean" columnKey="mean" sort={headerSort} align="right" /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[60px]"><SortHeader label="Std" columnKey="std" sort={headerSort} align="right" /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]"><SortHeader label="30d Chg" columnKey="chg30" sort={headerSort} align="right" /></th>
+                    <th className="text-right px-2 py-2 font-semibold text-muted-foreground w-[65px]"><SortHeader label="90d Chg" columnKey="chg90" sort={headerSort} align="right" /></th>
                     <th className="px-2 py-2 font-semibold text-muted-foreground w-[180px] min-w-[180px] max-w-[180px]">Ratio Z-Score Chart</th>
                   </tr>
                 </thead>

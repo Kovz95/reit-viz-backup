@@ -456,6 +456,11 @@ export default function PairsScreener() {
     return [...filtered].sort((a, b) => {
       switch (sortKey) {
         case "pValue": return (a.pValue - b.pValue) * dir;
+        case "adfStat": {
+          const fa = Number.isFinite(a.adfStat) ? a.adfStat : Infinity;
+          const fb = Number.isFinite(b.adfStat) ? b.adfStat : Infinity;
+          return (fa - fb) * dir;
+        }
         case "pValueRecent": return (a.pValueRecent - b.pValueRecent) * dir;
         case "halfLife": return (a.halfLife - b.halfLife) * dir;
         case "absZ": return (Math.abs(a.currentZ) - Math.abs(b.currentZ)) * dir;
@@ -706,7 +711,7 @@ export default function PairsScreener() {
               <tr className="text-left text-muted-foreground">
                 <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("ticker")}><div className="flex items-center gap-1">Pair <SortIcon col="ticker" /></div></th>
                 <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("pValue")}><div className="flex items-center gap-1">Coint p <SortIcon col="pValue" /></div></th>
-                <th className="px-3 py-2">ADF</th>
+                <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("adfStat")}><div className="flex items-center gap-1">ADF <SortIcon col="adfStat" /></div></th>
                 <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("halfLife")}><div className="flex items-center gap-1">Half-Life (d) <SortIcon col="halfLife" /></div></th>
                 <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("hedgeRatio")}><div className="flex items-center gap-1">Hedge β{model === "ratio" && <span className="text-muted-foreground/60">(=1)</span>} <SortIcon col="hedgeRatio" /></div></th>
                 <th className="px-3 py-2 cursor-pointer hover:text-foreground" onClick={() => handleSort("absZ")}><div className="flex items-center gap-1">{model === "ols" ? "Current OLS Z" : "Current Ratio Z"} <SortIcon col="absZ" /></div></th>

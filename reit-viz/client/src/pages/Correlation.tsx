@@ -64,6 +64,7 @@ import {
   Zap,
 } from "lucide-react";
 import ExportMenu from "@/components/ExportMenu";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ── Types ──
 interface TickerMeta {
@@ -296,15 +297,39 @@ function DriverScanResults({
   onShowAll: () => void;
   onPin?: (row: any) => void;
 }) {
-  const display = showAll ? rows : rows.slice(0, 30);
+  // Click-to-sort; "" keeps the incoming rank order until a header is clicked.
+  const sort = useTableSort<any>("");
+  const sortedRows = sort.apply(rows, (r, key) => {
+    switch (key) {
+      case "label": return r.label;
+      case "category": return r.category;
+      case "bestAbsCorr": return r.bestAbsCorr;
+      case "spearman": return r.spearman;
+      case "bestWindow": return r.bestWindow;
+      case "bestLag": return r.bestLag;
+      case "stability": return r.stability;
+      case "pVal": return r.pVal;
+      default: return null;
+    }
+  });
+  const display = showAll ? sortedRows : sortedRows.slice(0, 30);
+  const thCls = "px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap bg-card/50";
   return (
     <div data-testid="driver-scan-results" className="overflow-auto">
       <table className="text-[11px] font-mono w-full border-collapse">
         <thead>
           <tr className="border-b border-border/40">
-            {["#", "Factor", "Category", "Best |ρ|", "Spearman", "Window", "Lag", "Stability", "p-val", "Sparkline", "Action"].map(h => (
-              <th key={h} className="px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap bg-card/50">{h}</th>
-            ))}
+            <th className={thCls}>#</th>
+            <th className={thCls}><SortHeader label="Factor" columnKey="label" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Category" columnKey="category" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Best |ρ|" columnKey="bestAbsCorr" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Spearman" columnKey="spearman" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Window" columnKey="bestWindow" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Lag" columnKey="bestLag" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="Stability" columnKey="stability" sort={sort} /></th>
+            <th className={thCls}><SortHeader label="p-val" columnKey="pVal" sort={sort} /></th>
+            <th className={thCls}>Sparkline</th>
+            <th className={thCls}>Action</th>
           </tr>
         </thead>
         <tbody>

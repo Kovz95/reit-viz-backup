@@ -1468,18 +1468,67 @@ export default function HarsiOptimizer() {
         )
       : [...processedRows];
     const { col, dir } = sortState;
+    const bestOf = (r: (typeof filtered)[number]) => {
+      const lb = r.longBest,
+        sb = r.shortBest;
+      if (lb && sb) return lb.score >= sb.score ? lb : sb;
+      return lb ?? sb ?? null;
+    };
+    const numVal = (r: (typeof filtered)[number], key: string): number | null => {
+      switch (key) {
+        case "rsi":
+          return r.tr.currentRsi;
+        case "k":
+          return r.tr.currentStochK;
+        case "d":
+          return r.tr.currentStochD;
+        case "ha":
+          return r.tr.currentHaClose;
+        case "score":
+          return Math.max(r.longBest?.score ?? -1, r.shortBest?.score ?? -1);
+        default: {
+          const best = bestOf(r);
+          if (!best) return null;
+          if (key === "sigs") return best.summary.count;
+          if (key.startsWith("hit_")) {
+            const label = key.slice(4);
+            return returnMode === "band"
+              ? (best.summary as any).bandHitRate?.[label] ??
+                  (best.summary.hitRate as Record<string, number>)[label]
+              : (best.summary.hitRate as Record<string, number>)[label];
+          }
+          if (key.startsWith("avg_")) {
+            const label = key.slice(4);
+            return (best.summary.avgReturn as Record<string, number>)[label];
+          }
+          return null;
+        }
+      }
+    };
+    const isMissing = (v: number | null) =>
+      v === null || v === undefined || !Number.isFinite(v);
     filtered.sort((a, b) => {
-      const scoreA = Math.max(a.longBest?.score ?? -1, a.shortBest?.score ?? -1);
-      const scoreB = Math.max(b.longBest?.score ?? -1, b.shortBest?.score ?? -1);
       let cmp = 0;
-      if (col === "ticker") cmp = a.tr.ticker.localeCompare(b.tr.ticker);
-      else if (col === "currentSignal")
+      if (col === "ticker") {
+        cmp = a.tr.ticker.localeCompare(b.tr.ticker);
+        return dir === "asc" ? cmp : -cmp;
+      }
+      if (col === "currentSignal") {
         cmp = a.tr.currentSignal.localeCompare(b.tr.currentSignal);
-      else cmp = scoreA - scoreB;
+        return dir === "asc" ? cmp : -cmp;
+      }
+      const av = numVal(a, col),
+        bv = numVal(b, col);
+      const am = isMissing(av),
+        bm = isMissing(bv);
+      if (am && bm) return 0;
+      if (am) return 1;
+      if (bm) return -1;
+      cmp = (av as number) - (bv as number);
       return dir === "asc" ? cmp : -cmp;
     });
     return filtered;
-  }, [processedRows, filterText, sortState]);
+  }, [processedRows, filterText, sortState, returnMode]);
 
   const handleSort = (col: string) => {
     setSortState((prev) =>
@@ -2460,10 +2509,38 @@ export default function HarsiOptimizer() {
                       >
                         Live Signal
                       </th>
-                      <th className="text-right px-2 py-1.5">RSI</th>
-                      <th className="text-right px-2 py-1.5">K</th>
-                      <th className="text-right px-2 py-1.5">D</th>
-                      <th className="text-right px-2 py-1.5">HA</th>
+                      <th
+                        className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
+                        onClick={() => handleSort("rsi")}
+                      >
+                        RSI{" "}
+                        {sortState.col === "rsi" &&
+                          (sortState.dir === "asc" ? "▲" : "▼")}
+                      </th>
+                      <th
+                        className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
+                        onClick={() => handleSort("k")}
+                      >
+                        K{" "}
+                        {sortState.col === "k" &&
+                          (sortState.dir === "asc" ? "▲" : "▼")}
+                      </th>
+                      <th
+                        className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
+                        onClick={() => handleSort("d")}
+                      >
+                        D{" "}
+                        {sortState.col === "d" &&
+                          (sortState.dir === "asc" ? "▲" : "▼")}
+                      </th>
+                      <th
+                        className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
+                        onClick={() => handleSort("ha")}
+                      >
+                        HA{" "}
+                        {sortState.col === "ha" &&
+                          (sortState.dir === "asc" ? "▲" : "▼")}
+                      </th>
                       <th
                         className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
                         onClick={() => handleSort("score")}
@@ -2474,15 +2551,34 @@ export default function HarsiOptimizer() {
                       </th>
                       <th className="text-left px-2 py-1.5">Best Config</th>
                       <th className="text-left px-2 py-1.5">Side</th>
-                      <th className="text-right px-2 py-1.5">Sigs</th>
+                      <th
+                        className="text-right px-2 py-1.5 cursor-pointer hover:bg-accent"
+                        onClick={() => handleSort("sigs")}
+                      >
+                        Sigs{" "}
+                        {sortState.col === "sigs" &&
+                          (sortState.dir === "asc" ? "▲" : "▼")}
+                      </th>
                       {horizons.map((h) => (
-                        <th key={h.label} className="text-right px-1.5 py-1.5">
-                          {h.label} hit
+                        <th
+                          key={h.label}
+                          className="text-right px-1.5 py-1.5 cursor-pointer hover:bg-accent"
+                          onClick={() => handleSort("hit_" + h.label)}
+                        >
+                          {h.label} hit{" "}
+                          {sortState.col === "hit_" + h.label &&
+                            (sortState.dir === "asc" ? "▲" : "▼")}
                         </th>
                       ))}
                       {horizons.map((h) => (
-                        <th key={"avg" + h.label} className="text-right px-1.5 py-1.5">
-                          {h.label} avg
+                        <th
+                          key={"avg" + h.label}
+                          className="text-right px-1.5 py-1.5 cursor-pointer hover:bg-accent"
+                          onClick={() => handleSort("avg_" + h.label)}
+                        >
+                          {h.label} avg{" "}
+                          {sortState.col === "avg_" + h.label &&
+                            (sortState.dir === "asc" ? "▲" : "▼")}
                         </th>
                       ))}
                     </tr>

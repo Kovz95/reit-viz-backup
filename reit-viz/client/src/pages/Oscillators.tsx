@@ -29,6 +29,7 @@ import { refreshTickerData } from "@/lib/dataService";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { PresetBar } from "@/components/PresetBar";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
   stochOscillator,
   detectSignals,
@@ -1137,6 +1138,33 @@ export default function Oscillators() {
     return filtered;
   }, [rankedResults, sortBy, subMode, ewoDisplay, filterText]);
 
+  // Header click-sort (layers on top of the sortBy button order)
+  const headerSort = useTableSort<(typeof filteredSortedResults)[number]>("", "desc");
+  const displayResults = headerSort.apply(filteredSortedResults, (e, key) => {
+    if (key === "ticker") return e.ticker;
+    if (key === "value") {
+      const usePct = subMode === "ewo" && ewoDisplay === "pct";
+      return usePct ? (e.currentValuePct ?? null) : (e.currentValue ?? null);
+    }
+    if (key === "signal") return e.currentSignal;
+    if (key === "config") {
+      const bestCfg = e.configs.reduce((a: any, b: any) => (a.bestScore > b.bestScore ? a : b), e.configs[0]);
+      return bestCfg?.configLabel ?? null;
+    }
+    if (key === "side") return e.bestCategory;
+    if (key === "score") return e.bestScore;
+    const bestCfg = e.configs.reduce((a: any, b: any) => (a.bestScore > b.bestScore ? a : b), e.configs[0]);
+    const bestSummary = bestCfg?.categories.reduce((a: any, b: any) => (a.composite.score > b.composite.score ? a : b), bestCfg.categories[0])?.summary;
+    if (!bestSummary) return null;
+    if (key.startsWith("hit-")) {
+      const label = key.slice(4);
+      return returnMode === "band" ? (bestSummary.bandHitRate?.[label] ?? bestSummary.hitRate[label]) : bestSummary.hitRate[label];
+    }
+    if (key.startsWith("avg-")) return bestSummary.avgReturn[key.slice(4)];
+    if (key.startsWith("pf-")) return bestSummary.profitFactor[key.slice(3)];
+    return null;
+  });
+
   const exportCsv = () => {
     const horizons = je.filter((_: any, i: number) => i >= 2);
     const rows = filteredSortedResults.map((e) => {
@@ -1853,25 +1881,25 @@ export default function Oscillators() {
                   <table className="w-full text-[10px] font-mono">
                     <thead>
                       <tr className="bg-card text-muted-foreground">
-                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">Ticker</th>
-                        <th className="text-center px-2 py-1 font-bold">{valueColLabel}</th>
-                        <th className="text-center px-2 py-1 font-bold">Current Signal</th>
-                        <th className="text-center px-2 py-1 font-bold">Best Config</th>
-                        <th className="text-center px-2 py-1 font-bold">Best Side</th>
+                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border"><SortHeader label="Ticker" columnKey="ticker" sort={headerSort} /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label={valueColLabel} columnKey="value" sort={headerSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Current Signal" columnKey="signal" sort={headerSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Best Config" columnKey="config" sort={headerSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Best Side" columnKey="side" sort={headerSort} align="center" /></th>
                         {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
-                          <th key={h.label} className="text-center px-2 py-1 font-bold">{returnMode === "band" ? "Band" : "Hit"} {h.label}</th>
+                          <th key={h.label} className="text-center px-2 py-1 font-bold"><SortHeader label={`${returnMode === "band" ? "Band" : "Hit"} ${h.label}`} columnKey={`hit-${h.label}`} sort={headerSort} align="center" /></th>
                         ))}
                         {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
-                          <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">Avg {h.label}</th>
+                          <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold"><SortHeader label={`Avg ${h.label}`} columnKey={`avg-${h.label}`} sort={headerSort} align="center" /></th>
                         ))}
                         {(je as readonly any[]).filter((_: any, i: number) => i >= 2).map((h: any) => (
-                          <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
+                          <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold"><SortHeader label={`PF ${h.label}`} columnKey={`pf-${h.label}`} sort={headerSort} align="center" /></th>
                         ))}
-                        <th className="text-center px-2 py-1 font-bold">Score</th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Score" columnKey="score" sort={headerSort} align="center" /></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredSortedResults.map((e) => {
+                      {displayResults.map((e) => {
                         const isExpanded = expandedTicker === e.ticker;
                         const bestCfg = e.configs.reduce(
                           (a: any, b: any) => (a.bestScore > b.bestScore ? a : b),

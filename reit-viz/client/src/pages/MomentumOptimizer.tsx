@@ -28,6 +28,7 @@ import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import type { BasketOhlcBar } from "@/lib/basketOhlc";
@@ -919,6 +920,25 @@ export default function MomentumOptimizer() {
     return arr;
   }, [scoredResults, sortBy]);
 
+  // Header click-sort (layers on top of the sortBy button order)
+  const headerSort = useTableSort<(typeof scoredResults)[number]>("", "desc");
+  const displayResults = headerSort.apply(sortedResults, (r, key) => {
+    if (key === "ticker") return r.ticker;
+    if (key === "signal") return r.currentSignal;
+    if (key === "category") return r.bestCategory;
+    if (key === "score") return r.bestScore;
+    const bestCfg = r.configs.reduce((a, b) => a.bestScore > b.bestScore ? a : b, r.configs[0]);
+    const bestSummary: any = bestCfg?.categories.reduce((a, b) => a.composite.score > b.composite.score ? a : b, bestCfg.categories[0])?.summary;
+    if (!bestSummary) return null;
+    if (key.startsWith("hit-")) {
+      const label = key.slice(4);
+      return returnMode === "band" ? (bestSummary.bandHitRate?.[label] ?? bestSummary.hitRate[label]) : bestSummary.hitRate[label];
+    }
+    if (key.startsWith("avg-")) return bestSummary.avgReturn[key.slice(4)];
+    if (key.startsWith("pf-")) return bestSummary.profitFactor[key.slice(3)];
+    return null;
+  });
+
   const exportCsv = () => {
     if (!sortedResults || sortedResults.length === 0) return;
     const horizons = FORWARD_HORIZONS.filter((_, i) => i >= 2);
@@ -1487,25 +1507,25 @@ export default function MomentumOptimizer() {
                   <table className="w-full text-[10px] font-mono">
                     <thead>
                       <tr className="bg-card text-muted-foreground">
-                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">Ticker</th>
-                        <th className="text-center px-2 py-1 font-bold">Current Signal</th>
-                        <th className="text-center px-2 py-1 font-bold">Best Category</th>
+                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border"><SortHeader label="Ticker" columnKey="ticker" sort={headerSort} /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Current Signal" columnKey="signal" sort={headerSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Best Category" columnKey="category" sort={headerSort} align="center" /></th>
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map(h => (
                           <th key={h.label} className="text-center px-2 py-1 font-bold">
-                            {returnMode === "band" ? "Band" : "Hit"} {h.label}
+                            <SortHeader label={`${returnMode === "band" ? "Band" : "Hit"} ${h.label}`} columnKey={`hit-${h.label}`} sort={headerSort} align="center" />
                           </th>
                         ))}
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map(h => (
-                          <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">Avg {h.label}</th>
+                          <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold"><SortHeader label={`Avg ${h.label}`} columnKey={`avg-${h.label}`} sort={headerSort} align="center" /></th>
                         ))}
                         {FORWARD_HORIZONS.filter((_, i) => i >= 2).map(h => (
-                          <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
+                          <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold"><SortHeader label={`PF ${h.label}`} columnKey={`pf-${h.label}`} sort={headerSort} align="center" /></th>
                         ))}
-                        <th className="text-center px-2 py-1 font-bold">Score</th>
+                        <th className="text-center px-2 py-1 font-bold"><SortHeader label="Score" columnKey="score" sort={headerSort} align="center" /></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedResults.map(r => {
+                      {displayResults.map(r => {
                         const isExpanded = expandedTicker === r.ticker;
                         const bestCfg = r.configs.reduce((a, b) => a.bestScore > b.bestScore ? a : b, r.configs[0]);
                         const bestSummary = bestCfg?.categories.reduce((a, b) => a.composite.score > b.composite.score ? a : b, bestCfg.categories[0])?.summary;

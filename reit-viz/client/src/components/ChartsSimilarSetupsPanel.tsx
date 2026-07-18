@@ -10,6 +10,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Sparkles, ChevronDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import { getOhlcData, type OhlcPoint } from "@/lib/dataService";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ── Signal keys + labels (bundle M2 / PT) ───────────────────────────────────
 type SignalKey = "smaDist50" | "smaDist200" | "ret20" | "ret63" | "vol30" | "rsi14";
@@ -444,6 +445,25 @@ export function ChartsSimilarSetupsPanel({
     };
   }, [ticker, ohlc, topN, excludeLast, enabledSignals]);
 
+  // Click-to-sort for the matched-dates table ("" = keep nearest-distance order).
+  const sort = useTableSort<MatchedSetup>("");
+  const sortedMatches = sort.apply(result?.matches ?? [], (match, key) => {
+    switch (key) {
+      case "date": return match.date;
+      case "distance": return match.distance;
+      case "fwd1M": return match.fwd1M;
+      case "fwd3M": return match.fwd3M;
+      case "fwd6M": return match.fwd6M;
+      case "fwd1Y": return match.fwd1Y;
+      default:
+        if (key.startsWith("z:") && result) {
+          const idx = result.enabledList.indexOf(key.slice(2) as SignalKey);
+          return idx >= 0 ? match.zVec[idx] : null;
+        }
+        return null;
+    }
+  });
+
   if (!ticker) return null;
 
   const fmtPct = (value: number) =>
@@ -587,21 +607,21 @@ export function ChartsSimilarSetupsPanel({
                 <table className="w-full text-[10px] font-mono">
                   <thead className="sticky top-0 bg-card">
                     <tr className="text-muted-foreground/70 uppercase tracking-wider">
-                      <th className="text-left font-normal pr-3 py-1">Date</th>
+                      <th className="text-left font-normal pr-3 py-1"><SortHeader label="Date" columnKey="date" sort={sort} /></th>
                       {result.enabledList.map((key) => (
                         <th className="text-right font-normal pr-3 py-1" key={key}>
-                          {SIGNAL_LABELS[key]} z
+                          <SortHeader label={`${SIGNAL_LABELS[key]} z`} columnKey={`z:${key}`} sort={sort} align="right" />
                         </th>
                       ))}
-                      <th className="text-right font-normal pr-3 py-1">dist</th>
-                      <th className="text-right font-normal pr-3 py-1">fwd 1M</th>
-                      <th className="text-right font-normal pr-3 py-1">fwd 3M</th>
-                      <th className="text-right font-normal pr-3 py-1">fwd 6M</th>
-                      <th className="text-right font-normal py-1">fwd 1Y</th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="dist" columnKey="distance" sort={sort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="fwd 1M" columnKey="fwd1M" sort={sort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="fwd 3M" columnKey="fwd3M" sort={sort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="fwd 6M" columnKey="fwd6M" sort={sort} align="right" /></th>
+                      <th className="text-right font-normal py-1"><SortHeader label="fwd 1Y" columnKey="fwd1Y" sort={sort} align="right" /></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {result.matches.map((match) => (
+                    {sortedMatches.map((match) => (
                       <tr className="border-t border-border/40" key={match.date}>
                         <td className="text-foreground pr-3 py-0.5">{match.date}</td>
                         {match.zVec.map((z, i) => (

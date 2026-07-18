@@ -428,34 +428,69 @@ function ResidualTable({
   selected: string;
   onSelect: (t: string) => void;
 }) {
-  const [sortKey, setSortKey] = useState<"z" | "halfLife">("z");
+  const [sortKey, setSortKey] = useState<string>("z");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = (key: string) => {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setSortDir(key === "ticker" || key === "halfLife" ? "asc" : "desc");
+    }
+  };
+  const arrow = (key: string) => (sortKey === key ? (sortDir === "asc" ? " ▴" : " ▾") : "");
   const sorted = useMemo(() => {
     const rows = [...residuals];
-    if (sortKey === "z") rows.sort((a, b) => Math.abs(b.residualZ) - Math.abs(a.residualZ));
-    else rows.sort((a, b) => a.halfLife - b.halfLife);
+    const dir = sortDir === "asc" ? 1 : -1;
+    const val = (r: ResidualRow): number | string => {
+      if (sortKey === "ticker") return r.ticker;
+      if (sortKey === "z") return Math.abs(r.residualZ);
+      if (sortKey === "halfLife") return r.halfLife;
+      if (sortKey.startsWith("beta:")) return r.betas[parseInt(sortKey.slice(5), 10)] ?? NaN;
+      return 0;
+    };
+    rows.sort((a, b) => {
+      const av = val(a), bv = val(b);
+      if (typeof av === "string" || typeof bv === "string") return dir * String(av).localeCompare(String(bv));
+      const am = !Number.isFinite(av), bm = !Number.isFinite(bv);
+      if (am && bm) return 0;
+      if (am) return 1;   // missing/∞ always last
+      if (bm) return -1;
+      return dir * (av - bv);
+    });
     return rows;
-  }, [residuals, sortKey]);
+  }, [residuals, sortKey, sortDir]);
 
   return (
     <div className="absolute inset-0 overflow-auto">
       <table className="w-full text-[10px] font-mono">
         <thead className="sticky top-0 bg-card">
           <tr className="text-muted-foreground">
-            <th className="p-1 text-left">Ticker</th>
             <th
-              className="p-1 text-right cursor-pointer hover:text-foreground"
-              onClick={() => setSortKey("z")}
+              className="p-1 text-left cursor-pointer hover:text-foreground"
+              onClick={() => handleSort("ticker")}
             >
-              Resid Z {sortKey === "z" ? "▾" : ""}
+              Ticker{arrow("ticker")}
             </th>
             <th
               className="p-1 text-right cursor-pointer hover:text-foreground"
-              onClick={() => setSortKey("halfLife")}
+              onClick={() => handleSort("z")}
             >
-              Half-life {sortKey === "halfLife" ? "▾" : ""}
+              Resid Z{arrow("z")}
+            </th>
+            <th
+              className="p-1 text-right cursor-pointer hover:text-foreground"
+              onClick={() => handleSort("halfLife")}
+            >
+              Half-life{arrow("halfLife")}
             </th>
             {Array.from({ length: numFactors }, (_, c) => (
-              <th key={c} className="p-1 text-right">β{c + 1}</th>
+              <th
+                key={c}
+                className="p-1 text-right cursor-pointer hover:text-foreground"
+                onClick={() => handleSort(`beta:${c}`)}
+              >
+                β{c + 1}{arrow(`beta:${c}`)}
+              </th>
             ))}
           </tr>
         </thead>

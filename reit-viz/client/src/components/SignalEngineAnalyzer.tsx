@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { getMetricSeries, getTickersCacheSync } from "@/lib/dataService";
 import { groupMetricsByCategory, categorizeMetric } from "@/lib/metricCategories";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -1423,6 +1424,22 @@ function ResultView({
     byCategory.get(category)?.push(sig);
   }
 
+  // One shared click-to-sort applied within each category group ("" = keep order).
+  const sort = useTableSort<SignalResult>("");
+  const sortSigs = (sigs: SignalResult[]) =>
+    sort.apply(sigs, (sig, key) => {
+      switch (key) {
+        case "signal": return SIGNAL_DEFS[sig.signal]?.label ?? sig.signal;
+        case "now": return sig.currentValue;
+        case "firing": return sig.firing;
+        case "edge": return sig.meanForward20d;
+        case "hit": return sig.hitRate20d;
+        case "n": return sig.currentBucket?.n ?? null;
+        case "trig": return sig.triggerCount;
+        default: return null;
+      }
+    });
+
   return (
     <>
       <div className={`rounded-md border p-3 space-y-2 ${confluenceClass}`}>
@@ -1526,6 +1543,7 @@ function ResultView({
         {CATEGORIES.map((category) => {
           const sigs = byCategory.get(category) || [];
           if (sigs.length === 0) return null;
+          const sortedSigs = sortSigs(sigs);
           return (
             <div className="space-y-1" key={category}>
               <div
@@ -1538,18 +1556,18 @@ function ResultView({
                   <thead className="bg-card/40 text-muted-foreground">
                     <tr>
                       <th className="text-left px-2 py-1 w-[44px]">Chart</th>
-                      <th className="text-left px-2 py-1">Signal</th>
-                      <th className="text-right px-2 py-1">Now</th>
-                      <th className="text-right px-2 py-1">Firing</th>
-                      <th className="text-right px-2 py-1">20d edge</th>
-                      <th className="text-right px-2 py-1">Hit</th>
-                      <th className="text-right px-2 py-1">n</th>
-                      <th className="text-right px-2 py-1">Trig</th>
+                      <th className="text-left px-2 py-1"><SortHeader label="Signal" columnKey="signal" sort={sort} /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="Now" columnKey="now" sort={sort} align="right" /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="Firing" columnKey="firing" sort={sort} align="right" /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="20d edge" columnKey="edge" sort={sort} align="right" /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="Hit" columnKey="hit" sort={sort} align="right" /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="n" columnKey="n" sort={sort} align="right" /></th>
+                      <th className="text-right px-2 py-1"><SortHeader label="Trig" columnKey="trig" sort={sort} align="right" /></th>
                       <th className="text-right px-2 py-1 w-[20px]" />
                     </tr>
                   </thead>
                   <tbody>
-                    {sigs.map((sig) => (
+                    {sortedSigs.map((sig) => (
                       <SignalRow
                         key={sig.signal}
                         sig={sig}

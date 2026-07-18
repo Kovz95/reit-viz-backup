@@ -9,6 +9,7 @@ import { injectTickers, injectDates, injectEvents, injectTickerData, clearTicker
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { useUpload, type UploadedSheet } from "@/lib/uploadContext";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 interface DataStatus {
   tickers: number;
@@ -74,6 +75,8 @@ export default function DataManager() {
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [sourcesFilter, setSourcesFilter] = useState("");
   const [expandedWorkbooks, setExpandedWorkbooks] = useState<Set<string>>(new Set());
+  // Ticker table sort (shared across workbook tables) — default alphabetical.
+  const tickerSort = useTableSort<string>("ticker", "asc");
 
   // Parsing progress (client-side or server-side)
   const [parseProgress, setParseProgress] = useState<ParseProgress | null>(null);
@@ -1259,14 +1262,23 @@ export default function DataManager() {
                                   <table className="w-full text-[10px]">
                                     <thead>
                                       <tr className="text-muted-foreground border-b border-border">
-                                        <th className="text-left py-1 pr-2 font-medium">Ticker</th>
-                                        <th className="text-right py-1 px-2 font-medium">Dates</th>
-                                        <th className="text-right py-1 px-2 font-medium">Metrics</th>
-                                        <th className="text-right py-1 pl-2 font-medium">Size</th>
+                                        <th className="text-left py-1 pr-2 font-medium"><SortHeader label="Ticker" columnKey="ticker" sort={tickerSort} /></th>
+                                        <th className="text-right py-1 px-2 font-medium"><SortHeader label="Dates" columnKey="dates" sort={tickerSort} align="right" /></th>
+                                        <th className="text-right py-1 px-2 font-medium"><SortHeader label="Metrics" columnKey="metrics" sort={tickerSort} align="right" /></th>
+                                        <th className="text-right py-1 pl-2 font-medium"><SortHeader label="Size" columnKey="size" sort={tickerSort} align="right" /></th>
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {filteredTickers.sort().map(ticker => {
+                                      {tickerSort.apply(filteredTickers, (ticker, key) => {
+                                        const info = sourcesData.sources[ticker];
+                                        switch (key) {
+                                          case "ticker": return ticker;
+                                          case "dates": return info?.dates ?? null;
+                                          case "metrics": return info?.metrics ?? null;
+                                          case "size": return info?.fileSize ?? null;
+                                          default: return null;
+                                        }
+                                      }).map(ticker => {
                                         const info = sourcesData.sources[ticker];
                                         if (!info) return null;
                                         const tickerStale = isStale(info.uploadedAt);

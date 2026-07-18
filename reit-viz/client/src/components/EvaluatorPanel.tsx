@@ -11,6 +11,7 @@ import {
 } from "@/lib/signalUtils";
 import { harsiCompute } from "@/lib/harsi";
 import { tvaCompute } from "@/lib/tva";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1533,6 +1534,9 @@ function SignalDetailTable({ signals }: SignalDetailTableProps) {
       if (sortKey === "date") {
         va = a.num;
         vb = b.num;
+      } else if (sortKey === "entry") {
+        va = a.entryPrice;
+        vb = b.entryPrice;
       } else {
         va = a.returns[sortKey] ?? -Infinity;
         vb = b.returns[sortKey] ?? -Infinity;
@@ -1623,8 +1627,20 @@ function SignalDetailTable({ signals }: SignalDetailTableProps) {
                   >
                     #{sortKey === "date" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
                   </th>
-                  <th className="text-left px-2 py-1">Date</th>
-                  <th className="text-right px-2 py-1">Entry</th>
+                  <th
+                    className="text-left px-2 py-1 cursor-pointer hover:text-foreground"
+                    onClick={() => handleSort("date")}
+                    title="Signal entry date. Click to sort."
+                  >
+                    Date{sortKey === "date" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                  </th>
+                  <th
+                    className="text-right px-2 py-1 cursor-pointer hover:text-foreground"
+                    onClick={() => handleSort("entry")}
+                    title="Entry price. Click to sort."
+                  >
+                    Entry{sortKey === "entry" ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                  </th>
                   {(HORIZONS as { label: string; days: number }[]).map((h) => (
                     <th
                       key={h.label}
@@ -1755,17 +1771,37 @@ function HitConditionsTable({
     return map;
   }, [analysis.rows]);
 
+  // Empty initial sort key preserves the default order (rows arrive pre-sorted by
+  // separationScore); clicking any header re-ranks by that column.
+  const sort = useTableSort<FeatureAnalysisRow>("", "desc");
   const visibleRows = React.useMemo(
-    () =>
-      analysis.rows.filter((row) => {
+    () => {
+      const filteredRows = analysis.rows.filter((row) => {
         if (categoryFilter !== "all" && row.feature.category !== categoryFilter) return false;
         if (sigFilter === "q05") {
           const q = analysis.qValues[row.feature.id];
           if (q === undefined || q > 0.05) return false;
         }
         return true;
-      }),
-    [analysis, categoryFilter, sigFilter]
+      });
+      return sort.apply(filteredRows, (row, key) => {
+        switch (key) {
+          case "indicator": return row.feature.label;
+          case "hitMedian": return row.hitMedian;
+          case "missMedian": return row.missMedian;
+          case "medianSpread": return row.medianSpread;
+          case "cohensD": return Math.abs(row.cohensD);
+          case "ks": return row.ks;
+          case "auc": return row.auc;
+          case "p": return row.ksPVal;
+          case "q": return analysis.qValues[row.feature.id];
+          case "hitN": return row.hitN;
+          case "missN": return row.missN;
+          default: return null;
+        }
+      });
+    },
+    [analysis, categoryFilter, sigFilter, sort.apply]
   );
 
   function updateFilter(idx: number, patch: Partial<FilterRule>) {
@@ -1869,17 +1905,17 @@ function HitConditionsTable({
         <table className="w-full text-[10px] font-mono">
           <thead className="text-[9px] text-muted-foreground uppercase tracking-wide border-b border-border/40">
             <tr>
-              <th className="text-left px-1 py-1">Indicator</th>
-              <th className="text-center px-1 py-1">Hit median</th>
-              <th className="text-center px-1 py-1">Miss median</th>
-              <th className="text-center px-1 py-1">Δ med</th>
-              <th className="text-center px-1 py-1">|d|</th>
-              <th className="text-center px-1 py-1">KS</th>
-              <th className="text-center px-1 py-1">AUC</th>
-              <th className="text-center px-1 py-1">p</th>
-              <th className="text-center px-1 py-1">q</th>
-              <th className="text-center px-1 py-1">n hit</th>
-              <th className="text-center px-1 py-1">n miss</th>
+              <th className="text-left px-1 py-1"><SortHeader label="Indicator" columnKey="indicator" sort={sort} /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="Hit median" columnKey="hitMedian" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="Miss median" columnKey="missMedian" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="Δ med" columnKey="medianSpread" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="|d|" columnKey="cohensD" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="KS" columnKey="ks" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="AUC" columnKey="auc" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="p" columnKey="p" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="q" columnKey="q" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="n hit" columnKey="hitN" sort={sort} align="center" /></th>
+              <th className="text-center px-1 py-1"><SortHeader label="n miss" columnKey="missN" sort={sort} align="center" /></th>
               <th className="text-left px-1 py-1">Distribution (IQR + median)</th>
               <th className="text-center px-1 py-1">Filter</th>
             </tr>

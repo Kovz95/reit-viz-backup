@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SeasonalPatternRow, SeasonalWindow } from "@/lib/dataService";
 import { ChevronDown, ChevronUp, TrendingUp, TrendingDown, Clock } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 interface UpcomingEntry {
   ticker: string;
@@ -159,6 +160,23 @@ export default function UpcomingSeasonalWindows({
   const activeCount = upcoming.filter((e) => e.isActive).length;
   const upcomingCount = upcoming.filter((e) => !e.isActive).length;
 
+  // Click-to-sort ("" = keep current active-first / proximity order until clicked).
+  const sort = useTableSort<UpcomingEntry>("");
+  const displayRows = sort.apply(upcoming, (entry, key) => {
+    switch (key) {
+      case "status": return entry.isActive ? 1 : 0;
+      case "ticker": return entry.ticker;
+      case "dir": return entry.direction;
+      case "window": return entry.window.startMMDD;
+      case "starts": return entry.daysUntilStart;
+      case "avg": return entry.window.avgReturn;
+      case "winRate": return entry.window.winRate;
+      case "years": return entry.window.years;
+      case "tStat": return entry.window.tStat;
+      default: return null;
+    }
+  });
+
   return (
     <div className="border-b border-border bg-card/50">
       {/* Header bar */}
@@ -237,19 +255,19 @@ export default function UpcomingSeasonalWindows({
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-card border-b border-border/50">
                   <tr>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Status</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-14">Ticker</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Dir</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Window</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-14">Starts</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Avg</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Win%</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-8">N</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">t-stat</th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10"><SortHeader label="Status" columnKey="status" sort={sort} /></th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-14"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10"><SortHeader label="Dir" columnKey="dir" sort={sort} /></th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground"><SortHeader label="Window" columnKey="window" sort={sort} /></th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-14"><SortHeader label="Starts" columnKey="starts" sort={sort} align="right" /></th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12"><SortHeader label="Avg" columnKey="avg" sort={sort} align="right" /></th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12"><SortHeader label="Win%" columnKey="winRate" sort={sort} align="right" /></th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-8"><SortHeader label="N" columnKey="years" sort={sort} align="right" /></th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12"><SortHeader label="t-stat" columnKey="tStat" sort={sort} align="right" /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {upcoming.map((entry, i) => (
+                  {displayRows.map((entry, i) => (
                     <tr
                       key={`${entry.ticker}-${entry.direction}-${entry.window.startMMDD}-${entry.window.endMMDD}-${i}`}
                       className={`border-b border-border/20 hover:bg-accent/30 transition-colors ${

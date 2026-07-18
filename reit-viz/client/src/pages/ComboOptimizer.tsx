@@ -24,6 +24,7 @@ import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { Download } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { Button } from "@/components/ui/button";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { PresetBar } from "@/components/PresetBar";
@@ -1075,6 +1076,27 @@ export default function ComboOptimizer() {
     return filtered;
   }, [results, filterText, scoreWeights]);
 
+  // Header click-sort layered on top of the "RANK BY" <select>; initial key ""
+  // preserves the dropdown's ordering until a header is clicked.
+  const resultSort = useTableSort<ComboResult>("", "desc");
+  const sortedDisplayResults = resultSort.apply(displayResults, (r, key) => {
+    const c = r.topCombos[0];
+    if (!c) return null;
+    switch (key) {
+      case "ticker": return r.ticker;
+      case "trigger": return c.triggerLabel;
+      case "filters": return c.filterLabels.join(" & ");
+      case "dir": return c.direction;
+      case "n": return c.summary.count;
+      case "hit": return c.summary.hitRate[horizon] ?? null;
+      case "base": return c.baselineHitRate;
+      case "lift": return (c.summary.hitRate[horizon] ?? 0) - c.baselineHitRate;
+      case "avg": return c.summary.avgReturn[horizon] ?? null;
+      case "pf": return c.summary.profitFactor[horizon] ?? null;
+      default: return null;
+    }
+  });
+
   // CSV export
   const handleExportCSV = () => {
     const rows: Record<string, any>[] = [];
@@ -1505,21 +1527,21 @@ export default function ComboOptimizer() {
                   <table className="w-full text-[10px] font-mono">
                     <thead className="sticky top-0 z-20">
                       <tr className="bg-card text-muted-foreground shadow-[0_1px_0_0_hsl(var(--border))]">
-                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-30 border-r border-border">Ticker</th>
-                        <th className="text-left px-2 py-1 font-bold bg-card">Trigger</th>
-                        <th className="text-left px-2 py-1 font-bold bg-card">Filters</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card">Dir</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card">N</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card">Hit {horizon}</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card" title="Trigger-alone hit rate">Base {horizon}</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card" title="Hit rate improvement over baseline">Lift</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card">Avg {horizon}</th>
-                        <th className="text-center px-2 py-1 font-bold bg-card">PF {horizon}</th>
+                        <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-30 border-r border-border"><SortHeader label="Ticker" columnKey="ticker" sort={resultSort} /></th>
+                        <th className="text-left px-2 py-1 font-bold bg-card"><SortHeader label="Trigger" columnKey="trigger" sort={resultSort} /></th>
+                        <th className="text-left px-2 py-1 font-bold bg-card"><SortHeader label="Filters" columnKey="filters" sort={resultSort} /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label="Dir" columnKey="dir" sort={resultSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label="N" columnKey="n" sort={resultSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label={`Hit ${horizon}`} columnKey="hit" sort={resultSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label={`Base ${horizon}`} columnKey="base" sort={resultSort} align="center" title="Trigger-alone hit rate" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label="Lift" columnKey="lift" sort={resultSort} align="center" title="Hit rate improvement over baseline" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label={`Avg ${horizon}`} columnKey="avg" sort={resultSort} align="center" /></th>
+                        <th className="text-center px-2 py-1 font-bold bg-card"><SortHeader label={`PF ${horizon}`} columnKey="pf" sort={resultSort} align="center" /></th>
                         <th className="text-center px-2 py-1 font-bold bg-card" title="Hit Conditions — profile what other indicators looked like at hit-bars vs miss-bars">HC</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {displayResults.map(tickerResult => {
+                      {sortedDisplayResults.map(tickerResult => {
                         const expanded = expandedTicker === tickerResult.ticker;
                         return (expanded ? tickerResult.topCombos : tickerResult.topCombos.slice(0, 1)).flatMap((combo, comboIdx) => {
                           const hitRate  = combo.summary.hitRate[horizon] ?? 0;

@@ -21,6 +21,7 @@ import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
 import { Button } from "@/components/ui/button";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
   X,
   ChevronDown,
@@ -1109,7 +1110,34 @@ function BandTable({
   showOos: boolean;
 }) {
   const titleColor = accent === "green" ? "text-emerald-500" : "text-red-500";
-  const visible = bands.slice(0, limit);
+  const sort = useTableSort<{ band: Band; origIdx: number }>("", "desc");
+  const sortedBands = sort.apply(
+    bands.map((band, origIdx) => ({ band, origIdx })),
+    (row, key) => {
+      const b = row.band;
+      switch (key) {
+        case "band": return b.parts.map((p) => p.display).join(" ");
+        case "hits": return b.hits;
+        case "winRate": return b.winRate;
+        case "meanReturn": return b.meanReturn;
+        case "medianReturn": return b.medianReturn;
+        case "stdReturn": return b.stdReturn;
+        case "lift": return b.lift;
+        case "tStat": return b.tStat;
+        case "oosHits": return b.oosHits ?? null;
+        case "oosMean": return b.oosMean ?? null;
+        case "oosLift": return b.oosLift ?? null;
+        case "oosWinRate": return b.oosWinRate ?? null;
+        case "lastDate": return b.lastDate ?? null;
+        case "now":
+          return currentTickersByIdx
+            ? (currentTickersByIdx.get(row.origIdx)?.length ?? 0)
+            : (b.currentlyIn ? 1 : 0);
+        default: return null;
+      }
+    },
+  );
+  const visible = sortedBands.slice(0, limit);
 
   return (
     <div className="bg-card border border-border rounded overflow-hidden">
@@ -1142,35 +1170,35 @@ function BandTable({
           <table className="w-full text-[11px] font-mono">
             <thead className="bg-muted/40">
               <tr>
-                <th className="text-left px-2 py-1 font-bold">Band</th>
-                <th className="text-right px-2 py-1 font-bold">Hits</th>
-                <th className="text-right px-2 py-1 font-bold">Win %</th>
-                <th className="text-right px-2 py-1 font-bold">μ Ret</th>
-                <th className="text-right px-2 py-1 font-bold">Med</th>
-                <th className="text-right px-2 py-1 font-bold">σ</th>
-                <th className="text-right px-2 py-1 font-bold">Lift</th>
-                <th className="text-right px-2 py-1 font-bold">t-stat</th>
+                <th className="text-left px-2 py-1 font-bold"><SortHeader label="Band" columnKey="band" sort={sort} /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="Hits" columnKey="hits" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="Win %" columnKey="winRate" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="μ Ret" columnKey="meanReturn" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="Med" columnKey="medianReturn" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="σ" columnKey="stdReturn" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="Lift" columnKey="lift" sort={sort} align="right" /></th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="t-stat" columnKey="tStat" sort={sort} align="right" /></th>
                 {showOos && (
                   <>
                     <th className="text-right px-2 py-1 font-bold text-cyan-400 border-l border-border">
-                      OOS Hits
+                      <SortHeader label="OOS Hits" columnKey="oosHits" sort={sort} align="right" />
                     </th>
-                    <th className="text-right px-2 py-1 font-bold text-cyan-400">OOS μ</th>
-                    <th className="text-right px-2 py-1 font-bold text-cyan-400">OOS Lift</th>
-                    <th className="text-right px-2 py-1 font-bold text-cyan-400">OOS Win%</th>
+                    <th className="text-right px-2 py-1 font-bold text-cyan-400"><SortHeader label="OOS μ" columnKey="oosMean" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-bold text-cyan-400"><SortHeader label="OOS Lift" columnKey="oosLift" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-bold text-cyan-400"><SortHeader label="OOS Win%" columnKey="oosWinRate" sort={sort} align="right" /></th>
                   </>
                 )}
-                <th className="text-right px-2 py-1 font-bold">Last Hit</th>
-                <th className="text-left px-2 py-1 font-bold">Now</th>
+                <th className="text-right px-2 py-1 font-bold"><SortHeader label="Last Hit" columnKey="lastDate" sort={sort} align="right" /></th>
+                <th className="text-left px-2 py-1 font-bold"><SortHeader label="Now" columnKey="now" sort={sort} /></th>
               </tr>
             </thead>
             <tbody>
-              {visible.map((band, idx) => {
-                const tickers = currentTickersByIdx?.get(idx) ?? [];
+              {visible.map(({ band, origIdx }) => {
+                const tickers = currentTickersByIdx?.get(origIdx) ?? [];
                 const hasPool = !!currentTickersByIdx;
                 return (
                   <tr
-                    key={idx}
+                    key={origIdx}
                     className={`border-t border-border ${band.currentlyIn ? "bg-amber-500/10" : ""}`}
                   >
                     <td className="px-2 py-1 max-w-[460px]">

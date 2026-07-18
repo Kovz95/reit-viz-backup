@@ -1,6 +1,7 @@
 // Reconstructed from recovered-bundle/PairOptimizer-Df5S8y_J.js on 2026-06-11
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { usePersistedState } from "@/lib/persistedState";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useAppContext } from "@/lib/appContext";
 import { useWorkspaceState } from "@/lib/workspaceState";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -493,6 +494,36 @@ export default function PairOptimizer() {
     return copy;
   }, [results, sortBy]);
 
+  // Header click-sort (layers on top of the sortBy button order)
+  const headerSort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const displayResults = headerSort.apply(sortedResults, (row, key) => {
+    if (key === "pair") return `${row.tickerA}/${row.tickerB}`;
+    if (key === "halfLife") return row.halfLife;
+    if (key === "hurst") return row.hurstExponent;
+    if (key === "adf") return row.adfPValue;
+    if (key === "window") return row.bestWindow;
+    if (key === "buySigs") return row.buySummary?.count ?? null;
+    if (key === "sellSigs") return row.sellSummary?.count ?? null;
+    if (key === "score") return row.compositeScore;
+    const buy = row.buySummary;
+    const sell = row.sellSummary;
+    if (key.startsWith("hit-")) {
+      const label = key.slice(4);
+      const rateField = returnMode === "band" ? "bandHitRate" : "hitRate";
+      const br = buy?.[rateField]?.[label] ?? buy?.hitRate[label];
+      const sr = sell?.[rateField]?.[label] ?? sell?.hitRate[label];
+      const combined = buy?.count > 0 && sell?.count > 0
+        ? (br * buy.count + sr * sell.count) / (buy.count + sell.count)
+        : buy?.count > 0 ? br : sr;
+      return combined ?? null;
+    }
+    if (key.startsWith("pf-")) {
+      const label = key.slice(3);
+      return (buy?.count > 0 ? buy.profitFactor[label] : sell?.profitFactor[label]) ?? null;
+    }
+    return null;
+  });
+
   // ── CSV export ──
   const handleExportCsv = () => {
     const horizonCols = FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2);
@@ -851,26 +882,26 @@ export default function PairOptimizer() {
               <table className="w-full text-[10px] font-mono">
                 <thead>
                   <tr className="bg-card text-muted-foreground">
-                    <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">Pair</th>
-                    <th className="text-center px-2 py-1 font-bold">Half-Life</th>
-                    <th className="text-center px-2 py-1 font-bold">Hurst</th>
-                    <th className="text-center px-2 py-1 font-bold">ADF p</th>
-                    <th className="text-center px-2 py-1 font-bold">Window</th>
-                    <th className="text-center px-2 py-1 font-bold">Buy Sigs</th>
-                    <th className="text-center px-2 py-1 font-bold">Sell Sigs</th>
+                    <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border"><SortHeader label="Pair" columnKey="pair" sort={headerSort} /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Half-Life" columnKey="halfLife" sort={headerSort} align="center" /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Hurst" columnKey="hurst" sort={headerSort} align="center" /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="ADF p" columnKey="adf" sort={headerSort} align="center" /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Window" columnKey="window" sort={headerSort} align="center" /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Buy Sigs" columnKey="buySigs" sort={headerSort} align="center" /></th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Sell Sigs" columnKey="sellSigs" sort={headerSort} align="center" /></th>
                     {FWD_HORIZONS.map((h: HorizonDef) => (
                       <th key={h.label} className="text-center px-2 py-1 font-bold">
-                        {returnMode === "band" ? "Band" : "Hit"} {h.label}
+                        <SortHeader label={`${returnMode === "band" ? "Band" : "Hit"} ${h.label}`} columnKey={`hit-${h.label}`} sort={headerSort} align="center" />
                       </th>
                     ))}
                     {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => (
-                      <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
+                      <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold"><SortHeader label={`PF ${h.label}`} columnKey={`pf-${h.label}`} sort={headerSort} align="center" /></th>
                     ))}
-                    <th className="text-center px-2 py-1 font-bold">Score</th>
+                    <th className="text-center px-2 py-1 font-bold"><SortHeader label="Score" columnKey="score" sort={headerSort} align="center" /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedResults.map((row) => {
+                  {displayResults.map((row) => {
                     const pairKey = `${row.tickerA}/${row.tickerB}`;
                     const isExpanded = expandedPair === pairKey;
                     const buy = row.buySummary;

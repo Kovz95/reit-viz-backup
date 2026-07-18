@@ -27,6 +27,7 @@ import {
   Card, CardContent, CardHeader, CardTitle
 } from "@/components/ui/card";
 import { ChevronRight, ChevronDown, Play, Download, Plus, X, Minus, Activity } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // Inline icon creation (from bundle)
 const UserIcon = createLucideIcon("User", [
@@ -987,9 +988,12 @@ export default function PriceAction() {
       const bm = b.baseline.find(x => x.horizon === rankHorizon)!;
       const dir = sortDir === "asc" ? 1 : -1;
       if (sortKey === "ticker") return dir * a.ticker.localeCompare(b.ticker);
+      if (sortKey === "name") return dir * a.name.localeCompare(b.name);
       if (sortKey === "events") return (a.events - b.events) * dir;
       if (sortKey === "mean") return ((Number.isFinite(sk.mean) ? sk.mean : -Infinity) - (Number.isFinite(mk.mean) ? mk.mean : -Infinity)) * dir;
+      if (sortKey === "median") return ((Number.isFinite(sk.median) ? sk.median : -Infinity) - (Number.isFinite(mk.median) ? mk.median : -Infinity)) * dir;
       if (sortKey === "pUp") return ((Number.isFinite(sk.pUp) ? sk.pUp : -Infinity) - (Number.isFinite(mk.pUp) ? mk.pUp : -Infinity)) * dir;
+      if (sortKey === "baseMean") return ((Number.isFinite(bk.mean) ? bk.mean : -Infinity) - (Number.isFinite(bm.mean) ? bm.mean : -Infinity)) * dir;
       if (sortKey === "edge") {
         const ea = Number.isFinite(sk.mean) && Number.isFinite(bk.mean) ? sk.mean - bk.mean : -Infinity;
         const eb = Number.isFinite(mk.mean) && Number.isFinite(bm.mean) ? mk.mean - bm.mean : -Infinity;
@@ -1033,7 +1037,7 @@ export default function PriceAction() {
 
   const handleColSort = (col: string) => {
     if (col === sortKey) setSortDir(d => d === "asc" ? "desc" : "asc");
-    else { setSortKey(col); setSortDir(col === "ticker" ? "asc" : "desc"); }
+    else { setSortKey(col); setSortDir(col === "ticker" || col === "name" ? "asc" : "desc"); }
   };
 
   const isLoadingSingle = !!runConfig && runConfig.mode === "single" && (loadingSingle || !singleResult);
@@ -1324,12 +1328,12 @@ export default function PriceAction() {
                     <tr className="text-left text-muted-foreground border-b border-border">
                       <th className="py-1.5 pr-1 font-medium w-6"></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("ticker")}>Ticker <SortIcon col="ticker" /></th>
-                      <th className="py-1.5 pr-3 font-medium">Name</th>
+                      <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("name")}>Name <SortIcon col="name" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("events")}>N <SortIcon col="events" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("mean")}>Mean@{rankHorizon}d <SortIcon col="mean" /></th>
-                      <th className="py-1.5 pr-3 font-medium">Median</th>
+                      <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("median")}>Median <SortIcon col="median" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("pUp")}>P(up) <SortIcon col="pUp" /></th>
-                      <th className="py-1.5 pr-3 font-medium">Baseline Mean</th>
+                      <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("baseMean")}>Baseline Mean <SortIcon col="baseMean" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("edge")}>Edge vs. base <SortIcon col="edge" /></th>
                     </tr>
                   </thead>
@@ -1683,6 +1687,26 @@ function BiggestMoves({ tickers, sigmaWindow, sigmaBasis, dates }: {
     return arr;
   }, [rows, sortMode]);
 
+  // Header click-sort layered on top of the sortMode <Select>; when no header
+  // is active (initial key ""), the Select order is preserved.
+  const moveSort = useTableSort<any>("", "desc");
+  const displaySorted = sorted
+    ? moveSort.apply(sorted, (r, key) => {
+        switch (key) {
+          case "ticker": return r.ticker;
+          case "name": return r.name;
+          case "date": return r.date;
+          case "pct": return r.pct;
+          case "sigma": return r.sigma?.z ?? null;
+          case "pctile": return r.sigma?.percentileAbs ?? null;
+          case "freq": return r.sigma?.oneInNDays ?? null;
+          case "gap": return r.gap;
+          case "gapSigma": return r.gapSigma?.z ?? null;
+          default: return null;
+        }
+      })
+    : null;
+
   const latestDate = sorted && sorted.length > 0 ? sorted[0].date : "";
 
   return (
@@ -1711,27 +1735,27 @@ function BiggestMoves({ tickers, sigmaWindow, sigmaBasis, dates }: {
         </div>
       </CardHeader>
       <CardContent className="pt-0">
-        {sorted ? (
-          sorted.length === 0 ? (
+        {displaySorted ? (
+          displaySorted.length === 0 ? (
             <div className="text-xs text-muted-foreground py-2">No tickers returned data.</div>
           ) : (
             <div className="max-h-[400px] overflow-auto">
               <table className="w-full text-xs border-collapse">
                 <thead className="sticky top-0 bg-card z-10">
                   <tr className="text-left text-muted-foreground border-b border-border">
-                    <th className="py-1.5 pr-3 font-medium">Ticker</th>
-                    <th className="py-1.5 pr-3 font-medium">Name</th>
-                    <th className="py-1.5 pr-3 font-medium">Date</th>
-                    <th className="py-1.5 pr-3 font-medium">Move %</th>
-                    <th className="py-1.5 pr-3 font-medium">Sigma</th>
-                    <th className="py-1.5 pr-3 font-medium">|Move| pctile</th>
-                    <th className="py-1.5 pr-3 font-medium">Freq</th>
-                    <th className="py-1.5 pr-3 font-medium">Gap %</th>
-                    <th className="py-1.5 pr-3 font-medium">Gap σ</th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Ticker" columnKey="ticker" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Name" columnKey="name" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Date" columnKey="date" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Move %" columnKey="pct" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Sigma" columnKey="sigma" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="|Move| pctile" columnKey="pctile" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Freq" columnKey="freq" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Gap %" columnKey="gap" sort={moveSort} /></th>
+                    <th className="py-1.5 pr-3 font-medium"><SortHeader label="Gap σ" columnKey="gapSigma" sort={moveSort} /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map(r => {
+                  {displaySorted.map(r => {
                     const pctCls = !Number.isFinite(r.pct) || r.pct === 0 ? "" : r.pct > 0 ? "text-chart-2" : "text-destructive";
                     const gapCls = !Number.isFinite(r.gap) || r.gap === 0 ? "" : r.gap > 0 ? "text-chart-2" : "text-destructive";
                     const pctile = r.sigma ? `${(r.sigma.percentileAbs * 100).toFixed(1)}%` : "—";

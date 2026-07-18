@@ -21,6 +21,7 @@ import { u as useGlobalUniverse } from "@/lib/globalUniverse";
 import { filterTickersByClassification } from "@/lib/filterTickersByClassification";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import ClassificationFilters from "@/components/ClassificationFilters";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -172,6 +173,24 @@ function CrossingScreener() {
   const [results, setResults] = useState<CrossResult[]>([]);
   const [skipped, setSkipped] = useState<SkippedEntry[]>([]);
   const cancelRef = useRef(false);
+
+  // Click-to-sort; "" keeps the default candles-ago-then-score order until a header is clicked.
+  const sort = useTableSort<CrossResult>("");
+  const sortedResults = sort.apply(results, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "kind": return row.subtype;
+      case "direction": return row.direction;
+      case "candlesAgo": return row.candlesAgo;
+      case "crossDate": return row.crossDate;
+      case "closeAtCross": return row.closeAtCross;
+      case "levelValueAtCross": return row.levelValueAtCross;
+      case "currentPrice": return row.currentPrice;
+      case "distancePct": return row.distancePct;
+      case "score": return row.score;
+      default: return null;
+    }
+  });
 
   // Country/Exchange geo filter for the pairCombo universe.
   const pcGeo = useGeoFilter(pcSource === "global" ? universeMetas : allTickers, "cs-paircombo-filter-geo");
@@ -1010,21 +1029,21 @@ function CrossingScreener() {
               <table className="w-full text-[11px]">
                 <thead className="bg-card/40 sticky top-0">
                   <tr>
-                    <th className="text-left px-2 py-1 font-mono">Ticker</th>
-                    <th className="text-left px-2 py-1 font-mono">Kind</th>
-                    <th className="text-left px-2 py-1 font-mono">Direction</th>
-                    <th className="text-right px-2 py-1 font-mono">Candles ago</th>
-                    <th className="text-left px-2 py-1 font-mono">Cross date</th>
-                    <th className="text-right px-2 py-1 font-mono">Close @ cross</th>
-                    <th className="text-right px-2 py-1 font-mono">Level @ cross</th>
-                    <th className="text-right px-2 py-1 font-mono">Current</th>
-                    <th className="text-right px-2 py-1 font-mono">Dist from level</th>
-                    <th className="text-right px-2 py-1 font-mono">Score</th>
+                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
+                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Kind" columnKey="kind" sort={sort} /></th>
+                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Direction" columnKey="direction" sort={sort} /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Candles ago" columnKey="candlesAgo" sort={sort} align="right" /></th>
+                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Cross date" columnKey="crossDate" sort={sort} /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Close @ cross" columnKey="closeAtCross" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Level @ cross" columnKey="levelValueAtCross" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Current" columnKey="currentPrice" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Dist from level" columnKey="distancePct" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono"><SortHeader label="Score" columnKey="score" sort={sort} align="right" /></th>
                     <th className="px-2 py-1" />
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((row, idx) => (
+                  {sortedResults.map((row, idx) => (
                     <tr
                       key={`${row.ticker}-${row.kind}-${idx}`}
                       className="border-t border-border hover:bg-card/40"

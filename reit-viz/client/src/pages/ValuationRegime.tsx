@@ -17,6 +17,7 @@ import { FORWARD_HORIZONS } from "@/lib/forwardHorizons";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 
 interface HorizonDef { label: string; days: number; }
 const FWD_HORIZONS = FORWARD_HORIZONS as HorizonDef[];
@@ -239,6 +240,42 @@ export default function ValuationRegime() {
     else copy.sort((a, b) => a.ticker.localeCompare(b.ticker));
     return copy;
   }, [results, sortBy]);
+
+  // Click-to-sort on any data column. Initial key "" preserves the sortBy toggle
+  // order until the user clicks a header.
+  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const rowBestSummary = (row: (typeof sortedResults)[number]) => {
+    const bestResult = row.results.reduce(
+      (a: any, b: any) => (a.bestScore > b.bestScore ? a : b),
+      row.results[0]
+    );
+    return bestResult?.bands.reduce(
+      (a: any, b: any) => (a.composite.score > b.composite.score ? a : b),
+      bestResult?.bands[0]
+    )?.summary;
+  };
+  const displayRows = sort.apply(sortedResults, (row, key) => {
+    switch (key) {
+      case "ticker": return row.ticker;
+      case "bestMetric": return row.bestMetric;
+      case "bestWindow": return row.bestWindow;
+      case "bestBand": return row.bestBand;
+      case "score": return row.bestScore;
+      default: {
+        const summary = rowBestSummary(row);
+        if (!summary) return null;
+        if (key.startsWith("hit_")) {
+          const label = key.slice(4);
+          return returnMode === "band"
+            ? summary.bandHitRate?.[label] ?? summary.hitRate[label]
+            : summary.hitRate[label];
+        }
+        if (key.startsWith("avg_")) return summary.avgReturn[key.slice(4)];
+        if (key.startsWith("pf_")) return summary.profitFactor[key.slice(3)];
+        return null;
+      }
+    }
+  });
 
   const handleExportCSV = () => {
     const horizons = FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2);
@@ -486,26 +523,45 @@ export default function ValuationRegime() {
               <table className="w-full text-[10px] font-mono">
                 <thead>
                   <tr className="bg-card text-muted-foreground">
-                    <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">Ticker</th>
-                    <th className="text-center px-2 py-1 font-bold">Best Metric</th>
-                    <th className="text-center px-2 py-1 font-bold">Lookback</th>
-                    <th className="text-center px-2 py-1 font-bold">Best Band</th>
+                    <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border">
+                      <SortHeader label="Ticker" columnKey="ticker" sort={sort} />
+                    </th>
+                    <th className="text-center px-2 py-1 font-bold">
+                      <SortHeader label="Best Metric" columnKey="bestMetric" sort={sort} align="center" />
+                    </th>
+                    <th className="text-center px-2 py-1 font-bold">
+                      <SortHeader label="Lookback" columnKey="bestWindow" sort={sort} align="center" />
+                    </th>
+                    <th className="text-center px-2 py-1 font-bold">
+                      <SortHeader label="Best Band" columnKey="bestBand" sort={sort} align="center" />
+                    </th>
                     {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => (
                       <th key={h.label} className="text-center px-2 py-1 font-bold">
-                        {returnMode === "band" ? "Band" : "Hit"} {h.label}
+                        <SortHeader
+                          label={`${returnMode === "band" ? "Band" : "Hit"} ${h.label}`}
+                          columnKey={`hit_${h.label}`}
+                          sort={sort}
+                          align="center"
+                        />
                       </th>
                     ))}
                     {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => (
-                      <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">Avg {h.label}</th>
+                      <th key={`avg-${h.label}`} className="text-center px-2 py-1 font-bold">
+                        <SortHeader label={`Avg ${h.label}`} columnKey={`avg_${h.label}`} sort={sort} align="center" />
+                      </th>
                     ))}
                     {FWD_HORIZONS.filter((_: HorizonDef, i: number) => i >= 2).map((h: HorizonDef) => (
-                      <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">PF {h.label}</th>
+                      <th key={`pf-${h.label}`} className="text-center px-2 py-1 font-bold">
+                        <SortHeader label={`PF ${h.label}`} columnKey={`pf_${h.label}`} sort={sort} align="center" />
+                      </th>
                     ))}
-                    <th className="text-center px-2 py-1 font-bold">Score</th>
+                    <th className="text-center px-2 py-1 font-bold">
+                      <SortHeader label="Score" columnKey="score" sort={sort} align="center" />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedResults.map(row => {
+                  {displayRows.map(row => {
                     const bestResult = row.results.reduce((a: any, b: any) => a.bestScore > b.bestScore ? a : b, row.results[0]);
                     const bestSummary = bestResult?.bands.reduce((a: any, b: any) => a.composite.score > b.composite.score ? a : b, bestResult?.bands[0])?.summary;
                     const isExpanded = expandedTicker === row.ticker;
