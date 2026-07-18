@@ -18,6 +18,7 @@ import {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useExcludedTickers } from "@/lib/excludedTickers";
+import { useBaskets } from "@/lib/useBaskets";
 import { useGlobalAdvMap, useGlobalGeoMap, type GeoInfo } from "@/lib/globalUniverse";
 import { useWorkbookAdv, type AdvEntry as RawAdvEntry } from "@/lib/workbookAdv";
 import { parseNumericFilter } from "@/lib/numericFilter";
@@ -67,6 +68,12 @@ export interface UniverseContextValue {
    *  Joined from the global universe dataset. */
   exchangeFilter: Set<string>;
   setExchangeFilter: (s: Set<string>) => void;
+  /** Restrict the whole universe to a saved basket. "" = off. Accepts a basket
+   *  id or name (resolved via useBaskets().getBasket). */
+  universeBasketId: string;
+  setUniverseBasketId: (id: string) => void;
+  /** Resolved name of the active universe basket, or null when none/not found. */
+  universeBasketName: string | null;
   /** Ticker → { nation, exchange } keyed by UPPER-cased symbol, from the global dataset. */
   geoMap: Map<string, GeoInfo>;
   /** The nation (country) for a ticker, or null if unknown. */
@@ -133,6 +140,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   // Nation / exchange whitelists (joined from the global universe dataset).
   const [nationFilter, setNationFilter] = useState<Set<string>>(new Set());
   const [exchangeFilter, setExchangeFilter] = useState<Set<string>>(new Set());
+  // Restrict the whole universe to a saved basket ("" = off).
+  const [universeBasketId, setUniverseBasketId] = useState("");
+  const { getBasket } = useBaskets();
 
   const { data: tickersMeta = [] } = useQuery({
     queryKey: ["/universe-tickers"],
@@ -247,8 +257,18 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
   // liquidity can't be confirmed against the threshold.
   const advPredicate = useMemo(() => parseNumericFilter(advFilter), [advFilter]);
 
+  // Resolved basket restriction (uppercased symbols); null when off/not found.
+  const activeBasket = universeBasketId ? getBasket(universeBasketId) : undefined;
+  const basketSet = useMemo(() => {
+    if (!activeBasket) return null;
+    return new Set(activeBasket.tickers.map((t) => t.toUpperCase()));
+  }, [activeBasket]);
+
   const filteredTickersList = useMemo(() => {
-    let filtered = applyClassFilters(allTickers, filters, search, manualTickers);
+    const pool = basketSet
+      ? allTickers.filter((t) => basketSet.has(t.ticker.toUpperCase()))
+      : allTickers;
+    let filtered = applyClassFilters(pool, filters, search, manualTickers);
     if (excludedTickers.size > 0) {
       filtered = filtered.filter((t) => !excludedTickers.has(t.ticker.toUpperCase()));
     }
@@ -268,10 +288,11 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       filtered = filtered.filter((t) => advPredicate(advValueOf(t.ticker)));
     }
     return filtered;
-  }, [allTickers, filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, geoMap, advPredicate, advValueOf]);
+  }, [allTickers, basketSet, filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, geoMap, advPredicate, advValueOf]);
 
   const isFiltered = useMemo(() => {
     return (
+      basketSet != null ||
       Object.values(filters).some((s) => s.size > 0) ||
       search !== "" ||
       manualTickers.size > 0 ||
@@ -280,7 +301,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       exchangeFilter.size > 0 ||
       advPredicate !== null
     );
-  }, [filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, advPredicate]);
+  }, [basketSet, filters, search, manualTickers, excludedTickers, nationFilter, exchangeFilter, advPredicate]);
 
   const universeTickers = useMemo(() => {
     if (!isFiltered) return null;
@@ -301,8 +322,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
       exchangeFilter: [...exchangeFilter],
       advFilter,
       advWindow,
+      universeBasketId,
     };
-  }, [filters, search, manualTickers, nationFilter, exchangeFilter, advFilter, advWindow]);
+  }, [filters, search, manualTickers, nationFilter, exchangeFilter, advFilter, advWindow, universeBasketId]);
 
   const restore = useCallback((data: any) => {
     if (!data) return;
@@ -323,6 +345,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setExchangeFilter(new Set(Array.isArray(data.exchangeFilter) ? data.exchangeFilter : []));
     setAdvFilter(typeof data.advFilter === "string" ? data.advFilter : "");
     setAdvWindow(data.advWindow === 30 ? 30 : 90);
+    setUniverseBasketId(typeof data.universeBasketId === "string" ? data.universeBasketId : "");
   }, []);
 
   const clearAll = useCallback(() => {
@@ -332,6 +355,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setNationFilter(new Set());
     setExchangeFilter(new Set());
     setAdvFilter("");
+    setUniverseBasketId("");
   }, []);
 
   const value: UniverseContextValue = {
@@ -345,6 +369,9 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     setNationFilter,
     exchangeFilter,
     setExchangeFilter,
+    universeBasketId,
+    setUniverseBasketId,
+    universeBasketName: activeBasket?.name ?? null,
     geoMap,
     nationOf,
     exchangeOf,

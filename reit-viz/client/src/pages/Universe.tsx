@@ -25,6 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ClassificationFilters } from "@/lib/classificationFilters";
 import { FilterDropdown } from "@/components/ClassificationFilters";
+import { useBaskets } from "@/lib/useBaskets";
 import { commitClassificationOverride } from "@/lib/reclassificationOverrides";
 import {
   importClassificationOverrides,
@@ -47,6 +48,9 @@ export default function Universe() {
     setNationFilter,
     exchangeFilter,
     setExchangeFilter,
+    universeBasketId,
+    setUniverseBasketId,
+    universeBasketName,
     nationOf,
     exchangeOf,
     nationOptions,
@@ -68,6 +72,7 @@ export default function Universe() {
     clearAll,
   } = useUniverse();
 
+  const { baskets } = useBaskets();
   const overrides = useReclassificationOverrides();
   const overrideCount = Object.keys(overrides).length;
 
@@ -417,6 +422,18 @@ export default function Universe() {
             onChange={setExchangeFilter}
             testId="universe-filter-exchange"
           />
+          <select
+            value={universeBasketId}
+            onChange={(e) => setUniverseBasketId(e.target.value)}
+            className={`h-6 text-[11px] font-mono bg-background border rounded px-1.5 ${universeBasketName ? "border-cyan-500/60 text-cyan-400" : "border-border"}`}
+            title="Restrict the whole app's universe to a saved basket — every tab that follows the universe (Ranking, Screener, Scatter, Performance, …) will only see the basket's tickers"
+            data-testid="universe-basket-select"
+          >
+            <option value="">Basket: none</option>
+            {baskets.map((b) => (
+              <option key={b.id} value={b.id}>Basket: {b.name} ({b.tickers.length})</option>
+            ))}
+          </select>
           {nationFilter.size > 0 && offFilterNationTickers.length > 0 && (
             <button
               type="button"
