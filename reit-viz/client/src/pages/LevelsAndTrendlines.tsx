@@ -31,6 +31,7 @@ import { filterTickersByClassification } from "@/lib/filterTickersByClassificati
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
+import { futureWeekdays } from "@/lib/futureWeekdays";
 import {
   createChart,
   CandlestickSeries,
@@ -225,24 +226,8 @@ function scoreBg(score: number): string {
   return "rgba(239,68,68,0.15)";
 }
 
-function futureWeekdays(lastDate: string, n: number): string[] {
-  const out: string[] = [];
-  const [y, m, d] = lastDate.split("-").map((s) => parseInt(s, 10));
-  if (!y || !m || !d) return [];
-  const dt = new Date(y, m - 1, d);
-  let count = 0;
-  while (count < n) {
-    dt.setDate(dt.getDate() + 1);
-    const dow = dt.getDay();
-    if (dow === 0 || dow === 6) continue;
-    const yr = dt.getFullYear();
-    const mo = String(dt.getMonth() + 1).padStart(2, "0");
-    const day = String(dt.getDate()).padStart(2, "0");
-    out.push(`${yr}-${mo}-${day}`);
-    count++;
-  }
-  return out;
-}
+// futureWeekdays now lives in @/lib/futureWeekdays (shared with
+// SupportResistance + Trendlines).
 
 // ─── Combined chart — overlays candles + horizontal/fib price lines + MA line
 //     series + diagonal trendline segments + future projection + touch markers ─

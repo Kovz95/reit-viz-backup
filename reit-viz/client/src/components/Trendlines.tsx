@@ -49,6 +49,7 @@ import { isBasketTicker } from "@/lib/basketUtils";
 import { InputSeriesSelector, defaultInputSelection } from "@/lib/inputSeriesSelector";
 import { navigateToChartsWithPair, navigateToCharts } from "@/lib/chartNavigation";
 import { useUniverse } from "@/lib/universeContext";
+import { futureWeekdays } from "@/lib/futureWeekdays";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -435,22 +436,8 @@ export { detectTrendlines as d };
 
 // ── Generate future trading-day dates ──────────────────────────────────────────
 
-function futureWeekdays(lastDate: string, n: number): string[] {
-  const out: string[] = [];
-  const d = new Date(lastDate + "T00:00:00Z");
-  let count = 0;
-  while (count < n) {
-    d.setUTCDate(d.getUTCDate() + 1);
-    const dow = d.getUTCDay();
-    if (dow === 0 || dow === 6) continue;
-    const y = d.getUTCFullYear();
-    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    out.push(`${y}-${m}-${day}`);
-    count++;
-  }
-  return out;
-}
+// futureWeekdays now lives in @/lib/futureWeekdays (shared with
+// SupportResistance + LevelsAndTrendlines).
 
 function scoreBg(score: number): string {
   if (score >= 0.7) return "rgba(34,197,94,0.20)";

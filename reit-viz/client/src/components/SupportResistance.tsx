@@ -22,6 +22,7 @@ import { DATE_PRESETS, createDateRangeFromPreset } from "@/lib/dateUtils";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { navigateToChartsWithPair } from "@/lib/chartNavigation";
 import { useUniverse } from "@/lib/universeContext";
+import { futureWeekdays } from "@/lib/futureWeekdays";
 
 // ── Default config ─────────────────────────────────────────────────────────────
 
@@ -321,24 +322,8 @@ function scoreBg(score: number): string {
 
 // ── Generate future trading-day dates ─────────────────────────────────────────
 
-function futureWeekdays(lastDate: string, n: number): string[] {
-  const out: string[] = [];
-  const [y, m, d] = lastDate.split("-").map(s => parseInt(s, 10));
-  if (!y || !m || !d) return [];
-  const dt = new Date(y, m - 1, d);
-  let count = 0;
-  while (count < n) {
-    dt.setDate(dt.getDate() + 1);
-    const dow = dt.getDay();
-    if (dow === 0 || dow === 6) continue;
-    const yr = dt.getFullYear();
-    const mo = String(dt.getMonth() + 1).padStart(2, "0");
-    const day = String(dt.getDate()).padStart(2, "0");
-    out.push(`${yr}-${mo}-${day}`);
-    count++;
-  }
-  return out;
-}
+// futureWeekdays now lives in @/lib/futureWeekdays (shared with Trendlines +
+// LevelsAndTrendlines).
 
 const MIN_BARS = 200;
 

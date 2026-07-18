@@ -18,22 +18,15 @@ import {
   Check,
   Copy,
   GitMerge,
-  Layers,
 } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
-import {
-  FilterDropdown,
-  emptyClassFilters,
-  type ClassFilters,
-} from "./ClassificationFilters";
-import { useGeoFilter } from "@/lib/useGeoFilter";
+import BulkAddByGroup from "./BulkAddByGroup";
 import BasketMetricInspector, {
   type InspectableBasket,
 } from "./BasketMetricInspector";
 
 // The universe objects passed in (TickerMeta / GlobalRecord) carry the six
 // FactSet/RBICS classification levels; declare them here so we can group by them.
-type ClassKey = "economy" | "sector" | "subsector" | "industryGroup" | "industry" | "subindustry";
 interface TickerLike {
   ticker: string;
   name?: string;
@@ -44,16 +37,6 @@ interface TickerLike {
   industry?: string;
   subindustry?: string;
 }
-
-// Six classification levels (broad → narrow), labeled to match the rest of the app.
-const CLASS_LEVELS: { key: ClassKey; label: string }[] = [
-  { key: "economy", label: "Economy" },
-  { key: "sector", label: "Sector" },
-  { key: "subsector", label: "Subsector" },
-  { key: "industryGroup", label: "Ind. Group" },
-  { key: "industry", label: "Industry" },
-  { key: "subindustry", label: "Subindustry" },
-];
 
 const WEIGHTING_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "equal", label: "Equal" },
@@ -164,88 +147,15 @@ function BasketCard({
     [basket.id, basket.tickers, updateBasket],
   );
 
-  // ---- Bulk add by classification group ----
-  const [groupOpen, setGroupOpen] = useState(false);
-  const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
-  // Country/exchange filter for the bulk-add pool (e.g. "add every UK ticker").
-  const geo = useGeoFilter(tickers as any[], `basket-geo-${basket.id}`);
-
-  // Distinct values per level, from whatever universe was passed in. Levels with
-  // a single value across the universe are hidden (unless already selected) to
-  // keep the panel compact.
-  const classOptions = useMemo(() => {
-    const sets: Record<ClassKey, Set<string>> = {
-      economy: new Set(), sector: new Set(), subsector: new Set(),
-      industryGroup: new Set(), industry: new Set(), subindustry: new Set(),
-    };
-    for (const t of tickers) {
-      for (const { key } of CLASS_LEVELS) {
-        const v = (t as any)[key];
-        if (v) sets[key].add(v);
-      }
-    }
-    const out = {} as Record<ClassKey, string[]>;
-    for (const { key } of CLASS_LEVELS) out[key] = [...sets[key]].sort();
-    return out;
-  }, [tickers]);
-
-  // Ticker count per group value, shown next to each option.
-  const classCounts = useMemo(() => {
-    const counts = {
-      economy: {}, sector: {}, subsector: {},
-      industryGroup: {}, industry: {}, subindustry: {},
-    } as Record<ClassKey, Record<string, number>>;
-    for (const t of tickers) {
-      for (const { key } of CLASS_LEVELS) {
-        const v = (t as any)[key];
-        if (v) counts[key][v] = (counts[key][v] || 0) + 1;
-      }
-    }
-    return counts;
-  }, [tickers]);
-
-  const anyClassSelected = useMemo(
-    () => CLASS_LEVELS.some(({ key }) => classFilters[key].size > 0),
-    [classFilters],
+  // ---- Bulk add by classification group (shared BulkAddByGroup panel) ----
+  const addGroupTickers = useCallback(
+    (matched: string[]) => {
+      updateBasket(basket.id, {
+        tickers: [...new Set([...basket.tickers, ...matched])],
+      });
+    },
+    [basket.id, basket.tickers, updateBasket],
   );
-
-  // Symbols to add: the UNION of every selected group (across any level) — so
-  // picking several groups (e.g. two subindustries, or a sector + an industry)
-  // adds all their tickers, not just the ones common to all. Excludes symbols
-  // already in the basket.
-  const groupMatches = useMemo(() => {
-    // Candidates need a classification group OR an active country/exchange
-    // selection (geo alone = "add every ticker from that country/exchange").
-    if (!anyClassSelected && !geo.hasActiveGeo) return [] as string[];
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const t of geo.filterByGeo(tickers as any[])) {
-      let hit = !anyClassSelected; // geo-only selection: every geo match qualifies
-      if (!hit) {
-        for (const { key } of CLASS_LEVELS) {
-          const sel = classFilters[key];
-          if (sel.size > 0 && sel.has((t as any)[key])) {
-            hit = true;
-            break;
-          }
-        }
-      }
-      if (!hit) continue;
-      const up = String(t.ticker).toUpperCase();
-      if (!selectedSet.has(up) && !seen.has(up)) {
-        seen.add(up);
-        out.push(up);
-      }
-    }
-    return out;
-  }, [anyClassSelected, tickers, classFilters, selectedSet, geo.filterByGeo, geo.hasActiveGeo]);
-
-  const addGroup = useCallback(() => {
-    if (groupMatches.length === 0) return;
-    updateBasket(basket.id, {
-      tickers: [...new Set([...basket.tickers, ...groupMatches])],
-    });
-  }, [basket.id, basket.tickers, groupMatches, updateBasket]);
 
   const removeTicker = useCallback(
     (t: string) => {
@@ -493,70 +403,14 @@ function BasketCard({
             </div>
 
             {/* Add many at once by classification group */}
-            <div className="mt-1.5">
-              <button
-                type="button"
-                onClick={() => setGroupOpen((o) => !o)}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
-                data-testid={`basket-${basket.id}-group-toggle`}
-              >
-                {groupOpen ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronRight className="w-3 h-3" />
-                )}
-                <Layers className="w-3 h-3" />
-                Add by group
-              </button>
-              {groupOpen && (
-                <div className="mt-1.5 flex flex-col gap-2 rounded border border-border/60 bg-background/40 p-2">
-                  <div className="flex flex-wrap items-center gap-1">
-                    {CLASS_LEVELS.filter(
-                      ({ key }) => classOptions[key].length > 1 || classFilters[key].size > 0,
-                    ).map(({ key, label }) => (
-                      <FilterDropdown
-                        key={key}
-                        label={label}
-                        options={classOptions[key]}
-                        counts={classCounts[key]}
-                        selected={classFilters[key]}
-                        onChange={(next) => setClassFilters((f) => ({ ...f, [key]: next }))}
-                        testId={`basket-${basket.id}-class-${key}`}
-                      />
-                    ))}
-                    {geo.geoFilterUI}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={groupMatches.length === 0}
-                      onClick={addGroup}
-                      className="flex items-center gap-1 rounded bg-primary/15 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/25 disabled:opacity-40 disabled:cursor-not-allowed"
-                      data-testid={`basket-${basket.id}-add-group`}
-                    >
-                      <Plus className="w-3 h-3" />
-                      Add {groupMatches.length} ticker{groupMatches.length === 1 ? "" : "s"}
-                    </button>
-                    <span className="text-[10px] text-muted-foreground">
-                      {anyClassSelected || geo.hasActiveGeo
-                        ? `${groupMatches.length} new match${groupMatches.length === 1 ? "" : "es"}`
-                        : "Pick groups and/or a country/exchange to add them all"}
-                    </span>
-                    {anyClassSelected && (
-                      <button
-                        type="button"
-                        onClick={() => setClassFilters(emptyClassFilters())}
-                        className="ml-auto flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-                        data-testid={`basket-${basket.id}-group-clear`}
-                      >
-                        <X className="w-2.5 h-2.5" />
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            <BulkAddByGroup
+              tickers={tickers}
+              selectedSet={selectedSet}
+              onAdd={addGroupTickers}
+              testIdPrefix={`basket-${basket.id}`}
+              geoStorageKey={`basket-geo-${basket.id}`}
+              className="mt-1.5"
+            />
           </div>
 
           {/* Weighting + rebalance */}

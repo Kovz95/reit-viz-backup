@@ -44,6 +44,13 @@ export interface MetricSeriesResult {
 /**
  * Fetch a single metric series for a ticker.
  * Stub — TODO: reverse-engineer from production bundle.
+ *
+ * NOTE: deliberately NOT unified with the canonical
+ * `@/lib/fetchMetricSeries` — that one returns `{time, value}[]` (dense,
+ * date-trimmed), while this stub's contract is a `MetricSeriesResult`
+ * ({ticker, metricKey, dates, values}) that callers (EvaluatorPanel,
+ * FactorBacktest via signalUtils) destructure differently. Swapping the
+ * implementation would change the return shape, not just the source.
  */
 export async function fetchMetricSeries(
   _ticker: string,
