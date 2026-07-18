@@ -22,6 +22,7 @@ import { pct } from "@/lib/forwardReturns";
 import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
+import { groupMetricsByCategory } from "@/lib/metricCategories";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -264,8 +265,16 @@ export default function MomentumOptimizer() {
           }
         }
       }
-      const filtered = DEFAULT_REVISION_METRICS.filter(m => metricSet.has(m));
-      if (filtered.length > 0) setAvailableRevMetrics(filtered);
+      // Discover every FY1/FY2 estimate line present in the data (FFO/AFFO/EPS/
+      // EBITDA/Sales/Book value/FCF/Operating Income/…), not just the hardcoded
+      // handful — mirrors the Ranking page's revision-metric picker.
+      const discovered = groupMetricsByCategory([...metricSet])
+        .find(c => c.category === "Estimates (FY1/FY2)")?.metrics ?? [];
+      const merged = [...new Set([
+        ...DEFAULT_REVISION_METRICS.filter(m => metricSet.has(m)),
+        ...discovered,
+      ])].sort();
+      if (merged.length > 0) setAvailableRevMetrics(merged);
     });
   }, []);
 

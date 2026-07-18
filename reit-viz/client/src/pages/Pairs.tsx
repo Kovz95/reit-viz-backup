@@ -3434,12 +3434,14 @@ function MetricPicker({
   testId: string;
 }) {
   const customMetrics = getCustomFundamentalMetrics();
+  // Warm the tickers cache so the list below recomputes once it resolves.
+  const { data: tickersMetaAll } = useQuery({ queryKey: ["/clf-tickers"], queryFn: getTickers });
   // Union curated metrics + the loaded universe's metrics + derived, grouped.
   const metricGroups = useMemo(() => {
     const s = new Set<string>([...Object.values(METRIC_OPTIONS).flat(), ...DERIVED_METRICS]);
-    for (const t of getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
+    for (const t of tickersMetaAll || getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
     return groupMetricsByCategory([...s]);
-  }, []);
+  }, [tickersMetaAll]);
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-7 text-xs w-auto min-w-[180px]" data-testid={testId}>
