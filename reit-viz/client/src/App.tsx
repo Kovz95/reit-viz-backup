@@ -491,7 +491,7 @@ function StatusBar({ onOpenPalette }: { onOpenPalette?: () => void }) {
   }, []);
 
   // Universe filter counts come from the live UniverseContext.
-  const { filteredCount, totalCount, isFiltered } = useUniverse();
+  const { filteredCount, totalCount, isFiltered, universeBasketName } = useUniverse();
 
   // Market state / autosave / quote-poll data sources are not present in this
   // reconstruction; render sensible static/empty states (never crash).
@@ -548,6 +548,15 @@ function StatusBar({ onOpenPalette }: { onOpenPalette?: () => void }) {
           {filteredCount}
           <span className="text-muted-foreground/60">/{totalCount}</span>
         </span>
+        {universeBasketName && (
+          <span
+            className="px-1 rounded bg-cyan-500/15 text-cyan-400 truncate max-w-[140px]"
+            title={`Universe restricted to basket "${universeBasketName}" — change it on the Universe tab`}
+            data-testid="status-universe-basket"
+          >
+            🧺 {universeBasketName}
+          </span>
+        )}
       </div>
       <div className="flex-1" />
       <div className="flex items-center gap-1.5" data-testid="status-env">

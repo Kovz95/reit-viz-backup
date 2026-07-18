@@ -855,9 +855,12 @@ export default function SigmaMove() {
     setLoadingHistory(true);
     setGlobalError(null);
     try {
-      // Fetch enough history for the vol lookback AND the per-ticker distribution
-      // lookback (up to 5y = 1260 bars).
-      const minBars = Math.max(lookbackDays + horizonN + 5, 1300);
+      // Fetch only what the CURRENT settings need: the vol lookback, the active
+      // period window, and the per-ticker distribution lookback. Picking a longer
+      // dist lookback (e.g. 5y) re-runs this and fetches more; the default
+      // settings stay light (~520 bars instead of a flat 1300).
+      const window = Math.max(horizonN, isPeriodMode ? Math.max(1, Math.floor(periodWindow)) : 1);
+      const minBars = Math.max(lookbackDays + window + 5, distLookback + window + 5, 504);
       const batchData = await fetchMetricSeriesBatch("close", minBars);
       const tickerSet = new Set(tickerList.map((t: any) => t.ticker));
       const rows: LiveRow[] = [];
@@ -903,7 +906,7 @@ export default function SigmaMove() {
     } finally {
       setLoadingHistory(false);
     }
-  }, [tickerList, lookbackDays, horizonN]);
+  }, [tickerList, lookbackDays, horizonN, distLookback, isPeriodMode, periodWindow]);
 
   React.useEffect(() => {
     loadHistoricalData();
