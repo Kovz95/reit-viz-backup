@@ -91,6 +91,18 @@ html {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+/* Date inputs: the native calendar-picker icon is nearly invisible on the dark
+   UI. Brighten it and make the whole control obviously clickable so it opens
+   the calendar. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  opacity: 0.75;
+  cursor: pointer;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
 /* Custom scrollbar for dark theme */
 ::-webkit-scrollbar {
   width: 6px;

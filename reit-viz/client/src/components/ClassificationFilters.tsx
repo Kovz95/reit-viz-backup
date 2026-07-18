@@ -186,7 +186,7 @@ export function FilterDropdown({
       >
         <Filter className="w-2.5 h-2.5 flex-shrink-0" />
         <span className="font-medium">{label}:</span>
-        <span className="max-w-[80px] truncate">{displayText}</span>
+        <span className="whitespace-nowrap">{displayText}</span>
         <ChevronDown className={`w-2.5 h-2.5 transition-transform flex-shrink-0 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
@@ -241,12 +241,12 @@ export function FilterDropdown({
 
 // ---- Manual ticker add component ----
 function ManualTickerAdd({
-  allTickers,
+  tickerMeta,
   manualTickers,
   onAdd,
   onRemove,
 }: {
-  allTickers: string[];
+  tickerMeta: { ticker: string; name: string }[];
   manualTickers: Set<string>;
   onAdd: (t: string) => void;
   onRemove: (t: string) => void;
@@ -265,11 +265,26 @@ function ManualTickerAdd({
 
   const suggestions = useMemo(() => {
     if (!input || input.length < 1) return [];
-    const q = input.toUpperCase();
-    return allTickers
-      .filter((t) => t.toUpperCase().startsWith(q) && !manualTickers.has(t))
+    const q = input.toLowerCase();
+    // Match on ticker symbol OR company name. Prefix matches rank above
+    // substring matches so typing a ticker still surfaces it first.
+    const scored = tickerMeta
+      .filter((t) => !manualTickers.has(t.ticker))
+      .map((t) => {
+        const tk = t.ticker.toLowerCase();
+        const nm = (t.name || "").toLowerCase();
+        let score = -1;
+        if (tk.startsWith(q)) score = 0;
+        else if (nm.startsWith(q)) score = 1;
+        else if (tk.includes(q)) score = 2;
+        else if (nm.includes(q)) score = 3;
+        return { t, score };
+      })
+      .filter((s) => s.score >= 0)
+      .sort((a, b) => a.score - b.score || a.t.ticker.localeCompare(b.t.ticker))
       .slice(0, 8);
-  }, [input, allTickers, manualTickers]);
+    return scored.map((s) => s.t);
+  }, [input, tickerMeta, manualTickers]);
 
   const addTicker = (t: string) => {
     onAdd(t);
@@ -279,9 +294,13 @@ function ManualTickerAdd({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && input) {
-      const upper = input.toUpperCase();
-      const match = allTickers.find((t) => t.toUpperCase() === upper);
-      if (match) addTicker(match);
+      const q = input.toLowerCase();
+      // Exact ticker/name match wins; otherwise fall back to the top suggestion.
+      const exact = tickerMeta.find(
+        (t) => t.ticker.toLowerCase() === q || (t.name || "").toLowerCase() === q,
+      );
+      const pick = exact ?? suggestions[0];
+      if (pick) addTicker(pick.ticker);
     }
   };
 
@@ -290,8 +309,8 @@ function ManualTickerAdd({
       <div className="relative">
         <Plus className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
         <input
-          className="h-6 pl-6 pr-2 w-24 text-[11px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
-          placeholder="Add ticker"
+          className="h-6 pl-6 pr-2 w-32 text-[11px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+          placeholder="Add ticker or name"
           value={input}
           onChange={(e) => { setInput(e.target.value); setShowSuggestions(true); }}
           onFocus={() => setShowSuggestions(true)}
@@ -299,14 +318,15 @@ function ManualTickerAdd({
           data-testid="manual-ticker-input"
         />
         {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute z-50 mt-1 w-36 max-h-48 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1">
+          <div className="absolute z-50 mt-1 w-56 max-h-48 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1">
             {suggestions.map((s) => (
               <button
-                key={s}
-                className="w-full px-2 py-0.5 text-xs text-left hover:bg-accent rounded font-mono"
-                onClick={() => addTicker(s)}
+                key={s.ticker}
+                className="flex items-center gap-2 w-full px-2 py-0.5 text-xs text-left hover:bg-accent rounded"
+                onClick={() => addTicker(s.ticker)}
               >
-                {s}
+                <span className="font-mono flex-shrink-0">{s.ticker}</span>
+                <span className="truncate text-muted-foreground">{s.name}</span>
               </button>
             ))}
           </div>
@@ -393,8 +413,8 @@ export default function ClassificationFilters({
     return result as Record<ClassKey, string[]>;
   }, [tickersMeta]);
 
-  const allTickerSymbols = useMemo(
-    () => (tickersMeta || []).map((t) => t.ticker),
+  const tickerMetaList = useMemo(
+    () => (tickersMeta || []).map((t) => ({ ticker: t.ticker, name: t.name })),
     [tickersMeta]
   );
 
@@ -449,7 +469,7 @@ export default function ClassificationFilters({
 
       {/* Manual ticker add */}
       <ManualTickerAdd
-        allTickers={allTickerSymbols}
+        tickerMeta={tickerMetaList}
         manualTickers={manualTickers}
         onAdd={(t) => {
           const next = new Set(manualTickers);

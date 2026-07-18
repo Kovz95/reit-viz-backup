@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync } from "@/lib/dataService";
+import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync, getTickers } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import type { RevisionData, ClassifiedBase } from "@/lib/dataService";
 import ClassificationFilters, {
@@ -456,12 +456,24 @@ export default function Ranking() {
   const { universeTickers } = useUniverse();
   const [metrics, setMetrics] = useState<string[]>(["P/FFO FY2"]);
   const [pendingMetric, setPendingMetric] = useState("");
+  // Warm the tickers cache so the metric list below can enumerate every metric
+  // in the workbook (not just the curated defaults available at cold-start).
+  const { data: tickersMetaAll } = useQuery({ queryKey: ["/clf-tickers"], queryFn: getTickers });
   // Curated metrics + the loaded universe's metrics + derived, grouped by category.
+  // Recomputes once the ticker cache resolves so newly-discovered metrics appear.
   const metricCategoriesDyn = useMemo(() => {
     const s = new Set<string>([...Object.values(METRIC_OPTIONS).flat(), ...DERIVED_METRICS]);
-    for (const t of getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
+    for (const t of tickersMetaAll || getTickersCacheSync() || []) for (const m of t.metrics || []) s.add(m);
     return groupMetricsByCategory([...s]);
-  }, []);
+  }, [tickersMetaAll]);
+
+  // Estimate-revision metric choices: every FY1/FY2 estimate line available in the
+  // data (FFO/AFFO/EPS/EBITDA/…), not just a hardcoded handful. Falls back to the
+  // classic set so the dropdown is never empty before data loads.
+  const revisionMetricOptions = useMemo(() => {
+    const est = metricCategoriesDyn.find((c) => c.category === "Estimates (FY1/FY2)")?.metrics ?? [];
+    return [...new Set<string>([...REVISION_METRICS, ...est])].sort();
+  }, [metricCategoriesDyn]);
   const [newTemplateName, setNewTemplateName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
 
@@ -1231,7 +1243,8 @@ export default function Ranking() {
           type="date"
           value={dateInput}
           onChange={(e) => setDateInput(e.target.value)}
-          className="h-6 text-[11px] w-[130px] bg-background"
+          onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
+          className="h-6 text-[11px] w-[140px] bg-background cursor-pointer"
           data-testid="rank-date"
         />
         {dateInput && (
@@ -1255,11 +1268,11 @@ export default function Ranking() {
 
         {showRevisions && (
           <Select value={revMetric} onValueChange={setRevMetric}>
-            <SelectTrigger className="h-6 text-[11px] w-[100px]" data-testid="rev-metric-select">
+            <SelectTrigger className="h-6 text-[11px] w-auto min-w-[110px]" data-testid="rev-metric-select">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              {REVISION_METRICS.map((m) => (
+            <SelectContent className="max-h-[320px]">
+              {revisionMetricOptions.map((m) => (
                 <SelectItem key={m} value={m}>{m}</SelectItem>
               ))}
             </SelectContent>
