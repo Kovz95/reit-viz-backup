@@ -3,10 +3,14 @@
 import { useState, useMemo, Fragment } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { getMetricTrailing } from "@/lib/dataService";
+import { getMetricTrailing, getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { navigateToPairs } from "@/lib/navigateToPairs";
+import {
+  PAIR_RATIO_METRIC, ratioSeries, unorderedPairs, MAX_PAIR_LEGS, type PairBasis,
+} from "@/lib/pairValuation";
 import RerateMetricPicker from "@/components/RerateMetricPicker";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -70,7 +74,7 @@ type SortCol =
   | "ticker" | "m0" | "nowPctile" | "nowZ" | "proForma" | "proFormaPctile"
   | "proFormaZ" | "toMedian" | "toRich" | "toCheap" | "rr";
 
-type TickerMetaLite = { ticker: string; name: string } & RerateClassification;
+type TickerMetaLite = { ticker: string; name: string; legA?: string; legB?: string } & RerateClassification;
 // One table row per ticker, holding a computed RerateRow per selected metric.
 type MultiRow = { meta: TickerMetaLite; byMetric: Record<string, RerateRow> };
 
@@ -88,6 +92,9 @@ export default function ValuationReRating() {
   const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:rerate:lookbackDays", 1260);
   const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("reit-viz:rerate:groupBy", "none");
   const [search, setSearch] = useState("");
+  // Pairs mode: each row is an A/B ratio (price or the selected multiple).
+  const [pairMode, setPairMode] = usePersistedState("reit-viz:rerate:pairMode", false);
+  const [pairBasis, setPairBasis] = usePersistedState<PairBasis>("reit-viz:rerate:pairBasis", "price");
   const [classFilters, setClassFilters] = usePersistedState<Record<string, string>>("reit-viz:rerate:classFilters", DEFAULT_CLASS_FILTERS);
   // Changing a coarser level resets the finer ones (they may no longer apply).
   const setClassFilter = (key: string, value: string) => {
@@ -107,7 +114,16 @@ export default function ValuationReRating() {
   const removeMetric = (key: string) =>
     setMetricKeys(metricKeys.length > 1 ? metricKeys.filter((k) => k !== key) : metricKeys);
   const metrics = useMemo(() => metricKeys.map((k) => getRerateMetric(k)), [metricKeys]);
-  const effSortMetric = sortMetric && metricKeys.includes(sortMetric) ? sortMetric : metricKeys[0];
+  // In pairs mode the table has a single synthetic "A/B ratio" column.
+  const pairRatioMetric: RerateMetric = useMemo(
+    () => ({ ...PAIR_RATIO_METRIC, label: pairBasis === "price" ? "A/B Price Ratio" : `A/B ${metricKeys[0]} Ratio` }),
+    [pairBasis, metricKeys],
+  );
+  const effMetrics = pairMode ? [pairRatioMetric] : metrics;
+  const effMetricKeys = pairMode ? [PAIR_RATIO_METRIC.key] : metricKeys;
+  const effSortMetric = pairMode
+    ? PAIR_RATIO_METRIC.key
+    : (sortMetric && metricKeys.includes(sortMetric) ? sortMetric : metricKeys[0]);
   const tickers = useMemo(
     () => filteredTickersList.map((t) => ({
       ticker: t.ticker, name: t.name,
@@ -137,7 +153,7 @@ export default function ValuationReRating() {
   // Fetch each ticker's trailing history for EVERY selected metric (batched),
   // keyed on the metric set + lookback + universe. Shape: metricKey → ticker → vals.
   const metricsSig = metricKeys.join("|");
-  const { data: trailingByMetric = {}, isLoading } = useQuery({
+  const { data: trailingByMetric = {}, isLoading: singleLoading } = useQuery({
     queryKey: ["rerate-trailing-multi", metricsSig, lookbackDays, tickerKey],
     queryFn: async () => {
       const out: Record<string, Record<string, number[]>> = {};
@@ -155,12 +171,12 @@ export default function ValuationReRating() {
       }
       return out;
     },
-    enabled: tickers.length > 0 && metricKeys.length > 0,
+    enabled: !pairMode && tickers.length > 0 && metricKeys.length > 0,
   });
 
   // One row per ticker; each carries a RerateRow per selected metric (present
   // only where that ticker has enough history for that multiple).
-  const rows = useMemo<MultiRow[]>(() => {
+  const singleRows = useMemo<MultiRow[]>(() => {
     const out: MultiRow[] = [];
     for (const t of tickers) {
       const byMetric: Record<string, RerateRow> = {};
@@ -175,6 +191,62 @@ export default function ValuationReRating() {
     return out;
   }, [tickers, trailingByMetric, pctMove, metricKeys]);
 
+  // Legs that form pairs: the class/geo/search-filtered universe, capped (n²).
+  const pairLegs = useMemo(() => {
+    const q = search.trim().toUpperCase();
+    return tickers
+      .filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]))
+      .filter((t) => geo.matchesGeo(t.ticker))
+      .filter((t) => !q || t.ticker.includes(q) || t.name.toUpperCase().includes(q))
+      .sort((a, b) => a.ticker.localeCompare(b.ticker))
+      .slice(0, MAX_PAIR_LEGS);
+  }, [tickers, classFilters, geo.matchesGeo, search]);
+  const pairLegOverflow = pairMode
+    ? tickers.filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]) && geo.matchesGeo(t.ticker)).length - pairLegs.length
+    : 0;
+  const pairMetricKey = metricKeys[0];
+  const pairLegKey = useMemo(() => pairLegs.map((t) => t.ticker).join(","), [pairLegs]);
+
+  const { data: pairRows = [], isLoading: pairLoading } = useQuery({
+    queryKey: ["rerate-pairs", pairBasis, pairMetricKey, lookbackDays, pctMove, pairLegKey],
+    queryFn: async () => {
+      const seriesKey = pairBasis === "price" ? "close" : pairMetricKey;
+      const seriesByTicker = new Map<string, { time: string; value: number }[]>();
+      const batchSize = 12;
+      for (let b = 0; b < pairLegs.length; b += batchSize) {
+        const batch = pairLegs.slice(b, b + batchSize);
+        await Promise.all(batch.map(async (t) => {
+          seriesByTicker.set(t.ticker, await getMetricSeries(t.ticker, seriesKey).catch(() => []));
+        }));
+      }
+      const out: MultiRow[] = [];
+      const pairs = unorderedPairs(pairLegs);
+      for (let i = 0; i < pairs.length; i++) {
+        const [A, B] = pairs[i];
+        const ratio = ratioSeries(seriesByTicker.get(A.ticker) || [], seriesByTicker.get(B.ticker) || []);
+        // Trailing ratio values, windowed to the selected history length.
+        const vals = ratio.map((p) => p.value);
+        const trailing = lookbackDays < vals.length ? vals.slice(-lookbackDays) : vals;
+        const meta: TickerMetaLite = {
+          ticker: `${A.ticker}/${B.ticker}`, name: `${A.name} / ${B.name}`,
+          economy: A.economy, sector: A.sector, subsector: A.subsector,
+          industryGroup: A.industryGroup, industry: A.industry, subindustry: A.subindustry,
+          legA: A.ticker, legB: B.ticker,
+        };
+        // The ratio behaves like a direct, low-is-cheap multiple; a +X% relative
+        // move of A vs B re-rates it by X%.
+        const rr = buildRerateRow(meta, trailing, pctMove, PAIR_RATIO_METRIC);
+        if (rr) out.push({ meta, byMetric: { [PAIR_RATIO_METRIC.key]: rr } });
+        if (i % 300 === 299) await new Promise((r) => setTimeout(r));
+      }
+      return out;
+    },
+    enabled: pairMode && pairLegs.length >= 2 && (pairBasis === "price" || !!pairMetricKey),
+  });
+
+  const rows = pairMode ? pairRows : singleRows;
+  const isLoading = pairMode ? pairLoading : singleLoading;
+
   const sortValueOf = (row: MultiRow): number | string => {
     if (sortCol === "ticker") return row.meta.ticker;
     const rr = row.byMetric[effSortMetric];
@@ -185,9 +257,13 @@ export default function ValuationReRating() {
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = rows.filter((x) =>
-      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
-      && geo.matchesGeo(x.meta.ticker));
+    // Pairs mode filters its legs up front (see pairLegs); single mode filters
+    // the computed rows here by classification + geography.
+    let r = pairMode
+      ? rows.slice()
+      : rows.filter((x) =>
+          CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
+          && geo.matchesGeo(x.meta.ticker));
     if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       const av = sortValueOf(a), bv = sortValueOf(b);
@@ -197,7 +273,7 @@ export default function ValuationReRating() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir, classFilters, geo.matchesGeo]);
+  }, [rows, search, sortCol, effSortMetric, sortDir, classFilters, geo.matchesGeo, pairMode]);
 
   // When grouping, partition the already-sorted rows by the chosen classification
   // (rows keep their sort order within each group; groups are ordered A→Z).
@@ -211,11 +287,11 @@ export default function ValuationReRating() {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [visible, groupBy]);
 
-  const totalCols = 2 + metrics.length * 10;
+  const totalCols = 2 + effMetrics.length * 10;
 
   // Sort targets a (metric, stat) pair; metricKey null → the shared Ticker column.
   const isActiveSort = (col: SortCol, metricKey: string | null) =>
-    sortCol === col && (col === "ticker" || (metricKey ?? metricKeys[0]) === effSortMetric);
+    sortCol === col && (col === "ticker" || (metricKey ?? effMetricKeys[0]) === effSortMetric);
 
   const toggleSort = (col: SortCol, metricKey: string | null) => {
     if (isActiveSort(col, metricKey)) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -301,16 +377,16 @@ export default function ValuationReRating() {
       <td className={`px-1 py-1 text-center ${STICKY0}`}>
         <button
           type="button"
-          onClick={() => openInCharts(r.meta.ticker)}
-          title={`Chart ${r.meta.ticker} — ${effSortMetric} with percentile, z-score & reward:risk over time`}
+          onClick={() => pairMode && r.meta.legA && r.meta.legB ? navigateToPairs(r.meta.legA, r.meta.legB) : openInCharts(r.meta.ticker)}
+          title={pairMode ? `Open ${r.meta.ticker} in Pairs` : `Chart ${r.meta.ticker} — ${effSortMetric} with percentile, z-score & reward:risk over time`}
           className="text-muted-foreground hover:text-foreground"
         >
           <LineChart className="w-3.5 h-3.5" />
         </button>
       </td>
       <td className={`px-2 py-1 text-left font-semibold ${STICKY1}`} title={`${r.meta.name} · ${r.meta.sector}`}>{r.meta.ticker}</td>
-      {metricKeys.map((mk, i) => (
-        <Fragment key={mk}>{renderMetricCells(r.byMetric[mk], metrics[i])}</Fragment>
+      {effMetricKeys.map((mk, i) => (
+        <Fragment key={mk}>{renderMetricCells(r.byMetric[mk], effMetrics[i])}</Fragment>
       ))}
     </tr>
   );
@@ -320,7 +396,33 @@ export default function ValuationReRating() {
       {/* Controls */}
       <div className="flex items-end gap-3 flex-wrap px-3 py-2 border-b border-border bg-card flex-shrink-0">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Multiples</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Mode</div>
+          <div className="flex rounded border border-border/40 overflow-hidden h-7">
+            {(["single", "pairs"] as const).map((m) => (
+              <button key={m} type="button" onClick={() => setPairMode(m === "pairs")}
+                data-testid={`rerate-mode-${m}`}
+                className={`px-2.5 text-xs font-medium ${(m === "pairs") === pairMode ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
+                {m === "single" ? "Single" : "Pairs"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {pairMode && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Ratio</div>
+            <div className="flex rounded border border-border/40 overflow-hidden h-7">
+              {(["price", "multiple"] as const).map((bss) => (
+                <button key={bss} type="button" onClick={() => setPairBasis(bss)}
+                  data-testid={`rerate-basis-${bss}`}
+                  className={`px-2.5 text-xs font-medium ${pairBasis === bss ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
+                  {bss === "price" ? "Price" : "Multiple"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className={pairMode && pairBasis === "price" ? "opacity-40 pointer-events-none" : ""}>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Multiple (for ratio)" : "Multiples"}</div>
           <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
         <div>
@@ -376,7 +478,10 @@ export default function ValuationReRating() {
           />
         </div>
         <div className="text-[11px] text-muted-foreground ml-auto self-center">
-          {visible.length} names
+          {visible.length} {pairMode ? "pairs" : "names"}
+          {pairMode && pairLegOverflow > 0 && (
+            <span className="text-amber-400/80" title={`Capped at ${MAX_PAIR_LEGS} legs — narrow the universe with the filters to include the other ${pairLegOverflow}.`}> · {pairLegOverflow} legs over cap</span>
+          )}
         </div>
       </div>
 
@@ -386,7 +491,8 @@ export default function ValuationReRating() {
         <span>
           <b>Pro-forma</b> = the multiple if price moves {fmtMove(pctMove)}, with its percentile/z vs the stock's own {LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? ""} history.
           {" "}<b>→Median / ↑Rich / ↓Cheap</b> = implied % price move to re-rate to that historical level — your upside/downside room.
-          {metrics.some((m) => m.approx) && <em className="text-amber-400"> EV-based multiples assume EV moves with equity (ignores leverage) — approximate.</em>}
+          {effMetrics.some((m) => m.approx) && <em className="text-amber-400"> EV-based multiples assume EV moves with equity (ignores leverage) — approximate.</em>}
+          {pairMode && <em className="text-sky-300/80"> Pairs: each row is the A/B {pairBasis === "price" ? "price" : "multiple"} ratio; ↑Rich / ↓Cheap are implied relative moves to re-rate the ratio to its own extremes.</em>}
         </span>
       </div>
 
@@ -401,13 +507,13 @@ export default function ValuationReRating() {
                 onClick={() => toggleSort("ticker", null)}
                 rowSpan={2}
               >
-                Ticker <SortIcon col="ticker" metricKey={null} />
+                {pairMode ? "Pair" : "Ticker"} <SortIcon col="ticker" metricKey={null} />
               </th>
-              {metrics.map((m, i) => (
+              {effMetrics.map((m, i) => (
                 <th key={m.key} colSpan={10} className={`px-2 py-1 text-center normal-case ${i > 0 ? "border-l border-border/60" : ""}`}>
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-foreground/80">
                     {m.label}
-                    {metricKeys.length > 1 && (
+                    {!pairMode && metricKeys.length > 1 && (
                       <button
                         type="button"
                         onClick={() => removeMetric(m.key)}
@@ -420,7 +526,7 @@ export default function ValuationReRating() {
               ))}
             </tr>
             <tr>
-              {metrics.map((m) => <Fragment key={m.key}>{metricHeaderCells(m)}</Fragment>)}
+              {effMetrics.map((m) => <Fragment key={m.key}>{metricHeaderCells(m)}</Fragment>)}
             </tr>
           </thead>
           <tbody>

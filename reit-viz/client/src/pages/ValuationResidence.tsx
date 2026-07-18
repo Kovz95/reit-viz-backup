@@ -8,6 +8,10 @@ import { useQuery } from "@tanstack/react-query";
 import { getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { navigateToPairs } from "@/lib/navigateToPairs";
+import {
+  PAIR_RATIO_METRIC, ratioSeries, unorderedPairs, MAX_PAIR_LEGS, type PairBasis,
+} from "@/lib/pairValuation";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -53,6 +57,8 @@ type TickerMetaLite = {
   ticker: string; name: string;
   economy: string; sector: string; subsector: string;
   industryGroup: string; industry: string; subindustry: string;
+  /** In pairs mode, the two legs of the A/B ratio (for "open in Pairs"). */
+  legA?: string; legB?: string;
 };
 type Row = ResidenceResult & TickerMetaLite;
 // One table row per ticker, holding a computed residence Row per selected metric.
@@ -100,6 +106,10 @@ export default function ValuationResidence() {
   const [pctMove, setPctMove] = useSessionState("residence:pctMove", 20);
   const [horizon, setHorizon] = useSessionState("residence:horizon", 63);
   const [search, setSearch] = useState("");
+  // Pairs mode: each row is an A/B ratio (of price or the selected multiple)
+  // instead of a single ticker's multiple.
+  const [pairMode, setPairMode] = useSessionState("residence:pairMode", false);
+  const [pairBasis, setPairBasis] = useSessionState<PairBasis>("residence:pairBasis", "price");
   const [classFilters, setClassFilters] = useSessionState<Record<string, string>>("residence:classFilters", DEFAULT_CLASS_FILTERS);
   // Changing a coarser level resets the finer ones (they may no longer apply).
   const setClassFilter = (key: string, value: string) => {
@@ -120,7 +130,17 @@ export default function ValuationResidence() {
   const removeMetric = (key: string) =>
     setMetricKeys(metricKeys.length > 1 ? metricKeys.filter((k) => k !== key) : metricKeys);
   const metrics = useMemo(() => metricKeys.map((k) => getRerateMetric(k)), [metricKeys]);
-  const effSortMetric = sortMetric && metricKeys.includes(sortMetric) ? sortMetric : metricKeys[0];
+  // In pairs mode the table has a single synthetic "A/B ratio" column; otherwise
+  // it's one column group per selected multiple.
+  const pairRatioMetric: RerateMetric = useMemo(
+    () => ({ ...PAIR_RATIO_METRIC, label: pairBasis === "price" ? "A/B Price Ratio" : `A/B ${metricKeys[0]} Ratio` }),
+    [pairBasis, metricKeys],
+  );
+  const effMetrics = pairMode ? [pairRatioMetric] : metrics;
+  const effMetricKeys = pairMode ? [PAIR_RATIO_METRIC.key] : metricKeys;
+  const effSortMetric = pairMode
+    ? PAIR_RATIO_METRIC.key
+    : (sortMetric && metricKeys.includes(sortMetric) ? sortMetric : metricKeys[0]);
   const tickers = useMemo(
     () => filteredTickersList.map((t) => ({
       ticker: t.ticker, name: t.name,
@@ -148,7 +168,7 @@ export default function ValuationResidence() {
   }, [tickers, classFilters]);
 
   const metricsSig = metricKeys.join("|");
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: singleRows = [], isLoading: singleLoading } = useQuery({
     queryKey: ["residence-multi", metricsSig, basis, lookbackDays, pctMove, tickerKey],
     queryFn: async () => {
       const out: MultiRow[] = [];
@@ -176,8 +196,71 @@ export default function ValuationResidence() {
       }
       return out;
     },
-    enabled: tickers.length > 0 && metricKeys.length > 0,
+    enabled: !pairMode && tickers.length > 0 && metricKeys.length > 0,
   });
+
+  // Legs that form pairs: the class/geo/search-filtered universe, capped (pairs
+  // grow as n²). Sorted by ticker so the cap and pair orientation are stable.
+  const pairLegs = useMemo(() => {
+    const q = search.trim().toUpperCase();
+    const legs = tickers
+      .filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]))
+      .filter((t) => geo.matchesGeo(t.ticker))
+      .filter((t) => !q || t.ticker.includes(q) || t.name.toUpperCase().includes(q))
+      .sort((a, b) => a.ticker.localeCompare(b.ticker));
+    return legs.slice(0, MAX_PAIR_LEGS);
+  }, [tickers, classFilters, geo.matchesGeo, search]);
+  const pairLegOverflow = pairMode
+    ? tickers.filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]) && geo.matchesGeo(t.ticker)).length - pairLegs.length
+    : 0;
+  const pairMetricKey = metricKeys[0];
+  const pairLegKey = useMemo(() => pairLegs.map((t) => t.ticker).join(","), [pairLegs]);
+
+  const { data: pairRows = [], isLoading: pairLoading } = useQuery({
+    queryKey: ["residence-pairs", pairBasis, pairMetricKey, basis, lookbackDays, pctMove, pairLegKey],
+    queryFn: async () => {
+      const seriesKey = pairBasis === "price" ? "close" : pairMetricKey;
+      // Load each leg's basis series once, then combine into ratios.
+      const seriesByTicker = new Map<string, { time: string; value: number }[]>();
+      const batchSize = 12;
+      for (let b = 0; b < pairLegs.length; b += batchSize) {
+        const batch = pairLegs.slice(b, b + batchSize);
+        await Promise.all(batch.map(async (t) => {
+          seriesByTicker.set(t.ticker, await getMetricSeries(t.ticker, seriesKey).catch(() => []));
+        }));
+      }
+      const out: MultiRow[] = [];
+      const pairs = unorderedPairs(pairLegs);
+      for (let i = 0; i < pairs.length; i++) {
+        const [A, B] = pairs[i];
+        const ratio = ratioSeries(seriesByTicker.get(A.ticker) || [], seriesByTicker.get(B.ticker) || []);
+        if (ratio.length < 30) continue;
+        // The ratio behaves like a direct, low-is-cheap multiple; forward returns
+        // are the ratio's own forward returns (pass ratio as the "close").
+        const res = buildResidence(ratio, ratio, {
+          basis, window: lookbackDays, pctMove,
+          dir: PAIR_RATIO_METRIC.dir, lowIsCheap: PAIR_RATIO_METRIC.lowIsCheap,
+          horizons: HORIZONS.map((h) => h.days),
+          skipFirstYear: true,
+        });
+        if (!res) continue;
+        const meta: TickerMetaLite = {
+          ticker: `${A.ticker}/${B.ticker}`, name: `${A.name} / ${B.name}`,
+          economy: A.economy, sector: A.sector, subsector: A.subsector,
+          industryGroup: A.industryGroup, industry: A.industry, subindustry: A.subindustry,
+          legA: A.ticker, legB: B.ticker,
+        };
+        out.push({ meta, byMetric: { [PAIR_RATIO_METRIC.key]: { ...res, ...meta } as Row } });
+        // Yield to the event loop periodically so the UI stays responsive.
+        if (i % 200 === 199) await new Promise((r) => setTimeout(r));
+      }
+      return out;
+    },
+    enabled: pairMode && pairLegs.length >= 2 && (pairBasis === "price" || !!pairMetricKey),
+  });
+
+  const rows = pairMode ? pairRows : singleRows;
+  const isLoading = pairMode ? pairLoading : singleLoading;
 
   const FWD_COLS = new Set<SortCol>(["fwdRich", "fwdCheap", "edge"]);
   // Which tail's sample backs this column (fwdCheap → cheap tail; else rich tail).
@@ -205,9 +288,13 @@ export default function ValuationResidence() {
 
   const visible = useMemo(() => {
     const q = search.trim().toUpperCase();
-    let r = rows.filter((x) =>
-      CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
-      && geo.matchesGeo(x.meta.ticker));
+    // Pairs mode filters its legs up front (see pairLegs); single mode filters
+    // the computed rows here by classification + geography.
+    let r = pairMode
+      ? rows.slice()
+      : rows.filter((x) =>
+          CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
+          && geo.matchesGeo(x.meta.ticker));
     if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       // Keep low-sample tails out of the top of a forward-return sort (both directions).
@@ -221,7 +308,7 @@ export default function ValuationResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo]);
+  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo, pairMode]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -235,7 +322,7 @@ export default function ValuationResidence() {
 
   // Sort targets a (metric, stat) pair; metricKey null → the shared Ticker column.
   const isActiveSort = (col: SortCol, metricKey: string | null) =>
-    sortCol === col && (col === "ticker" || (metricKey ?? metricKeys[0]) === effSortMetric);
+    sortCol === col && (col === "ticker" || (metricKey ?? effMetricKeys[0]) === effSortMetric);
   const toggleSort = (col: SortCol, metricKey: string | null) => {
     if (isActiveSort(col, metricKey)) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSortCol(col); setSortMetric(metricKey); setSortDir(col === "ticker" ? "asc" : "desc"); }
@@ -280,7 +367,7 @@ export default function ValuationResidence() {
   // Frozen left columns so the ticker stays visible while scrolling metrics.
   const STICKY0 = "sticky left-0 bg-card z-10";
   const STICKY1 = "sticky left-7 bg-card z-10";
-  const totalCols = 2 + metrics.length * 11;
+  const totalCols = 2 + effMetrics.length * 11;
 
   const lowMark = <span className="text-[8px] align-super text-amber-400/70">*</span>;
   // The 11 cells (10 stats + occupancy) for one ticker × one metric. Clicking any
@@ -325,15 +412,16 @@ export default function ValuationResidence() {
   const renderRow = (row: MultiRow) => (
     <tr key={row.meta.ticker} className="border-b border-border/40 hover:bg-muted/30">
       <td className={`px-1 py-1 text-center ${STICKY0}`}>
-        <button type="button" onClick={() => openInCharts(row.meta.ticker)}
-          title={`Chart ${row.meta.ticker} — ${effSortMetric} percentile over time`}
+        <button type="button"
+          onClick={() => pairMode && row.meta.legA && row.meta.legB ? navigateToPairs(row.meta.legA, row.meta.legB) : openInCharts(row.meta.ticker)}
+          title={pairMode ? `Open ${row.meta.ticker} in Pairs` : `Chart ${row.meta.ticker} — ${effSortMetric} percentile over time`}
           className="text-muted-foreground hover:text-foreground">
           <LineChart className="w-3.5 h-3.5" />
         </button>
       </td>
       <td className={`px-2 py-1 text-left font-semibold ${STICKY1}`} title={`${row.meta.name} · ${row.meta.sector}`}>{row.meta.ticker}</td>
-      {metricKeys.map((mk, i) => (
-        <Fragment key={mk}>{renderMetricCells(row.byMetric[mk], metrics[i])}</Fragment>
+      {effMetricKeys.map((mk, i) => (
+        <Fragment key={mk}>{renderMetricCells(row.byMetric[mk], effMetrics[i])}</Fragment>
       ))}
     </tr>
   );
@@ -343,7 +431,33 @@ export default function ValuationResidence() {
       {/* Controls */}
       <div className="flex items-end gap-3 flex-wrap px-3 py-2 border-b border-border bg-card flex-shrink-0">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Multiples</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Mode</div>
+          <div className="flex rounded border border-border/40 overflow-hidden h-7">
+            {(["single", "pairs"] as const).map((m) => (
+              <button key={m} type="button" onClick={() => setPairMode(m === "pairs")}
+                data-testid={`residence-mode-${m}`}
+                className={`px-2.5 text-xs font-medium ${(m === "pairs") === pairMode ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
+                {m === "single" ? "Single" : "Pairs"}
+              </button>
+            ))}
+          </div>
+        </div>
+        {pairMode && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Ratio</div>
+            <div className="flex rounded border border-border/40 overflow-hidden h-7">
+              {(["price", "multiple"] as const).map((bss) => (
+                <button key={bss} type="button" onClick={() => setPairBasis(bss)}
+                  data-testid={`residence-basis-${bss}`}
+                  className={`px-2.5 text-xs font-medium ${pairBasis === bss ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
+                  {bss === "price" ? "Price" : "Multiple"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className={pairMode && pairBasis === "price" ? "opacity-40 pointer-events-none" : ""}>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Multiple (for ratio)" : "Multiples"}</div>
           <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
         <div>
@@ -406,7 +520,12 @@ export default function ValuationResidence() {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Search</div>
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ticker / name" className="h-7 text-xs max-w-[220px]" />
         </div>
-        <div className="text-[11px] text-muted-foreground ml-auto self-center">{visible.length} names</div>
+        <div className="text-[11px] text-muted-foreground ml-auto self-center">
+          {visible.length} {pairMode ? "pairs" : "names"}
+          {pairMode && pairLegOverflow > 0 && (
+            <span className="text-amber-400/80" title={`Capped at ${MAX_PAIR_LEGS} legs — narrow the universe with the filters to include the other ${pairLegOverflow}.`}> · {pairLegOverflow} legs over cap</span>
+          )}
+        </div>
       </div>
 
       {/* Explainer */}
@@ -424,12 +543,12 @@ export default function ValuationResidence() {
           <thead className="sticky top-0 bg-card z-10 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
             <tr>
               <th className={`px-1 py-1 w-7 ${STICKY0} z-20`} rowSpan={2} />
-              <th className={`px-2 py-1 text-left cursor-pointer hover:text-foreground select-none ${STICKY1} z-20`} onClick={() => toggleSort("ticker", null)} rowSpan={2}>Ticker <SortIcon col="ticker" metricKey={null} /></th>
-              {metrics.map((m, i) => (
+              <th className={`px-2 py-1 text-left cursor-pointer hover:text-foreground select-none ${STICKY1} z-20`} onClick={() => toggleSort("ticker", null)} rowSpan={2}>{pairMode ? "Pair" : "Ticker"} <SortIcon col="ticker" metricKey={null} /></th>
+              {effMetrics.map((m, i) => (
                 <th key={m.key} colSpan={11} className={`px-2 py-1 text-center normal-case ${i > 0 ? "border-l border-border/60" : ""}`}>
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-foreground/80">
                     {m.label}
-                    {metricKeys.length > 1 && (
+                    {!pairMode && effMetricKeys.length > 1 && (
                       <button type="button" onClick={() => removeMetric(m.key)} title={`Remove ${m.label}`} className="opacity-40 hover:opacity-100 hover:text-red-400 leading-none">×</button>
                     )}
                   </span>
@@ -437,7 +556,7 @@ export default function ValuationResidence() {
               ))}
             </tr>
             <tr>
-              {metrics.map((m) => <Fragment key={m.key}>{metricHeaderCells(m)}</Fragment>)}
+              {effMetrics.map((m) => <Fragment key={m.key}>{metricHeaderCells(m)}</Fragment>)}
             </tr>
           </thead>
           <tbody>
