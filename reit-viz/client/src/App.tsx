@@ -80,6 +80,7 @@ const Screener = lazy(() => import("@/pages/Screener"));
 const Ratings = lazy(() => import("@/pages/Ratings"));
 const AllOptimizers = lazy(() => import("@/pages/AllOptimizers"));
 const AllScreeners = lazy(() => import("@/pages/AllScreeners"));
+const GapFillScreener = lazy(() => import("@/pages/GapFillScreener"));
 const ZScoreOptimizer = lazy(() => import("@/pages/ZScoreOptimizer"));
 const PairOptimizer = lazy(() => import("@/pages/PairOptimizer"));
 const MomentumOptimizer = lazy(() => import("@/pages/MomentumOptimizer"));
@@ -600,6 +601,7 @@ const PAGES = [
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
+  { path: "/gap-fill", label: "Gap Fill Screener" },
   { path: "/screener", label: "Screener" },
   { path: "/ratings", label: "Ratings" },
   { path: "/optimizers", label: "All Optimizers" },
@@ -728,6 +730,7 @@ function AppShell() {
               <Route path="/performance" component={Performance} />
               <Route path="/short-interest" component={ShortInterest} />
               <Route path="/screeners" component={AllScreeners} />
+              <Route path="/gap-fill" component={GapFillScreener} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings" component={Ratings} />
               <Route path="/setups-screener" component={SetupsScreener} />
