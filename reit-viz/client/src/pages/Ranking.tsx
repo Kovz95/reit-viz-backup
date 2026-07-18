@@ -2,6 +2,14 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync, getTickers } from "@/lib/dataService";
+import { fetchMetricSeries } from "@/lib/queryClient";
+import {
+  BASIS_DEFS,
+  WINDOW_OPTIONS,
+  alignData,
+  computeAttributionRow,
+  type AttributionRow,
+} from "@/lib/attribution";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import type { RevisionData, ClassifiedBase } from "@/lib/dataService";
 import ClassificationFilters, {
@@ -344,6 +352,34 @@ function revBg(rev: number | null): string {
   return "";
 }
 
+// ── Attribution (multiple vs estimate) helpers ──
+const ATTR_COLOR_MULT = "#38bdf8"; // sky — multiple expansion
+const ATTR_COLOR_EST = "#fbbf24"; // amber — estimate revision
+
+function attrColor(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v) || v === 0) return "text-muted-foreground";
+  return v > 0 ? "text-emerald-400" : "text-rose-400";
+}
+
+const fmtAttrPct = (v: number | null | undefined) =>
+  v === null || v === undefined || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+
+// Horizontal bar showing the multiple-share vs estimate-share split of |move|.
+function AttrCompositionBar({ row, width = 64, height = 10 }: { row: AttributionRow | undefined; width?: number; height?: number }) {
+  if (!row) return <span className="text-[10px] text-muted-foreground/40">—</span>;
+  const mW = Math.round(row.multipleShare * width);
+  const eW = Math.round(row.estimateShare * width);
+  const multSign = Math.sign(row.multiplePct);
+  const estSign = Math.sign(row.estimatePct);
+  return (
+    <svg width={width} height={height} className="block">
+      <rect x={0} y={0} width={width} height={height} fill="hsl(var(--muted) / 0.3)" />
+      <rect x={0} y={0} width={mW} height={height} fill={ATTR_COLOR_MULT} opacity={multSign >= 0 ? 0.85 : 0.4} />
+      <rect x={mW} y={0} width={eW} height={height} fill={ATTR_COLOR_EST} opacity={estSign >= 0 ? 0.85 : 0.4} />
+    </svg>
+  );
+}
+
 const AVG_PRESETS = [
   { label: "Latest", value: "0" },
   { label: "5-day avg", value: "5" },
@@ -583,6 +619,9 @@ export default function Ranking() {
   const [sparklineLookback, setSparklineLookback] = useState(250);
   const [showRevisions, setShowRevisions] = useState(false);
   const [revMetric, setRevMetric] = useState("FFO FY2");
+  const [showAttribution, setShowAttribution] = useState(false);
+  const [attrWindow, setAttrWindow] = useState(252); // trading days; 0 = YTD
+  const [attrBasis, setAttrBasis] = useState<"auto" | "FFO" | "EPS">("auto");
   const [metricWeights, setMetricWeights] = useState<Record<string, number>>({});
   const [metricDirections, setMetricDirections] = useState<Record<string, number>>({});
   const [showWeights, setShowWeights] = useState(false);
@@ -632,12 +671,15 @@ export default function Ranking() {
     sparklineLookback,
     showRevisions,
     revMetric,
+    showAttribution,
+    attrWindow,
+    attrBasis,
     customTemplates: memTemplates,
     colVis,
     groupBy,
     metricWeights,
     metricDirections,
-  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
+  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
 
   const restoreRanking = useCallback((state: any) => {
     if (state.metrics !== undefined) setMetrics(state.metrics);
@@ -651,6 +693,9 @@ export default function Ranking() {
     if (state.sparklineLookback !== undefined) setSparklineLookback(state.sparklineLookback);
     if (state.showRevisions !== undefined) setShowRevisions(state.showRevisions);
     if (state.revMetric !== undefined) setRevMetric(state.revMetric);
+    if (state.showAttribution !== undefined) setShowAttribution(state.showAttribution);
+    if (state.attrWindow !== undefined) setAttrWindow(state.attrWindow);
+    if (state.attrBasis !== undefined) setAttrBasis(state.attrBasis);
     if (state.customTemplates !== undefined) setMemTemplates(state.customTemplates);
     if (state.colVis !== undefined) setColVis({ ...DEFAULT_COL_VIS, ...state.colVis, groupPctile: { ...DEFAULT_COL_VIS.groupPctile, ...state.colVis?.groupPctile }, groupZScore: { ...DEFAULT_COL_VIS.groupZScore, ...state.colVis?.groupZScore } });
     if (state.groupBy !== undefined) setGroupBy(state.groupBy);
@@ -709,6 +754,50 @@ export default function Ranking() {
       return map;
     },
     enabled: rawRows.length > 0 && metrics.length > 0,
+  });
+
+  // Fetch attribution (Δln(P) = Δln(multiple) + Δln(estimate)) per ticker over the
+  // selected window, ending at the as-of Date (or latest). Mirrors the /attribution
+  // universe-table loader. Underlying per-ticker raw is cached, so the three series
+  // per ticker share one network fetch.
+  const attrTickerSig = useMemo(
+    () => rawRows.filter(r => Object.values(r.values).some(v => v !== null)).map(r => r.ticker).join(","),
+    [rawRows],
+  );
+  const { data: attributionMap = {} } = useQuery({
+    queryKey: ["ranking-attribution", attrTickerSig, attrWindow, attrBasis, dateInput],
+    queryFn: async () => {
+      const tickers = attrTickerSig ? attrTickerSig.split(",") : [];
+      const end = dateInput || undefined; // trim series to the as-of date when set
+      const map: Record<string, AttributionRow> = {};
+      const CONCURRENCY = 8;
+      let idx = 0;
+      async function worker() {
+        for (;;) {
+          const i = idx++;
+          if (i >= tickers.length) return;
+          const ticker = tickers[i];
+          try {
+            const closeSeries = await fetchMetricSeries(ticker, "close", { end });
+            let basis: "FFO" | "EPS" = attrBasis === "auto" ? "FFO" : attrBasis;
+            let multSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].multiple, { end });
+            let estSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].estimate, { end });
+            if (attrBasis === "auto" && (!multSeries.length || !estSeries.length)) {
+              basis = "EPS";
+              multSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.multiple, { end });
+              estSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.estimate, { end });
+            }
+            if (!closeSeries.length || !multSeries.length || !estSeries.length) continue;
+            const data = alignData(closeSeries, multSeries, estSeries);
+            const row = computeAttributionRow(ticker, basis, data, attrWindow);
+            if (row) map[ticker] = row;
+          } catch { /* skip ticker */ }
+        }
+      }
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+      return map;
+    },
+    enabled: showAttribution && !!attrTickerSig,
   });
 
   // Build composite rows with Z-scores, percentiles (all classification levels), sparklines
@@ -840,13 +929,21 @@ export default function Ranking() {
         const rb = revisionMap.get(b.ticker);
         av = (ra?.[sortCol as keyof RevisionData] as number) ?? inf;
         bv = (rb?.[sortCol as keyof RevisionData] as number) ?? inf;
+      } else if (sortCol.startsWith("attr")) {
+        const pick = (row: AttributionRow | undefined) =>
+          sortCol === "attrTotal" ? row?.totalPct
+            : sortCol === "attrMult" ? row?.multiplePct
+            : sortCol === "attrEst" ? row?.estimatePct
+            : row?.multipleShare;
+        av = pick(attributionMap[a.ticker]) ?? inf;
+        bv = pick(attributionMap[b.ticker]) ?? inf;
       } else {
         av = a.values[sortCol] ?? inf;
         bv = b.values[sortCol] ?? inf;
       }
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, universeTickers, geo.filterByGeo]);
+  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, attributionMap, universeTickers, geo.filterByGeo]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -927,7 +1024,10 @@ export default function Ranking() {
       if (colVis.histPctile) metricHeaders.push(`Hist %ile(${m})`);
       if (colVis.histZScore) metricHeaders.push(`Hist Z(${m})`);
     }
-    const headers = [...baseHeaders, ...metricHeaders, ...(metrics.length > 1 ? ["Composite Z"] : [])];
+    const attrHeaders = showAttribution
+      ? ["Attr Total%", "Attr Multiple%", "Attr Estimate%", "Attr Multiple Share%"]
+      : [];
+    const headers = [...baseHeaders, ...metricHeaders, ...(metrics.length > 1 ? ["Composite Z"] : []), ...attrHeaders];
     const lines = sorted.map((r, i) => {
       const base = [i + 1, r.ticker, `"${r.name}"`, `"${r.subindustry}"`];
       const metricVals: (string | number)[] = [];
@@ -942,6 +1042,13 @@ export default function Ranking() {
         if (colVis.histZScore) metricVals.push(r.histZScore[m]?.toFixed(2) ?? "");
       }
       if (metrics.length > 1) metricVals.push(r.compositeZ?.toFixed(2) ?? "");
+      if (showAttribution) {
+        const ar = attributionMap[r.ticker];
+        metricVals.push(ar?.totalPct?.toFixed(2) ?? "");
+        metricVals.push(ar?.multiplePct?.toFixed(2) ?? "");
+        metricVals.push(ar?.estimatePct?.toFixed(2) ?? "");
+        metricVals.push(ar ? (ar.multipleShare * 100).toFixed(1) : "");
+      }
       return [...base, ...metricVals].join(",");
     });
     const csv = [headers.join(","), ...lines].join("\n");
@@ -1285,6 +1392,45 @@ export default function Ranking() {
 
         <div className="h-5 w-px bg-border mx-1" />
 
+        <Button
+          variant={showAttribution ? "default" : "outline"}
+          size="sm"
+          className="h-6 text-[11px] px-2 gap-1"
+          onClick={() => setShowAttribution(!showAttribution)}
+          title="Decompose each ticker's price move into multiple-expansion vs estimate-revision (Δln P = Δln M + Δln E)"
+          data-testid="toggle-attribution"
+        >
+          <BarChart3 className="w-3 h-3" />
+          Attribution
+        </Button>
+
+        {showAttribution && (
+          <>
+            <Select value={String(attrWindow)} onValueChange={(v) => setAttrWindow(parseInt(v))}>
+              <SelectTrigger className="h-6 text-[11px] w-auto min-w-[70px]" data-testid="attr-window-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WINDOW_OPTIONS.map((o) => (
+                  <SelectItem key={o.label} value={String(o.days)}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={attrBasis} onValueChange={(v) => setAttrBasis(v as "auto" | "FFO" | "EPS")}>
+              <SelectTrigger className="h-6 text-[11px] w-auto min-w-[80px]" data-testid="attr-basis-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto</SelectItem>
+                <SelectItem value="FFO">FFO</SelectItem>
+                <SelectItem value="EPS">EPS</SelectItem>
+              </SelectContent>
+            </Select>
+          </>
+        )}
+
+        <div className="h-5 w-px bg-border mx-1" />
+
         <span className="text-xs font-semibold text-muted-foreground" title="Lookback window for Hist% / HistZ percentiles and sparkline trail">History</span>
         {(() => {
           const isPreset = [60, 120, 250, 500, 1260, 2520].includes(sparklineLookback);
@@ -1516,6 +1662,13 @@ export default function Ranking() {
                     </span>
                   </th>
                 )}
+                {showAttribution && (
+                  <th colSpan={5} className="text-center px-1 py-1 border-l border-border/30">
+                    <span className="text-muted-foreground font-medium text-[10px]">
+                      Attribution ({attrWindow === 0 ? "YTD" : WINDOW_OPTIONS.find((o) => o.days === attrWindow)?.label ?? `${attrWindow}d`}, {attrBasis})
+                    </span>
+                  </th>
+                )}
               </tr>
               {/* Dynamic sub-headers based on colVis */}
               <tr className="border-b border-border/30 text-[9px] text-muted-foreground/60">
@@ -1551,11 +1704,28 @@ export default function Ranking() {
                     <th className="px-1 py-0.5 text-center">Trail</th>
                   </React.Fragment>
                 )}
+                {showAttribution && (
+                  <React.Fragment>
+                    <th className="px-1 py-0.5 text-right border-l border-border/20">
+                      <button className="hover:text-foreground" onClick={() => handleSort("attrTotal")} title="Total price return over the window">Tot <ArrowUpDown className="w-2 h-2 inline" /></button>
+                    </th>
+                    <th className="px-1 py-0.5 text-right">
+                      <button className="hover:text-foreground" onClick={() => handleSort("attrMult")} title="Δln(multiple) — re-rating contribution">Mult <ArrowUpDown className="w-2 h-2 inline" /></button>
+                    </th>
+                    <th className="px-1 py-0.5 text-right">
+                      <button className="hover:text-foreground" onClick={() => handleSort("attrEst")} title="Δln(estimate) — earnings-revision contribution">Est <ArrowUpDown className="w-2 h-2 inline" /></button>
+                    </th>
+                    <th className="px-1 py-0.5 text-right">
+                      <button className="hover:text-foreground" onClick={() => handleSort("attrShare")} title="Multiple share of |move|">M% <ArrowUpDown className="w-2 h-2 inline" /></button>
+                    </th>
+                    <th className="px-1 py-0.5 text-center">Split</th>
+                  </React.Fragment>
+                )}
               </tr>
             </thead>
             <tbody>
               {(() => {
-                const totalCols = 4 + metrics.length * countVisibleCols(colVis) + (metrics.length > 1 ? 1 : 0) + (showRevisions ? 5 : 0);
+                const totalCols = 4 + metrics.length * countVisibleCols(colVis) + (metrics.length > 1 ? 1 : 0) + (showRevisions ? 5 : 0) + (showAttribution ? 5 : 0);
                 const renderRow = (row: CompositeRow, rank: number) => (
                 <tr
                   key={row.ticker}
@@ -1671,6 +1841,28 @@ export default function Ranking() {
                             width={70}
                             height={18}
                           />
+                        </td>
+                      </React.Fragment>
+                    );
+                  })()}
+                  {showAttribution && (() => {
+                    const ar = attributionMap[row.ticker];
+                    return (
+                      <React.Fragment>
+                        <td className={`px-1 py-1 text-right font-mono tabular-nums border-l border-border/20 ${attrColor(ar?.totalPct)}`}>
+                          {fmtAttrPct(ar?.totalPct)}
+                        </td>
+                        <td className={`px-1 py-1 text-right font-mono tabular-nums ${attrColor(ar?.multiplePct)}`}>
+                          {fmtAttrPct(ar?.multiplePct)}
+                        </td>
+                        <td className={`px-1 py-1 text-right font-mono tabular-nums ${attrColor(ar?.estimatePct)}`}>
+                          {fmtAttrPct(ar?.estimatePct)}
+                        </td>
+                        <td className="px-1 py-1 text-right font-mono tabular-nums text-muted-foreground">
+                          {ar ? `${(ar.multipleShare * 100).toFixed(0)}%` : "—"}
+                        </td>
+                        <td className="px-1 py-1 text-center">
+                          <AttrCompositionBar row={ar} width={64} height={10} />
                         </td>
                       </React.Fragment>
                     );
