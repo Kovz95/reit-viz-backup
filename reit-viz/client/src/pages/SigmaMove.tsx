@@ -696,7 +696,16 @@ export default function SigmaMove() {
   }, [horizonN]);
 
   // Mode: live (today) | earnings | period (custom trailing window)
-  const [mode, setMode] = React.useState<"live" | "earnings" | "period">("live");
+  const [mode, setMode] = React.useState<"live" | "earnings" | "period">(() => {
+    try {
+      const s = localStorage.getItem("sigma-mode-v1");
+      if (s === "live" || s === "earnings" || s === "period") return s;
+    } catch {}
+    return "live";
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-mode-v1", mode); } catch {}
+  }, [mode]);
   const isEarningsMode = mode === "earnings";
   const isPeriodMode = mode === "period";
 
@@ -728,7 +737,15 @@ export default function SigmaMove() {
   const geo = useGeoFilter(tickerList as any[], "sigma-geo");
 
   // Per-ticker distribution: selected ticker + its own lookback (persisted)
-  const [selectedTicker, setSelectedTicker] = React.useState<string | null>(null);
+  const [selectedTicker, setSelectedTicker] = React.useState<string | null>(() => {
+    try { return localStorage.getItem("sigma-selected-ticker-v1") || null; } catch { return null; }
+  });
+  React.useEffect(() => {
+    try {
+      if (selectedTicker) localStorage.setItem("sigma-selected-ticker-v1", selectedTicker);
+      else localStorage.removeItem("sigma-selected-ticker-v1");
+    } catch {}
+  }, [selectedTicker]);
   const [distLookback, setDistLookback] = React.useState<number>(() => {
     try {
       const s = localStorage.getItem("sigma-dist-lookback-v1");
@@ -740,7 +757,15 @@ export default function SigmaMove() {
   React.useEffect(() => {
     try { localStorage.setItem("sigma-dist-lookback-v1", String(distLookback)); } catch {}
   }, [distLookback]);
-  const [showDistributions, setShowDistributions] = React.useState(true);
+  const [showDistributions, setShowDistributions] = React.useState<boolean>(() => {
+    try {
+      const s = localStorage.getItem("sigma-dist-open-v1");
+      return s == null ? true : s === "1";
+    } catch { return true; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-dist-open-v1", showDistributions ? "1" : "0"); } catch {}
+  }, [showDistributions]);
 
   // Earnings mode state
   const [earningsRows, setEarningsRows] = React.useState<EarningsRow[]>([]);

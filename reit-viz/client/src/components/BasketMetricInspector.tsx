@@ -425,7 +425,7 @@ export function BasketMetricInspector({
   const aggregationKind = getAggregationKind(metric);
 
   // Click-to-sort for the constituent table ("" = keep computed order until clicked).
-  const sort = useTableSort<ConstituentRow>("");
+  const sort = useTableSort<ConstituentRow>("", "desc", "desc", "basket-metric-inspector");
   const displayRows = sort.apply(rows, (row, key) => {
     switch (key) {
       case "ticker": return row.ticker;

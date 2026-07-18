@@ -923,7 +923,7 @@ export default function MomentumOptimizer() {
   }, [scoredResults, sortBy]);
 
   // Header click-sort (layers on top of the sortBy button order)
-  const headerSort = useTableSort<(typeof scoredResults)[number]>("", "desc");
+  const headerSort = useTableSort<(typeof scoredResults)[number]>("", "desc", "desc", "momentum-main");
   const displayResults = headerSort.apply(sortedResults, (r, key) => {
     if (key === "ticker") return r.ticker;
     if (key === "signal") return r.currentSignal;

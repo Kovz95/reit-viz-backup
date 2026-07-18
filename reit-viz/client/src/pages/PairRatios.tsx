@@ -475,7 +475,7 @@ export default function PairRatios() {
   const [lookback, setLookback] = useState("252");
   const [zThreshold, setZThreshold] = useState(2);
   const [sortBy, setSortBy] = useState("zscore");
-  const headerSort = useTableSort<RatioPair>(""); // click-to-sort headers; "" = defer to sortBy dropdown
+  const headerSort = useTableSort<RatioPair>("", "desc", "desc", "pairratios"); // click-to-sort headers; "" = defer to sortBy dropdown
   const [showZScore, setShowZScore] = useState(true);
   const [selectedPair, setSelectedPair] = useState<RatioPair | null>(null);
   const [filterMode, setFilterMode] = useState("all");

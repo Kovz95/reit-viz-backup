@@ -1084,7 +1084,7 @@ export default function RSIRegimeOptimizer() {
 
   // Click-to-sort on any data column. Initial key "" keeps the sortBy/RANK-BY order
   // until the user clicks a header.
-  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc", "desc", "rsiregime");
   const rowSummary = (row: (typeof sortedResults)[number]) => {
     const bestCfg = row.configs.reduce(
       (a, b) => (a.bestScore > b.bestScore ? a : b),

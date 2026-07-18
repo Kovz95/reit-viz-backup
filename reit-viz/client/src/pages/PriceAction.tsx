@@ -1689,7 +1689,7 @@ function BiggestMoves({ tickers, sigmaWindow, sigmaBasis, dates }: {
 
   // Header click-sort layered on top of the sortMode <Select>; when no header
   // is active (initial key ""), the Select order is preserved.
-  const moveSort = useTableSort<any>("", "desc");
+  const moveSort = useTableSort<any>("", "desc", "desc", "priceaction-moves");
   const displaySorted = sorted
     ? moveSort.apply(sorted, (r, key) => {
         switch (key) {

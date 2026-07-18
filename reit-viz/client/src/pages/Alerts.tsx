@@ -132,7 +132,7 @@ interface AlertGroupProps {
 }
 
 function AlertGroup({ title, alerts, badgeClass, onToggle, onDelete, onReset }: AlertGroupProps) {
-  const sort = useTableSort<Alert>(""); // keep incoming order until a header is clicked
+  const sort = useTableSort<Alert>("", "desc", "desc", "alerts-" + title); // keep incoming order until a header is clicked
   const sortedAlerts = sort.apply(alerts, (alert, key) => {
     switch (key) {
       case "ticker": return alert.ticker;

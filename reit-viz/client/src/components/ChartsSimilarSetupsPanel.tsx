@@ -446,7 +446,7 @@ export function ChartsSimilarSetupsPanel({
   }, [ticker, ohlc, topN, excludeLast, enabledSignals]);
 
   // Click-to-sort for the matched-dates table ("" = keep nearest-distance order).
-  const sort = useTableSort<MatchedSetup>("");
+  const sort = useTableSort<MatchedSetup>("", "desc", "desc", "charts-similar-setups");
   const sortedMatches = sort.apply(result?.matches ?? [], (match, key) => {
     switch (key) {
       case "date": return match.date;

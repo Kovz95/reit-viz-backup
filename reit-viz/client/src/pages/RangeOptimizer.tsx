@@ -1111,7 +1111,7 @@ function BandTable({
   showOos: boolean;
 }) {
   const titleColor = accent === "green" ? "text-emerald-500" : "text-red-500";
-  const sort = useTableSort<{ band: Band; origIdx: number }>("", "desc");
+  const sort = useTableSort<{ band: Band; origIdx: number }>("", "desc", "desc", "rangeoptimizer-bands");
   const sortedBands = sort.apply(
     bands.map((band, origIdx) => ({ band, origIdx })),
     (row, key) => {

@@ -1080,7 +1080,7 @@ export default function ComboOptimizer() {
 
   // Header click-sort layered on top of the "RANK BY" <select>; initial key ""
   // preserves the dropdown's ordering until a header is clicked.
-  const resultSort = useTableSort<ComboResult>("", "desc");
+  const resultSort = useTableSort<ComboResult>("", "desc", "desc", "combooptimizer");
   const sortedDisplayResults = resultSort.apply(displayResults, (r, key) => {
     const c = r.topCombos[0];
     if (!c) return null;

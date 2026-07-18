@@ -1141,7 +1141,7 @@ export default function Oscillators() {
   }, [rankedResults, sortBy, subMode, ewoDisplay, filterText]);
 
   // Header click-sort (layers on top of the sortBy button order)
-  const headerSort = useTableSort<(typeof filteredSortedResults)[number]>("", "desc");
+  const headerSort = useTableSort<(typeof filteredSortedResults)[number]>("", "desc", "desc", "oscillators");
   const displayResults = headerSort.apply(filteredSortedResults, (e, key) => {
     if (key === "ticker") return e.ticker;
     if (key === "value") {

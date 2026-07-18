@@ -19,7 +19,7 @@
 // The accessor may return number | string | null | undefined; non-finite numbers
 // and nullish values are treated as "missing" and pushed to the bottom.
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -41,18 +41,41 @@ function isMissing(v: SortValue): boolean {
   return v === null || v === undefined || (typeof v === "number" && !Number.isFinite(v));
 }
 
+// Sort state persists to sessionStorage (survives in-app tab switches AND a
+// full page refresh in the same tab) when a persistKey is supplied.
+function loadPersistedSort(persistKey?: string): { key: string; dir: SortDir } | null {
+  if (!persistKey) return null;
+  try {
+    const raw = sessionStorage.getItem("tblsort:" + persistKey);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (p && typeof p.key === "string" && (p.dir === "asc" || p.dir === "desc")) return p;
+  } catch {}
+  return null;
+}
+
 /**
  * @param initialKey  column key to sort by on first render ("" = unsorted)
  * @param initialDir  direction for the initial key (default "desc")
  * @param startDir    direction applied when the user clicks a *new* column (default "desc")
+ * @param persistKey  when set, the active sort is saved to sessionStorage under
+ *                    this key and restored on mount (survives tab switch + refresh)
  */
 export function useTableSort<T>(
   initialKey = "",
   initialDir: SortDir = "desc",
   startDir: SortDir = "desc",
+  persistKey?: string,
 ): TableSort<T> {
-  const [sortKey, setSortKey] = useState(initialKey);
-  const [sortDir, setSortDir] = useState<SortDir>(initialDir);
+  const [sortKey, setSortKey] = useState(() => loadPersistedSort(persistKey)?.key ?? initialKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadPersistedSort(persistKey)?.dir ?? initialDir);
+
+  useEffect(() => {
+    if (!persistKey) return;
+    try {
+      sessionStorage.setItem("tblsort:" + persistKey, JSON.stringify({ key: sortKey, dir: sortDir }));
+    } catch {}
+  }, [persistKey, sortKey, sortDir]);
 
   const onSort = useCallback((key: string) => {
     setSortKey((prevKey) => {

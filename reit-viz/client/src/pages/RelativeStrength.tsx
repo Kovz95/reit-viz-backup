@@ -573,7 +573,7 @@ function fmtNum(v: number, decimals = 2): string { return Number.isFinite(v) ? v
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function DecileTable({ title, rows, positive }: { title: string; rows: SnapshotRow[]; positive: boolean }) {
-  const sort = useTableSort<SnapshotRow>("", "desc");
+  const sort = useTableSort<SnapshotRow>("", "desc", "desc", "rse-decile-" + title);
   const displayRows = sort.apply(rows, (row, key) => {
     switch (key) {
       case "ticker": return row.ticker;
@@ -615,7 +615,7 @@ function UniverseRankingPanel({ snapshot, asOfDate }: { snapshot: SnapshotRow[];
     a.href = url; a.download = `rse-ranking-${asOfDate}.csv`; a.click(); URL.revokeObjectURL(url);
   };
   const decileSize = Math.ceil(snapshot.length / 10);
-  const rankSort = useTableSort<SnapshotRow>("", "desc");
+  const rankSort = useTableSort<SnapshotRow>("", "desc", "desc", "rse-ranking");
   const rankedRows = rankSort.apply(snapshot, (row, key) => {
     switch (key) {
       case "ticker": return row.ticker;

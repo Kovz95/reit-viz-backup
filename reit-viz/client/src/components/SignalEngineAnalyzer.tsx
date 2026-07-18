@@ -1425,7 +1425,7 @@ function ResultView({
   }
 
   // One shared click-to-sort applied within each category group ("" = keep order).
-  const sort = useTableSort<SignalResult>("");
+  const sort = useTableSort<SignalResult>("", "desc", "desc", "signalengine");
   const sortSigs = (sigs: SignalResult[]) =>
     sort.apply(sigs, (sig, key) => {
       switch (key) {

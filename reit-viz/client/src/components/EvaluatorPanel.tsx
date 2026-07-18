@@ -1773,7 +1773,7 @@ function HitConditionsTable({
 
   // Empty initial sort key preserves the default order (rows arrive pre-sorted by
   // separationScore); clicking any header re-ranks by that column.
-  const sort = useTableSort<FeatureAnalysisRow>("", "desc");
+  const sort = useTableSort<FeatureAnalysisRow>("", "desc", "desc", "evaluator-hitconditions");
   const visibleRows = React.useMemo(
     () => {
       const filteredRows = analysis.rows.filter((row) => {

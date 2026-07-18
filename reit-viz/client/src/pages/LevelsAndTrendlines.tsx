@@ -540,7 +540,7 @@ export default function LevelsAndTrendlines() {
   }, []);
 
   // Crossing-screener table sort (header-click; "" keeps candles-ago-then-score order).
-  const sort = useTableSort<CrossResult>("");
+  const sort = useTableSort<CrossResult>("", "desc", "desc", "levels-crossings");
   const sortedResults = sort.apply(results, (row, key) => {
     switch (key) {
       case "ticker": return row.ticker;

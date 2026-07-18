@@ -76,7 +76,7 @@ export default function DataManager() {
   const [sourcesFilter, setSourcesFilter] = useState("");
   const [expandedWorkbooks, setExpandedWorkbooks] = useState<Set<string>>(new Set());
   // Ticker table sort (shared across workbook tables) — default alphabetical.
-  const tickerSort = useTableSort<string>("ticker", "asc");
+  const tickerSort = useTableSort<string>("ticker", "asc", "desc", "datamanager-sources");
 
   // Parsing progress (client-side or server-side)
   const [parseProgress, setParseProgress] = useState<ParseProgress | null>(null);

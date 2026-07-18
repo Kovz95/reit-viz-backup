@@ -243,7 +243,7 @@ export default function ValuationRegime() {
 
   // Click-to-sort on any data column. Initial key "" preserves the sortBy toggle
   // order until the user clicks a header.
-  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const sort = useTableSort<(typeof sortedResults)[number]>("", "desc", "desc", "valuationregime");
   const rowBestSummary = (row: (typeof sortedResults)[number]) => {
     const bestResult = row.results.reduce(
       (a: any, b: any) => (a.bestScore > b.bestScore ? a : b),

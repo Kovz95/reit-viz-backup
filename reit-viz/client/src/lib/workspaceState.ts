@@ -3,7 +3,7 @@
 // useWorkspaceStateEx: extended version (currently same interface; reserved for richer options).
 // useUploadedMetricColumns: reads uploaded custom metric column names from the upload context.
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { useUpload } from "@/lib/uploadContext";
 
 const WORKSPACE_STORAGE_PREFIX = "reit-viz:workspace:";
@@ -25,6 +25,11 @@ export function useWorkspaceState(
   setState: (state: unknown) => void,
   opts?: { universeSig?: string; resultFields?: string[] }
 ): void {
+  const universeSig = opts?.universeSig;
+  // Keep the latest getState so the pagehide/unmount save always reads current state.
+  const getStateRef = useRef(getState);
+  getStateRef.current = getState;
+
   // Restore on mount
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -32,7 +37,7 @@ export function useWorkspaceState(
       const raw = window.sessionStorage.getItem(WORKSPACE_STORAGE_PREFIX + key);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      if (opts?.universeSig && parsed?._universeSig !== opts.universeSig) return;
+      if (universeSig && parsed?._universeSig !== universeSig) return;
       setState(parsed);
     } catch {
       // ignore
@@ -40,25 +45,28 @@ export function useWorkspaceState(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save on unmount
+  const save = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const state = getStateRef.current();
+      if (state == null) return;
+      const payload = universeSig ? { ...(state as object), _universeSig: universeSig } : state;
+      window.sessionStorage.setItem(WORKSPACE_STORAGE_PREFIX + key, JSON.stringify(payload));
+    } catch {
+      // quota or SSR — ignore
+    }
+  }, [key, universeSig]);
+
+  // Persist on unmount (in-app tab switch) AND on pagehide (hard refresh / tab
+  // close) — a full page reload does not run React unmount cleanup, so the
+  // pagehide listener is what makes state survive a refresh.
   useEffect(() => {
+    window.addEventListener("pagehide", save);
     return () => {
-      if (typeof window === "undefined") return;
-      try {
-        const state = getState();
-        if (state == null) return;
-        const payload =
-          opts?.universeSig ? { ...(state as object), _universeSig: opts.universeSig } : state;
-        window.sessionStorage.setItem(
-          WORKSPACE_STORAGE_PREFIX + key,
-          JSON.stringify(payload)
-        );
-      } catch {
-        // quota or SSR — ignore
-      }
+      window.removeEventListener("pagehide", save);
+      save();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts?.universeSig]);
+  }, [save]);
 }
 
 /**

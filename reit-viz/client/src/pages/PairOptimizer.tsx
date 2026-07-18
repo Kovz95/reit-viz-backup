@@ -497,7 +497,7 @@ export default function PairOptimizer() {
   }, [results, sortBy]);
 
   // Header click-sort (layers on top of the sortBy button order)
-  const headerSort = useTableSort<(typeof sortedResults)[number]>("", "desc");
+  const headerSort = useTableSort<(typeof sortedResults)[number]>("", "desc", "desc", "pairoptimizer");
   const displayResults = headerSort.apply(sortedResults, (row, key) => {
     if (key === "pair") return `${row.tickerA}/${row.tickerB}`;
     if (key === "halfLife") return row.halfLife;

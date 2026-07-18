@@ -298,7 +298,7 @@ function DriverScanResults({
   onPin?: (row: any) => void;
 }) {
   // Click-to-sort; "" keeps the incoming rank order until a header is clicked.
-  const sort = useTableSort<any>("");
+  const sort = useTableSort<any>("", "desc", "desc", "correlation-drivers");
   const sortedRows = sort.apply(rows, (r, key) => {
     switch (key) {
       case "label": return r.label;

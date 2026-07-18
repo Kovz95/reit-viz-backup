@@ -161,7 +161,7 @@ export default function UpcomingSeasonalWindows({
   const upcomingCount = upcoming.filter((e) => !e.isActive).length;
 
   // Click-to-sort ("" = keep current active-first / proximity order until clicked).
-  const sort = useTableSort<UpcomingEntry>("");
+  const sort = useTableSort<UpcomingEntry>("", "desc", "desc", "upcoming-seasonal");
   const displayRows = sort.apply(upcoming, (entry, key) => {
     switch (key) {
       case "status": return entry.isActive ? 1 : 0;
