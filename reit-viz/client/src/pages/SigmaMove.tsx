@@ -19,6 +19,14 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ClassificationFilters, {
+  emptyClassFilters,
+  applyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  type ClassFilters,
+} from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -53,6 +61,25 @@ const HORIZON_OPTIONS: { label: string; n: number }[] = [
 ];
 
 const DEFAULT_HORIZON_N = 1;
+
+// Trailing-window presets for "Period" mode (trading days)
+const PERIOD_WINDOW_OPTIONS: { label: string; days: number }[] = [
+  { label: "Daily", days: 1 },
+  { label: "Weekly", days: 5 },
+  { label: "Monthly", days: 21 },
+  { label: "2mo", days: 42 },
+  { label: "3mo", days: 63 },
+];
+const DEFAULT_PERIOD_WINDOW = 5;
+
+// Lookback presets for the per-ticker distribution plot (independent of vol LB)
+const DIST_LOOKBACK_OPTIONS: { label: string; days: number }[] = [
+  { label: "6mo", days: 126 },
+  { label: "1Y", days: 252 },
+  { label: "2Y", days: 504 },
+  { label: "5Y", days: 1260 },
+];
+const DEFAULT_DIST_LOOKBACK = 252;
 
 export const DEFAULT_INDEX_GROUPS: string[] = ["broad", "reit", "rates_bonds"];
 
@@ -505,6 +532,123 @@ function SortableHeaderEarnings({ label, k, sort, onClick, align = "left" }: Sor
 }
 
 // ---------------------------------------------------------------------------
+// Sigma distribution histogram (inline SVG, buckets in σ units −4σ..+4σ)
+// ---------------------------------------------------------------------------
+
+function SigmaHistogram({
+  values,
+  currentValue,
+  label,
+  sub,
+  width = 320,
+  height = 130,
+  testid,
+}: {
+  values: number[];
+  currentValue?: number | null;
+  label: string;
+  sub?: string;
+  width?: number;
+  height?: number;
+  testid?: string;
+}) {
+  const RANGE = 4;
+  const BINS = 40;
+  const binW = (2 * RANGE) / BINS;
+  const counts = new Array(BINS).fill(0);
+  let n = 0;
+  for (const v of values) {
+    if (v == null || !Number.isFinite(v)) continue;
+    const c = Math.max(-RANGE + 1e-9, Math.min(RANGE - 1e-9, v));
+    let idx = Math.floor((c + RANGE) / binW);
+    if (idx < 0) idx = 0;
+    if (idx >= BINS) idx = BINS - 1;
+    counts[idx]++;
+    n++;
+  }
+  const maxCount = Math.max(1, ...counts);
+  const padL = 4,
+    padR = 4,
+    padT = 6,
+    padB = 15;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const barW = plotW / BINS;
+  const xFor = (s: number) =>
+    padL + ((Math.max(-RANGE, Math.min(RANGE, s)) + RANGE) / (2 * RANGE)) * plotW;
+  const curX =
+    currentValue != null && Number.isFinite(currentValue) ? xFor(currentValue) : null;
+
+  return (
+    <div className="flex flex-col gap-1 min-w-[280px]" data-testid={testid}>
+      <div className="text-[10px] font-mono flex items-center justify-between">
+        <span className="text-foreground">{label}</span>
+        <span className="text-muted-foreground">
+          {sub ? `${sub} · ` : ""}
+          {n.toLocaleString()} obs
+        </span>
+      </div>
+      {n === 0 ? (
+        <div
+          className="flex items-center justify-center text-[10px] text-muted-foreground/60 border border-dashed border-border rounded"
+          style={{ width, height }}
+        >
+          no data
+        </div>
+      ) : (
+        <svg width={width} height={height} className="block">
+          <line
+            x1={xFor(0)}
+            y1={padT}
+            x2={xFor(0)}
+            y2={padT + plotH}
+            stroke="rgba(148,163,184,0.35)"
+            strokeWidth={1}
+          />
+          {counts.map((c, i) => {
+            const h = (c / maxCount) * plotH;
+            const x = padL + i * barW;
+            return (
+              <rect
+                key={i}
+                x={x + 0.4}
+                y={padT + plotH - h}
+                width={Math.max(0.6, barW - 0.8)}
+                height={h}
+                fill="rgba(245,158,11,0.55)"
+              />
+            );
+          })}
+          {curX != null && (
+            <line
+              x1={curX}
+              y1={padT - 3}
+              x2={curX}
+              y2={padT + plotH + 3}
+              stroke="#f59e0b"
+              strokeWidth={1.75}
+            />
+          )}
+          {[-4, -2, 0, 2, 4].map((t) => (
+            <text
+              key={t}
+              x={xFor(t)}
+              y={height - 3}
+              fontSize={8}
+              fill="rgba(148,163,184,0.7)"
+              textAnchor="middle"
+              fontFamily="monospace"
+            >
+              {t > 0 ? `+${t}` : t}σ
+            </text>
+          ))}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -551,8 +695,52 @@ export default function SigmaMove() {
     } catch {}
   }, [horizonN]);
 
-  // Mode toggle: false = Live, true = Earnings
-  const [isEarningsMode, setIsEarningsMode] = React.useState(false);
+  // Mode: live (today) | earnings | period (custom trailing window)
+  const [mode, setMode] = React.useState<"live" | "earnings" | "period">("live");
+  const isEarningsMode = mode === "earnings";
+  const isPeriodMode = mode === "period";
+
+  // Period window (trading days) — persisted
+  const [periodWindow, setPeriodWindow] = React.useState<number>(() => {
+    try {
+      const s = localStorage.getItem("sigma-period-window-v1");
+      const p = s == null ? NaN : parseInt(s, 10);
+      if (Number.isFinite(p) && p >= 1) return p;
+    } catch {}
+    return DEFAULT_PERIOD_WINDOW;
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-period-window-v1", String(periodWindow)); } catch {}
+  }, [periodWindow]);
+
+  // On-page classification + geo filters (subset without touching global universe)
+  const [classFilters, setClassFilters] = React.useState<ClassFilters>(() => {
+    try {
+      const s = localStorage.getItem("sigma-class-filters-v1");
+      if (s) return deserializeClassFilters(JSON.parse(s));
+    } catch {}
+    return emptyClassFilters();
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-class-filters-v1", JSON.stringify(serializeClassFilters(classFilters))); } catch {}
+  }, [classFilters]);
+  const [manualTickers, setManualTickers] = React.useState<Set<string>>(new Set());
+  const geo = useGeoFilter(tickerList as any[], "sigma-geo");
+
+  // Per-ticker distribution: selected ticker + its own lookback (persisted)
+  const [selectedTicker, setSelectedTicker] = React.useState<string | null>(null);
+  const [distLookback, setDistLookback] = React.useState<number>(() => {
+    try {
+      const s = localStorage.getItem("sigma-dist-lookback-v1");
+      const p = s == null ? NaN : parseInt(s, 10);
+      if (Number.isFinite(p) && p >= 20) return p;
+    } catch {}
+    return DEFAULT_DIST_LOOKBACK;
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-dist-lookback-v1", String(distLookback)); } catch {}
+  }, [distLookback]);
+  const [showDistributions, setShowDistributions] = React.useState(true);
 
   // Earnings mode state
   const [earningsRows, setEarningsRows] = React.useState<EarningsRow[]>([]);
@@ -642,7 +830,9 @@ export default function SigmaMove() {
     setLoadingHistory(true);
     setGlobalError(null);
     try {
-      const minBars = Math.max(lookbackDays + horizonN + 5, 504);
+      // Fetch enough history for the vol lookback AND the per-ticker distribution
+      // lookback (up to 5y = 1260 bars).
+      const minBars = Math.max(lookbackDays + horizonN + 5, 1300);
       const batchData = await fetchMetricSeriesBatch("close", minBars);
       const tickerSet = new Set(tickerList.map((t: any) => t.ticker));
       const rows: LiveRow[] = [];
@@ -783,12 +973,12 @@ export default function SigmaMove() {
     }
   }, [liveRows, lookbackDays, horizonN]);
 
-  // Auto-fetch quotes once history is loaded
+  // Auto-fetch quotes once history is loaded (live mode only)
   React.useEffect(() => {
-    if (!isEarningsMode && liveRows.length > 0 && !fetchedAt && !fetchingQuotes) {
+    if (mode === "live" && liveRows.length > 0 && !fetchedAt && !fetchingQuotes) {
       fetchLiveQuotes();
     }
-  }, [liveRows.length, isEarningsMode]);
+  }, [liveRows.length, mode]);
 
   // ---------------------------------------------------------------------------
   // loadIndexData (live mode)
@@ -1162,6 +1352,141 @@ export default function SigmaMove() {
   };
 
   // ---------------------------------------------------------------------------
+  // On-page filters, Period rows, and distribution data
+  // ---------------------------------------------------------------------------
+
+  // Working subset (classification + geo + manual pins) — the tickers that show
+  // in every mode. Applied to already-built rows so filter changes are instant.
+  const allowedTickers = React.useMemo(() => {
+    let r = applyClassFilters(tickerList as any[], classFilters, "", manualTickers);
+    r = geo.filterByGeo(r as any[]);
+    return new Set((r as any[]).map((t) => t.ticker));
+  }, [tickerList, classFilters, manualTickers, geo.filterByGeo]);
+
+  // Period-mode rows: most-recent trailing-window return in σ units, from the
+  // historical closes already loaded for the live rows (no live quotes needed).
+  const periodRows = React.useMemo<LiveRow[]>(() => {
+    const w = Math.max(1, Math.floor(periodWindow));
+    const sqrtW = Math.sqrt(w);
+    return liveRows.map((row) => {
+      const closes = row.closes;
+      const nlen = closes.length;
+      if (nlen <= w) {
+        return { ...row, last: null, previousClose: null, dollarChange: null, pctChange: null, logReturnToday: null, logReturnN: null, pctChangeN: null, sigmaMove: null, sigmaMoveEwma: null, percentile: null, percentileN: 0 };
+      }
+      const lastClose = closes[nlen - 1];
+      const prevClose = closes[nlen - 1 - w];
+      let logRet: number | null = null;
+      let sigmaMove: number | null = null;
+      let sigmaMoveEwma: number | null = null;
+      let pctChangeN: number | null = null;
+      let percentile: number | null = null;
+      let percentileN = 0;
+      if (Number.isFinite(lastClose) && Number.isFinite(prevClose) && lastClose > 0 && prevClose > 0) {
+        logRet = Math.log(lastClose / prevClose);
+        pctChangeN = Math.exp(logRet) - 1;
+        if (row.sigmaDaily != null && row.sigmaDaily > 0) sigmaMove = logRet / (row.sigmaDaily * sqrtW);
+        if (row.sigmaEwmaDaily != null && row.sigmaEwmaDaily > 0) sigmaMoveEwma = logRet / (row.sigmaEwmaDaily * sqrtW);
+        const dist = computeVolAndDistribution(closes, nlen - 1, lookbackDays, w).nDayReturnDistribution;
+        if (dist.length > 0) {
+          percentile = empiricalPercentile(dist, logRet);
+          percentileN = dist.length;
+        }
+      }
+      const dollarChange = Number.isFinite(lastClose) && Number.isFinite(prevClose) ? lastClose - prevClose : null;
+      return { ...row, last: lastClose, previousClose: prevClose, dollarChange, pctChange: pctChangeN, logReturnToday: null, logReturnN: logRet, pctChangeN, sigmaMove, sigmaMoveEwma, percentile, percentileN };
+    });
+  }, [liveRows, periodWindow, lookbackDays]);
+
+  const sortedPeriodRows = React.useMemo(() => {
+    const rows = periodRows.slice();
+    const dir = liveSort.dir === "asc" ? 1 : -1;
+    return rows.sort((a, b) => {
+      let va: any = null;
+      let vb: any = null;
+      if (liveSort.key === "ticker") { va = a.ticker; vb = b.ticker; }
+      else if (liveSort.key === "last") { va = a.last; vb = b.last; }
+      else if (liveSort.key === "dollarChange") { va = a.dollarChange; vb = b.dollarChange; }
+      else if (liveSort.key === "pctChange") { va = a.pctChange; vb = b.pctChange; }
+      else if (liveSort.key === "sigmaAnnualized") { va = a.sigmaAnnualized; vb = b.sigmaAnnualized; }
+      else if (liveSort.key === "sigmaEwmaAnnualized") { va = a.sigmaEwmaAnnualized; vb = b.sigmaEwmaAnnualized; }
+      else if (liveSort.key === "sigmaMove") { va = a.sigmaMove; vb = b.sigmaMove; }
+      else if (liveSort.key === "sigmaMoveEwma") { va = a.sigmaMoveEwma; vb = b.sigmaMoveEwma; }
+      else if (liveSort.key === "percentile") { va = a.percentile; vb = b.percentile; }
+      else if (liveSort.key === "absSigmaMove") {
+        va = a.sigmaMove == null ? null : Math.abs(a.sigmaMove);
+        vb = b.sigmaMove == null ? null : Math.abs(b.sigmaMove);
+      }
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "string" && typeof vb === "string") return va.localeCompare(vb) * dir;
+      return (va - vb) * dir;
+    });
+  }, [periodRows, liveSort]);
+
+  // Cross-sectional distribution: current σ-move across the filtered rows for the
+  // active mode.
+  const xsectionSigma = React.useMemo(() => {
+    const pick = (rows: { ticker: string; name: string; sigmaMove: number | null }[]) =>
+      rows
+        .filter((r) => allowedTickers.has(r.ticker) && matchesSearch(r.ticker, r.name))
+        .map((r) => r.sigmaMove)
+        .filter((v): v is number => v != null && Number.isFinite(v));
+    if (isEarningsMode) return pick(sortedEarningsRows);
+    if (isPeriodMode) return pick(sortedPeriodRows);
+    return pick(sortedLiveRows);
+  }, [isEarningsMode, isPeriodMode, sortedEarningsRows, sortedPeriodRows, sortedLiveRows, allowedTickers, matchesSearch]);
+
+  // Per-ticker distribution: histogram of the selected ticker's window-moves in σ
+  // units over its own lookback, with a marker at the current move.
+  const rowByTicker = React.useMemo(() => {
+    const m = new Map<string, LiveRow>();
+    for (const r of liveRows) m.set(r.ticker, r);
+    return m;
+  }, [liveRows]);
+
+  const distWindow = isPeriodMode ? Math.max(1, Math.floor(periodWindow)) : isEarningsMode ? 1 : Math.max(1, horizonN);
+
+  const tickerDist = React.useMemo(() => {
+    if (!selectedTicker) return null;
+    const row = rowByTicker.get(selectedTicker);
+    if (!row) return { ticker: selectedTicker, values: [] as number[], current: null as number | null, window: distWindow };
+    const closes = row.closes;
+    const nlen = closes.length;
+    const w = distWindow;
+    const vd = computeVolAndDistribution(closes, nlen - 1, distLookback, w);
+    const sd = vd.sigmaDaily;
+    if (sd == null || sd <= 0 || vd.nDayReturnDistribution.length === 0) {
+      return { ticker: selectedTicker, values: [] as number[], current: null as number | null, window: w };
+    }
+    const denom = sd * Math.sqrt(w);
+    const values = vd.nDayReturnDistribution.map((r) => r / denom).filter((v) => Number.isFinite(v));
+    // Current move (mode-aware log return) expressed in the histogram's σ units.
+    let currentLogRet: number | null = null;
+    if (isEarningsMode) {
+      const er = earningsRows.find((r) => r.ticker === selectedTicker);
+      currentLogRet = er?.logReturn ?? null;
+    } else if (isPeriodMode) {
+      if (nlen > w) {
+        const lc = closes[nlen - 1];
+        const pc = closes[nlen - 1 - w];
+        if (Number.isFinite(lc) && Number.isFinite(pc) && lc > 0 && pc > 0) currentLogRet = Math.log(lc / pc);
+      }
+    } else {
+      const lr = liveRows.find((r) => r.ticker === selectedTicker);
+      currentLogRet = lr?.logReturnN ?? null;
+      if (currentLogRet == null && nlen > w) {
+        const lc = closes[nlen - 1];
+        const pc = closes[nlen - 1 - w];
+        if (Number.isFinite(lc) && Number.isFinite(pc) && lc > 0 && pc > 0) currentLogRet = Math.log(lc / pc);
+      }
+    }
+    const current = currentLogRet != null ? currentLogRet / denom : null;
+    return { ticker: selectedTicker, values, current, window: w };
+  }, [selectedTicker, rowByTicker, distLookback, distWindow, isEarningsMode, isPeriodMode, earningsRows, liveRows]);
+
+  // ---------------------------------------------------------------------------
   // Export CSV
   // ---------------------------------------------------------------------------
   const exportCsv = React.useCallback(() => {
@@ -1278,6 +1603,8 @@ export default function SigmaMove() {
             <span className="text-[10px] text-muted-foreground">
               {isEarningsMode
                 ? `Sigma move on each earnings print. ${horizonN}-day log return scaled by σ (RV / EWMA) over a ${lookbackDays}-day window ending the trading day before the print.`
+                : isPeriodMode
+                ? `Trailing ${periodWindow}-day (~${(periodWindow / 21).toFixed(periodWindow % 21 === 0 ? 0 : 1)}mo) move scaled by ${lookbackDays}-day log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Historical closes only — no live quotes.`
                 : `${horizonN === 1 ? "Today's move" : `${horizonN}-day move`} scaled by ${lookbackDays}-day log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Live quotes via Yahoo Finance (~15-min delayed).`}
             </span>
           </div>
@@ -1286,30 +1613,74 @@ export default function SigmaMove() {
           <div className="flex items-center rounded border border-border overflow-hidden text-[11px]">
             <button
               type="button"
-              onClick={() => setIsEarningsMode(false)}
+              onClick={() => setMode("live")}
               className={`px-2.5 py-1 transition-colors ${
-                isEarningsMode
-                  ? "text-muted-foreground hover:text-foreground"
-                  : "bg-amber-500/15 text-amber-300"
+                mode === "live" ? "bg-amber-500/15 text-amber-300" : "text-muted-foreground hover:text-foreground"
               }`}
-              data-testid="btn-mode-live"
+              data-testid="sigma-mode-live"
             >
               Live (today)
             </button>
             <button
               type="button"
-              onClick={() => setIsEarningsMode(true)}
+              onClick={() => setMode("earnings")}
               className={`px-2.5 py-1 inline-flex items-center gap-1 transition-colors ${
-                isEarningsMode
-                  ? "bg-amber-500/15 text-amber-300"
-                  : "text-muted-foreground hover:text-foreground"
+                mode === "earnings" ? "bg-amber-500/15 text-amber-300" : "text-muted-foreground hover:text-foreground"
               }`}
-              data-testid="btn-mode-earnings"
+              data-testid="sigma-mode-earnings"
             >
               <CalendarIcon className="w-3 h-3" />
               Earnings days
             </button>
+            <button
+              type="button"
+              onClick={() => setMode("period")}
+              className={`px-2.5 py-1 transition-colors ${
+                mode === "period" ? "bg-amber-500/15 text-amber-300" : "text-muted-foreground hover:text-foreground"
+              }`}
+              data-testid="sigma-mode-period"
+            >
+              Period
+            </button>
           </div>
+
+          {/* Period window picker (period mode only) */}
+          {isPeriodMode && (
+            <div
+              className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
+              title="Trailing window for the period return. σ-move denominator scales by √window."
+            >
+              <span className="px-1.5 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/80 border-r border-border">
+                Window
+              </span>
+              {PERIOD_WINDOW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setPeriodWindow(opt.days)}
+                  className={`px-2 py-1 transition-colors ${
+                    periodWindow === opt.days ? "bg-amber-500/15 text-amber-300" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  data-testid={`sigma-window-${opt.label}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              <input
+                type="number"
+                min={1}
+                value={PERIOD_WINDOW_OPTIONS.some((o) => o.days === periodWindow) ? "" : periodWindow}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v) && v >= 1) setPeriodWindow(v);
+                }}
+                placeholder="d"
+                className="w-12 px-1 py-1 bg-background border-l border-border text-[10px] focus:outline-none"
+                title="Custom window (trading days)"
+                data-testid="sigma-window-custom"
+              />
+            </div>
+          )}
 
           {/* Earnings lookback years (earnings mode only) */}
           {isEarningsMode && (
@@ -1357,7 +1728,8 @@ export default function SigmaMove() {
             ))}
           </div>
 
-          {/* Horizon */}
+          {/* Horizon (not in period mode — window replaces it) */}
+          {!isPeriodMode && (
           <div
             className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
             title={`Return horizon in trading days. σ-move denominator scales by √N (= ${Math.sqrt(Math.max(1, horizonN)).toFixed(2)})`}
@@ -1381,6 +1753,7 @@ export default function SigmaMove() {
               </button>
             ))}
           </div>
+          )}
 
           <div className="flex-1" />
 
@@ -1408,10 +1781,10 @@ export default function SigmaMove() {
             )}
             {isEarningsMode ? (
               <span>
-                {earningsRows.length.toLocaleString()} prints · {tickerList.length} tickers
+                {earningsRows.length.toLocaleString()} prints · {allowedTickers.size}/{tickerList.length} tickers
               </span>
             ) : (
-              <span>{liveRows.length} tickers</span>
+              <span>{allowedTickers.size}/{liveRows.length} tickers</span>
             )}
           </div>
 
@@ -1484,7 +1857,7 @@ export default function SigmaMove() {
         </div>
 
         {/* Live summary stats */}
-        {!isEarningsMode && liveRows.length > 0 && (
+        {mode === "live" && liveRows.length > 0 && (
           <div className="flex items-center gap-3 mt-2 text-[10px] font-mono">
             <StatChip label="|σ| ≥ 1" value={liveSummaryStats.oneSig} total={liveSummaryStats.total} color="text-amber-400" />
             <StatChip label="|σ| ≥ 2" value={liveSummaryStats.twoSig} total={liveSummaryStats.total} color="text-orange-400" />
@@ -1494,6 +1867,27 @@ export default function SigmaMove() {
             <StatChip label="down" value={liveSummaryStats.losers} total={liveSummaryStats.total} color="text-red-400" />
           </div>
         )}
+
+        {/* Period summary stats */}
+        {mode === "period" && periodRows.length > 0 && (() => {
+          const rows = periodRows.filter((r) => allowedTickers.has(r.ticker) && r.sigmaMove != null);
+          const total = rows.length;
+          const oneSig = rows.filter((r) => Math.abs(r.sigmaMove!) >= 1).length;
+          const twoSig = rows.filter((r) => Math.abs(r.sigmaMove!) >= 2).length;
+          const threeSig = rows.filter((r) => Math.abs(r.sigmaMove!) >= 3).length;
+          const winners = rows.filter((r) => (r.sigmaMove ?? 0) > 0).length;
+          const losers = rows.filter((r) => (r.sigmaMove ?? 0) < 0).length;
+          return (
+            <div className="flex items-center gap-3 mt-2 text-[10px] font-mono">
+              <StatChip label="|σ| ≥ 1" value={oneSig} total={total} color="text-amber-400" />
+              <StatChip label="|σ| ≥ 2" value={twoSig} total={total} color="text-orange-400" />
+              <StatChip label="|σ| ≥ 3" value={threeSig} total={total} color="text-red-400" />
+              <span className="text-muted-foreground">|</span>
+              <StatChip label="up" value={winners} total={total} color="text-emerald-400" />
+              <StatChip label="down" value={losers} total={total} color="text-red-400" />
+            </div>
+          );
+        })()}
 
         {/* Earnings summary stats */}
         {isEarningsMode && earningsRows.length > 0 && (
@@ -1630,6 +2024,94 @@ export default function SigmaMove() {
         )}
       </div>
 
+      {/* Classification + geo filters (subset the universe on-page) */}
+      <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/50 bg-card/40 flex-wrap">
+        <ClassificationFilters
+          filters={classFilters}
+          onFiltersChange={setClassFilters}
+          search={tickerSearch}
+          onSearchChange={setTickerSearch}
+          manualTickers={manualTickers}
+          onManualTickersChange={setManualTickers}
+          filteredCount={allowedTickers.size}
+          totalCount={tickerList.length}
+          testIdPrefix="sigma"
+          extraFilters={geo.geoFilterUI}
+        />
+      </div>
+
+      {/* Distribution plots (cross-sectional + per-ticker) */}
+      <div className="border-b border-border/50 bg-card/20">
+        <div className="flex items-center gap-2 px-3 py-1">
+          <button
+            type="button"
+            onClick={() => setShowDistributions((v) => !v)}
+            className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+            data-testid="sigma-dist-toggle"
+          >
+            {showDistributions ? <ChevronUpIcon className="w-3 h-3" /> : <ChevronDownIcon className="w-3 h-3" />}
+            σ-move distributions
+          </button>
+          {showDistributions && (
+            <div
+              className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono ml-2"
+              title="Lookback for the per-ticker distribution (independent of the vol lookback)"
+            >
+              <span className="px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-muted-foreground/80 border-r border-border">
+                Dist LB
+              </span>
+              {DIST_LOOKBACK_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setDistLookback(opt.days)}
+                  className={`px-2 py-0.5 transition-colors ${
+                    distLookback === opt.days ? "bg-amber-500/15 text-amber-300" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  data-testid={`sigma-dist-lb-${opt.label}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              <input
+                type="number"
+                min={20}
+                value={DIST_LOOKBACK_OPTIONS.some((o) => o.days === distLookback) ? "" : distLookback}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v) && v >= 20) setDistLookback(v);
+                }}
+                placeholder="d"
+                className="w-12 px-1 py-0.5 bg-background border-l border-border text-[10px] focus:outline-none"
+                title="Custom lookback (trading days)"
+                data-testid="sigma-dist-lb-custom"
+              />
+            </div>
+          )}
+        </div>
+        {showDistributions && (
+          <div className="flex items-start gap-6 px-3 pb-2 flex-wrap">
+            <SigmaHistogram
+              values={xsectionSigma}
+              label={`Cross-section · ${isEarningsMode ? "earnings" : isPeriodMode ? `${periodWindow}d window` : horizonN === 1 ? "today" : `${horizonN}d`} σ-moves`}
+              sub={`${allowedTickers.size} tickers`}
+              testid="sigma-dist-xsection"
+            />
+            <SigmaHistogram
+              values={tickerDist?.values ?? []}
+              currentValue={tickerDist?.current ?? null}
+              label={
+                selectedTicker
+                  ? `${selectedTicker} · ${distWindow === 1 ? "daily" : `${distWindow}d`} σ-moves`
+                  : "Select a ticker row →"
+              }
+              sub={selectedTicker ? `last ${DIST_LOOKBACK_OPTIONS.find((o) => o.days === distLookback)?.label ?? `${distLookback}d`}` : undefined}
+              testid="sigma-dist-ticker"
+            />
+          </div>
+        )}
+      </div>
+
       {/* Content area */}
       <div className="flex-1 overflow-auto">
         {/* Global error */}
@@ -1669,7 +2151,7 @@ export default function SigmaMove() {
 
         {/* Earnings table */}
         {isEarningsMode && !loadingEarnings && earningsRows.length > 0 && (() => {
-          const filtered = sortedEarningsRows.filter((r) => matchesSearch(r.ticker, r.name));
+          const filtered = sortedEarningsRows.filter((r) => allowedTickers.has(r.ticker) && matchesSearch(r.ticker, r.name));
           if (filtered.length === 0) {
             return (
               <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
@@ -1719,7 +2201,9 @@ export default function SigmaMove() {
                   return (
                     <tr
                       key={`${row.ticker}-${row.earningsDate}-${idx}`}
-                      className="border-b border-border/50 hover:bg-white/5"
+                      onClick={() => setSelectedTicker(row.ticker)}
+                      className={`border-b border-border/50 cursor-pointer ${selectedTicker === row.ticker ? "bg-amber-500/10" : "hover:bg-white/5"}`}
+                      data-testid={`sigma-earnings-row-${row.ticker}`}
                     >
                       <td className="px-3 py-1.5 text-foreground" title={dateDisplay}>
                         {row.earningsDate}
@@ -1806,8 +2290,8 @@ export default function SigmaMove() {
         })()}
 
         {/* Live table */}
-        {!isEarningsMode && liveRows.length > 0 && (() => {
-          const filtered = sortedLiveRows.filter((r) => matchesSearch(r.ticker, r.name));
+        {mode === "live" && liveRows.length > 0 && (() => {
+          const filtered = sortedLiveRows.filter((r) => allowedTickers.has(r.ticker) && matchesSearch(r.ticker, r.name));
           if (filtered.length === 0) {
             return (
               <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
@@ -1909,7 +2393,12 @@ export default function SigmaMove() {
                 {filtered.map((row) => {
                   const lbl = sigmaLabel(row.sigmaMove);
                   return (
-                    <tr key={row.ticker} className="border-b border-border/50 hover:bg-white/5">
+                    <tr
+                      key={row.ticker}
+                      onClick={() => setSelectedTicker(row.ticker)}
+                      className={`border-b border-border/50 cursor-pointer ${selectedTicker === row.ticker ? "bg-amber-500/10" : "hover:bg-white/5"}`}
+                      data-testid={`sigma-row-${row.ticker}`}
+                    >
                       <td className="px-3 py-1.5 font-bold text-foreground">{row.ticker}</td>
                       <td
                         className="px-3 py-1.5 text-muted-foreground truncate max-w-[280px]"
@@ -1967,6 +2456,72 @@ export default function SigmaMove() {
                             : undefined
                         }
                       >
+                        {formatPercentile(row.percentile)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          );
+        })()}
+
+        {/* Period table */}
+        {mode === "period" && periodRows.length > 0 && (() => {
+          const filtered = sortedPeriodRows.filter((r) => allowedTickers.has(r.ticker) && matchesSearch(r.ticker, r.name));
+          if (filtered.length === 0) {
+            return (
+              <div className="flex items-center justify-center h-32 text-sm text-muted-foreground">
+                No tickers match the current filters.
+              </div>
+            );
+          }
+          return (
+            <table className="w-full text-[11px] font-mono" data-testid="sigma-period-table">
+              <thead className="sticky top-0 z-10 bg-card border-b border-border">
+                <tr className="text-muted-foreground">
+                  <SortableHeaderLive label="Ticker" k="ticker" sort={liveSort} onClick={toggleLiveSort} align="left" />
+                  <th className="text-left px-3 py-2 font-bold">Name</th>
+                  <SortableHeaderLive label="Last" k="last" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <th className="text-right px-3 py-2 font-bold">{periodWindow}d ago</th>
+                  <SortableHeaderLive label="Δ $" k="dollarChange" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="Δ %" k="pctChange" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label={`${lookbackDays}d HV (ann.)`} k="sigmaAnnualized" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="EWMA HV (ann.)" k="sigmaEwmaAnnualized" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="σ Move" k="sigmaMove" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="σ Move (EWMA)" k="sigmaMoveEwma" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="|σ|" k="absSigmaMove" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  <SortableHeaderLive label="Pctile" k="percentile" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((row) => {
+                  const lbl = sigmaLabel(row.sigmaMove);
+                  return (
+                    <tr
+                      key={row.ticker}
+                      onClick={() => setSelectedTicker(row.ticker)}
+                      className={`border-b border-border/50 cursor-pointer ${selectedTicker === row.ticker ? "bg-amber-500/10" : "hover:bg-white/5"}`}
+                      data-testid={`sigma-period-row-${row.ticker}`}
+                    >
+                      <td className="px-3 py-1.5 font-bold text-foreground">{row.ticker}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[280px]" title={row.name}>{row.name}</td>
+                      <td className="px-3 py-1.5 text-right">{formatNum(row.last)}</td>
+                      <td className="px-3 py-1.5 text-right text-muted-foreground">{formatNum(row.previousClose)}</td>
+                      <td className={`px-3 py-1.5 text-right ${pctChangeColor(row.dollarChange)}`}>{formatNumSigned(row.dollarChange)}</td>
+                      <td className={`px-3 py-1.5 text-right ${pctChangeColor(row.pctChange)}`}>{formatPct(row.pctChange)}</td>
+                      <td className="px-3 py-1.5 text-right text-muted-foreground" title={row.sigmaDaily != null ? `daily: ${(row.sigmaDaily * 100).toFixed(2)}% · window: ${row.hvWindow} returns` : undefined}>
+                        {row.sigmaAnnualized != null ? `${(row.sigmaAnnualized * 100).toFixed(1)}%` : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right text-muted-foreground" title={row.sigmaEwmaDaily != null ? `EWMA daily (λ=${EWMA_LAMBDA}): ${(row.sigmaEwmaDaily * 100).toFixed(2)}%` : undefined}>
+                        {row.sigmaEwmaAnnualized != null ? `${(row.sigmaEwmaAnnualized * 100).toFixed(1)}%` : "—"}
+                      </td>
+                      <td className={`px-3 py-1.5 text-right ${sigmaColor(row.sigmaMove)}`}>{formatSigma(row.sigmaMove)}</td>
+                      <td className={`px-3 py-1.5 text-right ${sigmaColor(row.sigmaMoveEwma)}`} title={row.sigmaMoveEwma != null ? `Log return / (σ_EWMA · √${periodWindow})` : undefined}>
+                        {formatSigma(row.sigmaMoveEwma)}
+                      </td>
+                      <td className={`px-3 py-1.5 text-right text-[10px] uppercase tracking-wider ${lbl.color}`}>{lbl.label}</td>
+                      <td className={`px-3 py-1.5 text-right ${percentileColor(row.percentile)}`} title={row.percentile != null ? `Rank of ${periodWindow}-day log return in trailing ${row.percentileN} obs (${lookbackDays}d window)` : undefined}>
                         {formatPercentile(row.percentile)}
                       </td>
                     </tr>
