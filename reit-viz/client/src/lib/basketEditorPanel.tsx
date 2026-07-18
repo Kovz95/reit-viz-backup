@@ -7,6 +7,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { Search, X, Trash2, Plus, Check, GitMerge, Layers, ChevronDown, ChevronRight } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import {
   FilterDropdown,
   emptyClassFilters,
@@ -105,6 +106,8 @@ export function BasketEditorPanel({
   // ---- Bulk add by classification group ----
   const [groupOpen, setGroupOpen] = useState(false);
   const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
+  // Country/exchange filter for the bulk-add pool (e.g. "add every UK ticker").
+  const geo = useGeoFilter(tickers as any[], "basket-editor-geo");
 
   // Distinct values per level from the loaded universe (single-value levels hidden).
   const classOptions = useMemo(() => {
@@ -144,17 +147,20 @@ export function BasketEditorPanel({
   );
 
   // UNION of every selected group across any level, minus already-selected tickers.
+  // A country/exchange selection narrows the pool (and alone selects all its tickers).
   const groupMatches = useMemo(() => {
-    if (!anyClassSelected) return [] as string[];
+    if (!anyClassSelected && !geo.hasActiveGeo) return [] as string[];
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const t of tickers) {
-      let hit = false;
-      for (const { key } of CLASS_LEVELS) {
-        const sel = classFilters[key];
-        if (sel.size > 0 && sel.has((t as any)[key])) {
-          hit = true;
-          break;
+    for (const t of geo.filterByGeo(tickers as any[])) {
+      let hit = !anyClassSelected; // geo-only selection: every geo match qualifies
+      if (!hit) {
+        for (const { key } of CLASS_LEVELS) {
+          const sel = classFilters[key];
+          if (sel.size > 0 && sel.has((t as any)[key])) {
+            hit = true;
+            break;
+          }
         }
       }
       if (!hit) continue;
@@ -165,7 +171,7 @@ export function BasketEditorPanel({
       }
     }
     return out;
-  }, [anyClassSelected, tickers, classFilters, selectedSet]);
+  }, [anyClassSelected, tickers, classFilters, selectedSet, geo.filterByGeo, geo.hasActiveGeo]);
 
   const addGroup = useCallback(() => {
     if (groupMatches.length === 0) return;
@@ -336,6 +342,7 @@ export function BasketEditorPanel({
                   testId={`basket-editor-class-${key}`}
                 />
               ))}
+              {geo.geoFilterUI}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -349,9 +356,9 @@ export function BasketEditorPanel({
                 Add {groupMatches.length} ticker{groupMatches.length === 1 ? "" : "s"}
               </button>
               <span className="text-[10px] text-muted-foreground">
-                {anyClassSelected
+                {anyClassSelected || geo.hasActiveGeo
                   ? `${groupMatches.length} new match${groupMatches.length === 1 ? "" : "es"}`
-                  : "Pick one or more groups (multi-select) to add them all"}
+                  : "Pick groups and/or a country/exchange to add them all"}
               </span>
               {anyClassSelected && (
                 <button

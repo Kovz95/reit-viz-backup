@@ -26,6 +26,7 @@ import {
   emptyClassFilters,
   type ClassFilters,
 } from "./ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import BasketMetricInspector, {
   type InspectableBasket,
 } from "./BasketMetricInspector";
@@ -166,6 +167,8 @@ function BasketCard({
   // ---- Bulk add by classification group ----
   const [groupOpen, setGroupOpen] = useState(false);
   const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
+  // Country/exchange filter for the bulk-add pool (e.g. "add every UK ticker").
+  const geo = useGeoFilter(tickers as any[], `basket-geo-${basket.id}`);
 
   // Distinct values per level, from whatever universe was passed in. Levels with
   // a single value across the universe are hidden (unless already selected) to
@@ -211,16 +214,20 @@ function BasketCard({
   // adds all their tickers, not just the ones common to all. Excludes symbols
   // already in the basket.
   const groupMatches = useMemo(() => {
-    if (!anyClassSelected) return [] as string[];
+    // Candidates need a classification group OR an active country/exchange
+    // selection (geo alone = "add every ticker from that country/exchange").
+    if (!anyClassSelected && !geo.hasActiveGeo) return [] as string[];
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const t of tickers) {
-      let hit = false;
-      for (const { key } of CLASS_LEVELS) {
-        const sel = classFilters[key];
-        if (sel.size > 0 && sel.has((t as any)[key])) {
-          hit = true;
-          break;
+    for (const t of geo.filterByGeo(tickers as any[])) {
+      let hit = !anyClassSelected; // geo-only selection: every geo match qualifies
+      if (!hit) {
+        for (const { key } of CLASS_LEVELS) {
+          const sel = classFilters[key];
+          if (sel.size > 0 && sel.has((t as any)[key])) {
+            hit = true;
+            break;
+          }
         }
       }
       if (!hit) continue;
@@ -231,7 +238,7 @@ function BasketCard({
       }
     }
     return out;
-  }, [anyClassSelected, tickers, classFilters, selectedSet]);
+  }, [anyClassSelected, tickers, classFilters, selectedSet, geo.filterByGeo, geo.hasActiveGeo]);
 
   const addGroup = useCallback(() => {
     if (groupMatches.length === 0) return;
@@ -517,6 +524,7 @@ function BasketCard({
                         testId={`basket-${basket.id}-class-${key}`}
                       />
                     ))}
+                    {geo.geoFilterUI}
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -530,9 +538,9 @@ function BasketCard({
                       Add {groupMatches.length} ticker{groupMatches.length === 1 ? "" : "s"}
                     </button>
                     <span className="text-[10px] text-muted-foreground">
-                      {anyClassSelected
+                      {anyClassSelected || geo.hasActiveGeo
                         ? `${groupMatches.length} new match${groupMatches.length === 1 ? "" : "es"}`
-                        : "Pick one or more groups (multi-select) to add them all"}
+                        : "Pick groups and/or a country/exchange to add them all"}
                     </span>
                     {anyClassSelected && (
                       <button
