@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/SlowStochOptimizer-BINIVNO0.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -762,6 +763,7 @@ export default function SlowStochOptimizer() {
     setRunningConfig(null);
     setRunning(false);
   }, [mode, frequency, selectedTicker, pairTickerA, pairTickerB, filteredTickers, signalKind, gridSize, returnMode, targetReturn, bandMin, bandMax, minHold, dateRange, basketTickers, basketMode, baskets, pairComboPicker.pairs, classFilter.filteredTickers, combosCount]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleCancel = () => { cancelRef.current = true; setRunning(false); setRunningConfig(null); };
 

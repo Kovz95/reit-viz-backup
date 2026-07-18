@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/RSIRegimeOptimizer-DgnHrF3m.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -707,6 +708,7 @@ export default function RSIRegimeOptimizer() {
     basketMode,
     baskets,
   ]);
+  useOptimizerRunAll(handleRunOptimizer); // unified /optimizers "Run selected" fan-out
 
   const handleEvaluate = useCallback(async () => {
     setEvaluating(true);

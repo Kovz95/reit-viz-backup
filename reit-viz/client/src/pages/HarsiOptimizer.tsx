@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/HarsiOptimizer-BXuhMFq0.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import React from "react";
 import {
@@ -1098,6 +1099,7 @@ export default function HarsiOptimizer() {
     universeTicks,
     pairComboPicker.pairs,
   ]);
+  useOptimizerRunAll(handleRunOptimizer); // unified /optimizers "Run selected" fan-out
 
   const handleCancel = () => {
     cancelRef.current = true;

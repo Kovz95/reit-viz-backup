@@ -7,6 +7,7 @@
 // per-ticker Detector (merged chart overlaying all four method types + combined
 // levels/trendlines detail tables) on top, and the Crossing Screener table below,
 // both filled by the same Run.
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useAppContext } from "@/lib/appContext";
 import { useBaskets } from "@/lib/baskets";
@@ -868,6 +869,7 @@ export default function LevelsAndTrendlines() {
     setSelectedLineIdxs(Object.fromEntries(detRows.map((r) => [r.ticker, new Set([0])])));
     setRunning(false);
   }, [anyLevelScan, scanTrendlines, tickerList, lookback, dateRange, timeframe, srConfig, trendlineConfig, topN, minScore, source]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleStop = useCallback(() => { cancelRef.current = true; }, []);
 

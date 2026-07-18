@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/MACrossoverOptimizer-BDlYyAhI.js
 
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
@@ -1829,6 +1830,7 @@ export default function MACrossoverOptimizer() {
     dateRange, indicatorSource, indicatorSourcePeriod, filteredUniverse, basketTickers, basketMode,
     baskets, pairCombo.pairs, inputSelection, timeframeMode,
   ]);
+  useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
 
   const runEvaluate = useCallback(async () => {
     setEvaluating(true);

@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/Oscillators-BTlPqSR6.js on 2026-06-12
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -967,6 +968,7 @@ export default function Oscillators() {
     targetReturn, returnMode, bandMin, bandMax, minHold, frequency, dateRange, basketTickers,
     basketRunMode, basketsDef,
   ]);
+  useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
 
   const runEvaluate = useCallback(async () => {
     setIsEvaluating(true);

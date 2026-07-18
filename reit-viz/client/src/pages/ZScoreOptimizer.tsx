@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/ZScoreOptimizer-Dl9PXr46.js on 2026-06-16
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -587,6 +588,7 @@ export default function ZScoreOptimizer() {
     setResults(out);
     setRunning(false);
   }, [tickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, selectedMetric, mode, buyThreshold, sellThreshold, targetReturn, returnMode, bandMin, bandMax, signalType, frequency, freqKey, dateRange, pairComboPicker.pairs, basketMode, baskets, filteredTickers]);
+  useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
 
   // ── Evaluate ──
   const handleEvaluate = useCallback(async () => {

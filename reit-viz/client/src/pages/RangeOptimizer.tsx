@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/RangeOptimizer-zhHihrAX.js on 2026-06-12
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useUniverse } from "@/lib/universeContext";
 import { getTickers } from "@/lib/dataService";
@@ -2288,6 +2289,7 @@ export default function RangeOptimizer() {
       setIsRunning(false);
     }
   };
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleCancel = () => {
     workerRef.current?.terminate();

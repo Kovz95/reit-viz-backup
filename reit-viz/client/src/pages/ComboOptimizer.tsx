@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/ComboOptimizer-DeA6DroV.js on 2026-06-11
 
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import React, { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
@@ -903,6 +904,7 @@ export default function ComboOptimizer() {
   }, [filteredAllTickers, selectedTicker, pairTickerA, pairTickerB, runMode, direction, horizon,
       targetReturn, pairCombo.pairs, minSignals, minLift, minHold, maxFilters, topN, allTriggers,
       allFilters, frequency, scoreWeights, dateRange, basketTickers, basketMode, baskets]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   // ─── Evaluate Mode ──────────────────────────────────────────────────────────
   const handleEvaluate = useCallback(async () => {

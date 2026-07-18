@@ -12,6 +12,7 @@
 // lightweight-charts factor pane, CSS-table loadings heatmap (à la
 // Correlation.HeatmapMatrix).
 
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createChart, ColorType, CrosshairMode, LineSeries } from "lightweight-charts";
 import type { Time, LineWidth } from "lightweight-charts";
@@ -759,6 +760,7 @@ export default function PCA() {
     selectedMetrics,
     sectorByTicker,
   ]);
+  useOptimizerRunAll(run); // unified /optimizers "Run selected" fan-out
 
   const colorMap = useMemo(
     () => (result ? buildColorMap(result.colorKey) : {}),

@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/TVAOptimizer-D4A65F3C.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   getScoreWeights,
@@ -700,6 +701,7 @@ export default function TVAOptimizer() {
     setResults(allResults);
     setRunning(false);
   }, [running, runMode, filteredAllTickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets, filteredTickers, enabledSignalTypes, targetReturn, frequency, resampleMode, dateRange, pairComboPicker.pairs]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   // ── Sorted/filtered results ────────────────────────────────────────────────
 

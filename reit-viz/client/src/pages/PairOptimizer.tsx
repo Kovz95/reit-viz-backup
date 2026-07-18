@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/PairOptimizer-Df5S8y_J.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { usePersistedState } from "@/lib/persistedState";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -484,6 +485,7 @@ export default function PairOptimizer() {
     }
     setShowLoading(false);
   }, [effectiveTickers, mode, tickerA, tickerB, selectedMetric, targetReturn, buyThreshold, sellThreshold, returnMode, bandMin, bandMax, spreadMethod, signalType, frequency, groupBy, runAnalysis, setResults]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   // ── Sorted results ──
   const sortedResults = useMemo(() => {

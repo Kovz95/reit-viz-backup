@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/MomentumOptimizer-rZsUBkFq.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -819,6 +820,7 @@ export default function MomentumOptimizer() {
       baskets, selectedRevMetric, momThreshold, revThreshold, targetReturn, runMode, returnMode,
       bandMin, bandMax, minHold, frequency, freqKey, dateRange, pairComboPicker.pairs,
       inputSelection, filteredTickers]);
+  useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
 
   // ── Serialize / hydrate ──
 

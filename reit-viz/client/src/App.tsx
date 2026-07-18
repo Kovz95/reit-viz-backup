@@ -78,6 +78,7 @@ const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
 const PairRatios = lazy(() => import("@/pages/PairRatios"));
 const Screener = lazy(() => import("@/pages/Screener"));
 const Ratings = lazy(() => import("@/pages/Ratings"));
+const AllOptimizers = lazy(() => import("@/pages/AllOptimizers"));
 const ZScoreOptimizer = lazy(() => import("@/pages/ZScoreOptimizer"));
 const PairOptimizer = lazy(() => import("@/pages/PairOptimizer"));
 const MomentumOptimizer = lazy(() => import("@/pages/MomentumOptimizer"));
@@ -325,6 +326,7 @@ function NavBar() {
       icon: Crosshair,
       universeControlled: true,
       group: [
+        { path: "/optimizers", label: "★ All Optimizers", icon: Crosshair },
         { path: "/z-optimizer", label: "Z Optimizer", icon: Crosshair },
         { path: "/pair-optimizer", label: "Pair Opt", icon: Shuffle },
         { path: "/momentum", label: "Momentum", icon: Zap },
@@ -629,6 +631,7 @@ const PAGES = [
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screener", label: "Screener" },
   { path: "/ratings", label: "Ratings" },
+  { path: "/optimizers", label: "All Optimizers" },
   { path: "/z-optimizer", label: "Z Optimizer" },
   { path: "/pair-optimizer", label: "Pair Opt" },
   { path: "/val-regime", label: "Val Regime" },
@@ -759,6 +762,7 @@ function AppShell() {
               <Route path="/ratings" component={Ratings} />
               <Route path="/setups-screener" component={SetupsScreener} />
               <Route path="/pattern-screener" component={PatternScreener} />
+              <Route path="/optimizers" component={AllOptimizers} />
               <Route path="/z-optimizer" component={ZScoreOptimizer} />
               <Route path="/pair-optimizer" component={PairOptimizer} />
               <Route path="/momentum" component={MomentumOptimizer} />

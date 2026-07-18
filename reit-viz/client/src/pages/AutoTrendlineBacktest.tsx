@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/AutoTrendlineBacktest-BuiEwErn.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useAppContext } from "@/lib/appContext";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -497,6 +498,7 @@ export default function AutoTrendlineBacktest() {
     setRunning(false);
     setLastRunAt(Date.now());
   }, [running, tickerList, nValues, minSignals, minBars, enabledKinds, timeframe, scopeMode, inputSelection]);
+  useOptimizerRunAll(handleRunScan); // unified /optimizers "Run selected" fan-out
 
   const handleStop = useCallback(() => {
     cancelRef.current = true;

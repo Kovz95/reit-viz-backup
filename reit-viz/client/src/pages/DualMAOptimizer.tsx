@@ -1,4 +1,5 @@
 // Reconstructed from recovered-bundle/DualMAOptimizer-Cbga92QD.js on 2026-06-11
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { getTickers, getDates } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
@@ -648,6 +649,7 @@ export default function DualMAOptimizer() {
     setResults(out);
     setRunning(false);
   }, [filteredTickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets, mode, gridSize, topK, frequency, dateRange, pairComboPicker.pairs, classFilter.filteredTickers, inputSelection]);
+  useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleEvaluate = useCallback(async () => {
     setEvaluating(true);

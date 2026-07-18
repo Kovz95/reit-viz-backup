@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/ROCOptimizer-BRhXmIfg.js on 2026-06-12
 
+import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as React from "react";
 import { usePersistedState } from "@/lib/persistedState";
@@ -1077,6 +1078,7 @@ export default function ROCOptimizer() {
     basketMode,
     userBaskets,
   ]);
+  useOptimizerRunAll(runOptimize); // unified /optimizers "Run selected" fan-out
 
   // ── Evaluate function ───────────────────────────────────────────────────────
 
