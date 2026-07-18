@@ -1,6 +1,8 @@
 // Reconstructed from recovered-bundle/FactorBacktest-DTdYrgz4.js on 2026-06-11
 import { useState, useMemo, useCallback } from "react";
-import { useAppContext } from "@/lib/appContext";
+import { useUniverse } from "@/lib/universeContext";
+import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
+import BasketPicker from "@/components/BasketPicker";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
 import { fetchMetricSeries } from "@/lib/signalUtils";
@@ -382,8 +384,9 @@ function fmtInt(v: number | null | undefined): string { return v == null || !Num
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+type RunMode = "universe" | "basket";
+
 export default function FactorBacktest() {
-  const appCtx = useAppContext();
   const [metricY, setMetricY] = useState("P/FFO FY2");
   const [metricX, setMetricX] = useState("FY2 FFO Growth");
   const [startDate, setStartDate] = useState("");
@@ -392,12 +395,14 @@ export default function FactorBacktest() {
   const [thresholdPct, setThresholdPct] = useState("5");
   const [sectorRelative, setSectorRelative] = useState(false);
   const [rankingMode, setRankingMode] = useState<"peg" | "zscore">("peg");
+  const [runMode, setRunMode] = useState<RunMode>("universe");
+  const [basketTickers, setBasketTickers] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState<RunProgress>({ stage: "idle", done: 0, total: 0, message: "" });
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const getWorkspaceState = useCallback(() => ({ metricY, metricX, startDate, endDate, rebalanceDays, thresholdPct, sectorRelative, rankingMode }), [metricY, metricX, startDate, endDate, rebalanceDays, thresholdPct, sectorRelative, rankingMode]);
+  const getWorkspaceState = useCallback(() => ({ metricY, metricX, startDate, endDate, rebalanceDays, thresholdPct, sectorRelative, rankingMode, runMode, basketTickers }), [metricY, metricX, startDate, endDate, rebalanceDays, thresholdPct, sectorRelative, rankingMode, runMode, basketTickers]);
   const restoreWorkspaceState = useCallback((saved: Record<string, unknown>) => {
     if (!saved || typeof saved !== "object") return;
     if (typeof saved.metricY === "string") setMetricY(saved.metricY);
@@ -408,6 +413,8 @@ export default function FactorBacktest() {
     if (typeof saved.thresholdPct === "string") setThresholdPct(saved.thresholdPct);
     if (typeof saved.sectorRelative === "boolean") setSectorRelative(saved.sectorRelative);
     if (saved.rankingMode === "peg" || saved.rankingMode === "zscore") setRankingMode(saved.rankingMode);
+    if (saved.runMode === "universe" || saved.runMode === "basket") setRunMode(saved.runMode);
+    if (Array.isArray(saved.basketTickers)) setBasketTickers((saved.basketTickers as unknown[]).filter((t): t is string => typeof t === "string"));
   }, []);
   useWorkspaceTab("factor-backtest", getWorkspaceState, restoreWorkspaceState);
 
@@ -440,13 +447,31 @@ export default function FactorBacktest() {
     return groupMetricsByCategory([...s]).map(({ category, metrics }) => ({ group: category, metrics }));
   }, [workbookMetrics, allTickersMeta]);
 
-  const universeTickers = useMemo(() => {
-    let tickers = allTickersMeta;
-    if (appCtx.universeTickers) tickers = tickers.filter(t => appCtx.universeTickers!.has(t.ticker));
-    return tickers.map(t => t.ticker);
-  }, [allTickersMeta, appCtx.universeTickers]);
+  // Global universe (Universe tab) narrowing, mirroring the optimizer pages.
+  const { universeTickers: globalUniverseSet, isFiltered } = useUniverse();
+  const filteredByUniverse = useMemo(
+    () => globalUniverseSet ? allTickersMeta.filter(t => globalUniverseSet.has(t.ticker)) : allTickersMeta,
+    [allTickersMeta, globalUniverseSet]
+  );
 
-  const sectorMap = useMemo(() => { const m = new Map<string, string>(); for (const t of allTickersMeta) m.set(t.ticker, t.sector || "Unknown"); return m; }, [allTickersMeta]);
+  // Classification + Country/Exchange geo + workbook/global source filters
+  // (active only in universe mode, same as the optimizers).
+  const classFilter = useOptimizerClassFilter(filteredByUniverse, runMode === "universe", "fb-clf");
+
+  const universeTickers = useMemo(() => {
+    if (runMode === "basket") return basketTickers;
+    return (classFilter.filteredTickers as { ticker: string }[]).map(t => t.ticker);
+  }, [runMode, basketTickers, classFilter.filteredTickers]);
+
+  const sectorMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of allTickersMeta) m.set(t.ticker, t.sector || "Unknown");
+    // Include global-universe metas so sector-relative works when the source is Global.
+    for (const t of (classFilter.filteredTickers as { ticker?: string; sector?: string }[])) {
+      if (t?.ticker && !m.has(t.ticker)) m.set(t.ticker, t.sector || "Unknown");
+    }
+    return m;
+  }, [allTickersMeta, classFilter.filteredTickers]);
 
   const handleRun = useCallback(async () => {
     setErrorMsg(null); setResult(null); setIsRunning(true);
@@ -713,14 +738,52 @@ export default function FactorBacktest() {
             </SelectContent>
           </Select>
         </div>
+        <div className="flex items-center gap-1">
+          <span className="text-muted-foreground">Run on:</span>
+          <div className="flex gap-px">
+            {(["universe", "basket"] as const).map(m => (
+              <button
+                key={m}
+                type="button"
+                data-testid={`fb-mode-${m}`}
+                className={`text-[11px] font-medium px-2 py-1 rounded transition-colors ${runMode === m ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`}
+                onClick={() => setRunMode(m)}
+                disabled={isRunning}
+                title={m === "universe" ? "Run cross-sectionally on the filtered universe" : "Run on a saved basket or a custom set of stocks"}
+              >
+                {m === "universe" ? "Universe" : "Basket / Custom"}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="text-muted-foreground">
-          Universe: <span className="text-foreground font-mono">{universeTickers.length}</span> tickers
-          {appCtx.isFiltered && <span className="text-amber-400 ml-1">(filtered)</span>}
+          {runMode === "basket" ? "Basket" : "Universe"}: <span className="text-foreground font-mono">{universeTickers.length}</span> tickers
+          {runMode === "universe" && (isFiltered || classFilter.hasActiveFilters) && <span className="text-amber-400 ml-1">(filtered)</span>}
+          {runMode === "universe" && classFilter.globalLoading && <span className="text-muted-foreground ml-1">(loading global…)</span>}
         </div>
         <div className="flex-1" />
         <Button onClick={handleRun} disabled={isRunning || datesQuery.isLoading || tickersQuery.isLoading} size="sm" className="h-7 text-xs">
           {isRunning ? <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Running…</> : <><PlayIcon className="w-3 h-3 mr-1" /> Run Backtest</>}
         </Button>
+
+        {/* Basket / Custom stock picker */}
+        {runMode === "basket" && (
+          <div className="w-full pt-1">
+            <BasketPicker tickers={filteredByUniverse} value={basketTickers} onChange={setBasketTickers} disabled={isRunning} testIdPrefix="fb-basket" />
+            <div className="text-[10px] text-muted-foreground mt-1">
+              Load a saved basket or type-ahead to add specific tickers. Factor stats are cross-sectional, so add several names.
+            </div>
+          </div>
+        )}
+
+        {/* Classification + Country/Exchange filters */}
+        {runMode === "universe" && classFilter.classFilterUI && (
+          <div className="flex flex-col gap-1 w-full pt-1">
+            <label className="text-[10px] uppercase tracking-wider text-muted-foreground">Classification &amp; Geography Filters</label>
+            {classFilter.universeSourceUI}
+            {classFilter.classFilterUI}
+          </div>
+        )}
       </div>
 
       {/* Progress */}
