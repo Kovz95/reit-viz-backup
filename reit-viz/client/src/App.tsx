@@ -79,6 +79,7 @@ const PairRatios = lazy(() => import("@/pages/PairRatios"));
 const Screener = lazy(() => import("@/pages/Screener"));
 const Ratings = lazy(() => import("@/pages/Ratings"));
 const AllOptimizers = lazy(() => import("@/pages/AllOptimizers"));
+const AllScreeners = lazy(() => import("@/pages/AllScreeners"));
 const ZScoreOptimizer = lazy(() => import("@/pages/ZScoreOptimizer"));
 const PairOptimizer = lazy(() => import("@/pages/PairOptimizer"));
 const MomentumOptimizer = lazy(() => import("@/pages/MomentumOptimizer"));
@@ -302,19 +303,7 @@ function NavBar() {
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
-    {
-      path: "__screeners_group",
-      label: "Screeners",
-      icon: Filter,
-      universeControlled: true,
-      group: [
-        { path: "/screener", label: "Stock Screener", icon: Filter },
-        { path: "/pair-screener", label: "Pair Screener", icon: Filter },
-        { path: "/pd-screener", label: "P/D Screener", icon: Filter },
-        { path: "/setups-screener", label: "Setups Screener", icon: Target },
-        { path: "/pattern-screener", label: "Pattern Screener", icon: Activity },
-      ],
-    },
+    { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
     { path: "/optimizers", label: "Optimizers", icon: Crosshair, universeControlled: true },
     { path: "/price-action", label: "Price Action", icon: Activity, universeControlled: true },
@@ -610,6 +599,7 @@ const PAGES = [
   { path: "/performance", label: "Performance" },
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
+  { path: "/screeners", label: "All Screeners" },
   { path: "/screener", label: "Screener" },
   { path: "/ratings", label: "Ratings" },
   { path: "/optimizers", label: "All Optimizers" },
@@ -737,6 +727,7 @@ function AppShell() {
               <Route path="/heatmap" component={Heatmap} />
               <Route path="/performance" component={Performance} />
               <Route path="/short-interest" component={ShortInterest} />
+              <Route path="/screeners" component={AllScreeners} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings" component={Ratings} />
               <Route path="/setups-screener" component={SetupsScreener} />

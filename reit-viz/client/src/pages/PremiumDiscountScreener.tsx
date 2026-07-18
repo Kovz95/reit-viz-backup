@@ -7,6 +7,14 @@ import { fetchPeerRelative } from "@/lib/fetchPeerRelative";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
 import { computePeerDelta } from "@/lib/computePeerDelta";
 import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
+import ClassificationFilters, {
+  emptyClassFilters,
+  applyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  type ClassFilters,
+} from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { Filter, ChevronUp, ChevronDown, X, Loader2, Search, ExternalLink } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
@@ -202,6 +210,37 @@ export default function PremiumDiscountScreener() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const cancelRef = useRef(false);
 
+  // ── 6-level classification + Country/Exchange filters (narrow the pool before
+  // the screen runs, same pattern as Ranking). classFilters persist to
+  // localStorage; the geo filter persists via its own storage key.
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() => {
+    try {
+      const s = localStorage.getItem("pdscreener-class-filters-v1");
+      if (s) return deserializeClassFilters(JSON.parse(s));
+    } catch {}
+    return emptyClassFilters();
+  });
+  useEffect(() => {
+    try { localStorage.setItem("pdscreener-class-filters-v1", JSON.stringify(serializeClassFilters(classFilters))); } catch {}
+  }, [classFilters]);
+  const [classSearch, setClassSearch] = useState("");
+  const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const geo = useGeoFilter(allTickers, "pdscreener-geo");
+
+  const clfActive = useMemo(
+    () =>
+      Object.values(classFilters).some((s) => s.size > 0) ||
+      classSearch !== "" ||
+      manualTickers.size > 0 ||
+      geo.hasActiveGeo,
+    [classFilters, classSearch, manualTickers, geo.hasActiveGeo],
+  );
+
+  const filteredPool = useMemo(
+    () => geo.filterByGeo(applyClassFilters(allTickers, classFilters, classSearch, manualTickers)),
+    [allTickers, classFilters, classSearch, manualTickers, geo.filterByGeo],
+  );
+
   useEffect(() => {
     if (available.size !== 0) {
       if (!valLockedRef.current && !available.has(valuationMetricSel)) setValuationMetricSel(valuationMetric);
@@ -219,13 +258,17 @@ export default function PremiumDiscountScreener() {
   }, []);
 
   const universeTickers = useMemo(() => {
-    if (universeMode === "workbook") return allTickers.map(t => t.ticker);
+    if (universeMode === "workbook") return filteredPool.map(t => t.ticker);
     if (universeMode === "basket") {
       const basket = baskets.find(b => b.id === selectedBasket);
-      return basket ? basket.tickers : [];
+      if (!basket) return [];
+      // Active classification/geo filters also narrow basket screens.
+      if (!clfActive) return basket.tickers;
+      const allowed = new Set(filteredPool.map(t => String(t.ticker).toUpperCase()));
+      return basket.tickers.filter(t => allowed.has(String(t).toUpperCase()));
     }
-    return classValue ? allTickers.filter(t => t[classKey] === classValue).map(t => t.ticker) : [];
-  }, [universeMode, selectedBasket, baskets, classKey, classValue, allTickers]);
+    return classValue ? filteredPool.filter(t => t[classKey] === classValue).map(t => t.ticker) : [];
+  }, [universeMode, selectedBasket, baskets, classKey, classValue, filteredPool, clfActive]);
 
   const classValues = useMemo(() => {
     const s = new Set<string>();
@@ -424,6 +467,21 @@ export default function PremiumDiscountScreener() {
               <PlayIcon className="w-3 h-3 mr-1" />Run screen
             </Button>
           )}
+        </div>
+        {/* Classification + Country/Exchange pool filters */}
+        <div className="px-3 pb-1.5 flex items-center gap-1.5 flex-wrap">
+          <ClassificationFilters
+            filters={classFilters}
+            onFiltersChange={setClassFilters}
+            search={classSearch}
+            onSearchChange={setClassSearch}
+            manualTickers={manualTickers}
+            onManualTickersChange={setManualTickers}
+            filteredCount={filteredPool.length}
+            totalCount={allTickers.length}
+            testIdPrefix="pdscr"
+            extraFilters={geo.geoFilterUI}
+          />
         </div>
         <div className="px-3 pb-2 flex items-center gap-3 text-[10px] text-muted-foreground">
           <span>

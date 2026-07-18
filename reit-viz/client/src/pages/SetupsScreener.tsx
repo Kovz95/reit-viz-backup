@@ -4,6 +4,14 @@ import { useLocation } from "wouter";
 import { useBaskets } from "@/lib/baskets";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import ClassificationFilters, {
+  emptyClassFilters,
+  applyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  type ClassFilters,
+} from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
@@ -475,7 +483,7 @@ export default function SetupsScreener() {
     if (universeMode === "classification" && classifyValues.length && !classifyValues.includes(classifyVal)) setClassifyVal(classifyValues[0]);
   }, [universeMode, classifyValues, classifyVal]);
 
-  const universeTickers = useMemo(() => {
+  const baseUniverseTickers = useMemo(() => {
     if (universeMode === "global") {
       if (globalMetas.length === 0) return [];
       if (globalDimVal) return globalMetas.filter(m => String((m as Record<string, unknown>)[globalDim] ?? "") === globalDimVal).map(m => (m as { ticker: string }).ticker);
@@ -487,6 +495,43 @@ export default function SetupsScreener() {
     if (universeMode === "basket" && basketId) { const b = baskets.find(b => b.id === basketId); return b ? b.tickers : []; }
     return [];
   }, [workbookTickers, universeMode, classifyDim, classifyVal, basketId, baskets, globalMetas, globalDim, globalDimVal]);
+
+  // ── 6-level classification + Country/Exchange filters, applied to whatever
+  // pool the universe mode resolves (same pattern as Ranking). classFilters
+  // persist to localStorage; geo persists via its own storage key.
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() => {
+    try {
+      const s = localStorage.getItem("setups-class-filters-v1");
+      if (s) return deserializeClassFilters(JSON.parse(s));
+    } catch {}
+    return emptyClassFilters();
+  });
+  useEffect(() => {
+    try { localStorage.setItem("setups-class-filters-v1", JSON.stringify(serializeClassFilters(classFilters))); } catch {}
+  }, [classFilters]);
+  const [classSearch, setClassSearch] = useState("");
+  const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const geoPool = universeMode === "global" ? (globalMetas as any[]) : (workbookTickers as any[]);
+  const geo = useGeoFilter(geoPool, "setups-geo");
+
+  const clfActive = useMemo(
+    () =>
+      Object.values(classFilters).some((s) => s.size > 0) ||
+      classSearch !== "" ||
+      manualTickers.size > 0 ||
+      geo.hasActiveGeo,
+    [classFilters, classSearch, manualTickers, geo.hasActiveGeo],
+  );
+
+  const universeTickers = useMemo(() => {
+    if (!clfActive) return baseUniverseTickers;
+    const metaBy = new Map<string, any>();
+    for (const m of workbookTickers) metaBy.set(String(m.ticker).toUpperCase(), m);
+    for (const m of globalMetas as any[]) { const k = String(m.ticker).toUpperCase(); if (!metaBy.has(k)) metaBy.set(k, m); }
+    const metas = baseUniverseTickers.map(t => metaBy.get(String(t).toUpperCase()) ?? { ticker: t });
+    const filtered = geo.filterByGeo(applyClassFilters(metas as any[], classFilters, classSearch, manualTickers));
+    return filtered.map((m: any) => m.ticker);
+  }, [baseUniverseTickers, clfActive, workbookTickers, globalMetas, classFilters, classSearch, manualTickers, geo.filterByGeo]);
 
   const handleRun = async () => {
     if (universeTickers.length === 0) { setErrorMsg("Universe is empty"); return; }
@@ -748,6 +793,22 @@ export default function SetupsScreener() {
             <PlayIcon className="w-3 h-3" />Run · {universeTickers.length} tickers
           </button>
         )}
+      </div>
+
+      {/* Classification + Country/Exchange pool filters */}
+      <div className="px-3 py-1.5 border-b border-border bg-card/40 flex items-center gap-1.5 flex-wrap">
+        <ClassificationFilters
+          filters={classFilters}
+          onFiltersChange={setClassFilters}
+          search={classSearch}
+          onSearchChange={setClassSearch}
+          manualTickers={manualTickers}
+          onManualTickersChange={setManualTickers}
+          filteredCount={universeTickers.length}
+          totalCount={baseUniverseTickers.length}
+          testIdPrefix="setups"
+          extraFilters={geo.geoFilterUI}
+        />
       </div>
 
       {/* Consensus preset row */}
