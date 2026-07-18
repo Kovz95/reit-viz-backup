@@ -309,7 +309,7 @@ function ManualTickerAdd({
       <div className="relative">
         <Plus className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
         <input
-          className="h-6 pl-6 pr-2 w-32 text-[11px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+          className="h-6 pl-6 pr-2 w-40 text-[11px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
           placeholder="Add ticker or name"
           value={input}
           onChange={(e) => { setInput(e.target.value); setShowSuggestions(true); }}
