@@ -575,6 +575,8 @@ export default function LevelsAndTrendlines() {
 
   // ── Detector view state ──
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+  const [detectorCollapsed, setDetectorCollapsed] = useState(false);
+  const [screenerCollapsed, setScreenerCollapsed] = useState(false);
   const [selectedLevelIdxs, setSelectedLevelIdxs] = useState<Record<string, Set<number>>>({});
   const [selectedLineIdxs, setSelectedLineIdxs] = useState<Record<string, Set<number>>>({});
   const [levelSort, setLevelSort] = useState({ key: "score", dir: "desc" });
@@ -710,11 +712,12 @@ export default function LevelsAndTrendlines() {
         srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList,
         tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken,
         rows: results, detRows: detResults, skipped, expandedTicker,
+        detectorCollapsed, screenerCollapsed,
         selLevels: serSel(selectedLevelIdxs), selLines: serSel(selectedLineIdxs),
         levelSort, lineSort, outerSort,
       };
     },
-    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort]
+    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, detectorCollapsed, screenerCollapsed, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -780,6 +783,8 @@ export default function LevelsAndTrendlines() {
     if (Array.isArray(state.detRows)) setDetResults(state.detRows);
     if (Array.isArray(state.skipped)) setSkipped(state.skipped);
     if (typeof state.expandedTicker === "string" || state.expandedTicker === null) setExpandedTicker(state.expandedTicker);
+    if (typeof state.detectorCollapsed === "boolean") setDetectorCollapsed(state.detectorCollapsed);
+    if (typeof state.screenerCollapsed === "boolean") setScreenerCollapsed(state.screenerCollapsed);
     if (state.selLevels) setSelectedLevelIdxs(hydrateSel(state.selLevels));
     if (state.selLines) setSelectedLineIdxs(hydrateSel(state.selLines));
     if (state.levelSort) setLevelSort(state.levelSort);
@@ -1389,11 +1394,19 @@ export default function LevelsAndTrendlines() {
 
         {/* ── Detector results ── */}
         <div className="border border-border rounded">
-          <div className="flex items-center justify-between px-2 py-1 bg-card/50 border-b border-border">
-            <span className="text-[11px] font-bold">Detector: {detResults.length} ticker{detResults.length === 1 ? "" : "s"}</span>
-            <span className="text-[10px] text-muted-foreground">Expand a ticker to see levels, trendlines &amp; the merged chart</span>
-          </div>
-          {detResults.length === 0 && !running ? (
+          <button
+            type="button"
+            onClick={() => setDetectorCollapsed((c) => !c)}
+            className={`w-full flex items-center justify-between px-2 py-1 bg-card/50 hover:bg-card/80 transition-colors ${detectorCollapsed ? "" : "border-b border-border"}`}
+            data-testid="cs-detector-collapse"
+          >
+            <span className="text-[11px] font-bold flex items-center gap-1.5">
+              <span className="font-mono text-muted-foreground">{detectorCollapsed ? "▸" : "▾"}</span>
+              Detector: {detResults.length} ticker{detResults.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-[10px] text-muted-foreground">{detectorCollapsed ? "click to expand" : "Expand a ticker to see levels, trendlines & the merged chart"}</span>
+          </button>
+          {!detectorCollapsed && (detResults.length === 0 && !running ? (
             <div className="p-3 text-[11px] text-muted-foreground">No detections yet. Configure the source and methods above, then click Run.</div>
           ) : (
             <>
@@ -1582,20 +1595,26 @@ export default function LevelsAndTrendlines() {
                 );
               })}
             </>
-          )}
+          ))}
         </div>
 
         {/* ── Crossing Screener results ── */}
         <div className="border border-border rounded">
-          <div className="flex items-center justify-between px-2 py-1 bg-card/50 border-b border-border">
-            <span className="text-[11px] font-bold">
+          <button
+            type="button"
+            onClick={() => setScreenerCollapsed((c) => !c)}
+            className={`w-full flex items-center justify-between px-2 py-1 bg-card/50 hover:bg-card/80 transition-colors ${screenerCollapsed ? "" : "border-b border-border"}`}
+            data-testid="cs-screener-collapse"
+          >
+            <span className="text-[11px] font-bold flex items-center gap-1.5">
+              <span className="font-mono text-muted-foreground">{screenerCollapsed ? "▸" : "▾"}</span>
               Crossing Screener: {volFilteredResults.length} signal{volFilteredResults.length === 1 ? "" : "s"}
               {minVolX > 0 && results.length > volFilteredResults.length && (<span className="ml-2 text-[10px] text-amber-400">({results.length - volFilteredResults.length} hidden by Vol× ≥ {minVolX})</span>)}
               {skipped.length > 0 && (<span className="ml-2 text-[10px] text-muted-foreground">({skipped.length} skipped)</span>)}
             </span>
-            <span className="text-[10px] text-muted-foreground">Crossings + breakouts · sorted by candles ago, then score</span>
-          </div>
-          {results.length === 0 && !running ? (
+            <span className="text-[10px] text-muted-foreground">{screenerCollapsed ? "click to expand" : "Crossings + breakouts · sorted by candles ago, then score"}</span>
+          </button>
+          {!screenerCollapsed && (results.length === 0 && !running ? (
             <div className="p-3 text-[11px] text-muted-foreground">No crossings or breakouts yet. Configure source, lookback, and methods, then click Run.</div>
           ) : (
             <div className="overflow-x-auto">
@@ -1640,7 +1659,7 @@ export default function LevelsAndTrendlines() {
                 </tbody>
               </table>
             </div>
-          )}
+          ))}
         </div>
 
         {/* Skipped */}
