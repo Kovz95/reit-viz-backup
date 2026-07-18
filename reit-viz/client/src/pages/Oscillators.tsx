@@ -1064,8 +1064,10 @@ export default function Oscillators() {
       pairTickerA,
       pairTickerB,
       basketTickers,
+      evalResult,
+      evalSide,
     }),
-    [selectedTicker, subMode, stochSignalMode, targetReturn, mode, results, expandedTicker, sortBy, returnMode, bandMin, bandMax, minHold, ewoDisplay, frequency, pairTickerA, pairTickerB, basketTickers]
+    [selectedTicker, subMode, stochSignalMode, targetReturn, mode, results, expandedTicker, sortBy, returnMode, bandMin, bandMax, minHold, ewoDisplay, frequency, pairTickerA, pairTickerB, basketTickers, evalResult, evalSide]
   );
 
   const applyInputs = useCallback((saved: any) => {
@@ -1092,6 +1094,8 @@ export default function Oscillators() {
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
     if (saved.pairTickerB) setPairTickerB(saved.pairTickerB);
     if (Array.isArray(saved.basketTickers)) setBasketTickers(saved.basketTickers.filter((s: any) => typeof s === "string"));
+    if (saved.evalResult !== undefined) setEvalResult(saved.evalResult);
+    if (saved.evalSide === "long" || saved.evalSide === "short") setEvalSide(saved.evalSide);
   }, []);
 
   (useWorkspaceTab as any)("oscillators", captureInputs, applyInputs);

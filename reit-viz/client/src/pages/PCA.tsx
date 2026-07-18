@@ -627,7 +627,9 @@ export default function PCA() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<PcaRun | null>(null);
+  // Persisted so the run output survives navigating away and back (same
+  // pattern as the other optimizers' "<page>:results" keys).
+  const [result, setResult] = usePersistedState<PcaRun | null>("pca.result", null);
   const [maximized, setMaximized] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [residualTicker, setResidualTicker] = useState<string>("");
