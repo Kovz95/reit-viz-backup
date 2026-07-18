@@ -291,7 +291,10 @@ export default function TVAOptimizer() {
     includeDivergence,
     pairCombo: pairComboPicker.serialize(),
     inputSelection,
-  }), [selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, runMode, frequency, targetReturn, includeRegime, includeThreshold, includeDivergence, pairComboPicker, inputSelection]);
+    expandedTicker,
+    sortBy,
+    expandedRows: [...expandedRows],
+  }), [selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, runMode, frequency, targetReturn, includeRegime, includeThreshold, includeDivergence, pairComboPicker, inputSelection, expandedTicker, sortBy, expandedRows]);
 
   const restoreWorkspaceState = useCallback((state: any) => {
     if (!state || typeof state !== "object") return;
@@ -313,6 +316,9 @@ export default function TVAOptimizer() {
       if (sel.kind === "close") setInputSelection({ kind: "close" });
       else if (sel.kind === "workbook" && typeof sel.metric === "string") setInputSelection({ kind: "workbook", metric: sel.metric });
     }
+    if (typeof state.expandedTicker === "string" || state.expandedTicker === null) setExpandedTicker(state.expandedTicker);
+    if (typeof state.sortBy === "string") setSortBy(state.sortBy);
+    if (Array.isArray(state.expandedRows)) setExpandedRows(new Set(state.expandedRows.filter((t: any) => typeof t === "string")));
   }, [pairComboPicker, setBasketMode, setFrequency, setInputSelection]);
 
   useWorkspaceTab("tva-optimizer", getWorkspaceState, restoreWorkspaceState);
