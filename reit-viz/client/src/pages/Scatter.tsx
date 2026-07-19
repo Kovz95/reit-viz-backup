@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { navigateToTicker } from "@/lib/navigateToPairs";
 import { isPercentMetric } from "@/lib/metricHelpers";
-import { getTickers, getTickersCacheSync, getDates } from "@/lib/dataService";
+import { getTickers, getTickersCacheSync, getDates, metricMultiplier } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { filterScatterPoints } from "@/lib/filterHelpers";
 import { defaultClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/filterHelpers";
@@ -570,7 +570,23 @@ export default function Scatter() {
       ),
   });
 
-  const rawPoints: ScatterPoint[] = (queryData?.points ?? []) as unknown as ScatterPoint[];
+  // Scale decimal-stored percent metrics (growth, yields, cap rate, …) to percent
+  // units at ingestion, so axes/tooltips/CSV show 5% instead of 0.05 with a % suffix.
+  const rawPoints: ScatterPoint[] = useMemo(() => {
+    const pts = (queryData?.points ?? []) as unknown as ScatterPoint[];
+    const mx = metricMultiplier(metricX);
+    const my = metricMultiplier(metricY);
+    const mz = metricZ !== "none" ? metricMultiplier(metricZ) : 1;
+    const mc = resolvedColorMetric ? metricMultiplier(resolvedColorMetric) : 1;
+    if (mx === 1 && my === 1 && mz === 1 && mc === 1) return pts;
+    return pts.map((p) => ({
+      ...p,
+      x: p.x !== null && p.x !== undefined ? p.x * mx : p.x,
+      y: p.y !== null && p.y !== undefined ? p.y * my : p.y,
+      z: p.z !== null && p.z !== undefined ? p.z * mz : p.z,
+      colorVal: p.colorVal !== null && p.colorVal !== undefined ? p.colorVal * mc : p.colorVal,
+    }));
+  }, [queryData, metricX, metricY, metricZ, resolvedColorMetric]);
   const resolvedDate: string = queryData?.resolvedDate ?? "";
 
   // Country / Exchange geo filter (options derived from the full point pool).
