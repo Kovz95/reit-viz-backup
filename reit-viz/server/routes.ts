@@ -850,6 +850,84 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // Scatter backtest sampling: X/Y/close for every ticker at each rebalance date
+  // (every `step` trading days, `periods` holding intervals, ending at `end`).
+  // One pass per ticker file; the client computes quintiles/IC/curves so signal
+  // and bucket changes never refetch. step=1 supports daily rebalancing.
+  // Query params: x, y, step (default 21), periods (default 36, max 1300), end (optional)
+  app.get("/api/scatter-backtest", (req, res) => {
+    const metricX = req.query.x as string;
+    const metricY = req.query.y as string;
+    const step = Math.max(1, parseInt(req.query.step as string) || 21);
+    const periods = Math.min(1300, Math.max(2, parseInt(req.query.periods as string) || 36));
+    const endParam = req.query.end as string | undefined;
+    if (!metricX || !metricY) {
+      return res.status(400).json({ error: "Query params x and y required" });
+    }
+    try {
+      const tickersMeta = readJSON(path.join(DATA_DIR, "tickers.json"));
+      const dates = getDates();
+
+      let endIdx = dates.length - 1;
+      if (endParam) {
+        const found = dates.indexOf(endParam);
+        if (found >= 0) endIdx = found;
+        else {
+          for (let i = dates.length - 1; i >= 0; i--) {
+            if (dates[i] <= endParam) { endIdx = i; break; }
+          }
+        }
+      }
+
+      const idxs: number[] = [];
+      for (let k = periods; k >= 0; k--) {
+        const idx = endIdx - k * step;
+        if (idx >= 0) idxs.push(idx);
+      }
+      if (idxs.length < 3) {
+        return res.status(400).json({ error: "Not enough history for the requested window" });
+      }
+
+      const lastIdx = idxs[idxs.length - 1];
+      const round6 = (v: number) => Number(v.toPrecision(6));
+      // Forward-fill walk to the sample indices (same semantics as getValueAtDateIdx,
+      // but O(dates) per metric instead of O(map) per lookup).
+      const sampleMetric = (encoded: any): (number | null)[] => {
+        const map = decodeMetricToMap(encoded);
+        const out: (number | null)[] = new Array(idxs.length).fill(null);
+        let last: number | null = null;
+        let p = 0;
+        for (let i = 0; i <= lastIdx && p < idxs.length; i++) {
+          const v = map.get(i);
+          if (v !== undefined) last = v;
+          while (p < idxs.length && idxs[p] === i) {
+            out[p] = last === null ? null : round6(last);
+            p++;
+          }
+        }
+        return out;
+      };
+
+      const tickers: any[] = [];
+      for (const t of tickersMeta) {
+        const filePath = path.join(DATA_DIR, "tickers", `${t.ticker}.json`);
+        if (!fs.existsSync(filePath)) continue;
+        const rawData = readJSON(filePath);
+        if (!rawData["close"]) continue;
+        tickers.push({
+          ticker: t.ticker,
+          x: rawData[metricX] ? sampleMetric(rawData[metricX]) : null,
+          y: rawData[metricY] ? sampleMetric(rawData[metricY]) : null,
+          close: sampleMetric(rawData["close"]),
+        });
+      }
+
+      res.json({ dates: idxs.map((i) => dates[i]), step, tickers });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to compute backtest data" });
+    }
+  });
+
   // Compute a formula series: seriesA op seriesB (or seriesA op constant)
   app.post("/api/formula", (req, res) => {
     try {

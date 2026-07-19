@@ -137,6 +137,25 @@ const PRESET_VIEWS = [
   { label: "Valuation vs Size", x: "P/FFO FY2", y: "Dividend Yield", z: "Enterprise Value" },
 ];
 
+const BT_STEPS = [
+  { key: "1", label: "Daily" },
+  { key: "5", label: "Weekly" },
+  { key: "21", label: "Monthly" },
+];
+const BT_LOOKBACKS = [
+  { key: "252", label: "1Y" },
+  { key: "504", label: "2Y" },
+  { key: "756", label: "3Y" },
+  { key: "1260", label: "5Y" },
+];
+const BT_SIGNALS = [
+  { key: "residual", label: "Residual (Y vs X)" },
+  { key: "x", label: "X value" },
+  { key: "y", label: "Y value" },
+];
+const BT_Q = 5;
+const BT_QUINT_COLORS = ["#ef4444", "#f97316", "#eab308", "#84cc16", "#22c55e"];
+
 const FWD_HORIZONS = [
   { key: "21", label: "1M", days: 21 },
   { key: "63", label: "3M", days: 63 },
@@ -235,6 +254,25 @@ function retSummary(rets: number[]): { n: number; mean: number; median: number; 
   const median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
   const hitRate = (rets.filter((v) => v > 0).length / n) * 100;
   return { n, mean, median, hitRate };
+}
+
+// Average-tie ranks for Spearman correlation.
+function rankArray(vals: number[]): number[] {
+  const order = vals.map((v, i) => [v, i] as [number, number]).sort((a, b) => a[0] - b[0]);
+  const ranks = new Array(vals.length).fill(0);
+  let i = 0;
+  while (i < order.length) {
+    let j = i;
+    while (j + 1 < order.length && order[j + 1][0] === order[i][0]) j++;
+    const avg = (i + j) / 2;
+    for (let k = i; k <= j; k++) ranks[order[k][1]] = avg;
+    i = j + 1;
+  }
+  return ranks;
+}
+
+function spearmanCorr(a: number[], b: number[]): number {
+  return pearsonCorr(rankArray(a), rankArray(b));
 }
 
 function sampleStdArr(vals: number[]): number {
@@ -426,6 +464,12 @@ export default function Scatter() {
   const [showFwd, setShowFwd] = useState(false);
   const [fwdHorizon, setFwdHorizon] = useState("63");
   const [colorByFwd, setColorByFwd] = useState(false);
+  // Quintile backtest of the current plane as a factor
+  const [showBacktest, setShowBacktest] = useState(false);
+  const [btSignal, setBtSignal] = useState("residual");
+  const [btStep, setBtStep] = useState("21");
+  const [btLookback, setBtLookback] = useState("756");
+  const [btRun, setBtRun] = useState<{ x: string; y: string; step: number; periods: number; end?: string } | null>(null);
 
   const getState = useCallback(
     () => ({
@@ -448,12 +492,14 @@ export default function Scatter() {
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
       showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
       showFwd, fwdHorizon, colorByFwd,
+      showBacktest, btSignal, btStep, btLookback,
     }),
     [metricX, metricY, metricZ, classFilters, manualTickers, colorBy, colorMode, colorMetric,
       showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel,
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
       showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
-      showFwd, fwdHorizon, colorByFwd]
+      showFwd, fwdHorizon, colorByFwd,
+      showBacktest, btSignal, btStep, btLookback]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -490,10 +536,15 @@ export default function Scatter() {
     if (saved.showFwd !== undefined) setShowFwd(saved.showFwd);
     if (saved.fwdHorizon !== undefined) setFwdHorizon(saved.fwdHorizon);
     if (saved.colorByFwd !== undefined) setColorByFwd(saved.colorByFwd);
+    if (saved.showBacktest !== undefined) setShowBacktest(saved.showBacktest);
+    if (saved.btSignal !== undefined) setBtSignal(saved.btSignal);
+    if (saved.btStep !== undefined) setBtStep(saved.btStep);
+    if (saved.btLookback !== undefined) setBtLookback(saved.btLookback);
   }, []);
 
   useWorkspaceState("scatter", getState, restoreState);
 
+  const [resizeTick, setResizeTick] = useState(0);
   const [viewRange, setViewRange] = useState<ViewRange | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -765,6 +816,173 @@ export default function Scatter() {
     }
     return maxAbs > 0 ? { maxAbs } : null;
   }, [colorByFwd, activeFwdReturns, transformedPoints]);
+
+  // ── Quintile backtest of the plane ──
+  // Universe membership for the backtest: current classification/search/manual/geo
+  // filters, but WITHOUT the x/y-non-null requirement (that's per-date in history).
+  const eligibleTickers = useMemo(() => {
+    let pts = rawPoints;
+    if (universeTickers) pts = pts.filter((p) => universeTickers.has(p.ticker));
+    pts = filterScatterPoints(pts, classFilters, searchText, manualTickers);
+    pts = geo.filterByGeo(pts);
+    return new Set(pts.map((p) => p.ticker));
+  }, [rawPoints, universeTickers, classFilters, searchText, manualTickers, geo.filterByGeo]);
+
+  const { data: btData, isFetching: btLoading, error: btError } = useQuery({
+    queryKey: ["scatter-backtest", btRun],
+    enabled: !!btRun,
+    staleTime: Infinity,
+    retry: false,
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        x: btRun!.x, y: btRun!.y,
+        step: String(btRun!.step), periods: String(btRun!.periods),
+      });
+      if (btRun!.end) params.set("end", btRun!.end);
+      const res = await fetch(`/api/scatter-backtest?${params.toString()}`);
+      if (!res.ok) throw new Error(`Backtest data: HTTP ${res.status}`);
+      return res.json() as Promise<{
+        dates: string[];
+        step: number;
+        tickers: { ticker: string; x: (number | null)[] | null; y: (number | null)[] | null; close: (number | null)[] | null }[];
+      }>;
+    },
+  });
+
+  // Rebalance each sampled date: rank by signal into quintiles, hold to the next
+  // sample, compound equal-weight quintile returns + Q5−Q1 spread + Spearman IC.
+  const btResult = useMemo(() => {
+    if (!btData) return null;
+    const rows = btData.tickers.filter((t) => eligibleTickers.has(t.ticker));
+    const nD = btData.dates.length;
+    const quintRets: number[][] = [];
+    const ics: number[] = [];
+    const usedDates: string[] = [];
+    let namesSum = 0;
+    for (let t = 0; t + 1 < nD; t++) {
+      const entries: { x: number; y: number; ret: number }[] = [];
+      for (const r of rows) {
+        const x = r.x?.[t], y = r.y?.[t], c0 = r.close?.[t], c1 = r.close?.[t + 1];
+        if (x == null || y == null || c0 == null || c1 == null || c0 <= 0) continue;
+        entries.push({ x, y, ret: c1 / c0 - 1 });
+      }
+      if (entries.length < 2 * BT_Q) continue;
+      // Skip dead periods (stale/ffilled closes at the data edge → all-zero returns).
+      if (entries.filter((e) => e.ret !== 0).length < entries.length * 0.2) continue;
+      let sigs: number[];
+      if (btSignal === "x") sigs = entries.map((e) => e.x);
+      else if (btSignal === "y") sigs = entries.map((e) => e.y);
+      else {
+        const reg = computeRegression(entries);
+        sigs = entries.map((e) => e.y - (reg.slope * e.x + reg.intercept));
+      }
+      const order = sigs.map((s, i) => [s, i] as [number, number]).sort((a, b) => a[0] - b[0]);
+      const qSum = new Array(BT_Q).fill(0);
+      const qN = new Array(BT_Q).fill(0);
+      order.forEach(([, i], pos) => {
+        const q = Math.min(BT_Q - 1, Math.floor((pos * BT_Q) / order.length));
+        qSum[q] += entries[i].ret;
+        qN[q]++;
+      });
+      quintRets.push(qSum.map((s, q) => (qN[q] ? s / qN[q] : 0)));
+      ics.push(spearmanCorr(sigs, entries.map((e) => e.ret)));
+      usedDates.push(btData.dates[t + 1]);
+      namesSum += entries.length;
+    }
+    if (quintRets.length < 3) return null;
+    const curves: number[][] = Array.from({ length: BT_Q }, () => [1]);
+    const spreadCurve: number[] = [1];
+    for (let t = 0; t < quintRets.length; t++) {
+      for (let q = 0; q < BT_Q; q++) curves[q].push(curves[q][t] * (1 + quintRets[t][q]));
+      spreadCurve.push(spreadCurve[t] * (1 + quintRets[t][BT_Q - 1] - quintRets[t][0]));
+    }
+    const perYear = 252 / btData.step;
+    const ann = (curve: number[]) =>
+      (Math.pow(curve[curve.length - 1], perYear / (curve.length - 1)) - 1) * 100;
+    const icMean = ics.reduce((s, v) => s + v, 0) / ics.length;
+    const icStd = sampleStdArr(ics);
+    return {
+      usedDates,
+      curves,
+      spreadCurve,
+      annQ: curves.map(ann),
+      annSpread: ann(spreadCurve),
+      spreadHit: (quintRets.filter((r) => r[BT_Q - 1] - r[0] > 0).length / quintRets.length) * 100,
+      icMean,
+      icT: icStd > 0 ? icMean / (icStd / Math.sqrt(ics.length)) : 0,
+      nPeriods: quintRets.length,
+      avgNames: namesSum / quintRets.length,
+    };
+  }, [btData, btSignal, eligibleTickers]);
+
+  const btCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Draw the backtest equity curves (Q1..Q5 + Q5−Q1 spread).
+  useEffect(() => {
+    const canvas = btCanvasRef.current;
+    if (!canvas || !btResult) return;
+    const rect = canvas.parentElement!.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = rect.width, h = rect.height;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const mL = 44, mR = 10, mT = 10, mB = 22;
+    const plotW = w - mL - mR, plotH = h - mT - mB;
+    const all = [...btResult.curves.flat(), ...btResult.spreadCurve];
+    let vMin = Math.min(...all), vMax = Math.max(...all);
+    const pad = (vMax - vMin || 1) * 0.05;
+    vMin -= pad; vMax += pad;
+    const n = btResult.curves[0].length;
+    const px = (i: number) => mL + (plotW * i) / (n - 1);
+    const py = (v: number) => mT + plotH - ((v - vMin) / (vMax - vMin)) * plotH;
+
+    // Grid + y labels (growth multiples)
+    ctx.font = "9px 'JetBrains Mono', monospace";
+    for (let g = 0; g <= 4; g++) {
+      const v = vMin + ((vMax - vMin) * g) / 4;
+      const y = py(v);
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(mL, y); ctx.lineTo(mL + plotW, y); ctx.stroke();
+      ctx.fillStyle = "#7a8a9e";
+      ctx.textAlign = "right";
+      ctx.fillText(`${v.toFixed(2)}x`, mL - 4, y + 3);
+    }
+    // 1.0x reference
+    const y1 = py(1);
+    if (y1 >= mT && y1 <= mT + plotH) {
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(mL, y1); ctx.lineTo(mL + plotW, y1); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // x date labels
+    ctx.fillStyle = "#7a8a9e";
+    ctx.textAlign = "center";
+    for (let g = 0; g <= 3; g++) {
+      const i = Math.round(((n - 1) * g) / 3);
+      const di = Math.max(0, Math.min(btResult.usedDates.length - 1, i - 1));
+      ctx.fillText(btResult.usedDates[di], px(i), h - 8);
+    }
+
+    const drawCurve = (curve: number[], color: string, width: number, dash?: number[]) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      if (dash) ctx.setLineDash(dash);
+      ctx.beginPath();
+      curve.forEach((v, i) => { const X = px(i), Y = py(v); if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y); });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    };
+    btResult.curves.forEach((c, q) => drawCurve(c, BT_QUINT_COLORS[q], q === 0 || q === BT_Q - 1 ? 2 : 1.25));
+    drawCurve(btResult.spreadCurve, "#06b6d4", 2, [6, 3]);
+  }, [btResult, showBacktest, resizeTick]);
 
   // Mahalanobis outliers (scale-invariant, uses X/Y covariance).
   const mahalResult = useMemo(() => {
@@ -1340,7 +1558,7 @@ export default function Scatter() {
     showQuadrants, refX, refY, activeRange, getScaleHelpers, margins, dragState, viewRange,
     logX, logY, colorMode, colorMetric, colorMetricRange,
     kmeansResult, knnResult, mahalResult, hullsResult, loessResult, confBandResult,
-    showKde, showMarginals, axisStd, activeFwdReturns, fwdColorScale,
+    showKde, showMarginals, axisStd, activeFwdReturns, fwdColorScale, resizeTick,
   ]);
 
   // ---- Mouse handlers ----
@@ -1478,8 +1696,11 @@ export default function Scatter() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // Bump a real state value — setHoveredTicker(t => t) bails out on identical
+    // values, so the chart never redrew (and the canvas kept a stale overhanging
+    // size) when the container resized, e.g. when the backtest panel opens.
     const observer = new ResizeObserver(() => {
-      setHoveredTicker((t) => t);
+      setResizeTick((t) => t + 1);
     });
     observer.observe(container);
     return () => observer.disconnect();
@@ -1787,6 +2008,10 @@ export default function Scatter() {
             </>
           )}
         </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Backtest</span>
+          <Switch checked={showBacktest} onCheckedChange={setShowBacktest} className="scale-75" data-testid="scatter-backtest" />
+        </div>
       </div>
 
       {/* Toolbar row 3: filters */}
@@ -1929,7 +2154,7 @@ export default function Scatter() {
       </div>
 
       {/* Canvas */}
-      <div ref={containerRef} className="flex-1 relative min-h-0">
+      <div ref={containerRef} className="flex-1 relative min-h-0 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             Loading...
@@ -2024,6 +2249,114 @@ export default function Scatter() {
           </div>
         )}
       </div>
+
+      {/* Backtest panel */}
+      {showBacktest && (
+        <div className="h-[290px] border-t border-border flex flex-shrink-0 bg-card/40" data-testid="scatter-backtest-panel">
+          <div className="w-[340px] border-r border-border/50 p-2.5 flex flex-col gap-2 overflow-y-auto flex-shrink-0">
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+              Plane Backtest — quintiles rebalanced through history
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Select value={btSignal} onValueChange={setBtSignal}>
+                <SelectTrigger className="h-6 text-[11px] w-[150px]" data-testid="scatter-bt-signal">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BT_SIGNALS.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={btStep} onValueChange={setBtStep}>
+                <SelectTrigger className="h-6 text-[11px] w-[86px]" data-testid="scatter-bt-step">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BT_STEPS.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={btLookback} onValueChange={setBtLookback}>
+                <SelectTrigger className="h-6 text-[11px] w-[58px]" data-testid="scatter-bt-lookback">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BT_LOOKBACKS.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 text-[11px] px-2.5"
+                disabled={btLoading}
+                data-testid="scatter-bt-run"
+                onClick={() => {
+                  const step = parseInt(btStep) || 21;
+                  setBtRun({
+                    x: metricX,
+                    y: metricY,
+                    step,
+                    periods: Math.max(2, Math.floor((parseInt(btLookback) || 756) / step)),
+                    end: dateOverride || undefined,
+                  });
+                }}
+              >
+                {btLoading ? "Running…" : "Run"}
+              </Button>
+            </div>
+            {btRun && (
+              <div className="text-[10px] text-muted-foreground font-mono">
+                {btRun.x} / {btRun.y} · every {btRun.step}d · {btRun.periods} rebalances{btRun.end ? ` · to ${btRun.end}` : ""}
+              </div>
+            )}
+            {!!btError && (
+              <div className="text-[10px] text-red-400 font-mono">{String((btError as Error).message)}</div>
+            )}
+            {btResult && (
+              <div className="flex flex-col gap-0.5" data-testid="scatter-bt-stats">
+                {btResult.annQ.map((a, q) => (
+                  <div key={q} className="flex items-center justify-between text-[10px] font-mono">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: BT_QUINT_COLORS[q] }} />
+                      Q{q + 1}{q === 0 ? " (low sig)" : q === BT_Q - 1 ? " (high sig)" : ""}
+                    </span>
+                    <span className={a >= 0 ? "text-green-400" : "text-red-400"}>
+                      {a >= 0 ? "+" : ""}{a.toFixed(1)}%/yr
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between text-[10px] font-mono border-t border-border/50 pt-1 mt-0.5">
+                  <span className="text-cyan-400">Q5−Q1 spread</span>
+                  <span className={btResult.annSpread >= 0 ? "text-green-400" : "text-red-400"}>
+                    {btResult.annSpread >= 0 ? "+" : ""}{btResult.annSpread.toFixed(1)}%/yr · hit {btResult.spreadHit.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono">
+                  <span className="text-purple-400">Spearman IC</span>
+                  <span>{btResult.icMean.toFixed(3)} (t={btResult.icT.toFixed(1)})</span>
+                </div>
+                <div className="text-[10px] text-muted-foreground font-mono">
+                  {btResult.nPeriods} periods · ~{btResult.avgNames.toFixed(0)} names/rebalance
+                </div>
+                {btSignal === "residual" && (
+                  <div className="text-[9px] text-muted-foreground">
+                    Residual: above the fit line = expensive (high signal) — a working valuation plane shows Q1 &gt; Q5 (negative spread).
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex-1 relative min-h-0">
+            {btLoading ? (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-xs">Loading backtest data…</div>
+            ) : btResult ? (
+              <canvas ref={btCanvasRef} className="w-full h-full" data-testid="scatter-bt-canvas" />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-xs">
+                {btData ? "Not enough qualifying history for this configuration." : "Pick signal / frequency / lookback and hit Run."}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
