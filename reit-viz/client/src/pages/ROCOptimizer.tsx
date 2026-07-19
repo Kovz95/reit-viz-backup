@@ -576,7 +576,7 @@ export default function ROCOptimizer() {
   );
   const classFilteredTickers = classFilterState.filteredTickers;
   const { frequency, setFrequency, frequencyUI } = useFrequency("roc", "daily", running);
-  const timeframeMode = frequency === "weekly" ? "weekly" : "daily";
+  const timeframeMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   useEffect(() => {
     getTickers().then((t) => {
@@ -723,14 +723,14 @@ export default function ROCOptimizer() {
           effectiveFreq
         );
         const rawCloses = closes;
-        const minBars = effectiveFreq === "weekly" ? 52 : 252;
+        const minBars = effectiveFreq === "weekly" ? 52 : effectiveFreq === "monthly" ? 24 : 252;
         if (downsampled.closes.length < minBars) continue;
 
         let workingCloses: number[];
         let workingDates: string[];
         let weeklyData: { prices: number[]; weekIndex: number[] } | null = null;
 
-        if (effectiveFreq === "weekly") {
+        if (effectiveFreq === "weekly" || effectiveFreq === "monthly") {
           workingCloses = downsampled.closes;
           workingDates = downsampled.dates;
         } else if (frequency === "weekly_on_daily") {
@@ -743,7 +743,7 @@ export default function ROCOptimizer() {
           workingDates = priceDates;
         }
 
-        const barMultiplier = effectiveFreq === "weekly" || frequency === "weekly" ? 5 : 1;
+        const barMultiplier = effectiveFreq === "monthly" ? 21 : effectiveFreq === "weekly" || frequency === "weekly" ? 5 : 1;
 
         let benchmarkSeries: number[] | null = null;
         if (returnBasis === "relative" && ticker[peerLevel]) {
@@ -754,13 +754,13 @@ export default function ROCOptimizer() {
               const v = peerMedian[gi];
               return Number.isFinite(v) ? v : NaN;
             });
-            if (frequency === "weekly") {
+            if (frequency === "weekly" || frequency === "monthly") {
               const wl: number[] = [];
               let lastWk = "";
               let lastVal = NaN;
               let started = false;
               for (let j = 0; j < peerMapped.length; j++) {
-                const wk = (() => {
+                const wk = frequency === "monthly" ? (priceDates[j] || "").slice(0, 7) : (() => {
                   const dt = new Date(priceDates[j] + "T00:00:00Z");
                   if (isNaN(dt.getTime())) return priceDates[j];
                   const thu = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
@@ -802,7 +802,7 @@ export default function ROCOptimizer() {
         const startIdxCalc = (p: number) =>
           frequency === "weekly_on_daily"
             ? Math.max(p * 5, 21) + 126
-            : effectiveFreq === "weekly" || frequency === "weekly"
+            : effectiveFreq === "weekly" || frequency === "weekly" || effectiveFreq === "monthly"
             ? p + Math.ceil(126 / barMultiplier)
             : p + 126;
 
@@ -890,13 +890,13 @@ export default function ROCOptimizer() {
                   : sigIdx;
               if (dailyIdx < 0) continue;
               const profile = computeForwardProfile(
-                effectiveFreq === "weekly" ? rawCloses : workingCloses,
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
                 dailyIdx,
                 targetReturn,
                 direction,
                 bandOpts,
                 minHold,
-                effectiveFreq === "weekly" ? null : benchmarkSeries
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
               );
               profiles.push(profile);
               signalDates.push({
@@ -1024,9 +1024,9 @@ export default function ROCOptimizer() {
 
         const priceContext = {
           prices: workingCloses,
-          highs: effectiveFreq === "weekly" ? downsampled.highs : highs,
-          lows: effectiveFreq === "weekly" ? downsampled.lows : lows,
-          volumes: effectiveFreq === "weekly" ? (downsampled.volumes ?? null) : volumes,
+          highs: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? downsampled.highs : highs,
+          lows: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? downsampled.lows : lows,
+          volumes: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? (downsampled.volumes ?? null) : volumes,
           dates: workingDates,
           globalIndices: globalIndexMap,
           benchmarkPrices: benchmarkSeries,
@@ -1180,7 +1180,7 @@ export default function ROCOptimizer() {
       );
 
       let workingCloses: number[], workingDates: string[];
-      if (effectiveFreq === "weekly") {
+      if (effectiveFreq === "weekly" || effectiveFreq === "monthly") {
         workingCloses = downsampled.closes;
         workingDates = downsampled.dates;
         globalIndexMap = downsampled.dailyIndexMap.map((j: number) => globalIndexMap[j] ?? -1);
@@ -1217,9 +1217,9 @@ export default function ROCOptimizer() {
       setEvalResult(evalResultData);
       setEvalPriceContext({
         prices: workingCloses,
-        highs: effectiveFreq === "weekly" ? downsampled.highs : highs,
-        lows: effectiveFreq === "weekly" ? downsampled.lows : lows,
-        volumes: effectiveFreq === "weekly" ? (downsampled.volumes ?? null) : volumes,
+        highs: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? downsampled.highs : highs,
+        lows: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? downsampled.lows : lows,
+        volumes: (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? (downsampled.volumes ?? null) : volumes,
         dates: workingDates,
         globalIndices: globalIndexMap,
         benchmarkPrices: null,
@@ -1374,7 +1374,7 @@ export default function ROCOptimizer() {
           effectiveFreq
         );
         const rawCloses = closes;
-        const minBars = effectiveFreq === "weekly" ? 52 : 252;
+        const minBars = effectiveFreq === "weekly" ? 52 : effectiveFreq === "monthly" ? 24 : 252;
         if (downsampled.closes.length < minBars) {
           setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
           continue;
@@ -1384,7 +1384,7 @@ export default function ROCOptimizer() {
         let workingDates: string[];
         let weeklyData: { prices: number[]; weekIndex: number[] } | null = null;
 
-        if (effectiveFreq === "weekly") {
+        if (effectiveFreq === "weekly" || effectiveFreq === "monthly") {
           workingCloses = downsampled.closes;
           workingDates = downsampled.dates;
         } else if (frequency === "weekly_on_daily") {
@@ -1409,13 +1409,13 @@ export default function ROCOptimizer() {
               const v = peerMedian[gi];
               return Number.isFinite(v) ? v : NaN;
             });
-            if (frequency === "weekly") {
+            if (frequency === "weekly" || frequency === "monthly") {
               const wl: number[] = [];
               let lastWk = "";
               let lastVal = NaN;
               let started = false;
               for (let j = 0; j < peerMapped.length; j++) {
-                const wk = (() => {
+                const wk = frequency === "monthly" ? (priceDates[j] || "").slice(0, 7) : (() => {
                   const dt = new Date(priceDates[j] + "T00:00:00Z");
                   if (isNaN(dt.getTime())) return priceDates[j];
                   const thu = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
@@ -1496,16 +1496,16 @@ export default function ROCOptimizer() {
           for (const cat of bullCats) {
             for (const idx of detected[cat]) {
               if (minHold > 0 && lastBull >= 0 && idx < lastBull + minHold) continue;
-              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
+              const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
               if (di < 0) continue;
               const profile = computeForwardProfile(
-                effectiveFreq === "weekly" ? rawCloses : workingCloses,
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
                 di,
                 targetReturn,
                 "buy",
                 bandOpts,
                 minHold,
-                effectiveFreq === "weekly" ? null : benchmarkSeries
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
               );
               bullProfiles.push(profile);
               bullDates.push({
@@ -1521,16 +1521,16 @@ export default function ROCOptimizer() {
           for (const cat of bearCats) {
             for (const idx of detected[cat]) {
               if (minHold > 0 && lastBear >= 0 && idx < lastBear + minHold) continue;
-              const di = effectiveFreq === "weekly" ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
+              const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
               if (di < 0) continue;
               const profile = computeForwardProfile(
-                effectiveFreq === "weekly" ? rawCloses : workingCloses,
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
                 di,
                 targetReturn,
                 "sell",
                 bandOpts,
                 minHold,
-                effectiveFreq === "weekly" ? null : benchmarkSeries
+                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
               );
               bearProfiles.push(profile);
               bearDates.push({

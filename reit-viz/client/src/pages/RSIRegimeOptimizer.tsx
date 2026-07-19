@@ -254,7 +254,7 @@ export default function RSIRegimeOptimizer() {
   const pairComboPicker = usePairComboPicker(allTickers, runMode === "pairCombo", "rsi-pc");
   const universeTicks = classFilter.filteredTickers;
   const { frequency, setFrequency, frequencyUI } = useFrequency("rsiregime", "daily", running);
-  const resampleMode = frequency === "weekly" ? "weekly" : "daily";
+  const resampleMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   useEffect(() => {
     getTickers().then((tickers) => {
@@ -431,7 +431,7 @@ export default function RSIRegimeOptimizer() {
         } else {
           computePrices = (weekly as any).closes as number[];
         }
-        const minLen = freqForResample === "weekly" ? 52 : 252;
+        const minLen = freqForResample === "weekly" ? 52 : freqForResample === "monthly" ? 24 : 252;
         if (
           (freqForCalc === "weekly_on_daily" ? prices.length : computePrices.length) < minLen
         )
@@ -480,7 +480,7 @@ export default function RSIRegimeOptimizer() {
                     const band =
                       returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
                     const dailyIdx =
-                      freqForResample === "weekly" && !isWeeklyOnDaily
+                      (freqForResample === "weekly" || freqForResample === "monthly") && !isWeeklyOnDaily
                         ? getDailyIndexFromWeekly(n, weekly)
                         : n;
                     if (dailyIdx < 0) {
@@ -556,7 +556,7 @@ export default function RSIRegimeOptimizer() {
                     const dir =
                       RSI_CATEGORIES[key as keyof typeof RSI_CATEGORIES].direction;
                     const dailyIdx =
-                      freqForResample === "weekly" && !isWeeklyOnDaily
+                      (freqForResample === "weekly" || freqForResample === "monthly") && !isWeeklyOnDaily
                         ? getDailyIndexFromWeekly(n, weekly)
                         : n;
                     if (dailyIdx < 0) continue;
@@ -1019,6 +1019,7 @@ export default function RSIRegimeOptimizer() {
       if (
         state.frequency === "daily" ||
         state.frequency === "weekly" ||
+        state.frequency === "monthly" ||
         state.frequency === "weekly_on_daily"
       )
         setFrequency(state.frequency);

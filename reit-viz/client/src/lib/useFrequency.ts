@@ -17,10 +17,11 @@ export interface UseFrequencyResult {
   frequencyUI: React.ReactNode;
 }
 
-const FREQ_OPTIONS: Array<{ value: Frequency; label: string }> = [
-  { value: "daily",            label: "D" },
-  { value: "weekly",           label: "W" },
-  { value: "weekly_on_daily",  label: "W/D" },
+const FREQ_OPTIONS: Array<{ value: Frequency; label: string; title?: string }> = [
+  { value: "daily",            label: "D",   title: "Daily bars" },
+  { value: "weekly",           label: "W",   title: "Weekly bars" },
+  { value: "monthly",          label: "M",   title: "Monthly bars" },
+  { value: "weekly_on_daily",  label: "W/D", title: "Weekly signals evaluated on daily bars" },
 ];
 
 /**
@@ -54,6 +55,7 @@ export function useFrequency(
               {
                 key: opt.value,
                 disabled,
+                title: opt.title,
                 "data-testid": `${namespace}-freq-${opt.value}`,
                 onClick: () => setFrequency(opt.value),
                 className: [

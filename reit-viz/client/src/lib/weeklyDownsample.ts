@@ -178,15 +178,17 @@ function isoWeekKey(dateStr: string): string {
  */
 export function weeklyDownsamplePrices(
   prices: number[],
-  dates: string[]
+  dates: string[],
+  mode?: string
 ): { prices: number[]; weekIndex: number[] } {
+  const monthly = mode === "monthly";
   const outPrices: number[] = [];
   const weekIndex: number[] = [];
   let curWeek = "";
   let lastPrice = NaN;
   let lastIdx = -1;
   for (let o = 0; o < prices.length; o++) {
-    const wk = isoWeekKey(dates[o]);
+    const wk = monthly ? (dates[o] || "").slice(0, 7) : isoWeekKey(dates[o]);
     if (wk !== curWeek) {
       if (lastIdx >= 0) { outPrices.push(lastPrice); weekIndex.push(lastIdx); }
       curWeek = wk;

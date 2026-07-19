@@ -941,7 +941,7 @@ export default function MACrossoverOptimizer() {
   const { baskets } = useBaskets();
   const [running, setRunning] = useState(false);
   const { frequency, setFrequency, frequencyUI } = useFrequency("ma", "daily", running);
-  const timeframeMode = frequency === "weekly" ? "weekly" : "daily";
+  const timeframeMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [results, setResults] = usePersistedState<any[]>("ma:results", []);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
@@ -1096,12 +1096,12 @@ export default function MACrossoverOptimizer() {
 
         const dailyCloses = closes.slice();
         let weekly: any = null;
-        if (timeframeMode === "weekly" && mode !== "pair") {
+        if ((timeframeMode === "weekly" || timeframeMode === "monthly") && mode !== "pair") {
           weekly = weeklyDownsample(
             { dates: priceDates, highs, lows, closes, adjCloses: closes },
-            "weekly"
+            timeframeMode
           );
-          if (weekly.closes.length < 52) continue;
+          if (weekly.closes.length < (timeframeMode === "monthly" ? 24 : 52)) continue;
           if (volumes) {
             const wv = new Array(weekly.dailyIndexMap.length);
             let prevIdx = -1;
@@ -1170,7 +1170,7 @@ export default function MACrossoverOptimizer() {
           workDates = priceDates;
           workGlobal = globalIndices;
         }
-        const barMultiplier = frequency === "weekly" ? 5 : 1;
+        const barMultiplier = frequency === "weekly" ? 5 : frequency === "monthly" ? 21 : 1;
         const sigPrices = workClose;
 
         let benchmark: number[] | null = null;
@@ -1184,13 +1184,13 @@ export default function MACrossoverOptimizer() {
                 const v = peerSeries[h];
                 return Number.isFinite(v) ? v : NaN;
               });
-              if (frequency === "weekly") {
+              if (frequency === "weekly" || frequency === "monthly") {
                 const wk: number[] = [];
                 let cur = "";
                 let last = NaN;
                 let started = false;
                 for (let a = 0; a < aligned.length; a++) {
-                  const key = isoWeekKey(priceDates[a]);
+                  const key = frequency === "monthly" ? (priceDates[a] || "").slice(0, 7) : isoWeekKey(priceDates[a]);
                   if (key !== cur) {
                     if (started) wk.push(last);
                     cur = key;
@@ -1246,7 +1246,7 @@ export default function MACrossoverOptimizer() {
         const burnIn = (p: number) =>
           frequency === "weekly_on_daily"
             ? Math.max(p * 5, 21) + 126
-            : frequency === "weekly"
+            : frequency === "weekly" || frequency === "monthly"
             ? p + Math.ceil(126 / barMultiplier)
             : p + 126;
         const activeBand: ReturnBand | null = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
@@ -2490,7 +2490,7 @@ export default function MACrossoverOptimizer() {
       if (typeof s.bandMax === "number") setBandMax(s.bandMax);
       if (typeof s.minHold === "number") setMinHold(s.minHold);
       if (s.signalType) setSignalType(s.signalType);
-      if (s.frequency === "daily" || s.frequency === "weekly" || s.frequency === "weekly_on_daily") setFrequency(s.frequency);
+      if (s.frequency === "daily" || s.frequency === "weekly" || s.frequency === "monthly" || s.frequency === "weekly_on_daily") setFrequency(s.frequency);
       else if (s.timeframe === "weekly" && s.frequency === undefined) setFrequency("weekly");
       if (s.signalFamily === "slope" || s.signalFamily === "curvature" || s.signalFamily === "all" || s.signalFamily === "price_cross") setSignalFamily(s.signalFamily);
       if (typeof s.slopeLookback === "number") setSlopeLookback(s.slopeLookback);

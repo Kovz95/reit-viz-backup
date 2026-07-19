@@ -15,6 +15,16 @@ import { defaultInputSelection } from "@/lib/optimizerInputSeries";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
+
+// Monthly downsample for this page's date-less price arrays: last close of each
+// 21-trading-bar block (~1 calendar month). The page never retains real dates
+// across its four price sources, so calendar-month bucketing isn't available.
+function monthlyStride(prices: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 20; i < prices.length; i += 21) out.push(prices[i]);
+  if ((prices.length - 1) % 21 !== 20 && prices.length > 0) out.push(prices[prices.length - 1]);
+  return out;
+}
 import { weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
@@ -553,7 +563,7 @@ export default function DualMAOptimizer() {
       if (typeof saved.evalSlopeLookback === "number") setSlopeLookback(saved.evalSlopeLookback);
       if (typeof saved.evalSlopeMinPct === "number") setSlopeMinPct(saved.evalSlopeMinPct);
       if (typeof saved.evalAllowShort === "boolean") setAllowShort(saved.evalAllowShort);
-      if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+      if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
       if (saved.inputSelection && typeof saved.inputSelection === "object") {
         const sel = saved.inputSelection;
         if (sel.kind === "close") setInputSelection({ kind: "close" });
@@ -630,7 +640,9 @@ export default function DualMAOptimizer() {
         if (!prices) continue;
 
         let series = prices;
-        if (!isPair && frequency === "weekly") {
+        if (!isPair && frequency === "monthly") {
+          series = monthlyStride(prices);
+        } else if (!isPair && frequency === "weekly") {
           const fakeDates = prices.map((_, idx) => `d${idx}`);
           series = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
         } else if (!isPair && frequency === "weekly_on_daily") {
@@ -638,7 +650,7 @@ export default function DualMAOptimizer() {
           series = weeklyDownsamplePrices(prices, fakeDates).prices;
         }
 
-        if (series.length < 50) continue;
+        if (series.length < (frequency === "monthly" ? 24 : 50)) continue;
 
         const topResults = runGridSearch(series, gridCfg, topK);
         if (topResults.length === 0) continue;
@@ -684,7 +696,9 @@ export default function DualMAOptimizer() {
         }
       }
 
-      if (frequency === "weekly") {
+      if (frequency === "monthly") {
+        prices = monthlyStride(prices);
+      } else if (frequency === "weekly") {
         const fakeDates = prices.map((_, i) => `d${i}`);
         prices = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
       } else if (frequency === "weekly_on_daily") {
@@ -692,7 +706,7 @@ export default function DualMAOptimizer() {
         prices = weeklyDownsamplePrices(prices, fakeDates).prices;
       }
 
-      if (prices.length < 50) { setEvaluating(false); return; }
+      if (prices.length < (frequency === "monthly" ? 24 : 50)) { setEvaluating(false); return; }
 
       const result = runBacktest(prices, {
         biasMAType, biasLen, triggerMAType, triggerLen,

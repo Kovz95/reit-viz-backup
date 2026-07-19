@@ -261,7 +261,7 @@ export default function TVAOptimizer() {
   const filteredTickers = classFilter.filteredTickers;
 
   const { frequency, frequencyUI, setFrequency } = useFrequency("tva", "daily", running);
-  const resampleMode = frequency === "weekly" ? "weekly" : "daily";
+  const resampleMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   useEffect(() => {
     (getTickers as any)().then((tickers: any[]) => {
@@ -305,7 +305,7 @@ export default function TVAOptimizer() {
     if (state.pairCombo) pairComboPicker.hydrate(state.pairCombo);
     if (Array.isArray(state.basketTickers)) setBasketTickers(state.basketTickers.filter((t: any) => typeof t === "string"));
     if (state.basketMode === "stocks" || state.basketMode === "combined") setBasketMode(state.basketMode);
-    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "weekly_on_daily") setFrequency(state.frequency as any);
+    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "monthly" || state.frequency === "weekly_on_daily") setFrequency(state.frequency as any);
     else if (state.timeframe === "weekly") setFrequency("weekly");
     if (typeof state.targetReturn === "number") setTargetReturn(state.targetReturn);
     if (typeof state.includeRegime === "boolean") setIncludeRegime(state.includeRegime);
@@ -566,13 +566,13 @@ export default function TVAOptimizer() {
             dailyPrices = filtered.adjCloses; workDates = filtered.dates; workGlobalIndices = [];
           } else {
             weeklyResampled = (weeklyDownsample as any)(filtered, freq);
-            if (freq === "weekly" && weeklyResampled.adjCloses.length < MIN_HISTORY_WEEKLY) {
+            if ((freq === "weekly" || freq === "monthly") && weeklyResampled.adjCloses.length < (freq === "monthly" ? 24 : MIN_HISTORY_WEEKLY)) {
               allSkipped.push({ ticker: entry.ticker, reason: "insufficient weekly history" });
               setProgress({ current: s + 1, total: tickerEntries.length }); continue;
             }
             workPrices = weeklyResampled.adjCloses; workVolumes = weeklyResampled.volumes;
             dailyPrices = filtered.adjCloses;
-            workDates = freq === "weekly" ? weeklyResampled.dates : filtered.dates;
+            workDates = freq === "weekly" || freq === "monthly" ? weeklyResampled.dates : filtered.dates;
             workGlobalIndices = [];
           }
         }
@@ -609,7 +609,7 @@ export default function TVAOptimizer() {
                       let dailyIdx: number;
                       if ((frequency as string) === "weekly_on_daily" && weeklyResult) {
                         dailyIdx = weeklyResult.weekIndex[ye] ?? -1;
-                      } else if (freq === "weekly" && weeklyResampled) {
+                      } else if ((freq === "weekly" || freq === "monthly") && weeklyResampled) {
                         dailyIdx = (getDailyIndexFromWeekly as any)(ye, weeklyResampled);
                       } else {
                         dailyIdx = ye;
@@ -652,7 +652,7 @@ export default function TVAOptimizer() {
         let finalDates: string[];
         let finalGlobalIndices: number[];
 
-        if (runMode !== "pair" && runMode !== "pairCombo" && freq === "weekly" && (frequency as string) !== "weekly_on_daily") {
+        if (runMode !== "pair" && runMode !== "pairCombo" && (freq === "weekly" || freq === "monthly") && (frequency as string) !== "weekly_on_daily") {
           try {
             const gDates = globalDates.length > 0 ? globalDates : await (getDates as any)();
             if (globalDates.length === 0) globalDates.push(...gDates);

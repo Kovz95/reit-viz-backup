@@ -316,17 +316,17 @@ export default function PairOptimizer() {
         (i) => mapCA.get(i)! / mapCA.get(overlapIndices[0])! - mapCB.get(i)! / mapCB.get(overlapIndices[0])! + 1
       );
 
-      const freqMode = freq === "weekly" ? "weekly" : "daily";
+      const freqMode = freq === "weekly" ? "weekly" : freq === "monthly" ? "monthly" : "daily";
       const overlapDates = overlapIndices.map((i) => dates[i]);
       let workingSeries: number[];
       let mapToDaily: (idx: number) => number;
 
-      if (freqMode === "weekly") {
+      if (freqMode === "weekly" || freqMode === "monthly") {
         const downsampled = weeklyDownsample(
           { dates: overlapDates, closes: spreadSeries, adjCloses: spreadSeries },
-          "weekly"
+          freqMode
         );
-        if (downsampled.closes.length < 30) return null;
+        if (downsampled.closes.length < (freqMode === "monthly" ? 24 : 30)) return null;
         if (freq === "weekly_on_daily") {
           const mapped = new Array<number>(spreadSeries.length);
           let wi = 0;

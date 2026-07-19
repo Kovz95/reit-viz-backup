@@ -597,7 +597,7 @@ export default function HarsiOptimizer() {
   const [minHold, setMinHold] = useState(1);
   const [running, setRunning] = useState(false);
   const { frequency, setFrequency, frequencyUI } = useFrequency("harsi", "daily", running);
-  const resampleMode = frequency === "weekly" ? "weekly" : "daily";
+  const resampleMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [workerProgress, setWorkerProgress] = useState<{
     ticker: string;
@@ -763,7 +763,7 @@ export default function HarsiOptimizer() {
         },
         freqMode
       );
-      const minLen = freqMode === "weekly" ? 52 : 252;
+      const minLen = freqMode === "weekly" ? 52 : freqMode === "monthly" ? 24 : 252;
       if (resampled.closes.length < minLen) return null;
       const resampledGlobal = resampled.dailyIndexMap
         ? resampled.dailyIndexMap.map((f: number) =>
@@ -1378,6 +1378,7 @@ export default function HarsiOptimizer() {
       if (
         state.frequency === "daily" ||
         state.frequency === "weekly" ||
+        state.frequency === "monthly" ||
         state.frequency === "weekly_on_daily"
       )
         setFrequency(state.frequency);

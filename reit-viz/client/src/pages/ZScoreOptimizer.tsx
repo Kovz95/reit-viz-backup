@@ -404,7 +404,7 @@ export default function ZScoreOptimizer() {
   const filteredTickers = classFilter.filteredTickers;
   const pairComboPicker = usePairComboPicker(allTickers, mode === "pairCombo", "zs-pc");
   const { frequency, setFrequency, frequencyUI } = useFrequency("zs", "daily", running);
-  const freqKey = frequency === "weekly" ? "weekly" : "daily";
+  const freqKey = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   useEffect(() => {
     getTickers().then((t) => {
@@ -524,7 +524,7 @@ export default function ZScoreOptimizer() {
         let metricSeries: number[];
         let priceSeries: number[];
         const effFrequency = mode === "pair" || mode === "pairCombo" ? "daily" : frequency;
-        if (effFreq === "weekly") {
+        if (effFreq === "weekly" || effFreq === "monthly") {
           metricSeries = resampled.dailyIndexMap.map((c: number) => metricVals[c]);
           priceSeries = resampled.adjCloses;
         } else if (effFrequency === "weekly_on_daily") {
@@ -536,10 +536,10 @@ export default function ZScoreOptimizer() {
           priceSeries = priceVals;
         }
 
-        const minBars = effFreq === "weekly" ? 52 : 252;
+        const minBars = effFreq === "weekly" ? 52 : effFreq === "monthly" ? 24 : 252;
         if (metricSeries.length < minBars) continue;
-        const weeklyCloses = effFreq === "weekly" ? priceVals : undefined;
-        const weeklyResult = effFreq === "weekly" ? resampled : undefined;
+        const weeklyCloses = effFreq === "weekly" || effFreq === "monthly" ? priceVals : undefined;
+        const weeklyResult = effFreq === "weekly" || effFreq === "monthly" ? resampled : undefined;
 
         const windowResults: WindowResult[] = [];
         for (const w of CANDIDATE_WINDOWS) {
@@ -782,7 +782,7 @@ export default function ZScoreOptimizer() {
     if (saved.expandedTicker !== undefined) setExpandedTicker(saved.expandedTicker);
     if (saved.sortBy) setSortBy(saved.sortBy);
     if (saved.signalType) setSignalType(saved.signalType);
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
     else if (saved.timeframe === "weekly") setFrequency("weekly");
   }, [setFrequency, setResults, setBasketMode, pairComboPicker]);
 

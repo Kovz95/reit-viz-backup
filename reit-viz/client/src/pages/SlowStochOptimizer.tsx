@@ -445,7 +445,7 @@ async function fetchTickerSeries(
       dates: filtered.dates, opens, highs, lows,
       closes: filtered.adjCloses, adjCloses: filtered.adjCloses, volumes: filtered.volumes
     }, frequency);
-    const minLength = frequency === "weekly" ? 52 : 252;
+    const minLength = frequency === "weekly" ? 52 : frequency === "monthly" ? 24 : 252;
     if (resampled.closes.length < minLength) return null;
     const resampledGlobalIndices = resampled.dailyIndexMap.map((idx: number) => idx >= 0 ? globalIndices[idx] ?? -1 : -1);
     return {
@@ -521,7 +521,7 @@ export default function SlowStochOptimizer() {
   const [minHold, setMinHold] = useState(1);
   const [running, setRunning] = useState(false);
   const { frequency, setFrequency, frequencyUI } = useFrequency("slowstoch", "daily", running);
-  const freqKey = frequency === "weekly" ? "weekly" : "daily";
+  const freqKey = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [runningConfig, setRunningConfig] = useState<{ ticker: string; done: number; total: number } | null>(null);
   const [inputSelection, setInputSelection] = usePersistedState("slow-stoch-input-selection", defaultInputSelection);
@@ -611,7 +611,7 @@ export default function SlowStochOptimizer() {
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
     if (saved.pairTickerB) setPairTickerB(saved.pairTickerB);
     if (Array.isArray(saved.basketTickers)) setBasketTickers(saved.basketTickers.filter((t: any) => typeof t === "string"));
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
     else if ((saved.timeframe === "weekly" && saved.frequency === undefined) || (saved.barInterval === "weekly" && saved.frequency === undefined)) setFrequency("weekly");
     if (ALL_SIGNAL_KINDS.includes(saved.signalKind)) setSignalKind(saved.signalKind);
     if (ALL_GRID_SIZES.includes(saved.gridSize)) setGridSize(saved.gridSize);

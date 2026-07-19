@@ -214,7 +214,7 @@ export default function Oscillators() {
     "daily",
     isRunning || mode === "pair" || mode === "pairCombo"
   );
-  const ht = frequency === "weekly" ? "weekly" : "daily";
+  const ht = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   useEffect(() => {
     (getTickers as any)().then((tickers: any[]) => {
@@ -636,11 +636,11 @@ export default function Oscillators() {
             : await fetchTickerData(ticker.ticker, allDates);
 
           if (!priceData) continue;
-          const weekly = mo({ dates: priceData.priceDates, closes: priceData.closes, adjCloses: priceData.closes, highs: priceData.highs, lows: priceData.lows }, "weekly");
-          if (weekly.adjCloses.length < 52) continue;
+          const weekly = mo({ dates: priceData.priceDates, closes: priceData.closes, adjCloses: priceData.closes, highs: priceData.highs, lows: priceData.lows }, ht);
+          if (weekly.adjCloses.length < (ht === "monthly" ? 24 : 52)) continue;
 
           const dailyCloses = priceData.closes;
-          const MA_LEN = 52;
+          const MA_LEN = ht === "monthly" ? 12 : 52;
           const maWeekly = new Array(weekly.closes.length).fill(null);
           let sum = 0; let cnt = 0;
           for (let i = 0; i < weekly.closes.length; i++) {
@@ -802,7 +802,7 @@ export default function Oscillators() {
           wkData_wod = wkC;
         } else {
           weeklyObj = mo({ dates: priceData.priceDates, closes: priceData.closes, adjCloses: priceData.closes, highs: priceData.highs, lows: priceData.lows }, ht);
-          const minLen = ht === "weekly" ? 52 : 252;
+          const minLen = ht === "weekly" ? 52 : ht === "monthly" ? 24 : 252;
           if (weeklyObj.closes.length < minLen) continue;
           wkCloses_ = weeklyObj.closes; wkHighs = weeklyObj.highs; wkLows = weeklyObj.lows;
         }
@@ -839,6 +839,8 @@ export default function Oscillators() {
                       ? Math.max((kLen + sk + sd) * 5, 21) + 126
                       : ht === "weekly"
                       ? kLen + sk + sd + 26
+                      : ht === "monthly"
+                      ? kLen + sk + sd + 12
                       : kLen + sk + sd + 126;
 
                   const signals = wo(kDaily, dDaily, os, ob, stochSignalMode, warmup);
@@ -849,7 +851,7 @@ export default function Oscillators() {
                   for (const sig of signals) {
                     if (minHold > 0 && sig.index < lastIdx) continue;
                     const dailyIdx =
-                      ht === "weekly" && weeklyObj ? fo(sig.index, weeklyObj) : sig.index;
+                      (ht === "weekly" || ht === "monthly") && weeklyObj ? fo(sig.index, weeklyObj) : sig.index;
                     if (dailyIdx < 0) continue;
                     const profile = Lt(dailyCloses, dailyIdx, targetReturn, sig.direction, bandObj, minHold);
                     sig.direction === "buy" ? buyProfiles.push(profile) : sellProfiles.push(profile);
@@ -1081,7 +1083,7 @@ export default function Oscillators() {
     if (typeof saved.bandMax === "number") setBandMax(saved.bandMax);
     if (typeof saved.minHold === "number") setMinHold(saved.minHold);
     if (saved.ewoDisplay === "raw" || saved.ewoDisplay === "pct") setEwoDisplay(saved.ewoDisplay);
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "weekly_on_daily") {
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") {
       setFrequency(saved.frequency);
     } else if (saved.timeframe === "weekly" && saved.frequency === undefined) {
       setFrequency("weekly");

@@ -167,7 +167,7 @@ export default function AutoTrendlineBacktest() {
   const [pairTickerA, setPairTickerA] = useState("NEE");
   const [pairTickerB, setPairTickerB] = useState("SO");
   const [basketTickers, setBasketTickers] = useState<string[]>([]);
-  const [timeframe, setTimeframe] = useState<"daily" | "weekly">("daily");
+  const [timeframe, setTimeframe] = useState<"daily" | "weekly" | "monthly">("daily");
   const pairCombo = usePairComboPicker(allTickers, scopeMode === "pairCombo", "atl-paircombo");
   const [minSignals, setMinSignals] = useState(5);
   const [minBars, setMinBars] = useState(252);
@@ -233,7 +233,7 @@ export default function AutoTrendlineBacktest() {
       if (typeof state?.pairTickerB === "string") setPairTickerB(state.pairTickerB);
       if (Array.isArray(state?.basketTickers)) setBasketTickers(state.basketTickers);
       if (state?.pc) pairCombo.hydrate(state.pc);
-      if (state?.timeframe === "daily" || state?.timeframe === "weekly") setTimeframe(state.timeframe);
+      if (state?.timeframe === "daily" || state?.timeframe === "weekly" || state?.timeframe === "monthly") setTimeframe(state.timeframe);
       if (typeof state?.minSignals === "number") setMinSignals(state.minSignals);
       if (typeof state?.minBars === "number") setMinBars(state.minBars);
       if (Array.isArray(state?.enabledKinds)) {
@@ -395,7 +395,7 @@ export default function AutoTrendlineBacktest() {
             const dsLows = downsampled.lows;
             const dailyIndexMap = downsampled.dailyIndexMap;
             const minBarsEffective =
-              timeframe === "weekly" ? Math.max(30, Math.floor(minBars / 5)) : minBars;
+              timeframe === "weekly" ? Math.max(30, Math.floor(minBars / 5)) : timeframe === "monthly" ? Math.max(24, Math.floor(minBars / 21)) : minBars;
 
             if (dsCloses.length < minBarsEffective) {
               resultSkipped.push({
@@ -748,7 +748,7 @@ export default function AutoTrendlineBacktest() {
               Timeframe
             </label>
             <div className="flex gap-1">
-              {(["daily", "weekly"] as const).map((tf) => (
+              {(["daily", "weekly", "monthly"] as const).map((tf) => (
                 <button
                   key={tf}
                   onClick={() => setTimeframe(tf)}
@@ -759,7 +759,7 @@ export default function AutoTrendlineBacktest() {
                   }`}
                   data-testid={`atl-tf-${tf}`}
                 >
-                  {tf === "daily" ? "Daily" : "Weekly"}
+                  {tf === "daily" ? "Daily" : tf === "weekly" ? "Weekly" : "Monthly"}
                 </button>
               ))}
             </div>

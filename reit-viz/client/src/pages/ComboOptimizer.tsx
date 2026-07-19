@@ -471,7 +471,7 @@ export default function ComboOptimizer() {
   const initRef = useRef(false);
 
   const { frequency, setFrequency, frequencyUI } = useFrequency("combo", "daily", running);
-  const resampleMode = frequency === "weekly" ? "weekly" : "daily";
+  const resampleMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   // captureInputs: snapshot of persistent/UI state (excludes ephemeral per-run state)
   const captureInputs = useCallback(() => {
@@ -555,7 +555,7 @@ export default function ComboOptimizer() {
     if (Array.isArray(state.results)) setResults(state.results);
     if (state.expandedTicker !== undefined) setExpandedTicker(state.expandedTicker);
     if (state.evalResult !== undefined) setEvalResult(state.evalResult);
-    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "weekly_on_daily") {
+    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "monthly" || state.frequency === "weekly_on_daily") {
       setFrequency(state.frequency);
     } else if (state.timeframe === "weekly" && state.frequency === undefined) {
       setFrequency("weekly");
@@ -693,7 +693,7 @@ export default function ComboOptimizer() {
           } else {
             const resampled = weeklyDownsample({ dates: basketData.priceDates, closes: rawPrices, adjCloses: rawPrices, highs: basketData.highs, lows: basketData.lows }, resampleMode);
             resampledResult = resampled;
-            if (resampleMode === "weekly" && volumes) {
+            if ((resampleMode === "weekly" || resampleMode === "monthly") && volumes) {
               const weeklyVols = new Array(resampled.dailyIndexMap.length);
               let prevIdx = -1;
               for (let k = 0; k < resampled.dailyIndexMap.length; k++) {
@@ -710,7 +710,7 @@ export default function ComboOptimizer() {
             lows   = resampled.lows;
             dates  = resampled.dates;
             globalIndices = dates.map((d: string) => dateIndexMap.get(d) ?? -1);
-            const minLen = resampleMode === "weekly" ? 52 : 252;
+            const minLen = resampleMode === "weekly" ? 52 : resampleMode === "monthly" ? 24 : 252;
             if (prices.length < minLen) continue;
           }
         } else {
@@ -737,7 +737,7 @@ export default function ComboOptimizer() {
           } else {
             const resampled = weeklyDownsample({ dates: clippedDates, closes: rawPrices, adjCloses: rawPrices, highs: clippedHighs, lows: clippedLows }, resampleMode);
             resampledResult = resampled;
-            if (resampleMode === "weekly" && volumes) {
+            if ((resampleMode === "weekly" || resampleMode === "monthly") && volumes) {
               const weeklyVols = new Array(resampled.dailyIndexMap.length);
               let prevIdx = -1;
               for (let k = 0; k < resampled.dailyIndexMap.length; k++) {
@@ -756,7 +756,7 @@ export default function ComboOptimizer() {
             const dateMap2 = new Map<string, number>();
             for (let i = 0; i < globalDates.length; i++) dateMap2.set(globalDates[i], i);
             globalIndices = dates.map((d: string) => dateMap2.get(d) ?? -1);
-            const minLen = resampleMode === "weekly" ? 52 : 252;
+            const minLen = resampleMode === "weekly" ? 52 : resampleMode === "monthly" ? 24 : 252;
             if (prices.length < minLen) continue;
           }
         }
@@ -791,7 +791,7 @@ export default function ComboOptimizer() {
 
         // Helper: compute forward return profiles then summarize
         const getProfile = (sigIdx: number, dir: "buy" | "sell") => {
-          if (resampleMode === "weekly" && resampledResult !== null && rawPrices !== null) {
+          if ((resampleMode === "weekly" || resampleMode === "monthly") && resampledResult !== null && rawPrices !== null) {
             const dailyIdx = getDailyIndexFromWeekly(sigIdx, resampledResult);
             if (dailyIdx < 0) return null;
             return (computeForwardProfile as any)(rawPrices, dailyIdx, targetReturn, dir, null, minHold);
@@ -978,8 +978,8 @@ export default function ComboOptimizer() {
       // Resample if weekly
       let workPrices = prices, workHighs = highs, workLows = lows, workVolumes = volumes;
       let workGlobalIndices = globalIndices;
-      if (frequency === "weekly") {
-        const resampled = weeklyDownsample({ dates, closes: prices, adjCloses: prices, highs, lows }, "weekly");
+      if (frequency === "weekly" || frequency === "monthly") {
+        const resampled = weeklyDownsample({ dates, closes: prices, adjCloses: prices, highs, lows }, frequency);
         workPrices = resampled.adjCloses;
         workHighs  = resampled.highs;
         workLows   = resampled.lows;

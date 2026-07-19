@@ -248,7 +248,7 @@ export default function MomentumOptimizer() {
   const filteredTickers = classFilter.filteredTickers;
   const { frequency, setFrequency, frequencyUI } = useFrequency("mom", "daily", running);
   const [inputSelection, setInputSelection] = usePersistedState<any>("momentum-input-selection", { kind: "ohlcv", series: "close" });
-  const freqKey = frequency === "weekly" ? "weekly" : "daily";
+  const freqKey = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
   const [availableRevMetrics, setAvailableRevMetrics] = useState<string[]>(DEFAULT_REVISION_METRICS);
 
   useEffect(() => {
@@ -606,7 +606,7 @@ export default function MomentumOptimizer() {
           effectivePrices = resampledData.closes;
         }
 
-        const minLength = fKey === "weekly" ? 52 : 252;
+        const minLength = fKey === "weekly" ? 52 : fKey === "monthly" ? 24 : 252;
         const effLen = actualFreq === "weekly_on_daily" ? closes.length : effectivePrices.length;
         if (effLen < minLength) continue;
 
@@ -615,6 +615,8 @@ export default function MomentumOptimizer() {
         for (const horizonCfg of MOMENTUM_HORIZONS) {
           const horizonDays = fKey === "weekly"
             ? Math.max(1, Math.round(horizonCfg.days / 5))
+            : fKey === "monthly"
+            ? Math.max(1, Math.round(horizonCfg.days / 21))
             : horizonCfg.days;
 
           let momSeries: (number | null)[];
@@ -645,10 +647,10 @@ export default function MomentumOptimizer() {
 
             let prevCategory: string | null = null;
             const isWeeklyOnDaily = actualFreq === "weekly_on_daily";
-            const pctileWindow = fKey === "weekly" || isWeeklyOnDaily ? 52 : 252;
+            const pctileWindow = fKey === "weekly" || isWeeklyOnDaily ? 52 : fKey === "monthly" ? 12 : 252;
             const warmup = Math.max(
-              horizonDays + (fKey === "weekly" || isWeeklyOnDaily ? 52 : 252),
-              fKey === "weekly" ? Math.round(revHorizon.days / 5) : revHorizon.days
+              horizonDays + (fKey === "weekly" || isWeeklyOnDaily ? 52 : fKey === "monthly" ? 12 : 252),
+              fKey === "weekly" ? Math.round(revHorizon.days / 5) : fKey === "monthly" ? Math.max(1, Math.round(revHorizon.days / 21)) : revHorizon.days
             );
             const effectiveLen = isWeeklyOnDaily ? closes.length : effectivePrices.length;
 
@@ -737,7 +739,7 @@ export default function MomentumOptimizer() {
         let currentSignal = "None";
         {
           const hDays = bestConfig.config.lookback;
-          const hDaysEff = fKey === "weekly" ? Math.max(1, Math.round(hDays / 5)) : hDays;
+          const hDaysEff = fKey === "weekly" ? Math.max(1, Math.round(hDays / 5)) : fKey === "monthly" ? Math.max(1, Math.round(hDays / 21)) : hDays;
           const isWeeklyOnDailyNow = actualFreq === "weekly_on_daily";
           let momNow: (number | null)[];
           if (isWeeklyOnDailyNow && weeklyAgg) {
@@ -868,7 +870,7 @@ export default function MomentumOptimizer() {
     if (Array.isArray(saved.results)) setResults(saved.results);
     if (saved.expandedTicker !== undefined) setExpandedTicker(saved.expandedTicker);
     if (saved.sortBy) setSortBy(saved.sortBy);
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "weekly_on_daily") {
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") {
       setFrequency(saved.frequency);
     } else if (saved.timeframe === "weekly") {
       setFrequency("weekly");

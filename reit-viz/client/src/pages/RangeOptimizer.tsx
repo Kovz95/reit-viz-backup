@@ -1634,7 +1634,7 @@ export default function RangeOptimizer() {
   // Frequency
   const [isRunning, setIsRunning] = useState(false);
   const { frequency, setFrequency, frequencyUI } = useFrequency("range", "daily", isRunning);
-  const freqMode = frequency === "weekly" ? "weekly" : "daily";
+  const freqMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
 
   // Progress
   const [progress, setProgress] = useState<ProgressState>({
@@ -1764,6 +1764,7 @@ export default function RangeOptimizer() {
       if (
         saved.frequency === "daily" ||
         saved.frequency === "weekly" ||
+        saved.frequency === "monthly" ||
         saved.frequency === "weekly_on_daily"
       ) {
         setFrequency(saved.frequency);
@@ -1911,7 +1912,7 @@ export default function RangeOptimizer() {
       freqMode
     );
 
-    const warmup = freqMode === "weekly" ? 52 : 252;
+    const warmup = freqMode === "weekly" ? 52 : freqMode === "monthly" ? 24 : 252;
     if (ds.adjCloses.length < warmup) {
       throw new Error(`Insufficient history for ${selectedTicker} (need ≥${warmup} ${freqMode} bars).`);
     }
@@ -2065,7 +2066,7 @@ export default function RangeOptimizer() {
     setProgress({ current: 0, total: 0, stage: "fetch", fetched: 0, fetchTotal: tickersToRun.length });
 
     const CONCURRENCY = 5;
-    const WARMUP = freqMode === "weekly" ? 52 : 252;
+    const WARMUP = freqMode === "weekly" ? 52 : freqMode === "monthly" ? 24 : 252;
     const poolItems: any[] = [];
     let fetched = 0;
 
@@ -2189,7 +2190,7 @@ export default function RangeOptimizer() {
     setProgress({ current: 0, total: 0, stage: "fetch", fetched: 0, fetchTotal: basketTickers.length });
 
     const CONCURRENCY = 5;
-    const WARMUP = freqMode === "weekly" ? 52 : 252;
+    const WARMUP = freqMode === "weekly" ? 52 : freqMode === "monthly" ? 24 : 252;
     const poolItems: any[] = [];
     let fetched = 0;
 
