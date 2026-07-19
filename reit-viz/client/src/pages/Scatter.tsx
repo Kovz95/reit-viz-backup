@@ -1895,6 +1895,7 @@ export default function Scatter() {
         </div>
         {showQuadrants && (
           <>
+            <span className="text-[10px] text-muted-foreground" title="Vertical divider position on the X axis (defaults to the median)">X split</span>
             <Input
               type="number"
               step="any"
@@ -1903,7 +1904,9 @@ export default function Scatter() {
               onChange={(e) => setRefLineX(e.target.value)}
               className="h-6 text-[11px] w-[70px] bg-background"
               data-testid="ref-line-x"
+              title="Vertical divider position on the X axis (defaults to the median)"
             />
+            <span className="text-[10px] text-muted-foreground" title="Horizontal divider position on the Y axis (defaults to the median)">Y split</span>
             <Input
               type="number"
               step="any"
@@ -1912,6 +1915,7 @@ export default function Scatter() {
               onChange={(e) => setRefLineY(e.target.value)}
               className="h-6 text-[11px] w-[70px] bg-background"
               data-testid="ref-line-y"
+              title="Horizontal divider position on the Y axis (defaults to the median)"
             />
           </>
         )}
@@ -1934,7 +1938,8 @@ export default function Scatter() {
           <Switch checked={showKnn} onCheckedChange={setShowKnn} className="scale-75" data-testid="scatter-knn" />
           {showKnn && (
             <>
-              <Input type="number" min={1} max={30} value={knnK} onChange={(e) => setKnnK(Math.max(1, Math.min(30, parseInt(e.target.value) || 5)))} className="h-6 w-[46px] text-[11px] bg-background" title="k neighbors" />
+              <span className="text-[10px] text-muted-foreground" title="Number of nearest neighbors">k</span>
+              <Input type="number" min={1} max={30} value={knnK} onChange={(e) => setKnnK(Math.max(1, Math.min(30, parseInt(e.target.value) || 5)))} className="h-6 w-[54px] text-[11px] bg-background" title="Number of nearest neighbors" />
               <span className="text-[10px] text-cyan-400 font-mono">{knnAnchor ? `→ ${knnAnchor}` : "click a point"}</span>
             </>
           )}
@@ -1943,14 +1948,20 @@ export default function Scatter() {
           <span className="text-[11px] text-muted-foreground">k-Means</span>
           <Switch checked={showKmeans} onCheckedChange={setShowKmeans} className="scale-75" data-testid="scatter-kmeans" />
           {showKmeans && (
-            <Input type="number" min={2} max={12} value={kmeansK} onChange={(e) => setKmeansK(Math.max(1, Math.min(12, parseInt(e.target.value) || 4)))} className="h-6 w-[46px] text-[11px] bg-background" title="k clusters" />
+            <>
+              <span className="text-[10px] text-muted-foreground" title="Number of clusters">k</span>
+              <Input type="number" min={2} max={12} value={kmeansK} onChange={(e) => setKmeansK(Math.max(1, Math.min(12, parseInt(e.target.value) || 4)))} className="h-6 w-[54px] text-[11px] bg-background" title="Number of clusters" />
+            </>
           )}
         </div>
         <div className="flex items-center gap-1">
           <span className="text-[11px] text-muted-foreground">Mahalanobis</span>
           <Switch checked={showMahalanobis} onCheckedChange={setShowMahalanobis} className="scale-75" data-testid="scatter-mahalanobis" />
           {showMahalanobis && (
-            <Input type="number" step="0.1" min={0.5} value={mahalThreshold} onChange={(e) => setMahalThreshold(parseFloat(e.target.value) || 2.5)} className="h-6 w-[52px] text-[11px] bg-background" title="threshold" />
+            <>
+              <span className="text-[10px] text-muted-foreground" title="Flag points farther than this many σ from the centroid">σ ≥</span>
+              <Input type="number" step="0.1" min={0.5} value={mahalThreshold} onChange={(e) => setMahalThreshold(parseFloat(e.target.value) || 2.5)} className="h-6 w-[62px] text-[11px] bg-background" title="Flag points farther than this many σ from the centroid" />
+            </>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -1965,14 +1976,20 @@ export default function Scatter() {
           <span className="text-[11px] text-muted-foreground">LOESS</span>
           <Switch checked={showLoess} onCheckedChange={setShowLoess} className="scale-75" data-testid="scatter-loess" />
           {showLoess && (
-            <Input type="number" step="0.05" min={0.1} max={1} value={loessSpan} onChange={(e) => setLoessSpan(Math.max(0.1, Math.min(1, parseFloat(e.target.value) || 0.5)))} className="h-6 w-[52px] text-[11px] bg-background" title="span" />
+            <>
+              <span className="text-[10px] text-muted-foreground" title="Smoothing span: fraction of points in each local fit (higher = smoother)">span</span>
+              <Input type="number" step="0.05" min={0.1} max={1} value={loessSpan} onChange={(e) => setLoessSpan(Math.max(0.1, Math.min(1, parseFloat(e.target.value) || 0.5)))} className="h-6 w-[62px] text-[11px] bg-background" title="Smoothing span: fraction of points in each local fit (higher = smoother)" />
+            </>
           )}
         </div>
         <div className="flex items-center gap-1">
           <span className="text-[11px] text-muted-foreground">Conf band</span>
           <Switch checked={showConfBand} onCheckedChange={setShowConfBand} className="scale-75" data-testid="scatter-confband" />
           {showConfBand && (
-            <Input type="number" step="1" min={50} max={99.9} value={confLevel} onChange={(e) => setConfLevel(Math.max(50, Math.min(99.9, parseFloat(e.target.value) || 95)))} className="h-6 w-[52px] text-[11px] bg-background" title="confidence %" />
+            <>
+              <span className="text-[10px] text-muted-foreground" title="Confidence level of the band around the regression line">CI %</span>
+              <Input type="number" step="1" min={50} max={99.9} value={confLevel} onChange={(e) => setConfLevel(Math.max(50, Math.min(99.9, parseFloat(e.target.value) || 95)))} className="h-6 w-[62px] text-[11px] bg-background" title="Confidence level of the band around the regression line" />
+            </>
           )}
         </div>
         <div className="flex items-center gap-1">
