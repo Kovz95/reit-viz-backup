@@ -8,12 +8,12 @@
 
 import { fetchMetricSeries, type MetricSeriesPoint } from "./fetchMetricSeries";
 
-export type BasisFamily = "FFO" | "AFFO" | "EPS";
-export type BasisPeriod = "FY1" | "FY2" | "LTM";
+export type BasisFamily = "FFO" | "AFFO" | "EPS" | "EPRA" | "Default";
+export type BasisPeriod = "FY0" | "FY1" | "FY2" | "LTM";
 export type BasisMode = "auto" | BasisFamily;
 
-export const BASIS_FAMILIES: BasisFamily[] = ["FFO", "AFFO", "EPS"];
-export const BASIS_PERIODS: BasisPeriod[] = ["FY1", "FY2", "LTM"];
+export const BASIS_FAMILIES: BasisFamily[] = ["FFO", "AFFO", "EPS", "EPRA", "Default"];
+export const BASIS_PERIODS: BasisPeriod[] = ["FY0", "FY1", "FY2", "LTM"];
 
 export interface BasisDef {
   // Stored multiple series to try, in order. FY1 multiples are stored under
@@ -41,18 +41,42 @@ export interface AttributionRow {
   sameDirection: boolean;
 }
 
-// The workbook carries FY1/FY2/LTM estimate vintages (no FY3 exists in the
-// source data). FFO/AFFO bases for REITs; EPS basis as the generic fallback.
+// The workbook carries FY0/FY1/FY2/LTM estimate vintages (no FY3 exists in the
+// source data). FFO/AFFO bases for REITs; EPS basis as the generic fallback;
+// EPRA (consensus earnings per share) for European names; "Default" resolves
+// each ticker's per-company default via the Universe-tab rules ("EPS (Default)"
+// pseudo-metrics — fetchMetricSeries resolves them per ticker). An empty
+// estimate name means that family×period combination has no source data and
+// loadBasisAligned skips it. Missing stored multiples are derived close ÷
+// estimate, which keeps the identity exact.
 const MULTIPLE_NAMES: Record<BasisFamily, Record<BasisPeriod, string[]>> = {
-  FFO:  { FY1: ["P/FFO (FY1)", "P/FFO FY1"],   FY2: ["P/FFO FY2"],  LTM: ["P/FFO LTM"] },
-  AFFO: { FY1: ["P/AFFO (FY1)", "P/AFFO FY1"], FY2: ["P/AFFO FY2"], LTM: ["P/AFFO LTM"] },
-  EPS:  { FY1: ["P/E (FY1)", "P/E FY1"],       FY2: ["P/E FY2"],    LTM: ["P/E LTM"] },
+  FFO:  { FY0: ["P/FFO (FY0)"],  FY1: ["P/FFO (FY1)", "P/FFO FY1"],   FY2: ["P/FFO FY2"],  LTM: ["P/FFO LTM"] },
+  AFFO: { FY0: ["P/AFFO (FY0)"], FY1: ["P/AFFO (FY1)", "P/AFFO FY1"], FY2: ["P/AFFO FY2"], LTM: ["P/AFFO LTM"] },
+  EPS:  { FY0: ["P/E (FY0)"],    FY1: ["P/E (FY1)", "P/E FY1"],       FY2: ["P/E FY2"],    LTM: ["P/E LTM"] },
+  EPRA: { FY0: [], FY1: [], FY2: [], LTM: [] },
+  Default: { FY0: [], FY1: [], FY2: [], LTM: [] },
 };
 
 const ESTIMATE_NAMES: Record<BasisFamily, Record<BasisPeriod, string>> = {
-  FFO:  { FY1: "FFO FY1",  FY2: "FFO FY2",  LTM: "FFO LTM" },
-  AFFO: { FY1: "AFFO FY1", FY2: "AFFO FY2", LTM: "AFFO LTM" },
-  EPS:  { FY1: "EPS FY1",  FY2: "EPS FY2",  LTM: "EPS LTM" },
+  FFO:  { FY0: "FFO FY0",  FY1: "FFO FY1",  FY2: "FFO FY2",  LTM: "FFO LTM" },
+  AFFO: { FY0: "AFFO FY0", FY1: "AFFO FY1", FY2: "AFFO FY2", LTM: "AFFO LTM" },
+  EPS:  { FY0: "EPS FY0",  FY1: "EPS FY1",  FY2: "EPS FY2",  LTM: "EPS LTM" },
+  EPRA: {
+    FY0: "EPRA Earnings per share (FY0)",
+    FY1: "EPRA Earnings per share (consensus FY1)",
+    FY2: "EPRA Earnings per share (consensus FY2)",
+    LTM: "", // no LTM EPRA series in the workbook
+  },
+  Default: {
+    FY0: "", // no FY0/LTM slots in the default-metric config
+    FY1: "EPS FY1 (Default)",
+    FY2: "EPS (Default)",
+    LTM: "",
+  },
+};
+
+const FAMILY_PREFIX: Record<BasisFamily, string> = {
+  FFO: "P/FFO", AFFO: "P/AFFO", EPS: "P/E", EPRA: "P/EPRA", Default: "P/Default",
 };
 
 export function getBasisDef(family: BasisFamily, period: BasisPeriod): BasisDef {
@@ -60,7 +84,7 @@ export function getBasisDef(family: BasisFamily, period: BasisPeriod): BasisDef 
   return {
     multiples: MULTIPLE_NAMES[family][period],
     estimate,
-    label: `${family === "EPS" ? "P/E" : `P/${family}`} × ${estimate}`,
+    label: estimate ? `${FAMILY_PREFIX[family]} × ${estimate}` : `${FAMILY_PREFIX[family]} ${period} (unavailable)`,
   };
 }
 
@@ -103,9 +127,11 @@ export async function loadBasisAligned(
 ): Promise<{ basis: BasisFamily; aligned: AlignedData } | null> {
   const closeSeries = await fetchMetricSeries(ticker, "close", opts);
   if (!closeSeries.length) return null;
-  const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPS"] : [mode];
+  // "auto": REIT FFO first, then EPRA (European names), then generic EPS.
+  const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPRA", "EPS"] : [mode];
   for (const family of families) {
     const def = getBasisDef(family, period);
+    if (!def.estimate) continue; // combination has no source data
     const estSeries = await fetchMetricSeries(ticker, def.estimate, opts);
     if (!estSeries.length) continue;
     let multSeries: MetricSeriesPoint[] = [];

@@ -15,6 +15,10 @@ import { Download, RefreshCw, Info, SortAsc, SortDesc } from "lucide-react";
 import { ArrowUpDown } from "@/components/ui/icons";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { useGridColor } from "@/lib/gridPref";
+import ClassificationFilters, { emptyClassFilters, applyClassFilters } from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBaskets } from "@/lib/useBaskets";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import {
   WINDOW_OPTIONS,
   BASIS_FAMILIES,
@@ -312,14 +316,61 @@ function CompositionBar({ multShare, estShare, multSign, estSign }: CompositionB
   );
 }
 
+// ── Searchable single-ticker picker (symbol OR company name) ─────────────────
+
+export interface TickerOption { ticker: string; name?: string }
+
+function TickerSearchSelect({ options, value, onChange }: {
+  options: TickerOption[];
+  value: string;
+  onChange: (t: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const matches = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return options.slice(0, 60);
+    return options
+      .filter(o => o.ticker.toLowerCase().includes(s) || (o.name ?? "").toLowerCase().includes(s))
+      .slice(0, 60);
+  }, [options, q]);
+  return (
+    <div className="relative" data-testid="attr-ticker-select">
+      <input
+        value={open ? q : value}
+        placeholder="Search ticker or company…"
+        onFocus={() => { setOpen(true); setQ(""); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={e => setQ(e.target.value)}
+        className="w-60 px-2 py-1 text-[11px] bg-input border border-border rounded outline-none focus:border-primary"
+        data-testid="attr-ticker-input"
+      />
+      {open && (
+        <div className="absolute z-30 mt-1 w-80 max-h-72 overflow-y-auto bg-popover border border-border rounded shadow-lg">
+          {matches.map(o => (
+            <button
+              key={o.ticker}
+              onMouseDown={() => { onChange(o.ticker); setOpen(false); }}
+              className={`w-full text-left px-2 py-1 text-[10px] hover:bg-muted flex items-center justify-between gap-2 ${o.ticker === value ? "bg-primary/20" : ""}`}
+              data-testid={`attr-ticker-opt-${o.ticker}`}
+            >
+              <span className="font-semibold flex-shrink-0">{o.ticker}</span>
+              <span className="text-muted-foreground truncate">{o.name ?? ""}</span>
+            </button>
+          ))}
+          {matches.length === 0 && <div className="px-2 py-1 text-[10px] text-muted-foreground">No matches</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Single Ticker Panel ───────────────────────────────────────────────────────
 
 interface SinglePanelProps {
-  visibleTickers: string[];
+  tickerOptions: TickerOption[];
   activeTicker: string;
   setActiveTicker: (t: string) => void;
-  tickerSearch: string;
-  setTickerSearch: (s: string) => void;
   aligned: AlignedData | null;
   cumPath: CumPoint[];
   rollingPath: RollingPoint[];
@@ -331,24 +382,14 @@ interface SinglePanelProps {
   loadingSingle: boolean;
 }
 
-function SinglePanel({ visibleTickers, activeTicker, setActiveTicker, tickerSearch, setTickerSearch, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle }: SinglePanelProps) {
+function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle }: SinglePanelProps) {
   return (
     <div className="flex h-full">
-      {/* Ticker sidebar */}
-      <div className="w-32 border-r border-border flex flex-col flex-shrink-0">
-        <div className="p-1.5 border-b border-border">
-          <input value={tickerSearch} onChange={e => setTickerSearch(e.target.value)} placeholder="Search…" className="w-full px-1.5 py-1 text-[10px] bg-input border border-border rounded outline-none focus:border-primary" />
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {visibleTickers.map(t => (
-            <button key={t} onClick={() => setActiveTicker(t)} className={`w-full text-left px-2 py-1 text-[10px] border-b border-border/50 ${t === activeTicker ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>{t}</button>
-          ))}
-        </div>
-      </div>
       {/* Charts */}
       <div className="flex-1 flex flex-col overflow-auto">
-        {/* Summary header */}
-        <div className="px-3 py-2 border-b border-border bg-muted/20">
+        {/* Ticker picker + summary header */}
+        <div className="px-3 py-2 border-b border-border bg-muted/20 flex items-start gap-4 flex-wrap">
+          <TickerSearchSelect options={tickerOptions} value={activeTicker} onChange={setActiveTicker} />
           {loadingSingle ? (
             <div className="flex items-center gap-2 text-muted-foreground">
               <RefreshCw className="w-3 h-3 animate-spin" /> Loading {activeTicker}…
@@ -502,14 +543,20 @@ export default function Attribution() {
   const { filteredTickersList } = useAppContext();
   const tickers = useMemo(() => filteredTickersList.map(t => t.ticker), [filteredTickersList]);
 
-  const [mode, setMode] = useState<"single" | "table">("single");
+  const [mode, setMode] = useState<"single" | "basket" | "table">("single");
   const [basisMode, setBasisMode] = useState<BasisMode>("auto");
   const [basisPeriod, setBasisPeriod] = useState<BasisPeriod>("FY2");
-  const [tickerSearch, setTickerSearch] = useState("");
   const [windowDays, setWindowDays] = useState(252);
   const [rollingDays, setRollingDays] = useState(21);
-  const [searchInput, setSearchInput] = useState("");
   const [aligned, setAligned] = useState<AlignedData | null>(null);
+  // Universe-table filters (classification + country/exchange)
+  const [classFilters, setClassFilters] = useState(emptyClassFilters());
+  const [clfSearch, setClfSearch] = useState("");
+  const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const geo = useGeoFilter(filteredTickersList, "attr-geo");
+  // Basket mode
+  const { baskets } = useBaskets();
+  const [basketId, setBasketId] = useState("");
   const [resolvedBasis, setResolvedBasis] = useState<BasisFamily>("FFO");
   const [loadingSingle, setLoadingSingle] = useState(false);
   const [tableRows, setTableRows] = useState<AttributionRow[]>([]);
@@ -545,13 +592,22 @@ export default function Attribution() {
 
   useEffect(() => { loadSingle(); }, [loadSingle]);
 
-  // Run universe table
+  // Universe list after classification + geo filters (drives the table mode).
+  const filteredUniverseTickers = useMemo(() => {
+    let rows = applyClassFilters(filteredTickersList, classFilters, clfSearch, manualTickers);
+    rows = geo.filterByGeo(rows);
+    return rows.map((t: any) => t.ticker as string);
+  }, [filteredTickersList, classFilters, clfSearch, manualTickers, geo.filterByGeo]);
+
+  const activeBasket = useMemo(() => baskets.find(b => b.id === basketId) ?? null, [baskets, basketId]);
+
+  // Run attribution over an arbitrary ticker list (universe table or basket members).
   const cancelRef = useRef({ cancelled: false });
-  const runUniverseTable = useCallback(async () => {
+  const runTable = useCallback(async (list: string[]) => {
     cancelRef.current.cancelled = true;
     const token = { cancelled: false };
     cancelRef.current = token;
-    setLoadingTable(true); setTableRows([]); setTableProgress({ done: 0, total: tickers.length });
+    setLoadingTable(true); setTableRows([]); setTableProgress({ done: 0, total: list.length });
     const results: AttributionRow[] = [];
     const CONCURRENCY = 8;
     let idx = 0, done = 0;
@@ -559,21 +615,43 @@ export default function Attribution() {
       for (;;) {
         if (token.cancelled) return;
         const i = idx++;
-        if (i >= tickers.length) return;
-        const ticker = tickers[i];
+        if (i >= list.length) return;
+        const ticker = list[i];
         try {
           const res = await loadBasisAligned(ticker, basisMode, basisPeriod);
-          if (!res) { done++; setTableProgress({ done, total: tickers.length }); continue; }
+          if (!res) { done++; setTableProgress({ done, total: list.length }); continue; }
           const row = computeAttributionRow(ticker, `${res.basis} ${basisPeriod}`, res.aligned, windowDays);
           if (row) results.push(row);
         } catch { /* skip */ }
         done++;
-        if (!token.cancelled) setTableProgress({ done, total: tickers.length });
+        if (!token.cancelled) setTableProgress({ done, total: list.length });
       }
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
     if (!token.cancelled) { setTableRows(results); setLoadingTable(false); setTableProgress(null); }
-  }, [tickers, windowDays, basisMode, basisPeriod]);
+  }, [windowDays, basisMode, basisPeriod]);
+
+  // Basket mode: recompute automatically whenever the basket or settings change.
+  useEffect(() => {
+    if (mode !== "basket") return;
+    if (!activeBasket || activeBasket.tickers.length === 0) { setTableRows([]); return; }
+    runTable(activeBasket.tickers);
+  }, [mode, activeBasket, runTable]);
+
+  // Equal-weight aggregate across the computed rows (basket summary strip).
+  const aggregate = useMemo(() => {
+    if (!tableRows.length) return null;
+    const mean = (f: (r: AttributionRow) => number) => tableRows.reduce((s, r) => s + f(r), 0) / tableRows.length;
+    const mult = mean(r => r.multiplePct), est = mean(r => r.estimatePct);
+    const sumAbs = Math.abs(mult) + Math.abs(est);
+    return {
+      n: tableRows.length,
+      total: mean(r => r.totalPct),
+      mult, est,
+      multShare: sumAbs > 0 ? Math.abs(mult) / sumAbs : 0,
+      estShare: sumAbs > 0 ? Math.abs(est) / sumAbs : 0,
+    };
+  }, [tableRows]);
 
   // Derived paths
   const cumPath = useMemo(() => aligned ? buildCumulativePath(aligned, getStartIndex(aligned.dates, windowDays)) : [], [aligned, windowDays]);
@@ -632,10 +710,10 @@ export default function Attribution() {
     }
   }
 
-  const visibleTickers = useMemo(() => {
-    const q = tickerSearch.trim().toUpperCase();
-    return q ? tickers.filter(t => t.toUpperCase().includes(q)).slice(0, 200) : tickers.slice(0, 200);
-  }, [tickers, tickerSearch]);
+  const tickerOptions = useMemo(
+    () => filteredTickersList.map((t: any) => ({ ticker: t.ticker as string, name: t.name as string | undefined })),
+    [filteredTickersList]
+  );
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground font-mono text-xs">
@@ -648,9 +726,9 @@ export default function Attribution() {
         <div className="flex items-center gap-2">
           {/* Mode toggle */}
           <div className="flex items-center gap-0.5 border border-border rounded">
-            {(["single", "table"] as const).map(m => (
-              <button key={m} onClick={() => setMode(m)} className={`px-2 py-1 text-[10px] ${mode === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
-                {m === "single" ? "Single Ticker" : "Universe Table"}
+            {(["single", "basket", "table"] as const).map(m => (
+              <button key={m} onClick={() => setMode(m)} className={`px-2 py-1 text-[10px] ${mode === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid={`attr-mode-${m}`}>
+                {m === "single" ? "Single Ticker" : m === "basket" ? "Basket" : "Universe Table"}
               </button>
             ))}
           </div>
@@ -719,9 +797,9 @@ export default function Attribution() {
             <Download className="w-3 h-3 mr-1" /> CSV
           </Button>
           {mode === "table" && (
-            <Button variant="default" size="sm" onClick={runUniverseTable} disabled={loadingTable || tickers.length === 0} className="h-7 px-2 text-[10px]">
+            <Button variant="default" size="sm" onClick={() => runTable(filteredUniverseTickers)} disabled={loadingTable || filteredUniverseTickers.length === 0} className="h-7 px-2 text-[10px]" data-testid="attr-run-table">
               {loadingTable ? <RefreshCw className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
-              Run on {tickers.length}
+              Run on {filteredUniverseTickers.length}
             </Button>
           )}
           <GridProminenceToggle />
@@ -732,11 +810,9 @@ export default function Attribution() {
       <div className="flex-1 overflow-auto">
         {mode === "single" ? (
           <SinglePanel
-            visibleTickers={visibleTickers}
+            tickerOptions={tickerOptions}
             activeTicker={activeTicker}
             setActiveTicker={setActiveTicker}
-            tickerSearch={tickerSearch}
-            setTickerSearch={setTickerSearch}
             aligned={aligned}
             cumPath={cumPath}
             rollingPath={rollingPath}
@@ -747,16 +823,83 @@ export default function Attribution() {
             rollingDays={rollingDays}
             loadingSingle={loadingSingle}
           />
+        ) : mode === "basket" ? (
+          <div>
+            <div className="px-3 py-2 border-b border-border bg-muted/20 flex items-center gap-4 flex-wrap">
+              <Select value={basketId || undefined} onValueChange={setBasketId}>
+                <SelectTrigger className="h-7 text-[11px] w-[240px]" data-testid="attr-basket-select">
+                  <SelectValue placeholder="Pick a basket…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {baskets.map(b => (
+                    <SelectItem key={b.id} value={b.id}>{b.name} ({b.tickers.length})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {baskets.length === 0 && <span className="text-[10px] text-muted-foreground">No baskets yet — create one on the Baskets tab.</span>}
+              {aggregate && activeBasket && !loadingTable && (
+                <div className="flex items-center gap-5 flex-wrap" data-testid="attr-basket-summary">
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Basket (equal-weight, n={aggregate.n})</div>
+                    <div className="text-sm font-bold">{activeBasket.name}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Avg Total</div>
+                    <div className={`text-sm font-bold ${colorForValue(aggregate.total)}`}>{fmtPct(aggregate.total)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Avg Multiple</div>
+                    <div className={`text-sm font-bold ${colorForValue(aggregate.mult)}`}>{fmtPct(aggregate.mult)}</div>
+                    <div className="text-[9px] text-muted-foreground">share {fmtShare(aggregate.multShare)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Avg Estimate</div>
+                    <div className={`text-sm font-bold ${colorForValue(aggregate.est)}`}>{fmtPct(aggregate.est)}</div>
+                    <div className="text-[9px] text-muted-foreground">share {fmtShare(aggregate.estShare)}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+            {activeBasket ? (
+              <TablePanel
+                rows={sortedRows}
+                sortKey={sortKey}
+                sortDir={sortDir}
+                handleSort={handleSort}
+                loadingTable={loadingTable}
+                tableProgress={tableProgress}
+                windowDays={windowDays}
+              />
+            ) : (
+              <div className="p-4 text-[11px] text-muted-foreground">Pick a basket to decompose each member's return and see the equal-weight aggregate.</div>
+            )}
+          </div>
         ) : (
-          <TablePanel
-            rows={sortedRows}
-            sortKey={sortKey}
-            sortDir={sortDir}
-            handleSort={handleSort}
-            loadingTable={loadingTable}
-            tableProgress={tableProgress}
-            windowDays={windowDays}
-          />
+          <div>
+            <div className="px-3 py-1.5 border-b border-border bg-muted/10">
+              <ClassificationFilters
+                filters={classFilters}
+                onFiltersChange={setClassFilters}
+                search={clfSearch}
+                onSearchChange={setClfSearch}
+                manualTickers={manualTickers}
+                onManualTickersChange={setManualTickers}
+                filteredCount={filteredUniverseTickers.length}
+                totalCount={filteredTickersList.length}
+                testIdPrefix="attr"
+                extraFilters={geo.geoFilterUI}
+              />
+            </div>
+            <TablePanel
+              rows={sortedRows}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              handleSort={handleSort}
+              loadingTable={loadingTable}
+              tableProgress={tableProgress}
+              windowDays={windowDays}
+            />
+          </div>
         )}
       </div>
     </div>
