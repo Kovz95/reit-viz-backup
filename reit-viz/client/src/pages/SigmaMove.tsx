@@ -3,6 +3,7 @@ import React from "react";
 import { useAppContext } from "@/lib/appContext";
 import { useAppStatus } from "@/lib/appStatus";
 import fetchMetricSeriesBatch from "@/lib/fetchMetricSeriesBatch";
+import { weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { apiRequest } from "@/lib/apiRequest";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
 import { fetchEarningsDates } from "@/lib/fetchEarningsDates";
@@ -709,6 +710,24 @@ export default function SigmaMove() {
   const isEarningsMode = mode === "earnings";
   const isPeriodMode = mode === "period";
 
+  // Bar frequency: daily | weekly | monthly — persisted. All σ, moves, and
+  // distributions are computed on bars of this frequency (weeklyDownsamplePrices
+  // collapses the daily close series). Earnings mode is inherently a daily-
+  // reaction study, so it forces daily regardless of this toggle.
+  const [freq, setFreq] = React.useState<"daily" | "weekly" | "monthly">(() => {
+    try {
+      const s = localStorage.getItem("sigma-freq-v1");
+      if (s === "daily" || s === "weekly" || s === "monthly") return s;
+    } catch {}
+    return "daily";
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-freq-v1", freq); } catch {}
+  }, [freq]);
+  // Bar-unit label for captions/tooltips (annualization uses 252/52/12 per year,
+  // computed where the rows are built).
+  const barUnit = freq === "monthly" ? "month" : freq === "weekly" ? "week" : "day";
+
   // Period window (trading days) — persisted
   const [periodWindow, setPeriodWindow] = React.useState<number>(() => {
     try {
@@ -859,14 +878,28 @@ export default function SigmaMove() {
       // period window, and the per-ticker distribution lookback. Picking a longer
       // dist lookback (e.g. 5y) re-runs this and fetches more; the default
       // settings stay light (~520 bars instead of a flat 1300).
+      // Under weekly/monthly bars the settings are in BARS of that frequency,
+      // but minBars gates the RAW DAILY series before downsampling — scale by
+      // ~5 (weekly) / ~21 (monthly), capped at ~10y so long-history names
+      // aren't filtered out when the workbook can't possibly satisfy it
+      // (the math degrades gracefully on shorter distributions).
       const window = Math.max(horizonN, isPeriodMode ? Math.max(1, Math.floor(periodWindow)) : 1);
-      const minBars = Math.max(lookbackDays + window + 5, distLookback + window + 5, 504);
+      // Earnings mode is a daily-reaction study — force daily bars there.
+      const effFreq = isEarningsMode ? "daily" : freq;
+      const effAnnFactor = Math.sqrt(effFreq === "monthly" ? 12 : effFreq === "weekly" ? 52 : 252);
+      const dailyFactor = effFreq === "monthly" ? 21 : effFreq === "weekly" ? 5 : 1;
+      const neededBars = Math.max(lookbackDays + window + 5, distLookback + window + 5, effFreq === "daily" ? 504 : 60);
+      const minBars = Math.min(neededBars * dailyFactor, 2520);
       const batchData = await fetchMetricSeriesBatch("close", minBars);
       const tickerSet = new Set(tickerList.map((t: any) => t.ticker));
       const rows: LiveRow[] = [];
       for (const item of batchData) {
         if (!tickerSet.has(item.ticker)) continue;
-        const closes: number[] = (item.values || []).map((v: number | null) => v ?? NaN);
+        let closes: number[] = (item.values || []).map((v: number | null) => v ?? NaN);
+        if (effFreq !== "daily") {
+          // Collapse to one close per week/month (last bar of each bucket).
+          closes = weeklyDownsamplePrices(closes, item.dates || [], effFreq).prices;
+        }
         const { sigmaDaily, sigmaEwmaDaily, hvWindow } = computeVolAndDistribution(
           closes,
           closes.length - 1,
@@ -889,9 +922,9 @@ export default function SigmaMove() {
           logReturnN: null,
           pctChangeN: null,
           sigmaDaily,
-          sigmaAnnualized: sigmaDaily != null ? sigmaDaily * Math.sqrt(252) : null,
+          sigmaAnnualized: sigmaDaily != null ? sigmaDaily * effAnnFactor : null,
           sigmaEwmaDaily,
-          sigmaEwmaAnnualized: sigmaEwmaDaily != null ? sigmaEwmaDaily * Math.sqrt(252) : null,
+          sigmaEwmaAnnualized: sigmaEwmaDaily != null ? sigmaEwmaDaily * effAnnFactor : null,
           hvWindow,
           sigmaMove: null,
           sigmaMoveEwma: null,
@@ -906,7 +939,7 @@ export default function SigmaMove() {
     } finally {
       setLoadingHistory(false);
     }
-  }, [tickerList, lookbackDays, horizonN, distLookback, isPeriodMode, periodWindow]);
+  }, [tickerList, lookbackDays, horizonN, distLookback, isPeriodMode, isEarningsMode, periodWindow, freq]);
 
   React.useEffect(() => {
     loadHistoricalData();
@@ -1548,7 +1581,7 @@ export default function SigmaMove() {
       const comments = [
         "# Sigma Move — Earnings days",
         `# Lookback (years of prints): ${earningsYears >= 999 ? "all" : earningsYears + "Y"}`,
-        `# Vol lookback: ${lookbackDays}d  |  Horizon: ${horizonN}d`,
+        `# Vol lookback: ${lookbackDays}d  |  Horizon: ${horizonN}d  |  Bars: daily (earnings mode)`,
         `# Universe: ${tickerList.length} tickers / ${earningsRows.length} prints`,
       ];
       const csv = [...comments, headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
@@ -1587,7 +1620,7 @@ export default function SigmaMove() {
       ]);
       const comments = [
         "# Sigma Move — Period mode (trailing-window move, historical closes only)",
-        `# Window: ${periodWindow} bar${periodWindow === 1 ? "" : "s"}  |  Vol lookback: ${lookbackDays}d`,
+        `# Window: ${periodWindow} bar${periodWindow === 1 ? "" : "s"}  |  Vol lookback: ${lookbackDays} bars  |  Bars: ${freq}`,
         `# Universe: ${periodRows.length} tickers`,
       ];
       const csv = [...comments, headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
@@ -1630,7 +1663,7 @@ export default function SigmaMove() {
       "# Sigma Move snapshot",
       `# Fetched: ${fetchedAt || "n/a"}`,
       `# Market state: ${marketState || "unknown"}`,
-      `# Vol lookback: ${lookbackDays}d  |  Horizon: ${horizonN}d`,
+      `# Vol lookback: ${lookbackDays} bars  |  Horizon: ${horizonN} bars  |  Bars: ${freq}`,
       `# Universe: ${liveRows.length} tickers`,
     ];
     const csv = [...comments, headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
@@ -1644,6 +1677,7 @@ export default function SigmaMove() {
   }, [
     isEarningsMode,
     isPeriodMode,
+    freq,
     sortedLiveRows,
     sortedEarningsRows,
     sortedPeriodRows,
@@ -1675,8 +1709,8 @@ export default function SigmaMove() {
               {isEarningsMode
                 ? `Sigma move on each earnings print. ${horizonN}-day log return scaled by σ (RV / EWMA) over a ${lookbackDays}-day window ending the trading day before the print.`
                 : isPeriodMode
-                ? `Trailing ${periodWindow}-day (~${(periodWindow / 21).toFixed(periodWindow % 21 === 0 ? 0 : 1)}mo) move scaled by ${lookbackDays}-day log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Historical closes only — no live quotes.`
-                : `${horizonN === 1 ? "Today's move" : `${horizonN}-day move`} scaled by ${lookbackDays}-day log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Live quotes via Yahoo Finance (~15-min delayed).`}
+                ? `Trailing ${periodWindow}-${barUnit} move scaled by ${lookbackDays}-${barUnit} log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Historical closes only — no live quotes.${freq !== "daily" ? ` Bars = ${freq}.` : ""}`
+                : `${horizonN === 1 ? "Today's move" : `${horizonN}-${barUnit} move`} scaled by ${lookbackDays}-${barUnit} log-return vol (RV / EWMA λ=${EWMA_LAMBDA}) + empirical percentile rank. Live quotes via Yahoo Finance (~15-min delayed).${freq !== "daily" ? ` Bars = ${freq} (today's live move in ${freq}-bar σ units).` : ""}`}
             </span>
           </div>
 
@@ -1719,7 +1753,7 @@ export default function SigmaMove() {
           {isPeriodMode && (
             <div
               className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
-              title="Trailing window for the period return. σ-move denominator scales by √window."
+              title={`Trailing window for the period return, in ${barUnit} bars${freq !== "daily" ? ` (bars @ ${freq})` : ""}. σ-move denominator scales by √window.`}
             >
               <span className="px-1.5 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/80 border-r border-border">
                 Window
@@ -1774,6 +1808,35 @@ export default function SigmaMove() {
             </div>
           )}
 
+          {/* Bar frequency */}
+          <div
+            className={`flex items-center rounded border border-border overflow-hidden text-[10px] font-mono ${isEarningsMode ? "opacity-40" : ""}`}
+            title={isEarningsMode
+              ? "Earnings mode studies the daily earnings-day reaction — bar frequency is forced to Daily"
+              : "Bar frequency — all σ, moves, and distributions are computed on bars of this frequency (lookback/horizon/window counts are in bars)"}
+          >
+            <span className="px-1.5 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/80 border-r border-border">
+              Freq
+            </span>
+            {([["daily", "D", "Daily bars"], ["weekly", "W", "Weekly bars — σ, moves, and distributions computed on weekly closes"], ["monthly", "M", "Monthly bars — σ, moves, and distributions computed on monthly closes"]] as const).map(([f, label, tip]) => (
+              <button
+                key={f}
+                type="button"
+                disabled={isEarningsMode}
+                onClick={() => setFreq(f)}
+                title={tip}
+                className={`px-2 py-1 transition-colors ${isEarningsMode ? "cursor-not-allowed" : ""} ${
+                  (isEarningsMode ? "daily" : freq) === f
+                    ? "bg-amber-500/15 text-amber-300"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid={`sigma-freq-${f}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Sigma lookback */}
           <div
             className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
@@ -1803,7 +1866,7 @@ export default function SigmaMove() {
           {!isPeriodMode && (
           <div
             className="flex items-center rounded border border-border overflow-hidden text-[10px] font-mono"
-            title={`Return horizon in trading days. σ-move denominator scales by √N (= ${Math.sqrt(Math.max(1, horizonN)).toFixed(2)})`}
+            title={`Return horizon in ${barUnit} bars${freq !== "daily" ? ` (bars @ ${freq})` : ""}. σ-move denominator scales by √N (= ${Math.sqrt(Math.max(1, horizonN)).toFixed(2)})`}
           >
             <span className="px-1.5 py-1 text-[9px] uppercase tracking-wider text-muted-foreground/80 border-r border-border">
               Horizon
@@ -2164,7 +2227,7 @@ export default function SigmaMove() {
           <div className="flex items-start gap-6 px-3 pb-2 flex-wrap">
             <SigmaHistogram
               values={xsectionSigma}
-              label={`Cross-section · ${isEarningsMode ? "earnings" : isPeriodMode ? `${periodWindow}d window` : horizonN === 1 ? "today" : `${horizonN}d`} σ-moves`}
+              label={`Cross-section · ${isEarningsMode ? "earnings" : isPeriodMode ? `${periodWindow}-bar window` : horizonN === 1 ? "today" : `${horizonN}-bar`} σ-moves${!isEarningsMode && freq !== "daily" ? ` (${freq} bars)` : ""}`}
               sub={`${allowedTickers.size} tickers`}
               testid="sigma-dist-xsection"
             />
