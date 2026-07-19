@@ -162,43 +162,15 @@ export async function resolveSeriesDataStatic(
       metric = resolveDefaultMetricFor(metric, metas.find((t: any) => t.ticker === ticker));
     }
 
-    // Fetch dates and ticker data
-    const [datesResp, tickerResp] = await Promise.all([
-      fetch("data/dates.json"),
-      fetch(`data/tickers/${ticker}.json`),
-    ]);
-    
-    if (!datesResp.ok || !tickerResp.ok) return [];
-    
-    const dates: string[] = await datesResp.json();
-    const rawData = await tickerResp.json();
-    
-    if (!rawData[metric]) return [];
-    
-    const arr = rawData[metric] as any[];
-    const data: DataPoint[] = [];
-    
-    if (arr.length === 0) return data;
-    
-    // Detect format: tuples [[dateIdx, value], ...] vs flat [value, value, ...]
-    const isTupleFormat = Array.isArray(arr[0]);
-    
-    if (isTupleFormat) {
-      for (const item of arr) {
-        const [dateIdx, value] = item;
-        if (dateIdx < dates.length && value != null) {
-          data.push({ time: dates[dateIdx], value });
-        }
-      }
-    } else {
-      // Flat array: index position maps to dates.json
-      for (let i = 0; i < arr.length && i < dates.length; i++) {
-        if (arr[i] != null) {
-          data.push({ time: dates[i], value: arr[i] });
-        }
-      }
-    }
-    return data;
+    // Load via the same /api/ticker path the rest of the app uses. The old
+    // direct fetch of data/tickers/<T>.json only works on a fully static
+    // deployment — the server deployment statically mounts /data/macro ONLY,
+    // so that fetch returned the SPA's index.html on prod and stock legs of
+    // the correlation engine silently failed.
+    const { fetchTickerRaw, getDenseSeries } = await import("./tickerData");
+    const raw = await fetchTickerRaw(ticker);
+    if (!raw) return [];
+    return getDenseSeries(raw, metric) as DataPoint[];
   }
 }
 

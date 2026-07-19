@@ -34,8 +34,8 @@ export const CATEGORY_ORDER = [
 // Client-derived metrics that are computed in the app rather than parsed from the
 // workbook — always offered alongside the data-backed metrics.
 export const DERIVED_METRICS = [
-  "EPS (Default)",
-  "EPS Growth (Default)",
+  "EPS (Default)", "EPS FY1 (Default)",
+  "EPS Growth (Default)", "EPS Growth FY1 (Default)",
   "Volume",
   "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
   "HV 30D", "HV 60D", "HV 90D", "HV 180D",
@@ -46,8 +46,8 @@ export const DERIVED_METRICS = [
 // (e.g. "growth" before valuation; price multiples before their metric family).
 const RULES: Array<[string, (m: string) => boolean]> = [
   // Pseudo-metrics resolved per ticker from the Universe-tab default-metric rules.
-  ["Estimates (FY1/FY2)", (m) => m === "EPS (Default)"],
-  ["Growth", (m) => m === "EPS Growth (Default)"],
+  ["Growth", (m) => /\(Default\)$/.test(m) && /growth/i.test(m)],
+  ["Estimates (FY1/FY2)", (m) => /\(Default\)$/.test(m)],
   ["Price", (m) => ["close", "open", "high", "low"].includes(m)],
   ["Volume & Liquidity", (m) => /\bvolume\b|avg daily/i.test(m)],
   ["Ratings & Sentiment", (m) => /ratings|\bbull\b|\bbear\b|short interest|^si /i.test(m)],

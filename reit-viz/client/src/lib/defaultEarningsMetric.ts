@@ -20,8 +20,10 @@ export interface DefaultMetricConfig {
 }
 
 export const DEFAULT_METRIC_SLOTS = {
-  eps: { pseudo: "EPS (Default)", label: "EPS (per share)", fallback: "FFO FY2" },
-  growth: { pseudo: "EPS Growth (Default)", label: "EPS growth", fallback: "FY2 FFO Growth" },
+  eps: { pseudo: "EPS (Default)", label: "EPS FY2 (per share)", fallback: "FFO FY2" },
+  epsFy1: { pseudo: "EPS FY1 (Default)", label: "EPS FY1 (per share)", fallback: "FFO FY1" },
+  growth: { pseudo: "EPS Growth (Default)", label: "EPS growth FY2", fallback: "FY2 FFO Growth" },
+  growthFy1: { pseudo: "EPS Growth FY1 (Default)", label: "EPS growth FY1", fallback: "FY1 FFO Growth" },
 } as const;
 export type DefaultSlot = keyof typeof DEFAULT_METRIC_SLOTS;
 export const DEFAULT_SLOT_KEYS = Object.keys(DEFAULT_METRIC_SLOTS) as DefaultSlot[];
@@ -58,33 +60,28 @@ function sanitize(cfg: any, fallback: string): DefaultMetricConfig {
   };
 }
 
+function buildConfigs(parsed: any): Record<DefaultSlot, DefaultMetricConfig> {
+  const out = {} as Record<DefaultSlot, DefaultMetricConfig>;
+  for (const k of DEFAULT_SLOT_KEYS) {
+    out[k] = sanitize(parsed?.[k], DEFAULT_METRIC_SLOTS[k].fallback);
+  }
+  return out;
+}
+
 export function getDefaultMetricConfigs(): Record<DefaultSlot, DefaultMetricConfig> {
-  const empty = {
-    eps: { rules: [], fallback: DEFAULT_METRIC_SLOTS.eps.fallback },
-    growth: { rules: [], fallback: DEFAULT_METRIC_SLOTS.growth.fallback },
-  };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const p = JSON.parse(raw);
-      return {
-        eps: sanitize(p?.eps, DEFAULT_METRIC_SLOTS.eps.fallback),
-        growth: sanitize(p?.growth, DEFAULT_METRIC_SLOTS.growth.fallback),
-      };
-    }
+    if (raw) return buildConfigs(JSON.parse(raw));
     // Migrate the legacy single-slot (EPS-only) config once.
     const legacy = window.localStorage.getItem(LEGACY_KEY);
     if (legacy) {
-      const migrated = {
-        eps: sanitize(JSON.parse(legacy), DEFAULT_METRIC_SLOTS.eps.fallback),
-        growth: empty.growth,
-      };
+      const migrated = buildConfigs({ eps: JSON.parse(legacy) });
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
       return migrated;
     }
-    return empty;
+    return buildConfigs(null);
   } catch {
-    return empty;
+    return buildConfigs(null);
   }
 }
 
