@@ -629,9 +629,25 @@ async function computeMatrixStatic(
 
 // ── Public API ──
 
+// "TICKER:EPS (Default)"-style specs must be translated to the ticker's
+// concrete metric BEFORE hitting the server route (which knows nothing about
+// the Universe-tab rules); the static path also benefits.
+async function translateDefaultSpec(spec: string): Promise<string> {
+  const idx = spec.indexOf(":");
+  if (idx <= 0) return spec;
+  const ticker = spec.slice(0, idx);
+  const metric = spec.slice(idx + 1);
+  const { isDefaultMetricName, resolveDefaultMetricFor } = await import("./defaultEarningsMetric");
+  if (ticker.toUpperCase() === "MACRO" || !isDefaultMetricName(metric)) return spec;
+  const { getTickers } = await import("./dataService");
+  const metas = await getTickers();
+  return `${ticker}:${resolveDefaultMetricFor(metric, metas.find((t: any) => t.ticker === ticker))}`;
+}
+
 export async function fetchPairwiseCorrelation(
   specA: string, specB: string, window: number, mode: string
 ): Promise<PairwiseResult> {
+  [specA, specB] = await Promise.all([translateDefaultSpec(specA), translateDefaultSpec(specB)]);
   if (isStaticMode()) {
     return computePairwiseStatic(specA, specB, window, mode);
   }
@@ -644,6 +660,7 @@ export async function fetchPairwiseCorrelation(
 export async function fetchMatrixCorrelation(
   specs: string[], mode: string, window: string | number
 ): Promise<MatrixResult> {
+  specs = await Promise.all(specs.map((s) => translateDefaultSpec(s)));
   if (isStaticMode()) {
     return computeMatrixStatic(specs, mode, String(window));
   }
