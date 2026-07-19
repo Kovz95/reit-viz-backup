@@ -23,6 +23,20 @@ export function extractBasketId(ticker: string): string | null {
 }
 
 /**
+ * Display label for a (possibly basket) ticker: resolves "BASKET:<id>" to the
+ * basket's name, falling back to the raw token when the basket isn't found.
+ * Plain tickers pass through unchanged.
+ */
+export function basketDisplayName(
+  ticker: string,
+  baskets: Array<{ id: string; name: string }>
+): string {
+  const id = extractBasketId(ticker);
+  if (!id) return ticker;
+  return baskets.find((b) => b.id === id)?.name ?? ticker;
+}
+
+/**
  * Uppercases all tickers, deduplicates (case-insensitive), and caps the result at 50 entries.
  */
 export function dedupeUpperTickers(tickers: string[]): string[] {

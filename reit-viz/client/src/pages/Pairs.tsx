@@ -69,7 +69,7 @@ import { IndicatorColorEditor } from "@/components/IndicatorsPanel";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
-import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
+import { isBasketTicker, extractBasketId, basketDisplayName } from "@/lib/basketUtils";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 
 const LOOKBACK_OPTIONS = [
@@ -2316,6 +2316,11 @@ export default function Pairs() {
   // Saved baskets (for BASKET: pair tokens + quick presets)
   const { baskets } = useBaskets();
 
+  // Display labels: raw leg tokens ("BASKET:<id>") stay in state / data fetches,
+  // but everything user-facing shows the basket's name instead.
+  const dispA = useMemo(() => basketDisplayName(tickerA, baskets), [tickerA, baskets]);
+  const dispB = useMemo(() => basketDisplayName(tickerB, baskets), [tickerB, baskets]);
+
   const serializePairs = useCallback(() => ({
     tickerA,
     tickerB,
@@ -2607,7 +2612,7 @@ export default function Pairs() {
     addSeries(percentileRank, "percentileRank");
 
     const rows = Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-    const header = `Date,${tickerA} ${metricA},${tickerB} ${metricB},Ratio,Log Ratio,Z-Score (${zWindow}d),Spread Z (${betaLookback}/${spreadZWindow}d),OLS Resid Z (${olsResidWindow}d),Pct Rank,Correlation (${zWindow}d),Rolling Beta,Beta-Adj Spread,Rolling R2`;
+    const header = `Date,${dispA} ${metricA},${dispB} ${metricB},Ratio,Log Ratio,Z-Score (${zWindow}d),Spread Z (${betaLookback}/${spreadZWindow}d),OLS Resid Z (${olsResidWindow}d),Pct Rank,Correlation (${zWindow}d),Rolling Beta,Beta-Adj Spread,Rolling R2`;
     const fmt = (v: number | undefined, dp: number) => v !== undefined ? v.toFixed(dp) : "";
     const lines = rows.map(
       (r) =>
@@ -2618,10 +2623,10 @@ export default function Pairs() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `pairs_${tickerA}_${tickerB}.csv`;
+    a.download = `pairs_${dispA}_${dispB}.csv`.replace(/[^\w.-]+/g, "_");
     a.click();
     URL.revokeObjectURL(url);
-  }, [pairsData, tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow]);
+  }, [pairsData, dispA, dispB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow]);
 
   // Chart heights
   const priceH = 180;
@@ -2637,8 +2642,8 @@ export default function Pairs() {
         id: "prices",
         data: pairsData.priceA,
         secondaryData: pairsData.priceB,
-        title: `${tickerA} vs ${tickerB} — ${metricA === metricB ? metricA : metricA + " / " + metricB}`,
-        secondaryLabel: `${tickerA} (blue) · ${tickerB} (orange)`,
+        title: `${dispA} vs ${dispB} — ${metricA === metricB ? metricA : metricA + " / " + metricB}`,
+        secondaryLabel: `${dispA} (blue) · ${dispB} (orange)`,
         color: "#0ea5e9",
         secondaryColor: "#f59e0b",
         height: priceH,
@@ -2647,14 +2652,14 @@ export default function Pairs() {
       {
         id: "ratio",
         data: pairsData.ratio,
-        title: `Ratio (${tickerA} / ${tickerB})`,
+        title: `Ratio (${dispA} / ${dispB})`,
         color: "#22c55e",
         height: ratioH,
       },
       {
         id: "logRatio",
         data: pairsData.logRatio,
-        title: `Log Ratio — ln(${tickerA} / ${tickerB})`,
+        title: `Log Ratio — ln(${dispA} / ${dispB})`,
         color: "#a855f7",
         height: ratioH,
         refLines: [{ value: 0, color: "rgba(255,255,255,0.2)", style: LineStyle.Dashed }],
@@ -2692,7 +2697,7 @@ export default function Pairs() {
       {
         id: "percentileRank",
         data: pairsData.percentileRank,
-        title: `Ratio Percentile Rank (${tickerA} / ${tickerB})`,
+        title: `Ratio Percentile Rank (${dispA} / ${dispB})`,
         color: "#10b981",
         height: zH,
         refLines: [
@@ -2718,7 +2723,7 @@ export default function Pairs() {
       {
         id: "spread",
         data: pairsData.spread,
-        title: `Spread (${tickerA} − ${tickerB})`,
+        title: `Spread (${dispA} − ${dispB})`,
         color: "#14b8a6",
         height: ratioH,
         refLines: [{ value: 0, color: "rgba(255,255,255,0.15)", style: LineStyle.Dashed }],
@@ -2726,7 +2731,7 @@ export default function Pairs() {
       {
         id: "rollingBeta",
         data: pairsData.rollingBeta,
-        title: `Rolling Beta (${tickerA} vs ${tickerB}, ${zWindow}d)`,
+        title: `Rolling Beta (${dispA} vs ${dispB}, ${zWindow}d)`,
         color: "#ec4899",
         height: corrH,
         refLines: [
@@ -2755,7 +2760,7 @@ export default function Pairs() {
         ],
       },
     ];
-  }, [pairsData, tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow]);
+  }, [pairsData, dispA, dispB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow]);
 
   return (
     <div className="flex flex-col h-full bg-background" data-testid="pairs-page">
@@ -3290,8 +3295,8 @@ export default function Pairs() {
                     <OlsScatterChart
                       priceA={pairsData.priceA}
                       priceB={pairsData.priceB}
-                      tickerA={tickerA}
-                      tickerB={tickerB}
+                      tickerA={dispA}
+                      tickerB={dispB}
                       isMaximized={maximizedChart === "olsScatter"}
                       onMaximize={setMaximizedChart}
                     />
@@ -3301,8 +3306,8 @@ export default function Pairs() {
                     <PairResidenceChart
                       zScore={pairsData.zScore}
                       percentileRank={pairsData.percentileRank}
-                      tickerA={tickerA}
-                      tickerB={tickerB}
+                      tickerA={dispA}
+                      tickerB={dispB}
                       zWindow={zWindow}
                       isMaximized={maximizedChart === "residence"}
                       onMaximize={setMaximizedChart}
@@ -3313,8 +3318,8 @@ export default function Pairs() {
                     <SignalAnalyzerChart
                       priceA={pairsData.priceA}
                       priceB={pairsData.priceB}
-                      tickerA={tickerA}
-                      tickerB={tickerB}
+                      tickerA={dispA}
+                      tickerB={dispB}
                       isMaximized={maximizedChart === "signalAnalyzer"}
                       onMaximize={setMaximizedChart}
                     />
