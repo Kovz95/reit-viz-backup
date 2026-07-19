@@ -29,6 +29,9 @@ import {
   Palette,
   RotateCcw,
   Download,
+  Hand,
+  Plus,
+  X,
 } from "lucide-react";
 import { navigateToTicker } from "@/lib/navigateToPairs";
 import { isPercentMetric } from "@/lib/metricHelpers";
@@ -75,6 +78,7 @@ interface DragState {
   startY: number;
   currentX: number;
   currentY: number;
+  button?: number;
 }
 
 interface RegressionResult {
@@ -404,9 +408,64 @@ function tCritical(conf: number, dof: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Main Scatter page
+// Multi-pane wrapper: add/remove independent scatter panes, each one screen
+// tall with its own metrics, filters, overlays, and saved workspace state.
 // ---------------------------------------------------------------------------
-export default function Scatter() {
+export default function ScatterPage() {
+  const [paneIds, setPaneIds] = useState<number[]>([1]);
+  const nextIdRef = useRef(2);
+
+  const getPanesState = useCallback(
+    () => ({ paneIds, nextId: nextIdRef.current }),
+    [paneIds]
+  );
+  const restorePanesState = useCallback((saved: any) => {
+    if (Array.isArray(saved?.paneIds) && saved.paneIds.length > 0) setPaneIds(saved.paneIds);
+    if (typeof saved?.nextId === "number") nextIdRef.current = saved.nextId;
+  }, []);
+  useWorkspaceState("scatter-panes", getPanesState, restorePanesState);
+
+  const addPane = useCallback(() => {
+    setPaneIds((p) => [...p, nextIdRef.current++]);
+  }, []);
+  const removePane = useCallback((id: number) => {
+    setPaneIds((p) => (p.length > 1 ? p.filter((x) => x !== id) : p));
+  }, []);
+
+  return (
+    <div className="h-full overflow-y-auto flex flex-col" data-testid="scatter-page-multi">
+      {paneIds.map((id) => (
+        <div
+          key={id}
+          className="h-full flex-shrink-0 flex flex-col border-b-2 border-border"
+          data-testid={`scatter-pane-wrap-${id}`}
+        >
+          <ScatterPane
+            // Pane 1 keeps the historical "scatter" key so existing saved state survives.
+            stateKey={id === 1 ? "scatter" : `scatter-${id}`}
+            paneId={id}
+            paneCount={paneIds.length}
+            onAdd={addPane}
+            onRemove={() => removePane(id)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface ScatterPaneProps {
+  stateKey: string;
+  paneId: number;
+  paneCount: number;
+  onAdd: () => void;
+  onRemove: () => void;
+}
+
+// ---------------------------------------------------------------------------
+// Single scatter pane (the original page content)
+// ---------------------------------------------------------------------------
+function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPaneProps) {
   const { universeTickers } = useAppContext();
   const [metricX, setMetricX] = useState("P/FFO FY2");
   const [metricY, setMetricY] = useState("Dividend Yield");
@@ -444,6 +503,8 @@ export default function Scatter() {
   const [logX, setLogX] = useState(false);
   const [logY, setLogY] = useState(false);
   const [regressionLevel, setRegressionLevel] = useState("none");
+  // "select" = drag draws a zoom/select box (shift+drag pans); "pan" = drag pans.
+  const [dragMode, setDragMode] = useState<"select" | "pan">("select");
 
   // ── Stats / ML overlays ──
   const [showKnn, setShowKnn] = useState(false);
@@ -489,13 +550,14 @@ export default function Scatter() {
       logX,
       logY,
       regressionLevel,
+      dragMode,
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
       showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
       showFwd, fwdHorizon, colorByFwd,
       showBacktest, btSignal, btStep, btLookback,
     }),
     [metricX, metricY, metricZ, classFilters, manualTickers, colorBy, colorMode, colorMetric,
-      showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel,
+      showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel, dragMode,
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
       showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
       showFwd, fwdHorizon, colorByFwd,
@@ -519,6 +581,7 @@ export default function Scatter() {
     if (saved.logX !== undefined) setLogX(saved.logX);
     if (saved.logY !== undefined) setLogY(saved.logY);
     if (saved.regressionLevel !== undefined) setRegressionLevel(saved.regressionLevel);
+    if (saved.dragMode !== undefined) setDragMode(saved.dragMode);
     if (saved.showKnn !== undefined) setShowKnn(saved.showKnn);
     if (saved.knnK !== undefined) setKnnK(saved.knnK);
     if (saved.knnAnchor !== undefined) setKnnAnchor(saved.knnAnchor);
@@ -542,7 +605,7 @@ export default function Scatter() {
     if (saved.btLookback !== undefined) setBtLookback(saved.btLookback);
   }, []);
 
-  useWorkspaceState("scatter", getState, restoreState);
+  useWorkspaceState(stateKey, getState, restoreState);
 
   const [resizeTick, setResizeTick] = useState(0);
   const [viewRange, setViewRange] = useState<ViewRange | null>(null);
@@ -590,7 +653,7 @@ export default function Scatter() {
   const resolvedDate: string = queryData?.resolvedDate ?? "";
 
   // Country / Exchange geo filter (options derived from the full point pool).
-  const geo = useGeoFilter(rawPoints, "scatter-geo");
+  const geo = useGeoFilter(rawPoints, `${stateKey}-geo`);
 
   const categoryValues = useMemo(() => {
     const vals = new Set(rawPoints.map((p: any) => p[colorBy]).filter(Boolean));
@@ -1584,11 +1647,11 @@ export default function Scatter() {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const isPan = e.button === 1 || e.button === 2 || e.shiftKey;
-    const state: DragState = { type: isPan ? "pan" : "select", startX: x, startY: y, currentX: x, currentY: y };
+    const isPan = e.button === 1 || e.button === 2 || e.shiftKey || dragMode === "pan";
+    const state: DragState = { type: isPan ? "pan" : "select", startX: x, startY: y, currentX: x, currentY: y, button: e.button };
     dragRef.current = state;
     if (!isPan) setDragState(state);
-  }, []);
+  }, [dragMode]);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1639,7 +1702,7 @@ export default function Scatter() {
       const drag = dragRef.current;
       dragRef.current = null;
       setDragState(null);
-      if (!drag || drag.type !== "select") return;
+      if (!drag) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -1647,13 +1710,16 @@ export default function Scatter() {
       const h = rect.height;
       const dw = Math.abs(drag.currentX - drag.startX);
       const dh = Math.abs(drag.currentY - drag.startY);
-      if (dw < 5 && dh < 5) {
+      // A near-stationary LEFT press counts as a click in both drag modes, so
+      // point navigation / KNN anchoring keep working in pan mode.
+      if (dw < 5 && dh < 5 && (drag.button ?? 0) === 0) {
         if (hoveredTicker) {
           if (showKnn) setKnnAnchor((prev) => (prev === hoveredTicker ? null : hoveredTicker));
           else navigateToTicker(hoveredTicker);
         }
         return;
       }
+      if (drag.type !== "select") return;
       const { fromCanvasX, fromCanvasY } = getScaleHelpers(w, h);
       const x1 = fromCanvasX(Math.min(drag.startX, drag.currentX));
       const x2 = fromCanvasX(Math.max(drag.startX, drag.currentX));
@@ -1878,6 +1944,35 @@ export default function Scatter() {
             Latest
           </Button>
         )}
+        <div className="ml-auto flex items-center gap-1.5">
+          {paneCount > 1 && (
+            <span className="text-[10px] text-muted-foreground font-mono">pane {paneId}</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 gap-1 text-[11px] px-2"
+            onClick={onAdd}
+            title="Add another independent scatter below"
+            data-testid="scatter-add-pane"
+          >
+            <Plus className="w-3 h-3" />
+            Add scatter
+          </Button>
+          {paneCount > 1 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 gap-1 text-[11px] px-2 text-red-400 hover:text-red-300"
+              onClick={onRemove}
+              title="Remove this scatter pane"
+              data-testid={`scatter-remove-pane-${paneId}`}
+            >
+              <X className="w-3 h-3" />
+              Remove
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Toolbar row 2: toggles */}
@@ -1943,6 +2038,17 @@ export default function Scatter() {
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] text-muted-foreground">Log Y</span>
           <Switch checked={logY} onCheckedChange={setLogY} className="scale-75" />
+        </div>
+        <div className="h-5 w-px bg-border" />
+        <div className="flex items-center gap-1.5" title="On: drag pans the view (shift+drag always pans). Off: drag draws a zoom box.">
+          <Hand className="w-3 h-3 text-muted-foreground" />
+          <span className="text-[11px] text-muted-foreground">Pan drag</span>
+          <Switch
+            checked={dragMode === "pan"}
+            onCheckedChange={(v) => setDragMode(v ? "pan" : "select")}
+            className="scale-75"
+            data-testid="scatter-pan-mode"
+          />
         </div>
       </div>
 
@@ -2199,7 +2305,7 @@ export default function Scatter() {
             style={{
               cursor: dragRef.current
                 ? dragRef.current.type === "pan" ? "grabbing" : "crosshair"
-                : hoveredTicker ? "pointer" : "crosshair",
+                : hoveredTicker ? "pointer" : dragMode === "pan" ? "grab" : "crosshair",
             }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -2279,6 +2385,11 @@ export default function Scatter() {
         {showFwd && !fwdInfo && !isLoading && (
           <div className="absolute bottom-2 left-2 z-10 bg-background/95 border border-amber-500/40 rounded-md px-3 py-1.5 text-[10px] text-amber-400 font-mono">
             Fwd returns need history: set the as-of Date to a past date, then forward performance is measured from there.
+          </div>
+        )}
+        {!isLoading && (
+          <div className="absolute bottom-1 right-2 z-10 text-[9px] text-muted-foreground/60 font-mono pointer-events-none select-none">
+            {dragMode === "pan" ? "drag: pan" : "drag: zoom-select · shift+drag: pan"} · scroll: zoom · dbl-click: reset
           </div>
         )}
       </div>
