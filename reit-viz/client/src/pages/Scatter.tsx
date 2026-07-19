@@ -1805,7 +1805,7 @@ export default function Scatter() {
           <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid="scatter-z">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="max-h-[420px]">
+          <SelectContent>
             <SelectItem value="none">None (uniform)</SelectItem>
             {metricGroups.map(({ category, metrics }) => (
               <div key={category}>
@@ -2378,7 +2378,8 @@ function MetricPicker({ value, onChange, testId, uploadedColumns, groups }: Metr
       <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid={testId}>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className="max-h-[420px]">
+      {/* No max-h cap: fill the available viewport height below the trigger */}
+      <SelectContent>
         {groups.map(({ category, metrics }) => (
           <div key={category}>
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
