@@ -149,6 +149,9 @@ const HORIZON_WINDOWS = [
 
 const DEFAULT_METRICS = ["P/AFFO FY2", "P/FFO FY2", "FY2 AFFO Growth", "Dividend Yield", "3M Price Chg%", "% off 52wk High"];
 
+// Max trading days a metric's last value is carried forward (~1 month).
+const FFILL_BARS = 21;
+
 const DEFAULT_CONFIG: RseConfig = {
   metrics: DEFAULT_METRICS,
   weights: Object.fromEntries(DEFAULT_METRICS.map(k => [k, 1])),
@@ -175,6 +178,25 @@ function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: MetricSeri
   for (const point of series) {
     const idx = dateIndex.get(point.time);
     if (idx !== undefined && point.value != null && Number.isFinite(point.value)) row[idx] = point.value;
+  }
+}
+
+// Carry each metric's last known value forward up to maxBars trading days, so
+// sparsely-updated fundamentals (e.g. Dividend / AFFO payout, which can lag the
+// price series by days or weeks) still count in the snapshot. Prices are NEVER
+// forward-filled — stale prices would fabricate flat returns in the backtest.
+function forwardFillMatrix(panel: MatrixPanel, maxBars: number) {
+  for (const row of panel.matrix) {
+    let lastVal = NaN;
+    let age = 0;
+    for (let d = 0; d < row.length; d++) {
+      if (Number.isFinite(row[d])) {
+        lastVal = row[d];
+        age = 0;
+      } else if (Number.isFinite(lastVal) && ++age <= maxBars) {
+        row[d] = lastVal;
+      }
+    }
   }
 }
 
@@ -902,7 +924,9 @@ export default function RelativeStrength() {
     setProgressMsg("");
     try {
       const [allTickers, tradingDates] = await Promise.all([fetchWorkbookTickers(), fetchTradingDates()]);
-      const tickerList = (appCtx.filteredTickersList ?? allTickers.map((t: { ticker: string }) => t.ticker));
+      // An empty filteredTickersList means the universe context hasn't loaded
+      // yet (startup race) — fall back to the full workbook rather than erroring.
+      const tickerList = (appCtx.filteredTickersList?.length ? appCtx.filteredTickersList : allTickers.map((t: { ticker: string }) => t.ticker));
       const visibleSet = new Set(tickerList.map((t: { ticker: string } | string) => typeof t === "string" ? t : t.ticker));
       const filtered = allTickers.filter((t: { ticker: string }) => visibleSet.has(t.ticker));
       if (filtered.length < 5) throw new Error("Need at least 5 tickers in universe");
@@ -936,6 +960,7 @@ export default function RelativeStrength() {
       }
 
       setProgressMsg("Computing percentiles + z-scores…");
+      for (const m of metrics) forwardFillMatrix(rawPanels[m], FFILL_BARS);
       const peerIndex = buildPeerIndex(filtered, config.xs.peerDimension);
       const metricPanels: Record<string, MetricPanelResult> = {};
       for (const m of metrics) {
