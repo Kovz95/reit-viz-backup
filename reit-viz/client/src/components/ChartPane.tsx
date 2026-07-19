@@ -40,6 +40,7 @@ import {
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
+import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
@@ -1123,15 +1124,40 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
   const patternResults = useMemo(() => {
     const s = getPatternSettings(paneId);
-    if (!s.enabled || patternBars.length < 40) return { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[] };
+    const empty = { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[], bars: patternBars };
+    if (!s.enabled) return empty;
+    // Resample to the selected timeframe before detection. The downsampled bars
+    // keep real daily dates (each bucket's last trading day), so pattern lines
+    // drawn by time land correctly on the daily chart.
+    let detectionBars = patternBars;
+    const tf = s.timeframe;
+    if ((tf === "weekly" || tf === "monthly") && patternBars.length > 0) {
+      try {
+        const ds = weeklyDownsample(
+          {
+            dates: patternBars.map((b) => b.time),
+            closes: patternBars.map((b) => b.close),
+            adjCloses: patternBars.map((b) => b.close),
+            highs: patternBars.map((b) => b.high),
+            lows: patternBars.map((b) => b.low),
+            opens: patternBars.map((b) => b.open),
+          },
+          tf,
+        );
+        detectionBars = ds.dates.map((d: string, i: number) => ({
+          time: d, open: ds.opens[i], high: ds.highs[i], low: ds.lows[i], close: ds.closes[i],
+        }));
+      } catch { detectionBars = patternBars; }
+    }
+    if (detectionBars.length < 40) return { ...empty, bars: detectionBars };
     let patterns: ReturnType<typeof detectChartPatterns> = [];
     try {
-      patterns = detectChartPatterns(patternBars, {
+      patterns = detectChartPatterns(detectionBars, {
         sensitivity: s.sensitivity, lookbackBars: s.lookbackBars, maxPatterns: s.maxPatterns, perPattern: s.perPattern,
       });
     } catch { patterns = []; }
     const relevant = s.showMostRelevant
-      ? rankRelevance(patterns, patternBars, s.lookbackBars).slice(0, 5).map((p) => ({
+      ? rankRelevance(patterns, detectionBars, s.lookbackBars).slice(0, 5).map((p) => ({
           id: `${p.key}-${p.endIdx}`,
           label: p.label,
           direction: p.direction,
@@ -1139,7 +1165,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           components: p.components ?? { confidence: 0, recency: 0, proximity: 0 },
         }))
       : [];
-    return { patterns, relevant };
+    return { patterns, relevant, bars: detectionBars };
     // patternNonce forces re-read of localStorage settings.
   }, [patternBars, paneId, patternNonce]);
 
@@ -2959,8 +2985,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     }
 
     // ── Chart patterns (Pattern Recognition) ──
-    if (patternResults.patterns.length && patternBars.length) {
-      const timeAt = (idx: number) => patternBars[idx]?.time;
+    // Index into the SAME (possibly weekly/monthly-resampled) bars detection ran
+    // on — their dates are real trading days, so they plot on the daily chart.
+    if (patternResults.patterns.length && patternResults.bars.length) {
+      const timeAt = (idx: number) => patternResults.bars[idx]?.time;
       for (const pat of patternResults.patterns) {
         const color = pat.direction > 0 ? "#26a69a" : pat.direction < 0 ? "#ef5350" : "#3b82f6";
         let labelSeries: ISeriesApi<any> | null = null;
