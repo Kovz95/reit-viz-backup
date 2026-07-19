@@ -42,6 +42,7 @@ const METRIC_GROUPS_BASE: Record<string, string[]> = {
     "FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth",
     "FY1 EPS Growth", "FY2 EPS Growth",
   ],
+  "Company Defaults": ["EPS (Default)", "EPS Growth (Default)"],
 };
 
 

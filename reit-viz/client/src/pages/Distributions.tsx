@@ -14,6 +14,7 @@ import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories"
 // Curated metrics always offered; unioned at runtime with the loaded universe.
 const ALL_METRICS_BASE = [
   "close", "open", "high", "low",
+  "EPS (Default)", "EPS Growth (Default)",
   "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
   "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
   "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate",

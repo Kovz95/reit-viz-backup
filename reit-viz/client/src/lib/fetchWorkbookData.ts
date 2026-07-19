@@ -8,7 +8,7 @@
 // GET /api/ticker/<sym> via toSparseMetrics (gL). See lib/tickerData.ts.
 
 import { fetchTickerRaw, toSparseMetrics, type SparsePair } from "@/lib/tickerData";
-import { isDefaultEpsMetric } from "@/lib/defaultEarningsMetric";
+import { isDefaultMetricName } from "@/lib/defaultEarningsMetric";
 
 export interface WorkbookDataResult {
   ticker: string;
@@ -97,33 +97,26 @@ export async function fetchScatterData(
   extra?: Record<string, string>,
   colorMetric?: string
 ): Promise<ScatterQueryResult> {
-  const anyPseudo = [metricX, metricY, metricZ, colorMetric].some((m) => isDefaultEpsMetric(m));
-  if (!anyPseudo) {
+  const pseudoName = [metricX, metricY, metricZ, colorMetric].find((m) => isDefaultMetricName(m));
+  if (!pseudoName) {
     return fetchScatterRaw(metricX, metricY, metricZ, asOf, extra, colorMetric);
   }
 
-  // "EPS (Default)": the server resolves nothing per ticker, so fetch the
-  // scatter once per referenced concrete metric (substituted on the pseudo
-  // axes) and stitch each ticker's values from its resolved metric's call.
-  const { getDefaultEpsConfig, referencedEpsMetrics, resolveDefaultEps } =
-    await import("@/lib/defaultEarningsMetric");
+  // Default pseudo-metrics: the server resolves nothing per ticker, so fetch
+  // once per referenced concrete metric (substituted on the axes carrying THIS
+  // pseudo name) and stitch each ticker's values from its resolved metric's
+  // call. Recursion handles a second pseudo name on other axes (e.g. X = EPS
+  // (Default), Y = EPS Growth (Default)).
+  const { referencedMetricsFor, resolveDefaultMetricFor } = await import("@/lib/defaultEarningsMetric");
   const { getTickers } = await import("@/lib/dataService");
-  const cfg = getDefaultEpsConfig();
   const metas = await getTickers();
-  const resolvedBy = new Map(metas.map((t: any) => [t.ticker, resolveDefaultEps(t, cfg)]));
-  const referenced = referencedEpsMetrics(cfg);
-  const sub = (m: string | undefined, repl: string) => (m && isDefaultEpsMetric(m) ? repl : m);
+  const resolvedBy = new Map(metas.map((t: any) => [t.ticker, resolveDefaultMetricFor(pseudoName, t)]));
+  const referenced = referencedMetricsFor(pseudoName);
+  const sub = (m: string | undefined, repl: string) => (m === pseudoName ? repl : m);
 
   const calls = await Promise.all(
     referenced.map((dm) =>
-      fetchScatterRaw(
-        sub(metricX, dm)!,
-        sub(metricY, dm)!,
-        sub(metricZ, dm),
-        asOf,
-        extra,
-        sub(colorMetric, dm)
-      )
+      fetchScatterData(sub(metricX, dm)!, sub(metricY, dm)!, sub(metricZ, dm), asOf, extra, sub(colorMetric, dm))
     )
   );
   const byMetric = new Map(
@@ -131,14 +124,14 @@ export async function fetchScatterData(
   );
   const base = calls[0];
   const points = base.points.map((p) => {
-    const src = byMetric.get(resolvedBy.get(p.ticker) ?? cfg.fallback)?.get(p.ticker);
+    const src = byMetric.get(resolvedBy.get(p.ticker) ?? referenced[0])?.get(p.ticker);
     if (!src) return p;
     return {
       ...p,
-      x: isDefaultEpsMetric(metricX) ? src.x : p.x,
-      y: isDefaultEpsMetric(metricY) ? src.y : p.y,
-      z: isDefaultEpsMetric(metricZ) ? src.z : p.z,
-      colorVal: isDefaultEpsMetric(colorMetric) ? src.colorVal : p.colorVal,
+      x: metricX === pseudoName ? src.x : p.x,
+      y: metricY === pseudoName ? src.y : p.y,
+      z: metricZ === pseudoName ? src.z : p.z,
+      colorVal: colorMetric === pseudoName ? src.colorVal : p.colorVal,
     };
   });
   return { ...base, points };

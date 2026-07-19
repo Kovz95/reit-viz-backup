@@ -148,6 +148,7 @@ const METRIC_OPTIONS: Record<string, string[]> = {
     "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2",
     "P/AFFO LTM", "P/AFFO FY2", "Implied Cap Rate",
   ],
+  "Company Defaults": ["EPS (Default)", "EPS Growth (Default)"],
   Yields: [
     "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
     "Dividend Yield",

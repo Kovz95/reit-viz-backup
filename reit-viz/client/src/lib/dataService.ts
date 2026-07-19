@@ -270,11 +270,9 @@ export async function injectFundamentalSheets(
 }
 
 import {
-  DEFAULT_EPS_METRIC,
-  isDefaultEpsMetric,
-  referencedEpsMetrics,
-  resolveDefaultEps,
-  getDefaultEpsConfig,
+  isDefaultMetricName,
+  referencedMetricsFor,
+  resolveDefaultMetricFor,
 } from "./defaultEarningsMetric";
 
 // ---- Percentage conversion ----
@@ -622,10 +620,10 @@ export async function getOhlcData(symbol: string): Promise<OhlcPoint[]> {
 
 /** Get time series for a specific metric of a ticker */
 export async function getMetricSeries(symbol: string, metric: string): Promise<TimeValue[]> {
-  // "EPS (Default)" pseudo-metric: resolve per ticker via the Universe-tab rules.
-  if (isDefaultEpsMetric(metric)) {
+  // Default pseudo-metrics: resolve per ticker via the Universe-tab rules.
+  if (isDefaultMetricName(metric)) {
     const metas = await getTickers();
-    return getMetricSeries(symbol, resolveDefaultEps(metas.find((t) => t.ticker === symbol)));
+    return getMetricSeries(symbol, resolveDefaultMetricFor(metric, metas.find((t) => t.ticker === symbol)));
   }
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
@@ -980,6 +978,17 @@ export async function getPairsData(
     b?: { dates: string[]; values: number[] } | null;
   }
 ): Promise<PairsData> {
+  // Default pseudo-metrics resolve per LEG: each ticker uses its own
+  // company-default metric (e.g. GB leg → EPRA EPS, US leg → FFO FY2).
+  if (isDefaultMetricName(metricA) || isDefaultMetricName(metricB)) {
+    const metas = await getTickers();
+    if (isDefaultMetricName(metricA)) {
+      metricA = resolveDefaultMetricFor(metricA, metas.find((t) => t.ticker === tickerA));
+    }
+    if (isDefaultMetricName(metricB)) {
+      metricB = resolveDefaultMetricFor(metricB, metas.find((t) => t.ticker === tickerB));
+    }
+  }
   const dates = await getDates();
 
   const dateIdx = new Map<string, number>();
@@ -1297,17 +1306,25 @@ export async function getMultiMetricForAllTickers(
   dateParam?: string,
   avgDays?: number
 ): Promise<(ClassifiedBase & { values: Record<string, number | null> })[]> {
-  // "EPS (Default)": fetch every metric the rules reference, then pick the
-  // resolved one per ticker (rows carry the classification meta needed).
-  if (metrics.includes(DEFAULT_EPS_METRIC)) {
-    const cfg = getDefaultEpsConfig();
+  // Default pseudo-metrics: fetch every metric the rules reference, then pick
+  // the resolved one per ticker (rows carry the classification meta needed).
+  const pseudoMetrics = metrics.filter((m) => isDefaultMetricName(m));
+  if (pseudoMetrics.length > 0) {
     const expanded = [
-      ...new Set([...metrics.filter((m) => m !== DEFAULT_EPS_METRIC), ...referencedEpsMetrics(cfg)]),
+      ...new Set([
+        ...metrics.filter((m) => !isDefaultMetricName(m)),
+        ...pseudoMetrics.flatMap((p) => referencedMetricsFor(p)),
+      ]),
     ];
     const rows = await getMultiMetricForAllTickers(expanded, dateParam, avgDays);
     return rows.map((r) => ({
       ...r,
-      values: { ...r.values, [DEFAULT_EPS_METRIC]: r.values[resolveDefaultEps(r, cfg)] ?? null },
+      values: {
+        ...r.values,
+        ...Object.fromEntries(
+          pseudoMetrics.map((p) => [p, r.values[resolveDefaultMetricFor(p, r)] ?? null])
+        ),
+      },
     }));
   }
   const tickersMeta = await getTickers();
@@ -1443,9 +1460,9 @@ export async function getMetricTrailing(
   metric: string,
   trailingDays: number = 250
 ): Promise<number[]> {
-  if (isDefaultEpsMetric(metric)) {
+  if (isDefaultMetricName(metric)) {
     const metas = await getTickers();
-    return getMetricTrailing(symbol, resolveDefaultEps(metas.find((t) => t.ticker === symbol)), trailingDays);
+    return getMetricTrailing(symbol, resolveDefaultMetricFor(metric, metas.find((t) => t.ticker === symbol)), trailingDays);
   }
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
@@ -1487,15 +1504,14 @@ export async function getMetricTrailingAllTickers(
 ): Promise<(ClassifiedBase & { current: number | null; values: number[]; dates: string[] })[]> {
   const tickersMeta = await getTickers();
 
-  // "EPS (Default)" resolves per ticker, which the server batch cannot do —
-  // fan out one batch call per referenced metric and stitch rows per ticker.
-  if (isDefaultEpsMetric(metric)) {
-    const cfg = getDefaultEpsConfig();
-    const referenced = referencedEpsMetrics(cfg);
+  // Default pseudo-metrics resolve per ticker, which the server batch cannot
+  // do — fan out one batch call per referenced metric and stitch per ticker.
+  if (isDefaultMetricName(metric)) {
+    const referenced = referencedMetricsFor(metric);
     const perMetric = await Promise.all(referenced.map((m) => getMetricTrailingAllTickers(m, trailingDays)));
     const byMetric = new Map(referenced.map((m, i) => [m, new Map(perMetric[i].map((r) => [r.ticker, r]))]));
     return tickersMeta.map((t) => {
-      const resolved = resolveDefaultEps(t, cfg);
+      const resolved = resolveDefaultMetricFor(metric, t);
       const row = byMetric.get(resolved)?.get(t.ticker);
       return row ?? {
         ticker: t.ticker, name: t.name,

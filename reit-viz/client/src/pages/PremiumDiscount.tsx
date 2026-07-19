@@ -67,6 +67,7 @@ const VALUATION_METRICS = [
 ];
 
 const GROWTH_METRICS = [
+  { id: "EPS Growth (Default)", label: "EPS Growth (Default)" },
   { id: "FY1 EPS Growth", label: "FY1 EPS Growth" },
   { id: "FY2 EPS Growth", label: "FY2 EPS Growth" },
   { id: "FY1 FFO Growth", label: "FY1 FFO Growth" },

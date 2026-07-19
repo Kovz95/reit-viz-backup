@@ -93,9 +93,9 @@ const HORIZON_LABELS = HORIZONS.map(h => h.label);
 const METRIC_GROUPS_BASE: Record<string, string[]> = {
   Valuation:   ["P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2", "EV/EBITDA LTM", "EV/EBITDA FY2", "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2"],
   Yields:      ["FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2", "Dividend Yield"],
-  Growth:      ["FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth", "FY1 EPS Growth", "FY2 EPS Growth"],
+  Growth:      ["EPS Growth (Default)", "FY1 FFO Growth", "FY2 FFO Growth", "FY1 AFFO Growth", "FY2 AFFO Growth", "FY1 EPS Growth", "FY2 EPS Growth"],
   Performance: ["1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%", "% off 52wk High", "% off 52wk Low"],
-  Estimates:   ["EPS FY2", "FFO FY2", "AFFO FY2", "EBITDA FY2"],
+  Estimates:   ["EPS (Default)", "EPS FY2", "FFO FY2", "AFFO FY2", "EBITDA FY2"],
   Other:       ["close", "Enterprise Value", "Dividend Yield"],
 };
 
