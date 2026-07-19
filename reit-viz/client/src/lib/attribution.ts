@@ -3,13 +3,22 @@
 //   Δln(P) = Δln(M) + Δln(E)   where P = M × E (price = multiple × estimate).
 //
 // Shared by the /attribution page (single-ticker charts + universe table) and the
-// /ranking page (optional per-ticker attribution columns). The pure math lives
-// here so both consume one implementation.
+// /ranking page (optional per-ticker attribution columns). The pure math and the
+// basis-series loader live here so both consume one implementation.
 
-export type BasisMode = "auto" | "FFO" | "EPS";
+import { fetchMetricSeries, type MetricSeriesPoint } from "./fetchMetricSeries";
+
+export type BasisFamily = "FFO" | "AFFO" | "EPS";
+export type BasisPeriod = "FY1" | "FY2" | "LTM";
+export type BasisMode = "auto" | BasisFamily;
+
+export const BASIS_FAMILIES: BasisFamily[] = ["FFO", "AFFO", "EPS"];
+export const BASIS_PERIODS: BasisPeriod[] = ["FY1", "FY2", "LTM"];
 
 export interface BasisDef {
-  multiple: string;
+  // Stored multiple series to try, in order. FY1 multiples are stored under
+  // parenthesized names ("P/FFO (FY1)"); FY2/LTM are plain ("P/FFO FY2").
+  multiples: string[];
   estimate: string;
   label: string;
 }
@@ -32,11 +41,28 @@ export interface AttributionRow {
   sameDirection: boolean;
 }
 
-// Multiple/estimate pairs. FFO basis for REITs; EPS basis as the generic fallback.
-export const BASIS_DEFS: Record<"FFO" | "EPS", BasisDef> = {
-  FFO: { multiple: "P/FFO FY2", estimate: "FFO FY2", label: "P/FFO × FFO FY2" },
-  EPS: { multiple: "P/E FY2", estimate: "EPS FY2", label: "P/E × EPS FY2" },
+// The workbook carries FY1/FY2/LTM estimate vintages (no FY3 exists in the
+// source data). FFO/AFFO bases for REITs; EPS basis as the generic fallback.
+const MULTIPLE_NAMES: Record<BasisFamily, Record<BasisPeriod, string[]>> = {
+  FFO:  { FY1: ["P/FFO (FY1)", "P/FFO FY1"],   FY2: ["P/FFO FY2"],  LTM: ["P/FFO LTM"] },
+  AFFO: { FY1: ["P/AFFO (FY1)", "P/AFFO FY1"], FY2: ["P/AFFO FY2"], LTM: ["P/AFFO LTM"] },
+  EPS:  { FY1: ["P/E (FY1)", "P/E FY1"],       FY2: ["P/E FY2"],    LTM: ["P/E LTM"] },
 };
+
+const ESTIMATE_NAMES: Record<BasisFamily, Record<BasisPeriod, string>> = {
+  FFO:  { FY1: "FFO FY1",  FY2: "FFO FY2",  LTM: "FFO LTM" },
+  AFFO: { FY1: "AFFO FY1", FY2: "AFFO FY2", LTM: "AFFO LTM" },
+  EPS:  { FY1: "EPS FY1",  FY2: "EPS FY2",  LTM: "EPS LTM" },
+};
+
+export function getBasisDef(family: BasisFamily, period: BasisPeriod): BasisDef {
+  const estimate = ESTIMATE_NAMES[family][period];
+  return {
+    multiples: MULTIPLE_NAMES[family][period],
+    estimate,
+    label: `${family === "EPS" ? "P/E" : `P/${family}`} × ${estimate}`,
+  };
+}
 
 export const WINDOW_OPTIONS = [
   { label: "1M", days: 21 }, { label: "3M", days: 63 }, { label: "6M", days: 126 },
@@ -63,6 +89,45 @@ export function alignData(
     dates.push(p.time); closes.push(p.value); mults.push(m); ests.push(e);
   }
   return { dates, close: closes, multiple: mults, estimate: ests };
+}
+
+// Fetch + align close/multiple/estimate for one ticker under a basis family and
+// estimate period. "auto" tries FFO first (REITs), then EPS (generic fallback).
+// If no stored multiple series exists for the combination, the multiple is
+// derived pointwise as close ÷ estimate, which makes the identity exact.
+export async function loadBasisAligned(
+  ticker: string,
+  mode: BasisMode,
+  period: BasisPeriod,
+  opts?: { end?: string },
+): Promise<{ basis: BasisFamily; aligned: AlignedData } | null> {
+  const closeSeries = await fetchMetricSeries(ticker, "close", opts);
+  if (!closeSeries.length) return null;
+  const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPS"] : [mode];
+  for (const family of families) {
+    const def = getBasisDef(family, period);
+    const estSeries = await fetchMetricSeries(ticker, def.estimate, opts);
+    if (!estSeries.length) continue;
+    let multSeries: MetricSeriesPoint[] = [];
+    for (const name of def.multiples) {
+      multSeries = await fetchMetricSeries(ticker, name, opts);
+      if (multSeries.length) break;
+    }
+    if (!multSeries.length) {
+      const estMap = new Map(estSeries.map((p) => [p.time, p.value]));
+      multSeries = [];
+      for (const p of closeSeries) {
+        const e = estMap.get(p.time);
+        if (e !== undefined && e > 0 && Number.isFinite(p.value) && p.value > 0) {
+          multSeries.push({ time: p.time, value: p.value / e });
+        }
+      }
+    }
+    if (!multSeries.length) continue;
+    const aligned = alignData(closeSeries, multSeries, estSeries);
+    if (aligned.dates.length >= 2) return { basis: family, aligned };
+  }
+  return null;
 }
 
 // Resolve the window-start index. windowDays === 0 means YTD (first date of the

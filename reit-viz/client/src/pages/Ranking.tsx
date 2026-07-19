@@ -2,13 +2,15 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync, getTickers } from "@/lib/dataService";
-import { fetchMetricSeries } from "@/lib/queryClient";
 import {
-  BASIS_DEFS,
   WINDOW_OPTIONS,
-  alignData,
+  BASIS_FAMILIES,
+  BASIS_PERIODS,
+  loadBasisAligned,
   computeAttributionRow,
   type AttributionRow,
+  type BasisMode,
+  type BasisPeriod,
 } from "@/lib/attribution";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import type { RevisionData, ClassifiedBase } from "@/lib/dataService";
@@ -621,7 +623,9 @@ export default function Ranking() {
   const [revMetric, setRevMetric] = useState("FFO FY2");
   const [showAttribution, setShowAttribution] = useState(false);
   const [attrWindow, setAttrWindow] = useState(252); // trading days; 0 = YTD
-  const [attrBasis, setAttrBasis] = useState<"auto" | "FFO" | "EPS">("auto");
+  const [attrCustomWindow, setAttrCustomWindow] = useState(false);
+  const [attrBasis, setAttrBasis] = useState<BasisMode>("auto");
+  const [attrPeriod, setAttrPeriod] = useState<BasisPeriod>("FY2");
   const [metricWeights, setMetricWeights] = useState<Record<string, number>>({});
   const [metricDirections, setMetricDirections] = useState<Record<string, number>>({});
   const [showWeights, setShowWeights] = useState(false);
@@ -674,12 +678,13 @@ export default function Ranking() {
     showAttribution,
     attrWindow,
     attrBasis,
+    attrPeriod,
     customTemplates: memTemplates,
     colVis,
     groupBy,
     metricWeights,
     metricDirections,
-  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
+  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, attrPeriod, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
 
   const restoreRanking = useCallback((state: any) => {
     if (state.metrics !== undefined) setMetrics(state.metrics);
@@ -696,6 +701,7 @@ export default function Ranking() {
     if (state.showAttribution !== undefined) setShowAttribution(state.showAttribution);
     if (state.attrWindow !== undefined) setAttrWindow(state.attrWindow);
     if (state.attrBasis !== undefined) setAttrBasis(state.attrBasis);
+    if (state.attrPeriod !== undefined) setAttrPeriod(state.attrPeriod);
     if (state.customTemplates !== undefined) setMemTemplates(state.customTemplates);
     if (state.colVis !== undefined) setColVis({ ...DEFAULT_COL_VIS, ...state.colVis, groupPctile: { ...DEFAULT_COL_VIS.groupPctile, ...state.colVis?.groupPctile }, groupZScore: { ...DEFAULT_COL_VIS.groupZScore, ...state.colVis?.groupZScore } });
     if (state.groupBy !== undefined) setGroupBy(state.groupBy);
@@ -765,7 +771,7 @@ export default function Ranking() {
     [rawRows],
   );
   const { data: attributionMap = {} } = useQuery({
-    queryKey: ["ranking-attribution", attrTickerSig, attrWindow, attrBasis, dateInput],
+    queryKey: ["ranking-attribution", attrTickerSig, attrWindow, attrBasis, attrPeriod, dateInput],
     queryFn: async () => {
       const tickers = attrTickerSig ? attrTickerSig.split(",") : [];
       const end = dateInput || undefined; // trim series to the as-of date when set
@@ -778,18 +784,9 @@ export default function Ranking() {
           if (i >= tickers.length) return;
           const ticker = tickers[i];
           try {
-            const closeSeries = await fetchMetricSeries(ticker, "close", { end });
-            let basis: "FFO" | "EPS" = attrBasis === "auto" ? "FFO" : attrBasis;
-            let multSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].multiple, { end });
-            let estSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].estimate, { end });
-            if (attrBasis === "auto" && (!multSeries.length || !estSeries.length)) {
-              basis = "EPS";
-              multSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.multiple, { end });
-              estSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.estimate, { end });
-            }
-            if (!closeSeries.length || !multSeries.length || !estSeries.length) continue;
-            const data = alignData(closeSeries, multSeries, estSeries);
-            const row = computeAttributionRow(ticker, basis, data, attrWindow);
+            const res = await loadBasisAligned(ticker, attrBasis, attrPeriod, { end });
+            if (!res) continue;
+            const row = computeAttributionRow(ticker, `${res.basis} ${attrPeriod}`, res.aligned, attrWindow);
             if (row) map[ticker] = row;
           } catch { /* skip ticker */ }
         }
@@ -1406,24 +1403,80 @@ export default function Ranking() {
 
         {showAttribution && (
           <>
-            <Select value={String(attrWindow)} onValueChange={(v) => setAttrWindow(parseInt(v))}>
-              <SelectTrigger className="h-6 text-[11px] w-auto min-w-[70px]" data-testid="attr-window-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {WINDOW_OPTIONS.map((o) => (
-                  <SelectItem key={o.label} value={String(o.days)}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={attrBasis} onValueChange={(v) => setAttrBasis(v as "auto" | "FFO" | "EPS")}>
+            {(() => {
+              const isPreset = WINDOW_OPTIONS.some((o) => o.days === attrWindow);
+              const showCustom = attrCustomWindow || !isPreset;
+              return (
+                <>
+                  <Select
+                    value={showCustom ? "custom" : String(attrWindow)}
+                    onValueChange={(v) => {
+                      if (v === "custom") {
+                        setAttrCustomWindow(true);
+                        setTimeout(() => {
+                          const el = document.getElementById("ranking-attr-custom-window") as HTMLInputElement | null;
+                          if (el) { el.focus(); el.select(); }
+                        }, 50);
+                      } else {
+                        setAttrCustomWindow(false);
+                        setAttrWindow(parseInt(v));
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-6 text-[11px] w-auto min-w-[70px]" data-testid="attr-window-select">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WINDOW_OPTIONS.map((o) => (
+                        <SelectItem key={o.label} value={String(o.days)}>{o.label}</SelectItem>
+                      ))}
+                      <SelectItem value="custom">Custom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {showCustom && (
+                    <Input
+                      id="ranking-attr-custom-window"
+                      type="number"
+                      min={2}
+                      max={5000}
+                      placeholder="days"
+                      className="h-6 w-[64px] text-[11px] px-1"
+                      defaultValue={attrWindow || ""}
+                      data-testid="attr-custom-window-input"
+                      onBlur={(e) => {
+                        const v = parseInt(e.target.value);
+                        if (!isNaN(v) && v >= 2 && v <= 5000) setAttrWindow(v);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const v = parseInt((e.target as HTMLInputElement).value);
+                          if (!isNaN(v) && v >= 2 && v <= 5000) setAttrWindow(v);
+                        }
+                      }}
+                    />
+                  )}
+                </>
+              );
+            })()}
+            <Select value={attrBasis} onValueChange={(v) => setAttrBasis(v as BasisMode)}>
               <SelectTrigger className="h-6 text-[11px] w-auto min-w-[80px]" data-testid="attr-basis-select">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="auto">Auto</SelectItem>
-                <SelectItem value="FFO">FFO</SelectItem>
-                <SelectItem value="EPS">EPS</SelectItem>
+                {BASIS_FAMILIES.map((f) => (
+                  <SelectItem key={f} value={f}>{f}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={attrPeriod} onValueChange={(v) => setAttrPeriod(v as BasisPeriod)}>
+              <SelectTrigger className="h-6 text-[11px] w-auto min-w-[64px]" data-testid="attr-period-select" title="Estimate vintage used for the multiple × estimate decomposition (the workbook carries FY1, FY2 and LTM)">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BASIS_PERIODS.map((p) => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </>
@@ -1665,7 +1718,7 @@ export default function Ranking() {
                 {showAttribution && (
                   <th colSpan={5} className="text-center px-1 py-1 border-l border-border/30">
                     <span className="text-muted-foreground font-medium text-[10px]">
-                      Attribution ({attrWindow === 0 ? "YTD" : WINDOW_OPTIONS.find((o) => o.days === attrWindow)?.label ?? `${attrWindow}d`}, {attrBasis})
+                      Attribution ({attrWindow === 0 ? "YTD" : WINDOW_OPTIONS.find((o) => o.days === attrWindow)?.label ?? `${attrWindow}d`}, {attrBasis === "auto" ? "Auto" : attrBasis} {attrPeriod})
                     </span>
                   </th>
                 )}

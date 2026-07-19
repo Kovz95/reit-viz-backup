@@ -1,7 +1,6 @@
 // Reconstructed from recovered-bundle/Attribution-DFOfL3Ra.js on 2026-06-11
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useAppContext } from "@/lib/appContext";
-import { fetchMetricSeries } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import {
   createChart,
@@ -15,12 +14,16 @@ import type { IChartApi, ISeriesApi } from "lightweight-charts";
 import { Download, RefreshCw, Info, SortAsc, SortDesc } from "lucide-react";
 import { ArrowUpDown } from "@/components/ui/icons";
 import {
-  BASIS_DEFS,
   WINDOW_OPTIONS,
-  alignData,
+  BASIS_FAMILIES,
+  BASIS_PERIODS,
+  getBasisDef,
   getStartIndex,
+  loadBasisAligned,
   computeAttributionRow,
   type BasisMode,
+  type BasisFamily,
+  type BasisPeriod,
   type AlignedData,
   type AttributionRow,
 } from "@/lib/attribution";
@@ -317,13 +320,14 @@ interface SinglePanelProps {
   cumPath: CumPoint[];
   rollingPath: RollingPoint[];
   summary: AttributionSummary | null;
-  resolvedBasis: "FFO" | "EPS";
+  resolvedBasis: BasisFamily;
+  basisPeriod: BasisPeriod;
   windowDays: number;
   rollingDays: number;
   loadingSingle: boolean;
 }
 
-function SinglePanel({ visibleTickers, activeTicker, setActiveTicker, tickerSearch, setTickerSearch, aligned, cumPath, rollingPath, summary, resolvedBasis, windowDays, rollingDays, loadingSingle }: SinglePanelProps) {
+function SinglePanel({ visibleTickers, activeTicker, setActiveTicker, tickerSearch, setTickerSearch, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle }: SinglePanelProps) {
   return (
     <div className="flex h-full">
       {/* Ticker sidebar */}
@@ -353,7 +357,7 @@ function SinglePanel({ visibleTickers, activeTicker, setActiveTicker, tickerSear
             <div className="flex items-center gap-6 flex-wrap">
               <div>
                 <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Ticker / Basis</div>
-                <div className="text-sm font-bold">{activeTicker} <span className="text-[10px] text-muted-foreground font-normal">({BASIS_DEFS[resolvedBasis].label})</span></div>
+                <div className="text-sm font-bold">{activeTicker} <span className="text-[10px] text-muted-foreground font-normal">({getBasisDef(resolvedBasis, basisPeriod).label})</span></div>
                 <div className="text-[9px] text-muted-foreground">{summary.startDate} → {summary.endDate}</div>
               </div>
               <div>
@@ -496,12 +500,13 @@ export default function Attribution() {
 
   const [mode, setMode] = useState<"single" | "table">("single");
   const [basisMode, setBasisMode] = useState<BasisMode>("auto");
+  const [basisPeriod, setBasisPeriod] = useState<BasisPeriod>("FY2");
   const [tickerSearch, setTickerSearch] = useState("");
   const [windowDays, setWindowDays] = useState(252);
   const [rollingDays, setRollingDays] = useState(21);
   const [searchInput, setSearchInput] = useState("");
   const [aligned, setAligned] = useState<AlignedData | null>(null);
-  const [resolvedBasis, setResolvedBasis] = useState<"FFO" | "EPS">("FFO");
+  const [resolvedBasis, setResolvedBasis] = useState<BasisFamily>("FFO");
   const [loadingSingle, setLoadingSingle] = useState(false);
   const [tableRows, setTableRows] = useState<AttributionRow[]>([]);
   const [loadingTable, setLoadingTable] = useState(false);
@@ -523,25 +528,16 @@ export default function Attribution() {
     if (!activeTicker) return;
     setLoadingSingle(true);
     try {
-      const closeSeries = await fetchMetricSeries(activeTicker, "close");
-      let basis: "FFO" | "EPS" = basisMode === "auto" ? "FFO" : basisMode;
-      let multSeries = await fetchMetricSeries(activeTicker, BASIS_DEFS[basis].multiple);
-      let estSeries = await fetchMetricSeries(activeTicker, BASIS_DEFS[basis].estimate);
-      if (basisMode === "auto" && (!multSeries.length || !estSeries.length)) {
-        basis = "EPS";
-        multSeries = await fetchMetricSeries(activeTicker, BASIS_DEFS.EPS.multiple);
-        estSeries = await fetchMetricSeries(activeTicker, BASIS_DEFS.EPS.estimate);
-      }
-      const data = alignData(closeSeries, multSeries, estSeries);
-      setAligned(data);
-      setResolvedBasis(basis);
+      const res = await loadBasisAligned(activeTicker, basisMode, basisPeriod);
+      setAligned(res?.aligned ?? null);
+      if (res) setResolvedBasis(res.basis);
     } catch (err) {
       console.error("Attribution single loader failed", err);
       setAligned(null);
     } finally {
       setLoadingSingle(false);
     }
-  }, [activeTicker, basisMode]);
+  }, [activeTicker, basisMode, basisPeriod]);
 
   useEffect(() => { loadSingle(); }, [loadSingle]);
 
@@ -562,18 +558,9 @@ export default function Attribution() {
         if (i >= tickers.length) return;
         const ticker = tickers[i];
         try {
-          const closeSeries = await fetchMetricSeries(ticker, "close");
-          let basis: "FFO" | "EPS" = basisMode === "auto" ? "FFO" : basisMode;
-          let multSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].multiple);
-          let estSeries = await fetchMetricSeries(ticker, BASIS_DEFS[basis].estimate);
-          if (basisMode === "auto" && (!multSeries.length || !estSeries.length)) {
-            basis = "EPS";
-            multSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.multiple);
-            estSeries = await fetchMetricSeries(ticker, BASIS_DEFS.EPS.estimate);
-          }
-          if (!closeSeries.length || !multSeries.length || !estSeries.length) { done++; setTableProgress({ done, total: tickers.length }); continue; }
-          const data = alignData(closeSeries, multSeries, estSeries);
-          const row = computeAttributionRow(ticker, basis, data, windowDays);
+          const res = await loadBasisAligned(ticker, basisMode, basisPeriod);
+          if (!res) { done++; setTableProgress({ done, total: tickers.length }); continue; }
+          const row = computeAttributionRow(ticker, `${res.basis} ${basisPeriod}`, res.aligned, windowDays);
           if (row) results.push(row);
         } catch { /* skip */ }
         done++;
@@ -582,7 +569,7 @@ export default function Attribution() {
     }
     await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
     if (!token.cancelled) { setTableRows(results); setLoadingTable(false); setTableProgress(null); }
-  }, [tickers, windowDays, basisMode]);
+  }, [tickers, windowDays, basisMode, basisPeriod]);
 
   // Derived paths
   const cumPath = useMemo(() => aligned ? buildCumulativePath(aligned, getStartIndex(aligned.dates, windowDays)) : [], [aligned, windowDays]);
@@ -630,13 +617,13 @@ export default function Attribution() {
       if (!cumPath.length) return;
       const header = "date,total_ln_pct,multiple_ln_pct,estimate_ln_pct";
       const rows = cumPath.map(p => `${p.date},${p.total.toFixed(4)},${p.mult.toFixed(4)},${p.est.toFixed(4)}`);
-      const meta = `# ${activeTicker} | basis=${resolvedBasis} | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | start=${summary?.startDate ?? ""} | end=${summary?.endDate ?? ""}`;
+      const meta = `# ${activeTicker} | basis=${resolvedBasis} ${basisPeriod} | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | start=${summary?.startDate ?? ""} | end=${summary?.endDate ?? ""}`;
       downloadCsv([meta, header, ...rows].join("\n"), `attribution_${activeTicker}_${windowDays === 0 ? "ytd" : `${windowDays}d`}.csv`);
     } else {
       if (!sortedRows.length) return;
       const header = "ticker,basis,total_pct,multiple_pct,estimate_pct,multiple_share,estimate_share,same_direction";
       const rows = sortedRows.map(r => [r.ticker, r.basis, r.totalPct.toFixed(4), r.multiplePct.toFixed(4), r.estimatePct.toFixed(4), r.multipleShare.toFixed(4), r.estimateShare.toFixed(4), r.sameDirection ? "1" : "0"].join(","));
-      const meta = `# universe attribution | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | basis=${basisMode === "auto" ? "auto(FFO->EPS)" : basisMode}`;
+      const meta = `# universe attribution | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | basis=${basisMode === "auto" ? "auto(FFO->EPS)" : basisMode} ${basisPeriod}`;
       downloadCsv([meta, header, ...rows].join("\n"), `attribution_universe_${windowDays === 0 ? "ytd" : `${windowDays}d`}.csv`);
     }
   }
@@ -667,9 +654,20 @@ export default function Attribution() {
           <div className="flex items-center gap-1">
             <span className="text-[10px] text-muted-foreground">Basis:</span>
             <div className="flex items-center gap-0.5 border border-border rounded">
-              {(["auto", "FFO", "EPS"] as const).map(b => (
+              {(["auto", ...BASIS_FAMILIES] as BasisMode[]).map(b => (
                 <button key={b} onClick={() => setBasisMode(b)} className={`px-1.5 py-0.5 text-[10px] ${basisMode === b ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
                   {b === "auto" ? "Auto" : b}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Estimate period */}
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">Est:</span>
+            <div className="flex items-center gap-0.5 border border-border rounded">
+              {BASIS_PERIODS.map(p => (
+                <button key={p} onClick={() => setBasisPeriod(p)} className={`px-1.5 py-0.5 text-[10px] ${basisPeriod === p ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                  {p}
                 </button>
               ))}
             </div>
@@ -682,6 +680,25 @@ export default function Attribution() {
                 <button key={o.label} onClick={() => setWindowDays(o.days)} className={`px-1.5 py-0.5 text-[10px] ${windowDays === o.days ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>{o.label}</button>
               ))}
             </div>
+            <input
+              type="number"
+              min={2}
+              max={5000}
+              placeholder="custom d"
+              defaultValue={WINDOW_OPTIONS.some(o => o.days === windowDays) ? "" : windowDays}
+              className={`w-[64px] bg-transparent border rounded px-1 py-0.5 text-[10px] ${WINDOW_OPTIONS.some(o => o.days === windowDays) ? "border-border" : "border-primary text-primary"}`}
+              title="Custom look-back window in trading days"
+              onBlur={e => {
+                const v = parseInt(e.target.value);
+                if (!isNaN(v) && v >= 2 && v <= 5000) setWindowDays(v);
+              }}
+              onKeyDown={e => {
+                if (e.key === "Enter") {
+                  const v = parseInt((e.target as HTMLInputElement).value);
+                  if (!isNaN(v) && v >= 2 && v <= 5000) setWindowDays(v);
+                }
+              }}
+            />
           </div>
           {/* Rolling (single mode only) */}
           {mode === "single" && (
@@ -720,6 +737,7 @@ export default function Attribution() {
             rollingPath={rollingPath}
             summary={summary}
             resolvedBasis={resolvedBasis}
+            basisPeriod={basisPeriod}
             windowDays={windowDays}
             rollingDays={rollingDays}
             loadingSingle={loadingSingle}
