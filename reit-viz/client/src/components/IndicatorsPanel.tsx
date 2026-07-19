@@ -397,7 +397,7 @@ export default function IndicatorsPanel({
     on: boolean,
     n?: number,
     anchorDate?: string | null,
-    timeframe?: "daily" | "weekly",
+    timeframe?: "daily" | "weekly" | "monthly",
   ) => {
     if (!on) {
       setActiveIndicators({ ...activeIndicators, fractalLines: undefined });
@@ -1044,10 +1044,10 @@ export default function IndicatorsPanel({
                 />
               </div>
 
-              {/* Timeframe: detect pivots on daily or weekly bars */}
+              {/* Timeframe: detect pivots on daily, weekly, or monthly bars */}
               <div className="flex gap-1 items-center">
                 <span className="text-[10px] text-muted-foreground w-12">Timeframe</span>
-                {(["daily", "weekly"] as const).map((tf) => (
+                {(["daily", "weekly", "monthly"] as const).map((tf) => (
                   <Button
                     key={tf}
                     variant={(activeIndicators.fractalLines?.timeframe ?? "daily") === tf ? "default" : "secondary"}
@@ -1056,7 +1056,7 @@ export default function IndicatorsPanel({
                     onClick={() => updateFractal(true, undefined, undefined, tf)}
                     data-testid={`panel-fractal-tf-${tf}`}
                   >
-                    {tf === "daily" ? "Daily" : "Weekly"}
+                    {tf === "daily" ? "Daily" : tf === "weekly" ? "Weekly" : "Monthly"}
                   </Button>
                 ))}
               </div>

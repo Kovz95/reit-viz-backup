@@ -7,7 +7,7 @@ export interface PatternSettings {
   autoRescan: boolean;
   maxPatterns: number;
   lookbackBars: number;
-  timeframe: "daily" | "weekly" | "both";
+  timeframe: "daily" | "weekly" | "monthly" | "both";
   showMostRelevant: boolean;
   perPattern?: Record<string, boolean>;
 }

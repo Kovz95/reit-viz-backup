@@ -42,12 +42,13 @@ const PATTERN_LIST: { key: string; label: string }[] = [
 ];
 
 const TIMEFRAMES: {
-  key: "daily" | "weekly" | "both";
+  key: "daily" | "weekly" | "monthly" | "both";
   label: string;
   desc: string;
 }[] = [
   { key: "daily", label: "Daily", desc: "Detect on daily bars" },
   { key: "weekly", label: "Weekly", desc: "Detect on weekly bars (overlaid on chart)" },
+  { key: "monthly", label: "Monthly", desc: "Detect on monthly bars (overlaid on chart)" },
   { key: "both", label: "Both", desc: "Daily (solid) + Weekly (dashed, thicker)" },
 ];
 

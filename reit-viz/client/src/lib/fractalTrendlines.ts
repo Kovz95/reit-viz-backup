@@ -91,6 +91,40 @@ export function resampleWeekly(bars: FractalBar[]): FractalBar[] {
 }
 
 /**
+ * Collapse a daily OHLC series into monthly bars: each calendar month becomes one
+ * bar with high = max of the month, low = min of the month, dated to the month's
+ * LAST daily bar (a real chart date, so line points map onto the daily x-axis).
+ * Bars must be sorted ascending by time. Mirrors resampleWeekly.
+ */
+export function resampleMonthly(bars: FractalBar[]): FractalBar[] {
+  if (!Array.isArray(bars) || bars.length === 0) return [];
+  const out: FractalBar[] = [];
+  let curKey = "";
+  let high = -Infinity;
+  let low = Infinity;
+  let lastTime = "";
+  const flush = () => {
+    if (lastTime && Number.isFinite(high) && Number.isFinite(low)) {
+      out.push({ time: lastTime, high, low });
+    }
+  };
+  for (const b of bars) {
+    const k = b.time.slice(0, 7); // YYYY-MM
+    if (k !== curKey) {
+      flush();
+      curKey = k;
+      high = -Infinity;
+      low = Infinity;
+    }
+    if (Number.isFinite(b.high)) high = Math.max(high, b.high);
+    if (Number.isFinite(b.low)) low = Math.min(low, b.low);
+    lastTime = b.time; // last daily bar seen in this month (input is ascending)
+  }
+  flush();
+  return out;
+}
+
+/**
  * Compute fractal resistance/support trendlines for an OHLC bar series.
  *
  * @param bars      OHLC bars sorted ascending by time.

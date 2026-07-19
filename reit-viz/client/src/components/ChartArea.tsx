@@ -482,7 +482,7 @@ export default function ChartArea({
   drawAllRef.current = drawAll;
   // Fractal Anchor tool: period + timeframe applied when anchoring / editing fractal lines.
   const [fractalN, setFractalN] = useState(10);
-  const [fractalTimeframe, setFractalTimeframe] = useState<"daily" | "weekly">("daily");
+  const [fractalTimeframe, setFractalTimeframe] = useState<"daily" | "weekly" | "monthly">("daily");
 
   // Changing the all-panes mode clears any current measurement (predictable reset).
   useEffect(() => {
@@ -1117,7 +1117,7 @@ export default function ChartArea({
   // every pane that already has fractal lines on, so the change is visible at once.
   // Build the next map from the current one (a plain object, not a function updater,
   // so setIndicatorsMap doesn't propagate to the parent inside a render-phase updater).
-  const applyFractalParams = useCallback((patch: { n?: number; timeframe?: "daily" | "weekly" }) => {
+  const applyFractalParams = useCallback((patch: { n?: number; timeframe?: "daily" | "weekly" | "monthly" }) => {
     if (patch.n !== undefined) setFractalN(patch.n);
     if (patch.timeframe !== undefined) setFractalTimeframe(patch.timeframe);
     const next = { ...indicatorsMap };
@@ -2238,17 +2238,17 @@ export default function ChartArea({
               title="Custom fractal period"
               data-testid="fractal-period-custom"
             />
-            {(["daily", "weekly"] as const).map((tf) => (
+            {(["daily", "weekly", "monthly"] as const).map((tf) => (
               <Button
                 key={tf}
                 variant="ghost"
                 size="sm"
                 className={`h-6 px-2 text-[11px] ${tf === "daily" ? "ml-1 " : ""}${fractalTimeframe === tf ? "border border-primary text-primary" : "text-muted-foreground"}`}
                 onClick={() => applyFractalParams({ timeframe: tf })}
-                title={tf === "weekly" ? "Detect pivots on weekly bars" : "Detect pivots on daily bars"}
+                title={tf === "weekly" ? "Detect pivots on weekly bars" : tf === "monthly" ? "Detect pivots on monthly bars" : "Detect pivots on daily bars"}
                 data-testid={`fractal-tf-${tf}`}
               >
-                {tf === "daily" ? "Daily" : "Weekly"}
+                {tf === "daily" ? "Daily" : tf === "weekly" ? "Weekly" : "Monthly"}
               </Button>
             ))}
           </div>

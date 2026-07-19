@@ -336,9 +336,10 @@ export function SeededOverlaysManager({
     const v = Number(localStorage.getItem("reit-viz-atl-n"));
     return Number.isFinite(v) && v >= 2 && v <= 50 ? v : 10;
   });
-  const [timeframe, setTimeframe] = useState<string>(() =>
-    localStorage.getItem("reit-viz-atl-tf") === "weekly" ? "weekly" : "daily"
-  );
+  const [timeframe, setTimeframe] = useState<string>(() => {
+    const v = localStorage.getItem("reit-viz-atl-tf");
+    return v === "weekly" || v === "monthly" ? v : "daily";
+  });
   const [multi, setMulti] = useState<boolean>(
     () => localStorage.getItem("reit-viz-atl-multi") !== "0"
   );
@@ -499,6 +500,7 @@ export function SeededOverlaysManager({
               >
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
               </select>
             </div>
             <Button

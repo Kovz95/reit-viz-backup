@@ -39,7 +39,7 @@ import {
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
-import { computeFractalTrendlines, resampleWeekly } from "@/lib/fractalTrendlines";
+import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
@@ -130,8 +130,8 @@ export interface ActiveIndicators {
   ad?: boolean;
   cmf?: number;       // period
   /** DojiEmoji fractal trendlines. n = fractal period; anchorDate = "as-of" replay date (undefined = latest bar);
-   *  timeframe = bar granularity pivots are detected on ("weekly" resamples daily→weekly first; default "daily"). */
-  fractalLines?: { n: number; anchorDate?: string; timeframe?: "daily" | "weekly" };
+   *  timeframe = bar granularity pivots are detected on ("weekly"/"monthly" resample daily bars first; default "daily"). */
+  fractalLines?: { n: number; anchorDate?: string; timeframe?: "daily" | "weekly" | "monthly" };
   /** Auto-detected diagonal support/resistance trendlines (pivot-pair RANSAC). */
   autoTrendlines?: boolean;
   /** Auto-detected horizontal support/resistance levels. */
@@ -2848,12 +2848,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const daily = (ohlcData as any[])
         .filter((b) => b && typeof b.time === "string")
         .map((b) => ({ time: b.time as string, high: Number(b.high), low: Number(b.low) }));
-      // Weekly: collapse each ISO week's daily bars into one (high=max, low=min),
-      // dated to the week's last bar (a real chart date) so pivots detect weekly swings.
+      // Weekly/Monthly: collapse each period's daily bars into one (high=max,
+      // low=min), dated to the period's last bar (a real chart date) so pivots
+      // detect weekly/monthly swings.
       const bars =
-        timeframe === "weekly" ? resampleWeekly(daily) : daily;
+        timeframe === "weekly" ? resampleWeekly(daily)
+        : timeframe === "monthly" ? resampleMonthly(daily)
+        : daily;
       const fr = computeFractalTrendlines(bars, n, anchorDate);
-      const tfLabel = timeframe === "weekly" ? ", W" : "";
+      const tfLabel = timeframe === "weekly" ? ", W" : timeframe === "monthly" ? ", M" : "";
       const anchorLabel = anchorDate ? ` @ ${anchorDate}` : "";
 
       const drawLine = (line: typeof fr.resistance, color: string, label: string) => {
