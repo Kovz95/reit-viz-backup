@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { navigateToTicker } from "@/lib/navigateToPairs";
 import { isPercentMetric } from "@/lib/metricHelpers";
-import { getTickers, getTickersCacheSync } from "@/lib/dataService";
+import { getTickers, getTickersCacheSync, getDates } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { filterScatterPoints } from "@/lib/filterHelpers";
 import { defaultClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/filterHelpers";
@@ -137,6 +137,13 @@ const PRESET_VIEWS = [
   { label: "Valuation vs Size", x: "P/FFO FY2", y: "Dividend Yield", z: "Enterprise Value" },
 ];
 
+const FWD_HORIZONS = [
+  { key: "21", label: "1M", days: 21 },
+  { key: "63", label: "3M", days: 63 },
+  { key: "126", label: "6M", days: 126 },
+  { key: "252", label: "1Y", days: 252 },
+];
+
 const REGRESSION_LEVEL_OPTIONS = [
   { key: "none", label: "All (universe)" },
   { key: "economy", label: "Economy" },
@@ -206,6 +213,28 @@ function mulberry32(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function pearsonCorr(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length);
+  if (n < 3) return 0;
+  let sa = 0, sb = 0;
+  for (let i = 0; i < n; i++) { sa += a[i]; sb += b[i]; }
+  const ma = sa / n, mb = sb / n;
+  let sab = 0, saa = 0, sbb = 0;
+  for (let i = 0; i < n; i++) { const da = a[i] - ma, db = b[i] - mb; sab += da * db; saa += da * da; sbb += db * db; }
+  const denom = Math.sqrt(saa * sbb);
+  return denom < 1e-12 ? 0 : sab / denom;
+}
+
+function retSummary(rets: number[]): { n: number; mean: number; median: number; hitRate: number } | null {
+  const n = rets.length;
+  if (n === 0) return null;
+  const sorted = [...rets].sort((x, y) => x - y);
+  const mean = rets.reduce((s, v) => s + v, 0) / n;
+  const median = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+  const hitRate = (rets.filter((v) => v > 0).length / n) * 100;
+  return { n, mean, median, hitRate };
 }
 
 function sampleStdArr(vals: number[]): number {
@@ -393,6 +422,10 @@ export default function Scatter() {
   const [showConfBand, setShowConfBand] = useState(false);
   const [confLevel, setConfLevel] = useState(95);
   const [showMarginals, setShowMarginals] = useState(false);
+  // Forward-return analytics (requires a historical as-of date)
+  const [showFwd, setShowFwd] = useState(false);
+  const [fwdHorizon, setFwdHorizon] = useState("63");
+  const [colorByFwd, setColorByFwd] = useState(false);
 
   const getState = useCallback(
     () => ({
@@ -414,11 +447,13 @@ export default function Scatter() {
       regressionLevel,
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
       showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
+      showFwd, fwdHorizon, colorByFwd,
     }),
     [metricX, metricY, metricZ, classFilters, manualTickers, colorBy, colorMode, colorMetric,
       showRegression, showOutliers, showQuadrants, refLineX, refLineY, logX, logY, regressionLevel,
       showKnn, knnK, knnAnchor, showKmeans, kmeansK, showMahalanobis, mahalThreshold,
-      showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals]
+      showHulls, showKde, showLoess, loessSpan, showConfBand, confLevel, showMarginals,
+      showFwd, fwdHorizon, colorByFwd]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -452,6 +487,9 @@ export default function Scatter() {
     if (saved.showConfBand !== undefined) setShowConfBand(saved.showConfBand);
     if (saved.confLevel !== undefined) setConfLevel(saved.confLevel);
     if (saved.showMarginals !== undefined) setShowMarginals(saved.showMarginals);
+    if (saved.showFwd !== undefined) setShowFwd(saved.showFwd);
+    if (saved.fwdHorizon !== undefined) setFwdHorizon(saved.fwdHorizon);
+    if (saved.colorByFwd !== undefined) setColorByFwd(saved.colorByFwd);
   }, []);
 
   useWorkspaceState("scatter", getState, restoreState);
@@ -616,6 +654,117 @@ export default function Scatter() {
       .slice(0, Math.max(1, knnK));
     return { anchor: knnAnchor, neighbors: dists, neighborSet: new Set(dists.map((n) => n.ticker)) };
   }, [showKnn, knnAnchor, knnK, transformedPoints, axisStd]);
+
+  // ── Forward-return analytics ──
+  // Trading-date axis (for horizon → forward-date resolution).
+  const { data: allDates } = useQuery({
+    queryKey: ["dates"],
+    queryFn: getDates,
+    staleTime: Infinity,
+    enabled: showFwd,
+  });
+
+  // Resolve as-of + forward trading dates. Null when as-of is the latest date
+  // (no forward window exists) — the UI hints to pick a historical date.
+  const fwdInfo = useMemo(() => {
+    if (!showFwd || !allDates || allDates.length === 0 || !resolvedDate) return null;
+    const asOfIdx = allDates.indexOf(resolvedDate);
+    if (asOfIdx < 0) return null;
+    const wantIdx = asOfIdx + (parseInt(fwdHorizon) || 63);
+    const fwdIdx = Math.min(wantIdx, allDates.length - 1);
+    if (fwdIdx <= asOfIdx) return null;
+    return {
+      asOfDate: allDates[asOfIdx],
+      fwdDate: allDates[fwdIdx],
+      actualDays: fwdIdx - asOfIdx,
+      truncated: wantIdx > allDates.length - 1,
+    };
+  }, [showFwd, allDates, resolvedDate, fwdHorizon]);
+
+  // ticker → forward return % over the horizon, from two whole-universe close snapshots.
+  const { data: fwdReturns } = useQuery({
+    queryKey: ["scatter-fwd", fwdInfo?.asOfDate, fwdInfo?.fwdDate],
+    enabled: !!fwdInfo,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const [asOf, fwd] = await Promise.all([
+        fetchScatterData("close", "close", undefined, fwdInfo!.asOfDate),
+        fetchScatterData("close", "close", undefined, fwdInfo!.fwdDate),
+      ]);
+      const asOfClose: Record<string, number> = {};
+      for (const p of asOf.points) if (p.x !== null && p.x !== undefined) asOfClose[p.ticker] = p.x;
+      const rets: Record<string, number> = {};
+      for (const p of fwd.points) {
+        const c0 = asOfClose[p.ticker];
+        if (p.x !== null && p.x !== undefined && c0 !== undefined && c0 > 0) {
+          rets[p.ticker] = (p.x / c0 - 1) * 100;
+        }
+      }
+      return rets;
+    },
+  });
+
+  const activeFwdReturns = showFwd && fwdInfo ? fwdReturns : undefined;
+
+  // Universe (visible points) forward-return summary — the benchmark.
+  const universeFwd = useMemo(() => {
+    if (!activeFwdReturns) return null;
+    return retSummary(
+      transformedPoints
+        .map((p) => activeFwdReturns[p.ticker])
+        .filter((v): v is number => v !== undefined)
+    );
+  }, [activeFwdReturns, transformedPoints]);
+
+  // KNN cohort forward performance: anchor, each neighbor, and cohort stats vs universe.
+  const knnFwd = useMemo(() => {
+    if (!activeFwdReturns || !knnResult) return null;
+    const anchorRet = activeFwdReturns[knnResult.anchor];
+    const rows = knnResult.neighbors.map((n) => ({
+      ticker: n.ticker,
+      d: n.d,
+      ret: activeFwdReturns[n.ticker],
+    }));
+    const cohort = retSummary(rows.map((r) => r.ret).filter((v): v is number => v !== undefined));
+    return { anchorRet, rows, cohort };
+  }, [activeFwdReturns, knnResult]);
+
+  // Neighborhood IC: corr(own fwd return, avg fwd return of k nearest neighbors).
+  // High IC ⇒ position in this X/Y plane clustered forward outcomes (was predictive).
+  const neighborhoodIC = useMemo(() => {
+    if (!activeFwdReturns) return null;
+    const pts = transformedPoints
+      .filter((p) => activeFwdReturns[p.ticker] !== undefined)
+      .map((p) => ({ x: p.x / axisStd.sx, y: p.y / axisStd.sy, ret: activeFwdReturns[p.ticker]! }));
+    const n = pts.length;
+    if (n < 10) return null;
+    const own: number[] = [], nbAvg: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const ds: { d: number; ret: number }[] = [];
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        ds.push({ d: (pts[i].x - pts[j].x) ** 2 + (pts[i].y - pts[j].y) ** 2, ret: pts[j].ret });
+      }
+      ds.sort((a, b) => a.d - b.d);
+      const kk = Math.min(Math.max(1, knnK), ds.length);
+      let s = 0;
+      for (let m = 0; m < kk; m++) s += ds[m].ret;
+      own.push(pts[i].ret);
+      nbAvg.push(s / kk);
+    }
+    return { ic: pearsonCorr(own, nbAvg), n };
+  }, [activeFwdReturns, transformedPoints, axisStd, knnK]);
+
+  // Symmetric color scale for fwd-return coloring (red = worst, green = best).
+  const fwdColorScale = useMemo(() => {
+    if (!colorByFwd || !activeFwdReturns) return null;
+    let maxAbs = 0;
+    for (const p of transformedPoints) {
+      const r = activeFwdReturns[p.ticker];
+      if (r !== undefined && Math.abs(r) > maxAbs) maxAbs = Math.abs(r);
+    }
+    return maxAbs > 0 ? { maxAbs } : null;
+  }, [colorByFwd, activeFwdReturns, transformedPoints]);
 
   // Mahalanobis outliers (scale-invariant, uses X/Y covariance).
   const mahalResult = useMemo(() => {
@@ -954,6 +1103,11 @@ export default function Scatter() {
     });
 
     const getPointColor = (p: ScatterPoint) => {
+      if (fwdColorScale && activeFwdReturns) {
+        const r = activeFwdReturns[p.ticker];
+        if (r === undefined) return "#475569";
+        return hslGradientHex(0.5 + r / (2 * fwdColorScale.maxAbs));
+      }
       if (kmeansResult) {
         const c = kmeansResult.clusterOf[p.ticker] ?? 0;
         return CLUSTER_COLORS[c % CLUSTER_COLORS.length];
@@ -1102,6 +1256,10 @@ export default function Scatter() {
           const pctC = isPercentMetric(colorMetric) ? "%" : "";
           label += `, ${colorMetric}=${p.colorVal.toFixed(2)}${pctC}`;
         }
+        if (activeFwdReturns && activeFwdReturns[p.ticker] !== undefined) {
+          const r = activeFwdReturns[p.ticker];
+          label += `, fwd=${r >= 0 ? "+" : ""}${r.toFixed(1)}%`;
+        }
         if (overallRegression) {
           const resid = p.y - (overallRegression.slope * p.x + overallRegression.intercept);
           label += ` (resid=${resid.toFixed(2)})`;
@@ -1182,7 +1340,7 @@ export default function Scatter() {
     showQuadrants, refX, refY, activeRange, getScaleHelpers, margins, dragState, viewRange,
     logX, logY, colorMode, colorMetric, colorMetricRange,
     kmeansResult, knnResult, mahalResult, hullsResult, loessResult, confBandResult,
-    showKde, showMarginals, axisStd,
+    showKde, showMarginals, axisStd, activeFwdReturns, fwdColorScale,
   ]);
 
   // ---- Mouse handlers ----
@@ -1362,7 +1520,8 @@ export default function Scatter() {
 
   const handleExportCsv = () => {
     const extraCol = colorMode === "metric" ? "," + colorMetric : "";
-    const header = `Ticker,Name,Subindustry,${metricX},${metricY}${metricZ !== "none" ? "," + metricZ : ""}${extraCol}${overallRegression ? ",Residual" : ""}`;
+    const fwdCol = activeFwdReturns && fwdInfo ? `,Fwd ${FWD_HORIZONS.find((h) => h.key === fwdHorizon)?.label ?? fwdHorizon} %` : "";
+    const header = `Ticker,Name,Subindustry,${metricX},${metricY}${metricZ !== "none" ? "," + metricZ : ""}${extraCol}${overallRegression ? ",Residual" : ""}${fwdCol}`;
     const rows = transformedPoints.map((p) => {
       let row = `${p.ticker},"${p.name}","${p.subindustry}",${p.x},${p.y}${metricZ !== "none" ? "," + (p.z ?? "") : ""}`;
       if (colorMode === "metric") row += `,${p.colorVal ?? ""}`;
@@ -1370,6 +1529,7 @@ export default function Scatter() {
         const resid = p.y - (overallRegression.slope * p.x + overallRegression.intercept);
         row += `,${resid.toFixed(4)}`;
       }
+      if (activeFwdReturns && fwdInfo) row += `,${activeFwdReturns[p.ticker]?.toFixed(4) ?? ""}`;
       return row;
     });
     const csv = [header, ...rows].join("\n");
@@ -1598,6 +1758,35 @@ export default function Scatter() {
           <span className="text-[11px] text-muted-foreground">Marginals</span>
           <Switch checked={showMarginals} onCheckedChange={setShowMarginals} className="scale-75" data-testid="scatter-marginals" />
         </div>
+        <div className="h-5 w-px bg-border" />
+        <div className="flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Fwd returns</span>
+          <Switch checked={showFwd} onCheckedChange={setShowFwd} className="scale-75" data-testid="scatter-fwd" />
+          {showFwd && (
+            <>
+              <Select value={fwdHorizon} onValueChange={setFwdHorizon}>
+                <SelectTrigger className="h-6 text-[11px] w-[58px]" data-testid="scatter-fwd-horizon">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {FWD_HORIZONS.map((h) => (
+                    <SelectItem key={h.key} value={h.key}>{h.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-[11px] text-muted-foreground">color</span>
+              <Switch checked={colorByFwd} onCheckedChange={setColorByFwd} className="scale-75" data-testid="scatter-fwd-color" />
+              {!fwdInfo && (
+                <span className="text-[10px] text-amber-400 font-mono">set a past as-of date</span>
+              )}
+              {fwdInfo && (
+                <span className="text-[10px] text-muted-foreground font-mono">
+                  {fwdInfo.asOfDate} → {fwdInfo.fwdDate}{fwdInfo.truncated ? ` (only ${fwdInfo.actualDays}d avail)` : ""}
+                </span>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Toolbar row 3: filters */}
@@ -1649,7 +1838,7 @@ export default function Scatter() {
 
       {/* Legend row */}
       <div className="flex items-center gap-2 px-3 py-0.5 border-b border-border/30 overflow-x-auto flex-shrink-0">
-        {colorMode === "metric" && colorMetricRange ? (
+        {fwdColorScale ? null : colorMode === "metric" && colorMetricRange ? (
           <div className="flex items-center gap-2">
             <Palette className="w-3 h-3 text-muted-foreground" />
             <span className="text-[10px] text-muted-foreground font-mono">
@@ -1704,6 +1893,39 @@ export default function Scatter() {
             </span>
           </>
         )}
+        {fwdColorScale && (
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div className="h-3 w-px bg-border mx-1" />
+            <span className="text-[10px] text-muted-foreground font-mono">
+              Fwd {FWD_HORIZONS.find((h) => h.key === fwdHorizon)?.label}
+            </span>
+            <span className="text-[10px] text-muted-foreground font-mono">-{fwdColorScale.maxAbs.toFixed(0)}%</span>
+            <div
+              className="h-2.5 rounded-sm flex-shrink-0"
+              style={{
+                width: 90,
+                background: `linear-gradient(to right, ${hslGradientColor(0)}, ${hslGradientColor(0.5)}, ${hslGradientColor(1)})`,
+              }}
+            />
+            <span className="text-[10px] text-muted-foreground font-mono">+{fwdColorScale.maxAbs.toFixed(0)}%</span>
+          </div>
+        )}
+        {universeFwd && (
+          <div className="flex items-center gap-2 flex-shrink-0" data-testid="scatter-fwd-summary">
+            <div className="h-3 w-px bg-border mx-1" />
+            <span className="text-[10px] text-sky-400 font-mono">
+              Universe fwd (n={universeFwd.n}): avg {universeFwd.mean >= 0 ? "+" : ""}{universeFwd.mean.toFixed(1)}% · med {universeFwd.median >= 0 ? "+" : ""}{universeFwd.median.toFixed(1)}% · hit {universeFwd.hitRate.toFixed(0)}%
+            </span>
+            {neighborhoodIC && (
+              <span
+                className="text-[10px] text-purple-400 font-mono"
+                title="Corr(own fwd return, avg fwd return of k nearest neighbors). High ⇒ position in this plane clustered outcomes."
+              >
+                Nbhd IC (k={knnK}): {neighborhoodIC.ic.toFixed(2)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Canvas */}
@@ -1744,6 +1966,62 @@ export default function Scatter() {
             <RotateCcw className="w-3 h-3" />
             Reset Zoom
           </Button>
+        )}
+        {knnFwd && fwdInfo && (
+          <div
+            className="absolute bottom-2 left-2 z-10 bg-background/95 backdrop-blur-sm border border-border rounded-md px-3 py-2 max-w-[300px] shadow-lg"
+            data-testid="scatter-knn-fwd-panel"
+          >
+            <div className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider mb-1">
+              KNN Fwd Performance · {FWD_HORIZONS.find((h) => h.key === fwdHorizon)?.label}
+            </div>
+            <div className="text-[10px] text-muted-foreground font-mono mb-1.5">
+              {fwdInfo.asOfDate} → {fwdInfo.fwdDate}
+            </div>
+            <div className="text-[11px] font-mono mb-1">
+              <span className="text-amber-400 font-semibold">{knnResult!.anchor}</span>{" "}
+              {knnFwd.anchorRet !== undefined ? (
+                <span className={knnFwd.anchorRet >= 0 ? "text-green-400" : "text-red-400"}>
+                  {knnFwd.anchorRet >= 0 ? "+" : ""}{knnFwd.anchorRet.toFixed(1)}%
+                </span>
+              ) : (
+                <span className="text-muted-foreground">n/a</span>
+              )}
+            </div>
+            <div className="max-h-[130px] overflow-y-auto mb-1.5">
+              {knnFwd.rows.map((r) => (
+                <div key={r.ticker} className="flex items-center justify-between text-[10px] font-mono gap-3">
+                  <span className="text-cyan-300">{r.ticker}</span>
+                  <span className="text-muted-foreground">d={r.d.toFixed(2)}</span>
+                  {r.ret !== undefined ? (
+                    <span className={r.ret >= 0 ? "text-green-400" : "text-red-400"}>
+                      {r.ret >= 0 ? "+" : ""}{r.ret.toFixed(1)}%
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">n/a</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {knnFwd.cohort && (
+              <div className="text-[10px] font-mono text-foreground border-t border-border/50 pt-1">
+                Neighbors: avg {knnFwd.cohort.mean >= 0 ? "+" : ""}{knnFwd.cohort.mean.toFixed(1)}% · med {knnFwd.cohort.median >= 0 ? "+" : ""}{knnFwd.cohort.median.toFixed(1)}% · hit {knnFwd.cohort.hitRate.toFixed(0)}%
+              </div>
+            )}
+            {knnFwd.cohort && universeFwd && (
+              <div className="text-[10px] font-mono text-muted-foreground">
+                vs universe avg:{" "}
+                <span className={knnFwd.cohort.mean - universeFwd.mean >= 0 ? "text-green-400" : "text-red-400"}>
+                  {knnFwd.cohort.mean - universeFwd.mean >= 0 ? "+" : ""}{(knnFwd.cohort.mean - universeFwd.mean).toFixed(1)}%
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+        {showFwd && !fwdInfo && !isLoading && (
+          <div className="absolute bottom-2 left-2 z-10 bg-background/95 border border-amber-500/40 rounded-md px-3 py-1.5 text-[10px] text-amber-400 font-mono">
+            Fwd returns need history: set the as-of Date to a past date, then forward performance is measured from there.
+          </div>
         )}
       </div>
     </div>
