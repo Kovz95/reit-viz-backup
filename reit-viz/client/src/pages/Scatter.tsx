@@ -32,6 +32,7 @@ import {
   Hand,
   Plus,
   X,
+  Save,
 } from "lucide-react";
 import { navigateToTicker } from "@/lib/navigateToPairs";
 import { isPercentMetric } from "@/lib/metricHelpers";
@@ -166,6 +167,24 @@ const FWD_HORIZONS = [
   { key: "126", label: "6M", days: 126 },
   { key: "252", label: "1Y", days: 252 },
 ];
+
+// User-saved layout presets — full pane-state snapshots in localStorage
+// (durable across sessions, shared by all panes).
+const PRESETS_STORAGE_KEY = "reit-viz-scatter-presets";
+
+function loadSavedPresets(): Record<string, any> {
+  try {
+    return JSON.parse(window.localStorage.getItem(PRESETS_STORAGE_KEY) || "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function persistSavedPresets(presets: Record<string, any>) {
+  try {
+    window.localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch { /* storage full / unavailable */ }
+}
 
 const REGRESSION_LEVEL_OPTIONS = [
   { key: "none", label: "All (universe)" },
@@ -606,6 +625,28 @@ function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPa
   }, []);
 
   useWorkspaceState(stateKey, getState, restoreState);
+
+  // ── Saved layout presets ──
+  const [savedPresets, setSavedPresets] = useState<Record<string, any>>(() => loadSavedPresets());
+  const handleSavePreset = useCallback(() => {
+    const name = window.prompt("Preset name:", `${metricX} vs ${metricY}`);
+    if (!name || !name.trim()) return;
+    const next = { ...loadSavedPresets(), [name.trim()]: getState() };
+    persistSavedPresets(next);
+    setSavedPresets(next);
+  }, [metricX, metricY, getState]);
+  const handleApplyPreset = useCallback((name: string) => {
+    const preset = loadSavedPresets()[name];
+    if (preset) restoreState(preset);
+  }, [restoreState]);
+  const handleDeletePreset = useCallback((name: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const next = { ...loadSavedPresets() };
+    delete next[name];
+    persistSavedPresets(next);
+    setSavedPresets(next);
+  }, []);
 
   const [resizeTick, setResizeTick] = useState(0);
   const [viewRange, setViewRange] = useState<ViewRange | null>(null);
@@ -1851,16 +1892,48 @@ function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPa
     <div className="flex flex-col h-full bg-background" data-testid="scatter-page">
       {/* Toolbar row 1 */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-wrap">
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={(open) => { if (open) setSavedPresets(loadSavedPresets()); }}>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-6 gap-1 text-[11px] px-2">
               <LayoutGrid className="w-3 h-3" />
               Templates
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
+          <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuItem
+              className="text-[11px] cursor-pointer gap-1.5"
+              onClick={handleSavePreset}
+              data-testid="scatter-save-preset"
+            >
+              <Save className="w-3 h-3" />
+              Save current layout as preset…
+            </DropdownMenuItem>
+            {Object.keys(savedPresets).length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-[10px]">My Presets</DropdownMenuLabel>
+                {Object.keys(savedPresets).sort().map((name) => (
+                  <DropdownMenuItem
+                    key={name}
+                    className="text-[11px] cursor-pointer flex items-center justify-between gap-2"
+                    onClick={() => handleApplyPreset(name)}
+                    data-testid={`scatter-preset-${name.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
+                  >
+                    <span className="truncate">{name}</span>
+                    <button
+                      className="flex-shrink-0 text-muted-foreground hover:text-red-400"
+                      onClick={(e) => handleDeletePreset(name, e)}
+                      title="Delete preset"
+                      data-testid={`scatter-preset-del-${name.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
             <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[10px]">Preset Views</DropdownMenuLabel>
             {PRESET_VIEWS.map((preset) => (
               <DropdownMenuItem
                 key={preset.label}
