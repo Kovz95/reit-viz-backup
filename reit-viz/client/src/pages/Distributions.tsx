@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useBaskets } from "@/lib/useBaskets";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
+import { metricMultiplier } from "@/lib/dataService";
 import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
 import { Loader2 } from "lucide-react";
 import { useUniverseDefaults } from "@/lib/universeDefaults";
@@ -490,15 +491,18 @@ export default function Distributions() {
       try {
         const series = await fetchMetricSeries(ticker, selectedMetric);
         const sliced = sliceByYears(series, years);
+        // fetchMetricSeries returns RAW values — scale decimal-stored percent
+        // metrics once so yields/growth read 5.0 (percent) not 0.050.
+        const mult = metricMultiplier(selectedMetric);
         const vals: number[] = [];
         for (const pt of sliced) {
-          if (pt.value != null && Number.isFinite(pt.value)) vals.push(pt.value);
+          if (pt.value != null && Number.isFinite(pt.value)) vals.push(pt.value * mult);
         }
         if (vals.length < 5) { missed.push(ticker); continue; }
         let current = NaN;
         for (let j = sliced.length - 1; j >= 0; j--) {
           if (sliced[j].value != null && Number.isFinite(sliced[j].value)) {
-            current = sliced[j].value; break;
+            current = sliced[j].value * mult; break;
           }
         }
         if (!Number.isFinite(current)) { missed.push(ticker); continue; }

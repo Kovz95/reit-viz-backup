@@ -342,6 +342,25 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // Display-unit multiplier — MUST mirror client dataService.ts metricMultiplier.
+  // Percent-STORED metrics (7.2 = 7.2%: "…Chg%", "…Interest%", SI deltas) get 1;
+  // decimal-stored percent-family metrics (0.072 = 7.2%: growth, yields, payout,
+  // cap rate, % off 52wk, Bull%/Bear%) get 100. Clients consuming the batch
+  // endpoints trust this scaling verbatim (no re-multiply), so a metric missing
+  // here renders 100x too small, and an over-covered one 100x too large.
+  function metricDisplayMult(metric: string): number {
+    if (metric.includes("Chg%") || metric.includes("Interest%") || metric.startsWith("SI Δ")) return 1;
+    return /growth\b/i.test(metric)
+      || /\byield\b/i.test(metric)
+      || /\bpayout\b/i.test(metric)
+      || /cap\s*rate/i.test(metric)
+      || /%\s*off\b/i.test(metric)
+      || /%\s*change/i.test(metric)
+      || metric === "Bull%"
+      || metric === "Bear%"
+      ? 100 : 1;
+  }
+
   // ── Batch trailing values for all tickers (valuation overview, heatmap sparklines) ──
   // POST body: { metric: "P/FFO FY2", trailingDays?: 1260 }
   // Returns: { data: { ADC: { current: 15.2, values: [...], dates: [...] }, ... } }
@@ -361,10 +380,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const datesPath = path.join(DATA_DIR, "dates.json");
       const allDates: string[] = fs.existsSync(datesPath) ? readJSON(datesPath) : [];
 
-      const METRIC_MULT: Record<string, number> = {
-        "Short Interest%": 100, "Dividend Yield": 100,
-      };
-      const mult = METRIC_MULT[metric] || 1;
+      const mult = metricDisplayMult(metric);
 
       const files = fs.readdirSync(tickerDir).filter(f => f.endsWith(".json"));
       const result: Record<string, { current: number | null; values: number[]; dates: string[] }> = {};
@@ -416,23 +432,8 @@ export async function registerRoutes(server: Server, app: Express) {
       const tickerDir = path.join(DATA_DIR, "tickers");
       if (!fs.existsSync(tickerDir)) return res.json({ data: {} });
 
-      // Mirror DECIMAL_TO_PERCENT_METRICS in client/src/lib/dataService.ts plus
-      // server-only metrics that are stored as decimals (e.g. Short Interest%).
-      // Without this, Heatmap "vs History" z-scores compare a 100x-multiplied
-      // current value against unmultiplied trailing values, producing garbage.
-      const METRIC_MULT: Record<string, number> = {
-        "Short Interest%": 100,
-        // Yields
-        "Dividend Yield": 100,
-        "FFO Yield LTM": 100, "FFO Yield FY2": 100,
-        "AFFO Yield LTM": 100, "AFFO Yield FY2": 100,
-        // Growth rates
-        "FY1 EPS Growth": 100, "FY2 EPS Growth": 100,
-        "FY1 FFO Growth": 100, "FY2 FFO Growth": 100,
-        "FY1 AFFO Growth": 100, "FY2 AFFO Growth": 100,
-        // Relative to 52-week range
-        "% off 52wk High": 100, "% off 52wk Low": 100,
-      };
+      // Heatmap "vs History" compares these trailing values against the client's
+      // metricMultiplier-scaled snapshot, so scaling must match metricDisplayMult.
 
       const files = fs.readdirSync(tickerDir).filter(f => f.endsWith(".json"));
       // Result shape: { metricName: { ticker: { current, values } } }
@@ -446,7 +447,7 @@ export async function registerRoutes(server: Server, app: Express) {
           for (const metric of metrics) {
             const encoded = rawData[metric];
             if (!encoded) continue;
-            const mult = METRIC_MULT[metric] || 1;
+            const mult = metricDisplayMult(metric);
             const decoded = decodeMetricToMap(encoded);
             const pairs: [number, number][] = [];
             for (const [idx, val] of decoded.entries()) {

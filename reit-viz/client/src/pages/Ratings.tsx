@@ -44,8 +44,8 @@ interface RatingsRow extends ClassifiedBase {
   buyPct: number | null;
   holdPct: number | null;
   sellPct: number | null;
-  bullPct: number | null;  // from Bull% metric (decimal 0-1)
-  bearPct: number | null;  // from Bear% metric (decimal 0-1)
+  bullPct: number | null;  // from Bull% metric (0-100; getMultiMetricForAllTickers pre-scales the stored 0-1 decimal)
+  bearPct: number | null;  // from Bear% metric (0-100; pre-scaled like bullPct)
 }
 
 type SortKey =
@@ -204,8 +204,8 @@ export default function Ratings() {
           buyPct,
           holdPct,
           sellPct,
-          bullPct: bullRaw != null ? bullRaw * 100 : null,
-          bearPct: bearRaw != null ? bearRaw * 100 : null,
+          bullPct: bullRaw ?? null,
+          bearPct: bearRaw ?? null,
         } as RatingsRow;
       })
       .filter((r) => r.totalCount > 0);

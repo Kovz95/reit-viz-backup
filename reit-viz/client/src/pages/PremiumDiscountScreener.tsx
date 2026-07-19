@@ -6,6 +6,7 @@ import { useUniverseDefaults } from "@/lib/universeDefaults";
 import { fetchPeerRelative } from "@/lib/fetchPeerRelative";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
 import { computePeerDelta } from "@/lib/computePeerDelta";
+import { metricMultiplier } from "@/lib/dataService";
 import { CLASSIFICATION_KEYS } from "@/lib/classificationKeys";
 import ClassificationFilters, {
   emptyClassFilters,
@@ -308,9 +309,30 @@ export default function PremiumDiscountScreener() {
           fetchPeerRelative(ticker, peerDimension, peerClass, valuationMetricSel, "median", undefined, fetchGlobalDatesList),
           fetchPeerRelative(ticker, peerDimension, peerClass, growthMetricSel, "median", undefined, fetchGlobalDatesList),
         ]);
-        const valDelta = computePeerDelta(valData.targetSeries, valData.groupSeries, "pct");
-        const growthDelta = computePeerDelta(growthData.targetSeries, growthData.groupSeries, "abs");
-        const result = computePairDelta(valDelta, growthDelta, sigmaFactor);
+        // Peer-relative series arrive RAW from the server. The "abs" growth gap
+        // must be scaled to percentage points for decimal-stored growth metrics;
+        // the "pct" premium is a fraction and is shown with a % suffix, so ×100.
+        // computePairDelta expects {time,value} points — pair the deltas with the
+        // response's date axis, dropping indices where either side had no data.
+        const dates: string[] = (valData as any).dates ?? (growthData as any).dates ?? [];
+        const gMult = metricMultiplier(growthMetricSel);
+        const valDeltaArr = computePeerDelta(valData.targetSeries, valData.groupSeries, "pct");
+        // computePeerDelta tolerates nulls internally; the cast just satisfies its number[] signature.
+        const growthDeltaArr = computePeerDelta(
+          growthData.targetSeries.map((v: number | null) => (v == null ? v : v * gMult)) as number[],
+          growthData.groupSeries.map((v: number | null) => (v == null ? v : v * gMult)) as number[],
+          "abs",
+        );
+        const toPoints = (arr: number[], scale: number, src: { targetSeries: any[]; groupSeries: any[] }) =>
+          arr
+            .map((v, i) => ({ time: dates[i], value: v * scale, ok: src.targetSeries?.[i] != null && src.groupSeries?.[i] != null }))
+            .filter((pt) => pt.ok && pt.time && Number.isFinite(pt.value))
+            .map(({ time, value }) => ({ time, value }));
+        const result = computePairDelta(
+          toPoints(valDeltaArr, 100, valData),
+          toPoints(growthDeltaArr, 1, growthData),
+          sigmaFactor,
+        );
         const nP = result.premGivenGrowth?.n ?? 0;
         const nG = result.growthGivenPrem?.n ?? 0;
         output.push({
