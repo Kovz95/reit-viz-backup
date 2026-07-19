@@ -9,6 +9,8 @@ import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlat
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import {
   createChart,
   ColorType,
@@ -681,6 +683,7 @@ function MiniChart({
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [logScale, setLogScale] = useState(false);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
   // Use flex-height: measure the container instead of using a fixed height
   const effectiveHeight = isMaximized ? undefined : height;
@@ -691,7 +694,7 @@ function MiniChart({
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
 
     const h = el.clientHeight || height;
-    const chart = createChart(el, { ...CHART_OPTIONS, width: el.clientWidth, height: h });
+    const chart = createChart(el, { ...CHART_OPTIONS, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: el.clientWidth, height: h });
     chartRef.current = chart;
 
     if (histogram) {
@@ -782,7 +785,7 @@ function MiniChart({
     ro.observe(el);
 
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, secondData, thirdData, fourthData, bandUpper, bandLower, color, height, histogram, isMaximized]);
+  }, [data, secondData, thirdData, fourthData, bandUpper, bandLower, color, height, histogram, isMaximized, gridColor]);
 
   // Log scale
   useEffect(() => {
@@ -1701,6 +1704,7 @@ export default function Correlation() {
               <Zap className="w-3 h-3 mr-0.5" /> Drivers
             </Button>
           </div>
+          <GridProminenceToggle className="mt-1.5" />
         </div>
 
         {activeTab === "drivers" ? (

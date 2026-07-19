@@ -32,6 +32,8 @@ import { useGeoFilter } from "@/lib/useGeoFilter";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { futureWeekdays } from "@/lib/futureWeekdays";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import {
   createChart,
   CandlestickSeries,
@@ -247,6 +249,7 @@ function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars =
   const candleSeriesRef = useRef<any>(null);
   const priceLineRefs = useRef<any[]>([]);
   const lineSeriesRefs = useRef<any[]>([]);
+  const gridColor = useGridColor("rgba(75,85,99,0.15)");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -255,7 +258,7 @@ function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars =
       width: el.clientWidth,
       height,
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#9ca3af", fontSize: 11, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
-      grid: { vertLines: { color: "rgba(75,85,99,0.15)" }, horzLines: { color: "rgba(75,85,99,0.15)" } },
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "rgba(75,85,99,0.3)" },
       timeScale: { borderColor: "rgba(75,85,99,0.3)", timeVisible: false, secondsVisible: false },
@@ -267,6 +270,12 @@ function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars =
     ro.observe(el);
     return () => { ro.disconnect(); chart.remove(); chartRef.current = null; candleSeriesRef.current = null; priceLineRefs.current = []; lineSeriesRefs.current = []; };
   }, [height]);
+
+  // Grid prominence restyle (rebuilding the chart here would orphan the
+  // candle/overlay effects keyed on bars/levels, so restyle in place).
+  useEffect(() => {
+    chartRef.current?.applyOptions({ grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } } });
+  }, [gridColor]);
 
   // Candlesticks
   useEffect(() => {
@@ -1247,6 +1256,7 @@ export default function LevelsAndTrendlines() {
 
           {/* Run / Stop */}
           <div className="ml-auto flex items-center gap-2">
+            <GridProminenceToggle />
             {running ? (
               <button onClick={handleStop} className="text-[11px] font-bold px-3 py-1 rounded bg-destructive text-destructive-foreground" data-testid="cs-stop">Stop</button>
             ) : (

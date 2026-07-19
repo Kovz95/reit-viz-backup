@@ -24,6 +24,8 @@ import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
 import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { useGridColor } from "@/lib/gridPref";
 import {
   createChart,
   CrosshairMode,
@@ -245,6 +247,7 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
   const chartsRef = useRef<any[]>([]);
   const seriesRef = useRef<any[]>([]);
   const isSyncingRef = useRef(false);
+  const gridColor = useGridColor("rgba(255,255,255,0.03)");
 
   useEffect(() => {
     const ratioEl = ratioRef.current;
@@ -262,6 +265,7 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
 
     const chart1 = createChart(ratioEl, {
       ...CHART_OPTIONS,
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       width: ratioEl.clientWidth,
       height: ratioEl.clientHeight || 300,
     });
@@ -278,6 +282,7 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
 
     const chart2 = createChart(zScoreEl, {
       ...CHART_OPTIONS,
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       width: zScoreEl.clientWidth,
       height: zScoreEl.clientHeight || 300,
     });
@@ -356,7 +361,7 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
       chartsRef.current = [];
       seriesRef.current = [];
     };
-  }, [ratioSeries, zScoreSeries]);
+  }, [ratioSeries, zScoreSeries, gridColor]);
 
   return (
     <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -881,6 +886,7 @@ export default function PairRatios() {
                   <span className="font-mono">{detailChartData.fullRatio.length}</span>
                 </div>
               )}
+              <GridProminenceToggle />
             </div>
           </div>
           {detailChartData ? (

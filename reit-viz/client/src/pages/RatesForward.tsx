@@ -11,6 +11,8 @@ import {
 import type { IChartApi } from "lightweight-charts";
 import { fetchFredSeries } from "@/lib/macroStatic";
 import { TrendingDown, TrendingUp, Activity } from "lucide-react";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -216,10 +218,10 @@ function computeConvexityScore(opts: {
   };
 }
 
-function makeChartOptions() {
+function makeChartOptions(gridColor: string) {
   return {
     layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#a1a1aa", fontSize: 11 },
-    grid: { vertLines: { color: "rgba(82, 82, 91, 0.15)" }, horzLines: { color: "rgba(82, 82, 91, 0.15)" } },
+    grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderVisible: false },
     timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false },
@@ -251,6 +253,7 @@ export default function RatesForward() {
   const [vnqSeries, setVnqSeries] = useState<RateSeries[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const gridColor = useGridColor("rgba(82, 82, 91, 0.15)");
 
   // Chart refs
   const scoreHistoryRef = useRef<HTMLDivElement>(null);
@@ -426,7 +429,7 @@ export default function RatesForward() {
     if (!scoreHistoryRef.current || !weeklyScoreHistory.length) return;
     const el = scoreHistoryRef.current;
     const chart = createChart(el, {
-      ...makeChartOptions(), width: el.clientWidth, height: 280,
+      ...makeChartOptions(gridColor), width: el.clientWidth, height: 280,
       timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, fixLeftEdge: false, fixRightEdge: false },
       leftPriceScale: { visible: true, borderVisible: false },
       rightPriceScale: { visible: true, borderVisible: false },
@@ -457,13 +460,13 @@ export default function RatesForward() {
     const ro = new ResizeObserver(() => { if (scoreHistoryRef.current) chart.applyOptions({ width: scoreHistoryRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); chart.remove(); scoreChartRef.current = null; };
-  }, [weeklyScoreHistory, vnqSeries]);
+  }, [weeklyScoreHistory, vnqSeries, gridColor]);
 
   // Chart: 2Y Treasury
   useEffect(() => {
     if (!twoYearRef.current || !allSeries["DGS2"]?.length) return;
     const el = twoYearRef.current;
-    const chart = createChart(el, { ...makeChartOptions(), width: el.clientWidth, height: 280 });
+    const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(LineSeries, { color: "#3b82f6", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(allSeries["DGS2"].map(p => ({ time: p.time, value: p.value })));
     chart.timeScale().fitContent();
@@ -471,13 +474,13 @@ export default function RatesForward() {
     const ro = new ResizeObserver(() => { if (twoYearRef.current) chart.applyOptions({ width: twoYearRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); chart.remove(); twoYearChartRef.current = null; };
-  }, [allSeries]);
+  }, [allSeries, gridColor]);
 
   // Chart: 10Y Decomp
   useEffect(() => {
     if (!tenDecompRef.current || !expSeries.length || !tpSeries.length) return;
     const el = tenDecompRef.current;
-    const chart = createChart(el, { ...makeChartOptions(), width: el.clientWidth, height: 320 });
+    const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 320 });
     const tpMap = new Map(tpSeries.map(p => [p.time, p.value]));
     const combined = expSeries.filter(p => tpMap.has(p.time)).map(p => ({ time: p.time, exp: p.value, total: p.value + tpMap.get(p.time)! }));
     chart.addSeries(AreaSeries, { lineColor: "#3b82f6", topColor: "rgba(59, 130, 246, 0.45)", bottomColor: "rgba(59, 130, 246, 0.05)", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
@@ -489,13 +492,13 @@ export default function RatesForward() {
     const ro = new ResizeObserver(() => { if (tenDecompRef.current) chart.applyOptions({ width: tenDecompRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); chart.remove(); tenDecompChartRef.current = null; };
-  }, [expSeries, tpSeries]);
+  }, [expSeries, tpSeries, gridColor]);
 
   // Chart: 2s10s
   useEffect(() => {
     if (!twoTenRef.current || !twoTenSpread.length) return;
     const el = twoTenRef.current;
-    const chart = createChart(el, { ...makeChartOptions(), width: el.clientWidth, height: 280 });
+    const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(AreaSeries, { lineColor: "#10b981", topColor: "rgba(16, 185, 129, 0.35)", bottomColor: "rgba(239, 68, 68, 0.20)", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(twoTenSpread.map(p => ({ time: p.time, value: p.value })));
     chart.timeScale().fitContent();
@@ -503,7 +506,7 @@ export default function RatesForward() {
     const ro = new ResizeObserver(() => { if (twoTenRef.current) chart.applyOptions({ width: twoTenRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); chart.remove(); twoTenChartRef.current = null; };
-  }, [twoTenSpread]);
+  }, [twoTenSpread, gridColor]);
 
   // Canvas: Forward curve
   useEffect(() => {
@@ -528,7 +531,7 @@ export default function RatesForward() {
     // Grid
     ctx.font = "11px ui-sans-serif, system-ui";
     ctx.fillStyle = "#a1a1aa";
-    ctx.strokeStyle = "rgba(82, 82, 91, 0.15)";
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
     for (let i = 0; i <= 5; i++) {
       const v = yMin + i * (yMax - yMin) / 5;
@@ -545,7 +548,7 @@ export default function RatesForward() {
       ctx.fillText(x < 1 ? `${(x * 12).toFixed(0)}M` : `${x}Y`, cx, padT + plotH + 6);
       ctx.beginPath(); ctx.moveTo(cx, padT + plotH); ctx.lineTo(cx, padT + plotH + 4);
       ctx.strokeStyle = "rgba(82, 82, 91, 0.4)"; ctx.stroke();
-      ctx.strokeStyle = "rgba(82, 82, 91, 0.15)";
+      ctx.strokeStyle = gridColor;
     }
     // 12-24m band
     const x12 = toCanvasX(1), x24 = toCanvasX(2);
@@ -591,7 +594,7 @@ export default function RatesForward() {
       ctx.fillStyle = "#d4d4d8"; ctx.fillText(c.name, lx + 22, ly);
       lx += 80;
     }
-  }, [forwardScenarios, spot3m]);
+  }, [forwardScenarios, spot3m, gridColor]);
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-full text-muted-foreground" data-testid="rates-forward-loading">Loading rates data...</div>;
@@ -617,6 +620,7 @@ export default function RatesForward() {
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Activity className="w-3.5 h-3.5" />FRED daily series + NY Fed ACM term-premium decomposition
+            <GridProminenceToggle />
           </div>
         </div>
 

@@ -25,6 +25,8 @@ import { findBestLag } from "@/lib/crossCorrelation";
 import { computePercentile } from "@/lib/percentile";
 import { computeStats } from "@/lib/computeStats";
 import { computeRollingCorr } from "@/lib/rollingCorr";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { LayoutDashboard as LayoutIcon } from "lucide-react";
 import { Download } from "lucide-react";
 import { Loader2 } from "lucide-react";
@@ -338,6 +340,8 @@ export default function PremiumDiscount() {
   const rawRatioContainerRef = useRef<HTMLDivElement>(null);
   const rvVerdictContainerRef = useRef<HTMLDivElement>(null);
   const scatterCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const gridColor = useGridColor(GRID_LINE_COLOR);
 
   const premiumChartRef = useRef<any>(null);
   const growthChartRef = useRef<any>(null);
@@ -1147,7 +1151,7 @@ export default function PremiumDiscount() {
   const createBaseChart = (container: HTMLElement) => {
     const chart = createChart(container, {
       layout: { background: { type: ColorType.Solid, color: TRANSPARENT_COLOR }, textColor: TEXT_COLOR, fontSize: 11 },
-      grid: { vertLines: { color: GRID_LINE_COLOR }, horzLines: { color: GRID_LINE_COLOR } },
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       rightPriceScale: { borderColor: GRID_LINE_COLOR },
       timeScale: { borderColor: GRID_LINE_COLOR, timeVisible: false },
       crosshair: { mode: CrosshairMode.Normal },
@@ -1494,6 +1498,15 @@ export default function PremiumDiscount() {
     window.addEventListener("resize", resize);
     return () => { ro.disconnect(); window.removeEventListener("resize", resize); };
   }, []);
+
+  // ── Grid prominence restyle (charts are created once, so applyOptions live) ─
+  useEffect(() => {
+    const charts = [premiumChartRef, growthChartRef, ratioChartRef, rollCorrChartRef,
+      relReturnChartRef, relRatioChartRef, rawRatioChartRef, rvVerdictChartRef];
+    for (const ref of charts) {
+      try { ref.current?.applyOptions({ grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } } }); } catch {}
+    }
+  }, [gridColor]);
 
   // ── Chart cleanup on unmount ───────────────────────────────────────────────
   useEffect(() => {
@@ -2026,6 +2039,7 @@ export default function PremiumDiscount() {
             <button onClick={handleExportCSV} className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground" data-testid="btn-csv" disabled={premiumSeries.length === 0}>
               <Download className="w-3.5 h-3.5" /> CSV
             </button>
+            <GridProminenceToggle />
             {loadingCloses && (
               <span className="flex items-center gap-1 text-[10px] font-mono text-amber-400">
                 <Loader2 className="w-3 h-3 animate-spin" /> computing

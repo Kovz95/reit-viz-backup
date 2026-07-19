@@ -13,6 +13,8 @@ import {
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
 import { Download, RefreshCw, Info, SortAsc, SortDesc } from "lucide-react";
 import { ArrowUpDown } from "@/components/ui/icons";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { useGridColor } from "@/lib/gridPref";
 import {
   WINDOW_OPTIONS,
   BASIS_FAMILIES,
@@ -137,6 +139,7 @@ function CumulativeChart({ data }: CumulativeChartProps) {
   const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; total: number; mult: number; est: number } | null>(null);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -144,7 +147,7 @@ function CumulativeChart({ data }: CumulativeChartProps) {
     const init = () => {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
-      const chart = createChart(el, { ...CHART_OPTIONS_BASE, width: rect.width, height: rect.height });
+      const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
       chart.applyOptions({ handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false } });
       chartRef.current = chart;
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
@@ -177,7 +180,7 @@ function CumulativeChart({ data }: CumulativeChartProps) {
       chartRef.current?.remove();
       chartRef.current = null; totalSeriesRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null;
     };
-  }, []);
+  }, [gridColor]);
 
   useEffect(() => {
     if (!chartRef.current || !totalSeriesRef.current || !multSeriesRef.current || !estSeriesRef.current) return;
@@ -191,7 +194,7 @@ function CumulativeChart({ data }: CumulativeChartProps) {
     multSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.mult })));
     estSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.est })));
     chartRef.current.timeScale().fitContent();
-  }, [data]);
+  }, [data, gridColor]);
 
   if (data.length < 2) return <div className="text-[10px] text-muted-foreground p-4">Insufficient data for cumulative decomposition.</div>;
   return (
@@ -221,6 +224,7 @@ function RollingChart({ data }: RollingChartProps) {
   const estSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; total: number; mult: number; est: number } | null>(null);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -228,7 +232,7 @@ function RollingChart({ data }: RollingChartProps) {
     const init = () => {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
-      const chart = createChart(el, { ...CHART_OPTIONS_BASE, width: rect.width, height: rect.height });
+      const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
       chart.applyOptions({ handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false } });
       chartRef.current = chart;
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
@@ -260,7 +264,7 @@ function RollingChart({ data }: RollingChartProps) {
       chartRef.current?.remove();
       chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; totalSeriesRef.current = null;
     };
-  }, []);
+  }, [gridColor]);
 
   useEffect(() => {
     if (!chartRef.current || !multSeriesRef.current || !estSeriesRef.current || !totalSeriesRef.current) return;
@@ -274,7 +278,7 @@ function RollingChart({ data }: RollingChartProps) {
     estSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.est, color: p.est >= 0 ? COLOR_EST + "b3" : "#d97706b3" })));
     totalSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.total })));
     chartRef.current.timeScale().fitContent();
-  }, [data]);
+  }, [data, gridColor]);
 
   if (data.length < 2) return <div className="text-[10px] text-muted-foreground p-4">Insufficient data for rolling decomposition (need at least one full rolling window after start).</div>;
   return (
@@ -720,6 +724,7 @@ export default function Attribution() {
               Run on {tickers.length}
             </Button>
           )}
+          <GridProminenceToggle />
         </div>
       </div>
 

@@ -34,6 +34,8 @@ import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
 import GridLayoutPicker, { gridContainerStyle } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import {
   computeSMA,
   computeEMA,
@@ -188,6 +190,7 @@ function MacroPane({
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   const [logScale, setLogScale] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
   const resolvedSeries = useMemo(() => pane.series.filter(s => s.visible).map(s => {
     const entry = allData[s.id];
@@ -218,6 +221,7 @@ function MacroPane({
 
     const chart = createChart(el, {
       ...CHART_OPTIONS,
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       width: el.clientWidth,
       height: effectiveFlexHeight ? el.clientHeight || 300 : height,
     });
@@ -678,7 +682,7 @@ function MacroPane({
       chartRef.current = null;
       indicatorSeriesRef.current = [];
     };
-  }, [resolvedSeries, height, pane.id, isMaximized, effectiveFlexHeight, activeIndicators, chartType]);
+  }, [resolvedSeries, height, pane.id, isMaximized, effectiveFlexHeight, activeIndicators, chartType, gridColor]);
 
   // Log scale
   useEffect(() => {
@@ -1424,6 +1428,8 @@ export default function Macro() {
             <TrendingUp className="w-3 h-3" />
             Indicators
           </Button>
+
+          <GridProminenceToggle />
         </div>
 
         {/* Charts + optional Indicators panel */}

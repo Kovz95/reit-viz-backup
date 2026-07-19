@@ -33,6 +33,8 @@ import { Maximize2, Minimize2, Play, X, HelpCircle } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import {
   buildPriceMatrix,
   alignAndClean,
@@ -310,12 +312,14 @@ function FactorTimeSeries({
   series: { name: string; color: string; data: { time: string; value: number }[] }[];
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || series.length === 0) return;
     const chart = createChart(el, {
       ...CHART_OPTIONS,
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       width: el.clientWidth,
       height: el.clientHeight || 240,
     });
@@ -340,7 +344,7 @@ function FactorTimeSeries({
       ro.disconnect();
       chart.remove();
     };
-  }, [series]);
+  }, [series, gridColor]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }
@@ -927,6 +931,7 @@ export default function PCA() {
               </>
             )}
           </Button>
+          <GridProminenceToggle />
         </div>
       </div>
 

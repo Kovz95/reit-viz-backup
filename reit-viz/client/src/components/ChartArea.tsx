@@ -5,7 +5,7 @@ import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
 import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
 import type { IChartApi } from "lightweight-charts";
-import ChartPane from "./ChartPane";
+import ChartPane, { gridColorFor } from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
 import QuickAnalyzePanel from "./QuickAnalyzePanel";
@@ -2644,6 +2644,7 @@ export default function ChartArea({
               maximizedId={maximizedSidePanel === "pd" ? "pd" : null}
               onMaximizeChange={(id) => setMaximizedSidePanel(id ? "pd" : null)}
               fillContainer={maximizedSidePanel === "pd"}
+              gridColor={gridColorFor(chartConfig.gridProminence)}
             />
           )}
           {showSimilarSetups && maximizedSidePanel !== "pd" && (

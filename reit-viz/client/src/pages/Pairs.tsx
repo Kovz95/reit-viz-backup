@@ -27,6 +27,8 @@ import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, 
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { useGridColor } from "@/lib/gridPref";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1432,6 +1434,7 @@ function PairsSubIndicatorChart({
   const chartRef = useRef<IChartApi | null>(null);
   const syncingRef = useRef(false);
   const { colors: IC } = useIndicatorColors();
+  const gridColor = useGridColor("rgba(255,255,255,0.03)");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -1453,8 +1456,8 @@ function PairsSubIndicatorChart({
         fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.03)" },
-        horzLines: { color: "rgba(255,255,255,0.03)" },
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.06)", minimumWidth: 80 },
@@ -1688,7 +1691,7 @@ function PairsSubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC]);
+  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor]);
 
   // Resize
   useEffect(() => {
@@ -1764,6 +1767,7 @@ function MiniChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const { colors: IC } = useIndicatorColors();
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
   const mainSeriesRef = useRef<ISeriesApi<any> | null>(null);
   const [logScale, setLogScale] = useState(false);
   // Counter that increments when chart + main series are ready, to trigger re-render
@@ -1785,6 +1789,7 @@ function MiniChart({
 
     const chart = createChart(el, {
       ...CHART_OPTIONS,
+      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       width: el.clientWidth,
       height: effectiveFlexHeight ? el.clientHeight || 300 : height,
     });
@@ -2058,7 +2063,7 @@ function MiniChart({
       chartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands]);
+  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands, gridColor]);
 
   // Log scale
   useEffect(() => {
@@ -3130,6 +3135,10 @@ export default function Pairs() {
           <Download className="w-3 h-3" />
           CSV
         </Button>
+
+        <div className="h-5 w-px bg-border mx-0.5" />
+
+        <GridProminenceToggle />
       </div>
 
       {/* Stats bar */}

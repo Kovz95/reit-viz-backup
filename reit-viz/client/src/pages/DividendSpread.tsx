@@ -12,6 +12,8 @@ import ClassificationFilters from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import ExportMenu from "@/components/ExportMenu";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
 import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
@@ -277,6 +279,7 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
   const [logScale, setLogScale] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
+  const gridColor = useGridColor("rgba(255,255,255,0.03)");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -290,8 +293,8 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.03)" },
-        horzLines: { color: "rgba(255,255,255,0.03)" },
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
       },
       crosshair: {
         vertLine: { color: "rgba(255,255,255,0.15)", width: 1 },
@@ -359,7 +362,7 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [row]);
+  }, [row, gridColor]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -409,6 +412,7 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
         >
           LOG
         </Button>
+        <GridProminenceToggle />
         <ExportMenu
           getChart={() => chartRef.current}
           label={`DivSpread_${row.ticker}_vs_${treasuryLabel}`}

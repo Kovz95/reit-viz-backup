@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/tooltip";
 import { RefreshCw, Info, SortAsc, SortDesc, Minus } from "lucide-react";
 import { ArrowUpDown } from "@/components/ui/icons";
+import { useGridColor } from "@/lib/gridPref";
+import GridProminenceToggle from "@/components/GridProminenceToggle";
 
 // ── Regime Constants ──────────────────────────────────────────────────────────
 
@@ -727,6 +729,7 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<{ bands: ISeriesApi<"Area">[]; growth?: ISeriesApi<"Line">; inflation?: ISeriesApi<"Line"> }>({ bands: [] });
+  const gridColor = useGridColor("rgba(148,163,184,0.08)");
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -737,8 +740,8 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: "rgba(148,163,184,0.08)" },
-        horzLines: { color: "rgba(148,163,184,0.08)" },
+        vertLines: { color: gridColor },
+        horzLines: { color: gridColor },
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "rgba(148,163,184,0.2)" },
@@ -751,7 +754,7 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
       chartRef.current = null;
       seriesRef.current = { bands: [] };
     };
-  }, []);
+  }, [gridColor]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -823,7 +826,7 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
     ] as never);
     seriesRef.current.bands.push(scaleSeries as unknown as ISeriesApi<"Area">);
     chart.timeScale().fitContent();
-  }, [classifications, episodes, granularEpisodes, shading]);
+  }, [classifications, episodes, granularEpisodes, shading, gridColor]);
 
   return (
     <div className="rounded-md border border-border bg-card p-2">
@@ -1087,6 +1090,7 @@ export default function MacroRegime() {
             </button>
           ))}
         </div>
+        <GridProminenceToggle />
         <Button variant="ghost" size="sm" onClick={() => setRefreshKey(k => k + 1)} data-testid="btn-refresh-regimes">
           <RefreshCw className="w-3.5 h-3.5" />
         </Button>

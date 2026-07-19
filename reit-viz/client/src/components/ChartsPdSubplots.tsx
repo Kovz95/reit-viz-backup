@@ -142,6 +142,8 @@ interface ChartsPdSubplotsProps {
   maximizedId?: string | null;
   onMaximizeChange?: (id: string | null) => void;
   fillContainer?: boolean;
+  /** Grid line color from the host's prominence setting (Charts tab chartConfig). */
+  gridColor?: string;
 }
 
 // ── Helpers (jT / aq + Tj) ───────────────────────────────────────────────────
@@ -267,6 +269,7 @@ export default function ChartsPdSubplots({
   maximizedId,
   onMaximizeChange,
   fillContainer,
+  gridColor,
 }: ChartsPdSubplotsProps) {
   const {
     showPDRatio,
@@ -652,6 +655,7 @@ export default function ChartsPdSubplots({
   const corrSeriesARef = useRef<any>(null);
   const corrSeriesBRef = useRef<any>(null);
 
+  const effectiveGridColor = gridColor ?? GRID_LINE_COLOR;
   const baseChartOptions = () => ({
     layout: {
       background: { type: ColorType.Solid, color: CHART_BG_COLOR },
@@ -659,8 +663,8 @@ export default function ChartsPdSubplots({
       fontSize: 11,
     },
     grid: {
-      vertLines: { color: GRID_LINE_COLOR },
-      horzLines: { color: GRID_LINE_COLOR },
+      vertLines: { color: effectiveGridColor },
+      horzLines: { color: effectiveGridColor },
     },
     rightPriceScale: { borderColor: GRID_LINE_COLOR },
     timeScale: { borderColor: GRID_LINE_COLOR, timeVisible: false },
@@ -675,6 +679,14 @@ export default function ChartsPdSubplots({
     kineticScroll: { mouse: false, touch: false },
     height: 0,
   });
+
+  // Restyle already-created charts when the host's grid prominence changes.
+  useEffect(() => {
+    const grid = { vertLines: { color: effectiveGridColor }, horzLines: { color: effectiveGridColor } };
+    for (const ref of [pdRatioChartRef, corrChartRef]) {
+      try { ref.current?.applyOptions({ grid }); } catch { /* chart disposed */ }
+    }
+  }, [effectiveGridColor]);
 
   // ── PD Ratio subplot ─────────────────────────────────────────────────────────
   useEffect(() => {
