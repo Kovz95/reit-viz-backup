@@ -958,17 +958,45 @@ export async function getPairsData(
   zWindow: number = 60,
   betaLookback: number = 52,
   spreadZWindow: number = 8,
-  olsResidWindow: number = 52
+  olsResidWindow: number = 52,
+  // Pre-resolved series for synthetic legs (e.g. BASKET: tokens) — dated values
+  // that replace the workbook fetch for that leg. Metric pickers don't apply to
+  // overridden legs (baskets are close-only aggregates).
+  overrides?: {
+    a?: { dates: string[]; values: number[] } | null;
+    b?: { dates: string[]; values: number[] } | null;
+  }
 ): Promise<PairsData> {
   const dates = await getDates();
-  const rawA = await getTickerRaw(tickerA);
-  const rawB = await getTickerRaw(tickerB);
 
-  if (!rawA[metricA]) throw new Error(`${metricA} not found for ${tickerA}`);
-  if (!rawB[metricB]) throw new Error(`${metricB} not found for ${tickerB}`);
+  const dateIdx = new Map<string, number>();
+  for (let i = 0; i < dates.length; i++) dateIdx.set(dates[i], i);
+  const overrideToMap = (o: { dates: string[]; values: number[] }): Map<number, number> => {
+    const m = new Map<number, number>();
+    for (let k = 0; k < o.dates.length; k++) {
+      const gi = dateIdx.get(o.dates[k]);
+      const v = o.values[k];
+      if (gi !== undefined && Number.isFinite(v)) m.set(gi, v);
+    }
+    return m;
+  };
 
-  const mapA = toIndexMap(rawA[metricA]);
-  const mapB = toIndexMap(rawB[metricB]);
+  let mapA: Map<number, number>;
+  if (overrides?.a) {
+    mapA = overrideToMap(overrides.a);
+  } else {
+    const rawA = await getTickerRaw(tickerA);
+    if (!rawA[metricA]) throw new Error(`${metricA} not found for ${tickerA}`);
+    mapA = toIndexMap(rawA[metricA]);
+  }
+  let mapB: Map<number, number>;
+  if (overrides?.b) {
+    mapB = overrideToMap(overrides.b);
+  } else {
+    const rawB = await getTickerRaw(tickerB);
+    if (!rawB[metricB]) throw new Error(`${metricB} not found for ${tickerB}`);
+    mapB = toIndexMap(rawB[metricB]);
+  }
 
   const priceA: TimeValue[] = [];
   const priceB: TimeValue[] = [];

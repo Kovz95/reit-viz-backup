@@ -69,6 +69,8 @@ import { IndicatorColorEditor } from "@/components/IndicatorsPanel";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
+import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
+import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 
 const LOOKBACK_OPTIONS = [
   { label: "20d", value: 20 },
@@ -111,7 +113,10 @@ function expandingMeanStdBands(
 }
 
 // Default visible chart IDs (core 6)
-const DEFAULT_VISIBLE_CHARTS = new Set(["prices", "ratio", "zscore", "percentileRank", "correlation", "olsScatter", "residence", "signalAnalyzer"]);
+// Default to just the A/B ratio chart — the core pairs view. Everything else
+// (prices, z-score, percentile, correlation, OLS scatter, residence, signal
+// analyzer, …) stays available via the "Visible Charts" picker.
+const DEFAULT_VISIBLE_CHARTS = new Set(["ratio"]);
 
 // All chart definitions with labels for the picker
 const CHART_DEFS: { id: string; label: string; group: string }[] = [
@@ -2335,7 +2340,15 @@ export default function Pairs() {
     if (state.olsResidWindow !== undefined) setOlsResidWindow(state.olsResidWindow);
     if (state.extraOlsZPlots !== undefined) setExtraOlsZPlots(state.extraOlsZPlots);
     if (state.pairsLayout !== undefined) setPairsLayout(state.pairsLayout);
-    if (state.visibleChartIds) setVisibleChartIds(new Set(state.visibleChartIds));
+    if (state.visibleChartIds) {
+      // Migration: saved sets identical to the OLD 8-chart default were never
+      // customized by the user — give them the new single-ratio-chart default
+      // instead of resurrecting the old wall of charts. Genuine custom picks
+      // (any other combination) are preserved.
+      const OLD_DEFAULT = ["correlation", "olsScatter", "percentileRank", "prices", "ratio", "residence", "signalAnalyzer", "zscore"].join(",");
+      const savedSig = [...state.visibleChartIds].sort().join(",");
+      if (savedSig !== OLD_DEFAULT) setVisibleChartIds(new Set(state.visibleChartIds));
+    }
     if (state.indicatorsMap !== undefined) setIndicatorsMap(state.indicatorsMap);
   }, []);
 
@@ -2497,10 +2510,32 @@ export default function Pairs() {
     queryFn: getTickers,
   });
 
+  // Basket legs resolve to a server-aggregated close series (same weighting
+  // engine the Charts tab uses); the basket contents are part of the query key
+  // so editing a basket refetches.
+  const basketLegSig = useCallback((tk: string): string => {
+    if (!isBasketTicker(tk)) return tk;
+    const b = baskets.find((x) => x.id === extractBasketId(tk));
+    return b ? `${tk}:${b.tickers.join("|")}:${b.weighting ?? ""}` : tk;
+  }, [baskets]);
+
   // Pairs data
-  const { data: pairsData, isLoading } = useQuery<PairsData>({
-    queryKey: ["pairs", tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow],
-    queryFn: () => getPairsData(tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow),
+  const { data: pairsData, isLoading, error: pairsError } = useQuery<PairsData>({
+    queryKey: ["pairs", basketLegSig(tickerA), basketLegSig(tickerB), metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow],
+    queryFn: async () => {
+      const resolveLeg = async (tk: string) => {
+        if (!isBasketTicker(tk)) return null;
+        const id = extractBasketId(tk);
+        const b = baskets.find((x) => x.id === id);
+        if (!b) throw new Error(`Basket not found for ${tk} — it may have been deleted.`);
+        if (b.tickers.length === 0) throw new Error(`Basket "${b.name}" is empty.`);
+        const ohlc = await getBasketOhlc(buildBasketOhlc(b.tickers, b, { weighting: b.weighting, rebalance: b.rebalance }));
+        if (!ohlc || !ohlc.dates || ohlc.dates.length === 0) throw new Error(`No data for basket "${b.name}".`);
+        return { dates: ohlc.dates, values: ohlc.closes };
+      };
+      const [ovA, ovB] = await Promise.all([resolveLeg(tickerA), resolveLeg(tickerB)]);
+      return getPairsData(tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow, { a: ovA, b: ovB });
+    },
     enabled: !!tickerA && !!tickerB,
   });
 
@@ -3215,6 +3250,10 @@ export default function Pairs() {
               {isLoading ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   Loading pairs data...
+                </div>
+              ) : pairsError ? (
+                <div className="flex items-center justify-center h-full text-rose-400 text-sm px-6 text-center" data-testid="pairs-error">
+                  {(pairsError as Error)?.message || "Failed to load pairs data"}
                 </div>
               ) : chartConfigs.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
