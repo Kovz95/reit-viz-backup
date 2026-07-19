@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import {
   LayoutGrid,
   TrendingDown,
@@ -1469,10 +1470,9 @@ export default function Scatter() {
         )}
         <div className="h-5 w-px bg-border mx-0.5" />
         <span className="text-xs font-semibold text-muted-foreground">Date</span>
-        <Input
-          type="date"
+        <DateInput
           value={dateOverride}
-          onChange={(e) => setDateOverride(e.target.value)}
+          onChange={setDateOverride}
           className="h-6 text-[11px] w-[130px] bg-background"
           data-testid="scatter-date"
         />

@@ -14,6 +14,7 @@ import { PRE_EARNINGS_WINDOWS, POST_EARNINGS_WINDOWS, WINDOW_LABELS } from "@/li
 import { hasPreEarningsWindows } from "@/lib/hasPreEarningsWindows";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import { Download } from "lucide-react";
 import { TrendingDown } from "@/lib/trending-down";
 import { ArrowUpDown } from "@/lib/arrow-up-down";
@@ -637,18 +638,16 @@ export default function Performance() {
           {viewMode === "periods" && (
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-muted-foreground">Custom:</span>
-              <Input
-                type="date"
+              <DateInput
                 value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
+                onChange={setCustomStart}
                 className="h-6 w-28 text-[11px]"
                 data-testid="custom-start"
               />
               <span className="text-[11px] text-muted-foreground">to</span>
-              <Input
-                type="date"
+              <DateInput
                 value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
+                onChange={setCustomEnd}
                 className="h-6 w-28 text-[11px]"
                 data-testid="custom-end"
               />

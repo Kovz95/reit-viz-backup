@@ -27,6 +27,7 @@ import { computeStats } from "@/lib/computeStats";
 import { computeRollingCorr } from "@/lib/rollingCorr";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import DateInput from "@/components/DateInput";
 import { LayoutDashboard as LayoutIcon } from "lucide-react";
 import { Download } from "lucide-react";
 import { Loader2 } from "lucide-react";
@@ -2515,10 +2516,9 @@ export default function PremiumDiscount() {
                 <MapPin className="w-2.5 h-2.5" /> Pin date
               </label>
               <div className="flex items-center gap-1">
-                <input
-                  type="date"
+                <DateInput
                   value={pinDate}
-                  onChange={(e) => setPinDate(e.target.value)}
+                  onChange={setPinDate}
                   className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[150px] text-foreground"
                   data-testid="input-pin-date"
                 />
@@ -2539,36 +2539,32 @@ export default function PremiumDiscount() {
                 <Calendar className="w-2.5 h-2.5" /> Highlight range
               </label>
               <div className="flex items-center gap-1">
-                <input
-                  type="date"
+                <DateInput
                   value={(() => {
                     const m = periodFilter.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
                     return m ? m[1] : "";
                   })()}
-                  onChange={(e) => {
-                    const start = e.target.value;
+                  onChange={(v) => {
+                    const start = v;
                     const m = periodFilter.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
                     const end = m ? m[2] : "";
                     setPeriodFilter(start && end ? `${start}..${end}` : start ? `${start}..${start}` : "");
                   }}
-                  title="Start date"
                   className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[140px] text-foreground placeholder:text-muted-foreground/50 [color-scheme:dark]"
                   data-testid="input-period-start"
                 />
                 <span className="text-[10px] font-mono text-muted-foreground">to</span>
-                <input
-                  type="date"
+                <DateInput
                   value={(() => {
                     const m = periodFilter.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
                     return m ? m[2] : "";
                   })()}
-                  onChange={(e) => {
-                    const end = e.target.value;
+                  onChange={(v) => {
+                    const end = v;
                     const m = periodFilter.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
                     const start = m ? m[1] : "";
                     setPeriodFilter(start && end ? `${start}..${end}` : end ? `${end}..${end}` : "");
                   }}
-                  title="End date"
                   className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[140px] text-foreground placeholder:text-muted-foreground/50 [color-scheme:dark]"
                   data-testid="input-period-end"
                 />

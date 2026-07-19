@@ -33,6 +33,7 @@ import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
 import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
+import DateInput from "@/components/DateInput";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
@@ -915,13 +916,13 @@ export default function TVAOptimizer() {
                       onClick={() => { setDatePreset(p.value); setDateRange((createDateRangeFromPreset as any)(p.value)); }}
                     >{p.label}</button>
                   ))}
-                  <input type="date" data-testid="tva-eval-date-start" value={dateRange.start}
-                    onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }}
-                    className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                  <DateInput data-testid="tva-eval-date-start" value={dateRange.start}
+                    onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }}
+                    className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
                   <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                  <input type="date" data-testid="tva-eval-date-end" value={dateRange.end}
-                    onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }}
-                    className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                  <DateInput data-testid="tva-eval-date-end" value={dateRange.end}
+                    onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }}
+                    className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
                 </div>
               </div>
 
@@ -1051,13 +1052,13 @@ export default function TVAOptimizer() {
                     onClick={() => { setDatePreset(p.value); setDateRange((createDateRangeFromPreset as any)(p.value)); }}
                   >{p.label}</button>
                 ))}
-                <input type="date" data-testid="tva-date-start" value={dateRange.start}
-                  onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="tva-date-start" value={dateRange.start}
+                  onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input type="date" data-testid="tva-date-end" value={dateRange.end}
-                  onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="tva-date-end" value={dateRange.end}
+                  onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
               </div>
             </div>
 

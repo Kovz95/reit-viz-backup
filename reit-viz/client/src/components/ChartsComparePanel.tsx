@@ -7,7 +7,7 @@ import { useState, useMemo, useCallback } from "react";
 import { Check, ChevronsUpDown, X } from "lucide-react";
 import { groupMetricsRecord, DERIVED_METRICS } from "@/lib/metricCategories";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -360,10 +360,9 @@ export default function ChartsComparePanel({
           </SelectContent>
         </Select>
         {anchorMode === "custom" && (
-          <Input
-            type="date"
+          <DateInput
             value={customDate}
-            onChange={(e) => setCustomDate(e.target.value)}
+            onChange={setCustomDate}
             className="h-6 text-[11px]"
             data-testid="compare-anchor-custom-date"
           />

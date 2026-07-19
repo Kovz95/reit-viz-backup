@@ -9,6 +9,7 @@ import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { BasketPicker } from "@/components/BasketPicker";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { PresetBar } from "@/components/PresetBar";
+import DateInput from "@/components/DateInput";
 import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { buildBacktestResult as buildBacktestResult, EvaluatorPanelResult, EvaluatorPanelLoader } from "@/components/EvaluatorPanel";
@@ -2232,26 +2233,24 @@ export default function ROCOptimizer() {
                     </button>
                   ))}
                 </div>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="roc-eval-date-start"
                   value={dateRange.start}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setDatePreset("custom");
-                    setDateRange({ ...dateRange, start: e.target.value });
+                    setDateRange({ ...dateRange, start: v });
                   }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="roc-eval-date-end"
                   value={dateRange.end}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setDatePreset("custom");
-                    setDateRange({ ...dateRange, end: e.target.value });
+                    setDateRange({ ...dateRange, end: v });
                   }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
               </div>
               {/* Run */}
@@ -2470,26 +2469,24 @@ export default function ROCOptimizer() {
                     </button>
                   ))}
                 </div>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="roc-date-start"
                   value={dateRange.start}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setDatePreset("custom");
-                    setDateRange({ ...dateRange, start: e.target.value });
+                    setDateRange({ ...dateRange, start: v });
                   }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="roc-date-end"
                   value={dateRange.end}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     setDatePreset("custom");
-                    setDateRange({ ...dateRange, end: e.target.value });
+                    setDateRange({ ...dateRange, end: v });
                   }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
               </div>
 

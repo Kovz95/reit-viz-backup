@@ -41,6 +41,7 @@ import { P as PresetBar } from "@/components/PresetBar";
 import { e as evaluateSignals, E as EvaluatorResultPanel, H as HitConditionsPanel } from "@/components/EvaluatorPanel";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
+import DateInput from "@/components/DateInput";
 import { Download } from "lucide-react";
 import * as React from "react";
 import "@/lib/harsi";
@@ -978,19 +979,17 @@ export default function SlowStochOptimizer() {
               >{p.label}</button>
             ))}
           </div>
-          <input
-            type="date"
+          <DateInput
             data-testid="slowstoch-date-start"
             value={dateRange.start}
-            onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }}
+            onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />
           <span className="text-[10px] font-mono text-muted-foreground">→</span>
-          <input
-            type="date"
+          <DateInput
             data-testid="slowstoch-date-end"
             value={dateRange.end}
-            onChange={e => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }}
+            onChange={v => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />
         </div>

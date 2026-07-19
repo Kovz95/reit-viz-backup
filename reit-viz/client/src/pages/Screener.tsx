@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import { Badge } from "@/components/ui/badge";
 import {
   Filter,
@@ -1202,19 +1203,19 @@ function ConditionRow({
         {/* Custom date range */}
         {(c.lookbackMode ?? "now") === "custom" && (
           <div className="flex items-center gap-1">
-            <Input
-              type="date"
+            <DateInput
               value={c.lookbackStartDate ?? ""}
-              onChange={(e) => patch({ lookbackStartDate: e.target.value })}
+              onChange={(v) => patch({ lookbackStartDate: v })}
               className="h-7 w-[120px] text-[10px] bg-muted/20 border-border px-1"
+              buttonClassName="h-7 w-7"
               data-testid="input-lb-start-date"
             />
             <span className="text-[10px] text-muted-foreground">–</span>
-            <Input
-              type="date"
+            <DateInput
               value={c.lookbackEndDate ?? ""}
-              onChange={(e) => patch({ lookbackEndDate: e.target.value })}
+              onChange={(v) => patch({ lookbackEndDate: v })}
               className="h-7 w-[120px] text-[10px] bg-muted/20 border-border px-1"
+              buttonClassName="h-7 w-7"
               data-testid="input-lb-end-date"
             />
           </div>

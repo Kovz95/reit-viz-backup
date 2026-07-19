@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import { Button } from "@/components/ui/button";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
 import { getTickers, getTickersCacheSync } from "@/lib/dataService";
@@ -727,14 +727,13 @@ export function BasketMetricInspector({
           <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground ml-2">
             As of
           </span>
-          <Input
-            type="date"
+          <DateInput
             value={asOfInput}
             min={availableDates[0]}
             max={availableDates[availableDates.length - 1]}
-            onChange={(event) => setAsOfInput(event.target.value)}
+            onChange={setAsOfInput}
             className="h-7 w-[145px] text-xs"
-            placeholder="latest"
+            buttonClassName="h-7 w-7"
             data-testid="basket-math-asof"
           />
           {asOfInput && (

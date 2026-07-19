@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import {
   ArrowUpDown,
   ArrowUp,
@@ -1347,12 +1348,10 @@ export default function Ranking() {
         )}
 
         <span className="text-xs font-semibold text-muted-foreground">Date</span>
-        <Input
-          type="date"
+        <DateInput
           value={dateInput}
-          onChange={(e) => setDateInput(e.target.value)}
-          onClick={(e) => (e.currentTarget as HTMLInputElement).showPicker?.()}
-          className="h-6 text-[11px] w-[140px] bg-background cursor-pointer"
+          onChange={setDateInput}
+          className="h-6 text-[11px] w-[140px] bg-background"
           data-testid="rank-date"
         />
         {dateInput && (

@@ -36,6 +36,7 @@ import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
+import DateInput from "@/components/DateInput";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
 import { e as evaluateSignals, E as EvaluatorResultPanel, H as HitConditionsPanel } from "@/components/EvaluatorPanel";
@@ -935,9 +936,9 @@ export default function ZScoreOptimizer() {
                     <button key={e.value} data-testid={`z-eval-date-preset-${e.value}`} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${datePreset === e.value ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground border border-border hover:text-foreground"}`} onClick={() => { setDatePreset(e.value); setDateRange(createDateRangeFromPreset(e.value)); }}>{e.label}</button>
                   ))}
                 </div>
-                <input type="date" data-testid="z-eval-date-start" value={dateRange.start} onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }} className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="z-eval-date-start" value={dateRange.start} onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }} className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input type="date" data-testid="z-eval-date-end" value={dateRange.end} onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }} className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="z-eval-date-end" value={dateRange.end} onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }} className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">&nbsp;</label>
@@ -1047,9 +1048,9 @@ export default function ZScoreOptimizer() {
                     <button key={e.value} data-testid={`z-date-preset-${e.value}`} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${datePreset === e.value ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground border border-border hover:text-foreground"}`} onClick={() => { setDatePreset(e.value); setDateRange(createDateRangeFromPreset(e.value)); }}>{e.label}</button>
                   ))}
                 </div>
-                <input type="date" data-testid="z-date-start" value={dateRange.start} onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }} className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="z-date-start" value={dateRange.start} onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }} className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input type="date" data-testid="z-date-end" value={dateRange.end} onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }} className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
+                <DateInput data-testid="z-date-end" value={dateRange.end} onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }} className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5" />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Buy σ</label>

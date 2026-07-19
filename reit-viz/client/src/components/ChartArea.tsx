@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import {
   Popover,
   PopoverContent,
@@ -2004,11 +2005,11 @@ export default function ChartArea({
               {editingAnnId ? "Edit Annotation" : "Add Annotation"}
             </div>
             <div className="flex flex-col gap-1.5 mb-2">
-              <Input
-                type="date"
+              <DateInput
                 value={annDate}
-                onChange={(e) => setAnnDate(e.target.value)}
+                onChange={setAnnDate}
                 className="h-7 text-xs"
+                buttonClassName="h-7 w-7"
                 data-testid="annotation-date"
               />
               <Input

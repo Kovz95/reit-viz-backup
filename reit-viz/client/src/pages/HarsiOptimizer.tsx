@@ -48,6 +48,7 @@ import {
 import { B as BasketPicker } from "@/components/BasketPicker";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
+import DateInput from "@/components/DateInput";
 import { Download } from "lucide-react";
 import "@/lib/harsi";
 import "@/lib/tva";
@@ -1670,24 +1671,22 @@ export default function HarsiOptimizer() {
               </button>
             ))}
           </div>
-          <input
-            type="date"
+          <DateInput
             data-testid="harsi-date-start"
             value={dateRange.start}
-            onChange={(e) => {
+            onChange={(v) => {
               setDatePreset("custom");
-              setDateRange({ ...dateRange, start: e.target.value });
+              setDateRange({ ...dateRange, start: v });
             }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />
           <span className="text-[10px] font-mono text-muted-foreground">→</span>
-          <input
-            type="date"
+          <DateInput
             data-testid="harsi-date-end"
             value={dateRange.end}
-            onChange={(e) => {
+            onChange={(v) => {
               setDatePreset("custom");
-              setDateRange({ ...dateRange, end: e.target.value });
+              setDateRange({ ...dateRange, end: v });
             }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />

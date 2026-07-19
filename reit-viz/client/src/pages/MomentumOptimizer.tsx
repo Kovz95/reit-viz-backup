@@ -46,6 +46,7 @@ import { B as BasketPicker } from "@/components/BasketPicker";
 import { e as evaluateSignals, E as EvaluatorResultPanel, H as HitConditionsPanel } from "@/components/EvaluatorPanel";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
+import DateInput from "@/components/DateInput";
 import { Download } from "lucide-react";
 import * as React from "react";
 import "@/lib/harsi";
@@ -1016,19 +1017,17 @@ export default function MomentumOptimizer() {
               >{preset.label}</button>
             ))}
           </div>
-          <input
-            type="date"
+          <DateInput
             data-testid="mom-date-start"
             value={(dateRange as any).start}
-            onChange={e => { setDatePreset("custom"); setDateRange({ ...(dateRange as any), start: e.target.value }); }}
+            onChange={v => { setDatePreset("custom"); setDateRange({ ...(dateRange as any), start: v }); }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />
           <span className="text-[10px] font-mono text-muted-foreground">→</span>
-          <input
-            type="date"
+          <DateInput
             data-testid="mom-date-end"
             value={(dateRange as any).end}
-            onChange={e => { setDatePreset("custom"); setDateRange({ ...(dateRange as any), end: e.target.value }); }}
+            onChange={v => { setDatePreset("custom"); setDateRange({ ...(dateRange as any), end: v }); }}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
           />
         </div>

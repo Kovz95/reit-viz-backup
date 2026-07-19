@@ -13,6 +13,7 @@ import { getWorkbookMetrics } from "@/lib/workbookMetrics";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Loader2, Info, Download } from "lucide-react";
@@ -706,9 +707,9 @@ export default function FactorBacktest() {
         </div>
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">Range:</span>
-          <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-7 w-32 text-xs" />
+          <DateInput value={startDate} onChange={setStartDate} className="h-7 w-32 text-xs" buttonClassName="h-7 w-7" />
           <span>→</span>
-          <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-7 w-32 text-xs" />
+          <DateInput value={endDate} onChange={setEndDate} className="h-7 w-32 text-xs" buttonClassName="h-7 w-7" />
         </div>
         <div className="flex items-center gap-1">
           <span className="text-muted-foreground">Rebalance:</span>

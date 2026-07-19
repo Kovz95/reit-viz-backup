@@ -30,6 +30,7 @@ import { refreshTickerData } from "@/lib/dataService";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { PresetBar } from "@/components/PresetBar";
+import DateInput from "@/components/DateInput";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
   stochOscillator,
@@ -1427,20 +1428,18 @@ export default function Oscillators() {
                     </button>
                   ))}
                 </div>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="osc-eval-date-start"
                   value={dateRange.start}
-                  onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="osc-eval-date-end"
                   value={dateRange.end}
-                  onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
               </div>
               <div className="flex flex-col gap-0.5">
@@ -1603,20 +1602,18 @@ export default function Oscillators() {
                     </button>
                   ))}
                 </div>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="osc-date-start"
                   value={dateRange.start}
-                  onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, start: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
                 <span className="text-[10px] font-mono text-muted-foreground">→</span>
-                <input
-                  type="date"
+                <DateInput
                   data-testid="osc-date-end"
                   value={dateRange.end}
-                  onChange={(e) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: e.target.value }); }}
-                  className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
+                  onChange={(v) => { setDatePreset("custom"); setDateRange({ ...dateRange, end: v }); }}
+                  className="h-6 w-[130px] text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5"
                 />
               </div>
               {mode === "universe" && classFilter.classFilterUI && (

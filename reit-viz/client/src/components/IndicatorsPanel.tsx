@@ -4,6 +4,7 @@ import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -1064,11 +1065,11 @@ export default function IndicatorsPanel({
               {/* As-of anchor date */}
               <div className="flex gap-1 items-center">
                 <span className="text-[10px] text-muted-foreground w-12">As of</span>
-                <Input
-                  type="date"
+                <DateInput
+                  wrapperClassName="flex-1"
                   className="h-6 text-[10px] px-1.5 flex-1"
                   value={activeIndicators.fractalLines.anchorDate ?? ""}
-                  onChange={(e) => updateFractal(true, undefined, e.target.value || null)}
+                  onChange={(v) => updateFractal(true, undefined, v || null)}
                   data-testid="fractal-anchor-date"
                 />
                 <Button
