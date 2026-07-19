@@ -5,7 +5,7 @@ import { useLocalStorage } from "@/lib/useLocalStorage";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchTradingDates } from "@/lib/fetchTradingDates";
-import { fetchMetricSeries } from "@/lib/signalUtils";
+import { fetchMetricSeries, type MetricSeriesPoint } from "@/lib/fetchMetricSeries";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,7 +20,7 @@ import { Play as PlayIcon } from "@/lib/icons";
 interface MetricDef {
   key: string;
   label: string;
-  family: "valuation" | "growth" | "technical" | "macro";
+  family: "valuation" | "growth" | "technical";
   direction: 1 | -1;
 }
 
@@ -108,23 +108,25 @@ interface RseConfig {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// Keys must match workbook metric names exactly (see GET /api/ticker/<sym>).
+// FY1 multiples are stored with parens: "P/AFFO (FY1)".
 const METRIC_DEFS: MetricDef[] = [
-  { key: "P/AFFO FY2",       label: "P/AFFO FY2",        family: "valuation", direction: -1 },
-  { key: "P/FFO FY2",        label: "P/FFO FY2",         family: "valuation", direction: -1 },
-  { key: "EV/EBITDA FY2",    label: "EV/EBITDA FY2",     family: "valuation", direction: -1 },
-  { key: "Implied Cap Rate", label: "Implied Cap Rate",   family: "valuation", direction:  1 },
-  { key: "AFFO Yield FY2",   label: "AFFO Yield FY2",    family: "valuation", direction:  1 },
-  { key: "Dividend Yield",   label: "Dividend Yield",    family: "valuation", direction:  1 },
-  { key: "FY2 AFFO Growth",  label: "FY2 AFFO Growth",   family: "growth",    direction:  1 },
-  { key: "FY1 AFFO Growth",  label: "FY1 AFFO Growth",   family: "growth",    direction:  1 },
-  { key: "FY2 FFO Growth",   label: "FY2 FFO Growth",    family: "growth",    direction:  1 },
-  { key: "FY2 EPS Growth",   label: "FY2 EPS Growth",    family: "growth",    direction:  1 },
-  { key: "1M Price Chg%",    label: "1M Momentum",       family: "technical", direction:  1 },
-  { key: "3M Price Chg%",    label: "3M Momentum",       family: "technical", direction:  1 },
-  { key: "6M Price Chg%",    label: "6M Momentum",       family: "technical", direction:  1 },
-  { key: "% off 52wk High",  label: "% off 52wk High",   family: "technical", direction:  1 },
-  { key: "Beta 10Y",         label: "Beta to 10Y",       family: "macro",     direction: -1 },
-  { key: "Beta BBB",         label: "Beta to BBB Spread",family: "macro",     direction: -1 },
+  { key: "P/AFFO FY2",            label: "P/AFFO FY2",         family: "valuation", direction: -1 },
+  { key: "P/AFFO (FY1)",          label: "P/AFFO FY1",         family: "valuation", direction: -1 },
+  { key: "P/FFO FY2",             label: "P/FFO FY2",          family: "valuation", direction: -1 },
+  { key: "P/FFO (FY1)",           label: "P/FFO FY1",          family: "valuation", direction: -1 },
+  { key: "EV/EBITDA FY2",         label: "EV/EBITDA FY2",      family: "valuation", direction: -1 },
+  { key: "Dividend Yield",        label: "Dividend Yield",     family: "valuation", direction:  1 },
+  { key: "FY2 AFFO Growth",       label: "FY2 AFFO Growth",    family: "growth",    direction:  1 },
+  { key: "FY1 AFFO Growth",       label: "FY1 AFFO Growth",    family: "growth",    direction:  1 },
+  { key: "FY2 FFO Growth",        label: "FY2 FFO Growth",     family: "growth",    direction:  1 },
+  { key: "FY2 EPS Growth",        label: "FY2 EPS Growth",     family: "growth",    direction:  1 },
+  { key: "Dividend / AFFO payout",label: "AFFO Payout Ratio",  family: "growth",    direction: -1 },
+  { key: "1M Price Chg%",         label: "1M Momentum",        family: "technical", direction:  1 },
+  { key: "3M Price Chg%",         label: "3M Momentum",        family: "technical", direction:  1 },
+  { key: "6M Price Chg%",         label: "6M Momentum",        family: "technical", direction:  1 },
+  { key: "% off 52wk High",       label: "% off 52wk High",    family: "technical", direction:  1 },
+  { key: "Short Interest%",       label: "Short Interest %",   family: "technical", direction: -1 },
 ];
 
 const METRIC_MAP: Record<string, MetricDef> = Object.fromEntries(METRIC_DEFS.map(m => [m.key, m]));
@@ -133,10 +135,9 @@ const FAMILY_LABELS: Record<string, string> = {
   valuation: "Valuation",
   growth: "Growth & Quality",
   technical: "Technicals",
-  macro: "Macro Sensitivity",
 };
 
-const FAMILIES = ["valuation", "growth", "technical", "macro"] as const;
+const FAMILIES = ["valuation", "growth", "technical"] as const;
 
 const HORIZON_WINDOWS = [
   { days:   5, label: "1W" },
@@ -146,7 +147,7 @@ const HORIZON_WINDOWS = [
   { days: 252, label: "12M" },
 ];
 
-const DEFAULT_METRICS = ["P/AFFO FY2", "AFFO Yield FY2", "FY2 AFFO Growth", "Dividend Yield", "3M Price Chg%", "% off 52wk High"];
+const DEFAULT_METRICS = ["P/AFFO FY2", "P/FFO FY2", "FY2 AFFO Growth", "Dividend Yield", "3M Price Chg%", "% off 52wk High"];
 
 const DEFAULT_CONFIG: RseConfig = {
   metrics: DEFAULT_METRICS,
@@ -167,15 +168,13 @@ function createMatrix(tickers: string[], dates: string[]): MatrixPanel {
   return { tickers, dates, matrix };
 }
 
-function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: { dates: string[]; values: (number | null)[] }) {
+function fillMatrixRow(panel: MatrixPanel, tickerIdx: number, series: MetricSeriesPoint[]) {
   const dateIndex = new Map<string, number>();
   for (let i = 0; i < panel.dates.length; i++) dateIndex.set(panel.dates[i], i);
   const row = panel.matrix[tickerIdx];
-  for (let i = 0; i < series.dates.length; i++) {
-    const time = series.dates[i];
-    const value = series.values[i];
-    const idx = dateIndex.get(time);
-    if (idx !== undefined && value != null && Number.isFinite(value)) row[idx] = value;
+  for (const point of series) {
+    const idx = dateIndex.get(point.time);
+    if (idx !== undefined && point.value != null && Number.isFinite(point.value)) row[idx] = point.value;
   }
 }
 
@@ -910,7 +909,9 @@ export default function RelativeStrength() {
       const tickers = filtered.map((t: { ticker: string }) => t.ticker);
 
       setProgressMsg(`Loading metrics for ${tickers.length} tickers…`);
-      const metrics = config.metrics;
+      // Drop metric keys that no longer exist in METRIC_DEFS (stale saved configs).
+      const metrics = config.metrics.filter(m => METRIC_MAP[m]);
+      if (metrics.length === 0) throw new Error("No valid metrics selected — pick at least one in Framework Configuration");
       const rawPanels: Record<string, MatrixPanel> = {};
       const pricePanel = createMatrix(tickers, tradingDates);
       for (const m of metrics) rawPanels[m] = createMatrix(tickers, tradingDates);
@@ -922,12 +923,12 @@ export default function RelativeStrength() {
           const tickerIdx = i + bIdx;
           try {
             const closeSeries = await fetchMetricSeries(ticker, "close");
-            if (closeSeries) fillMatrixRow(pricePanel, tickerIdx, closeSeries);
+            if (closeSeries.length) fillMatrixRow(pricePanel, tickerIdx, closeSeries);
           } catch { /**/ }
           for (const m of metrics) {
             try {
               const series = await fetchMetricSeries(ticker, m);
-              if (series) fillMatrixRow(rawPanels[m], tickerIdx, series);
+              if (series.length) fillMatrixRow(rawPanels[m], tickerIdx, series);
             } catch { /**/ }
           }
         }));
@@ -1098,9 +1099,9 @@ export default function RelativeStrength() {
               <SelectContent>
                 <SelectItem value="subindustry">Sub-Industry</SelectItem>
                 <SelectItem value="industry">Industry</SelectItem>
-                <SelectItem value="sector">Sector</SelectItem>
-                <SelectItem value="supersector">Super-Sector</SelectItem>
+                <SelectItem value="industryGroup">Industry Group</SelectItem>
                 <SelectItem value="subsector">Sub-Sector</SelectItem>
+                <SelectItem value="sector">Sector</SelectItem>
               </SelectContent>
             </Select>
           </div>
