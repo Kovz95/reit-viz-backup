@@ -192,8 +192,10 @@ const CHART_OPTIONS = {
     borderColor: "rgba(255,255,255,0.1)",
     timeVisible: false,
   },
-  handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-  handleScale: false,
+  // Same interaction model as the Charts tab (ChartPane): wheel zooms
+  // (cursor-anchored) without scrolling sideways; pan via click-drag.
+  handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+  handleScale: { mouseWheel: true, pinch: true },
 };
 
 interface DataPoint {
@@ -1457,8 +1459,8 @@ function PairsSubIndicatorChart({
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.06)", minimumWidth: 80 },
       timeScale: { borderColor: "rgba(255,255,255,0.06)", visible: false },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-      handleScale: false,
+      handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { mouseWheel: true, pinch: true },
     });
     chartRef.current = chart;
 
