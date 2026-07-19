@@ -8,6 +8,7 @@
 // GET /api/ticker/<sym> via toSparseMetrics (gL). See lib/tickerData.ts.
 
 import { fetchTickerRaw, toSparseMetrics, type SparsePair } from "@/lib/tickerData";
+import { isDefaultEpsMetric } from "@/lib/defaultEarningsMetric";
 
 export interface WorkbookDataResult {
   ticker: string;
@@ -65,7 +66,7 @@ export async function fetchWorkbookTickers(): Promise<any[]> {
 
 export { fetchWorkbookSeriesForTicker } from "@/lib/fetchWorkbookSeriesForTicker";
 
-export async function fetchScatterData(
+async function fetchScatterRaw(
   metricX: string,
   metricY: string,
   metricZ?: string,
@@ -86,6 +87,61 @@ export async function fetchScatterData(
   const res = await fetch(`/api/scatter?${params.toString()}`);
   if (!res.ok) throw new Error(`fetchScatterData: HTTP ${res.status}`);
   return res.json();
+}
+
+export async function fetchScatterData(
+  metricX: string,
+  metricY: string,
+  metricZ?: string,
+  asOf?: string,
+  extra?: Record<string, string>,
+  colorMetric?: string
+): Promise<ScatterQueryResult> {
+  const anyPseudo = [metricX, metricY, metricZ, colorMetric].some((m) => isDefaultEpsMetric(m));
+  if (!anyPseudo) {
+    return fetchScatterRaw(metricX, metricY, metricZ, asOf, extra, colorMetric);
+  }
+
+  // "EPS (Default)": the server resolves nothing per ticker, so fetch the
+  // scatter once per referenced concrete metric (substituted on the pseudo
+  // axes) and stitch each ticker's values from its resolved metric's call.
+  const { getDefaultEpsConfig, referencedEpsMetrics, resolveDefaultEps } =
+    await import("@/lib/defaultEarningsMetric");
+  const { getTickers } = await import("@/lib/dataService");
+  const cfg = getDefaultEpsConfig();
+  const metas = await getTickers();
+  const resolvedBy = new Map(metas.map((t: any) => [t.ticker, resolveDefaultEps(t, cfg)]));
+  const referenced = referencedEpsMetrics(cfg);
+  const sub = (m: string | undefined, repl: string) => (m && isDefaultEpsMetric(m) ? repl : m);
+
+  const calls = await Promise.all(
+    referenced.map((dm) =>
+      fetchScatterRaw(
+        sub(metricX, dm)!,
+        sub(metricY, dm)!,
+        sub(metricZ, dm),
+        asOf,
+        extra,
+        sub(colorMetric, dm)
+      )
+    )
+  );
+  const byMetric = new Map(
+    referenced.map((dm, i) => [dm, new Map(calls[i].points.map((p) => [p.ticker, p]))])
+  );
+  const base = calls[0];
+  const points = base.points.map((p) => {
+    const src = byMetric.get(resolvedBy.get(p.ticker) ?? cfg.fallback)?.get(p.ticker);
+    if (!src) return p;
+    return {
+      ...p,
+      x: isDefaultEpsMetric(metricX) ? src.x : p.x,
+      y: isDefaultEpsMetric(metricY) ? src.y : p.y,
+      z: isDefaultEpsMetric(metricZ) ? src.z : p.z,
+      colorVal: isDefaultEpsMetric(colorMetric) ? src.colorVal : p.colorVal,
+    };
+  });
+  return { ...base, points };
 }
 
 export async function computeBasketSeries(

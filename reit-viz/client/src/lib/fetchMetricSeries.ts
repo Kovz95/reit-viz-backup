@@ -6,6 +6,8 @@
 // GET /api/ticker/<sym> ({ dates, metrics }). See lib/tickerData.ts.
 
 import { fetchTickerRaw, getDenseSeries } from "@/lib/tickerData";
+import { isDefaultEpsMetric, resolveDefaultEps } from "@/lib/defaultEarningsMetric";
+import { getTickers } from "@/lib/dataService";
 
 export type MetricSeriesPoint = { time: string; value: number };
 
@@ -14,6 +16,11 @@ export async function fetchMetricSeries(
   metric: string,
   _opts?: { start?: string; end?: string; [key: string]: any }
 ): Promise<MetricSeriesPoint[]> {
+  // "EPS (Default)" pseudo-metric: resolve per ticker via the Universe-tab rules.
+  if (isDefaultEpsMetric(metric)) {
+    const metas = await getTickers();
+    metric = resolveDefaultEps(metas.find((t) => t.ticker === ticker));
+  }
   const raw = await fetchTickerRaw(ticker);
   if (!raw) return [];
   let series = getDenseSeries(raw, metric);

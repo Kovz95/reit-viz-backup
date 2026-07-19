@@ -25,6 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ClassificationFilters } from "@/lib/classificationFilters";
 import { FilterDropdown } from "@/components/ClassificationFilters";
+import DefaultEpsPanel from "@/components/DefaultEpsPanel";
 import { useBaskets } from "@/lib/useBaskets";
 import { commitClassificationOverride } from "@/lib/reclassificationOverrides";
 import {
@@ -624,6 +625,8 @@ export default function Universe() {
             </Button>
           </div>
         </div>
+        {/* Default earnings-metric (EPS (Default)) configuration */}
+        <DefaultEpsPanel />
         {/* Exclusions management panel */}
         <div className="rounded border border-border bg-card/50">
           <button

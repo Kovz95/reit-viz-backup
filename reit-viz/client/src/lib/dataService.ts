@@ -269,6 +269,14 @@ export async function injectFundamentalSheets(
   _customFundamentalMetrics = [...combined].sort();
 }
 
+import {
+  DEFAULT_EPS_METRIC,
+  isDefaultEpsMetric,
+  referencedEpsMetrics,
+  resolveDefaultEps,
+  getDefaultEpsConfig,
+} from "./defaultEarningsMetric";
+
 // ---- Percentage conversion ----
 // These metrics are stored as decimals in the Excel source (e.g. 0.04 = 4%).
 // We multiply by 100 so they display as proper percentages.
@@ -614,6 +622,11 @@ export async function getOhlcData(symbol: string): Promise<OhlcPoint[]> {
 
 /** Get time series for a specific metric of a ticker */
 export async function getMetricSeries(symbol: string, metric: string): Promise<TimeValue[]> {
+  // "EPS (Default)" pseudo-metric: resolve per ticker via the Universe-tab rules.
+  if (isDefaultEpsMetric(metric)) {
+    const metas = await getTickers();
+    return getMetricSeries(symbol, resolveDefaultEps(metas.find((t) => t.ticker === symbol)));
+  }
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
 
@@ -1284,6 +1297,19 @@ export async function getMultiMetricForAllTickers(
   dateParam?: string,
   avgDays?: number
 ): Promise<(ClassifiedBase & { values: Record<string, number | null> })[]> {
+  // "EPS (Default)": fetch every metric the rules reference, then pick the
+  // resolved one per ticker (rows carry the classification meta needed).
+  if (metrics.includes(DEFAULT_EPS_METRIC)) {
+    const cfg = getDefaultEpsConfig();
+    const expanded = [
+      ...new Set([...metrics.filter((m) => m !== DEFAULT_EPS_METRIC), ...referencedEpsMetrics(cfg)]),
+    ];
+    const rows = await getMultiMetricForAllTickers(expanded, dateParam, avgDays);
+    return rows.map((r) => ({
+      ...r,
+      values: { ...r.values, [DEFAULT_EPS_METRIC]: r.values[resolveDefaultEps(r, cfg)] ?? null },
+    }));
+  }
   const tickersMeta = await getTickers();
   const dates = await getDates();
 
@@ -1417,6 +1443,10 @@ export async function getMetricTrailing(
   metric: string,
   trailingDays: number = 250
 ): Promise<number[]> {
+  if (isDefaultEpsMetric(metric)) {
+    const metas = await getTickers();
+    return getMetricTrailing(symbol, resolveDefaultEps(metas.find((t) => t.ticker === symbol)), trailingDays);
+  }
   const rawData = await getTickerRaw(symbol);
   const dates = await getDates();
 
@@ -1456,6 +1486,26 @@ export async function getMetricTrailingAllTickers(
   trailingDays: number = 1260
 ): Promise<(ClassifiedBase & { current: number | null; values: number[]; dates: string[] })[]> {
   const tickersMeta = await getTickers();
+
+  // "EPS (Default)" resolves per ticker, which the server batch cannot do —
+  // fan out one batch call per referenced metric and stitch rows per ticker.
+  if (isDefaultEpsMetric(metric)) {
+    const cfg = getDefaultEpsConfig();
+    const referenced = referencedEpsMetrics(cfg);
+    const perMetric = await Promise.all(referenced.map((m) => getMetricTrailingAllTickers(m, trailingDays)));
+    const byMetric = new Map(referenced.map((m, i) => [m, new Map(perMetric[i].map((r) => [r.ticker, r]))]));
+    return tickersMeta.map((t) => {
+      const resolved = resolveDefaultEps(t, cfg);
+      const row = byMetric.get(resolved)?.get(t.ticker);
+      return row ?? {
+        ticker: t.ticker, name: t.name,
+        economy: t.economy || "", sector: t.sector || "",
+        subsector: t.subsector || "", industryGroup: t.industryGroup || "",
+        industry: t.industry || "", subindustry: t.subindustry || "",
+        current: null, values: [], dates: [],
+      };
+    });
+  }
 
   // Try server-side batch endpoint first
   try {
