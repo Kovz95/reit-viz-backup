@@ -1419,6 +1419,16 @@ function lineToBars(data: DataPoint[]): OhlcBar[] {
   return data.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }));
 }
 
+// Adaptive precision for the in-plot crosshair readout (ratios can be ~0.07,
+// prices ~300, z-scores ~1.5 — one fixed precision misreads at least one).
+function fmtReadoutVal(v: number): string {
+  const a = Math.abs(v);
+  if (a >= 1000) return v.toFixed(0);
+  if (a >= 100) return v.toFixed(1);
+  if (a >= 1) return v.toFixed(2);
+  return v.toFixed(4);
+}
+
 function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
   const out: PairsSubChartType[] = [];
   if (typeof indicators.rsi === "number") out.push("rsi");
@@ -1456,6 +1466,12 @@ function PairsSubIndicatorChart({
   const syncingRef = useRef(false);
   const { colors: IC } = useIndicatorColors();
   const gridColor = useGridColor("rgba(255,255,255,0.03)");
+  // In-plot crosshair readout for this sub-pane (fires for both direct hover
+  // and the parent chart's synced crosshair).
+  const [hoverReadout, setHoverReadout] = useState<{
+    time: string;
+    items: { label: string; value: number; color: string }[];
+  } | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -1667,6 +1683,22 @@ function PairsSubIndicatorChart({
     // Sync time scale with parent chart using TIME-based range (not logical range)
     // because indicator data may have fewer points than the parent (e.g. HA skips
     // the first data point), so logical indices don't map to the same calendar dates.
+    // In-plot readout: report this sub-pane's titled series at the crosshair.
+    const readoutCb = (param: any) => {
+      if (!param.time || !param.seriesData) { setHoverReadout(null); return; }
+      const items: { label: string; value: number; color: string }[] = [];
+      const seen = new Set<string>();
+      param.seriesData.forEach((dp: any, series: any) => {
+        const val = dp?.value ?? dp?.close;
+        const opts = series.options?.() ?? {};
+        if (val === undefined || val === null || !opts.title || seen.has(opts.title)) return;
+        seen.add(opts.title);
+        items.push({ label: opts.title, value: val, color: opts.color || "#e2e8f0" });
+      });
+      setHoverReadout(items.length > 0 ? { time: String(param.time), items } : null);
+    };
+    chart.subscribeCrosshairMove(readoutCb);
+
     // Parent-chart subscriptions must be torn down on cleanup: the parent keeps
     // firing them after this sub-chart (or a re-created parent) is disposed,
     // which raised "Object is disposed" errors on every indicator change.
@@ -1750,6 +1782,7 @@ function PairsSubIndicatorChart({
     return () => {
       chartRef.current = null;
       removeParentSubs?.();
+      setHoverReadout(null);
       try { chart.remove(); } catch {}
     };
   }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor]);
@@ -1772,12 +1805,29 @@ function PairsSubIndicatorChart({
     : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
 
   return (
-    <div className="relative w-full border-t border-border/30 flex-shrink-0" style={{ height: type === "ha" ? 100 : SUB_CHART_HEIGHT }}>
+    <div
+      className="relative w-full border-t border-border/30 flex-shrink-0"
+      style={{ height: type === "ha" ? 100 : SUB_CHART_HEIGHT }}
+      onMouseLeave={() => setHoverReadout(null)}
+    >
       <div className="absolute left-2 z-10 mt-0.5">
         <span className="text-[9px] font-mono text-muted-foreground/50 bg-background/80 px-1 py-0.5 rounded">
           {label}
         </span>
       </div>
+      {hoverReadout && hoverReadout.items.length > 0 && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 top-0.5 z-20 flex items-center gap-2 text-[9px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-6rem)] overflow-hidden"
+          data-testid={`pairs-sub-${type}-readout`}
+        >
+          {hoverReadout.items.map((it, i) => (
+            <span key={i} className="whitespace-nowrap">
+              <span style={{ color: it.color }}>{it.label}</span>{" "}
+              <span className="text-foreground font-semibold">{fmtReadoutVal(it.value)}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div ref={containerRef} className="w-full h-full" />
     </div>
   );
@@ -1831,6 +1881,12 @@ function MiniChart({
   const { colors: IC } = useIndicatorColors();
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
   const mainSeriesRef = useRef<ISeriesApi<any> | null>(null);
+  // Per-plot crosshair readout (same as ChartPane on the Charts tab): this
+  // chart's own series values at the hovered time, shown inside the plot.
+  const [hoverReadout, setHoverReadout] = useState<{
+    time: string;
+    items: { label: string; value: number; color: string }[];
+  } | null>(null);
   const [logScale, setLogScale] = useState(false);
   // Counter that increments when chart + main series are ready, to trigger re-render
   // so sub-charts receive the actual parentChart/parentSeries refs (not null).
@@ -1858,6 +1914,9 @@ function MiniChart({
     chartRef.current = chart;
     onRegisterChart(id, chart, data.length);
 
+    // Labels/colors for the in-plot readout, for principal series with no title.
+    const readoutMeta = new Map<unknown, { label: string; color: string }>();
+
     // Main series
     const mainSeries = chart.addSeries(LineSeries, {
       color,
@@ -1869,6 +1928,7 @@ function MiniChart({
     mainSeries.setData(data.map((d) => ({ time: d.time as Time, value: d.value })));
     mainSeriesRef.current = mainSeries;
     onRegisterSeries(id, mainSeries);
+    readoutMeta.set(mainSeries, { label: title, color });
     // Signal sub-charts that parentChart/parentSeries refs are now set
     setChartReady(c => c + 1);
 
@@ -1883,6 +1943,7 @@ function MiniChart({
       });
       sec.setData(secondaryData.map((d) => ({ time: d.time as Time, value: d.value })));
       sec.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } });
+      readoutMeta.set(sec, { label: secondaryLabel || "Secondary", color: secondaryColor });
     }
 
     // Reference lines
@@ -2112,23 +2173,36 @@ function MiniChart({
       }
     }
 
-    // Crosshair value reporting
+    // Crosshair value reporting + in-plot readout
     const crosshairCb = (param: any) => {
       if (!param.time || !param.seriesData) {
         onCrosshairMove?.(id, null);
+        setHoverReadout(null);
         return;
       }
       const values: Record<string, number> = {};
+      const items: { label: string; value: number; color: string }[] = [];
+      const seen = new Set<string>();
       param.seriesData.forEach((dataPoint: any, series: any) => {
         const val = dataPoint?.value ?? dataPoint?.close;
         if (val !== undefined && val !== null) {
-          const seriesTitle = series.options?.()?.title || title;
+          const opts = series.options?.() ?? {};
+          const seriesTitle = opts.title || title;
           values[seriesTitle || title] = val;
+          // Readout: principal series via readoutMeta, otherwise titled series
+          // only (ref/band helper lines have title "")
+          const meta = readoutMeta.get(series);
+          const label = meta?.label || opts.title;
+          if (label && !seen.has(label)) {
+            seen.add(label);
+            items.push({ label, value: val, color: meta?.color || opts.color || "#e2e8f0" });
+          }
         }
       });
       if (Object.keys(values).length > 0) {
         onCrosshairMove?.(id, { time: String(param.time), values });
       }
+      setHoverReadout(items.length > 0 ? { time: String(param.time), items } : null);
     };
     chart.subscribeCrosshairMove(crosshairCb);
 
@@ -2148,6 +2222,7 @@ function MiniChart({
       ro.disconnect();
       try { chart.unsubscribeCrosshairMove(crosshairCb); } catch {}
       onCrosshairMove?.(id, null);
+      setHoverReadout(null);
       onUnregisterChart(id);
       chart.remove();
       chartRef.current = null;
@@ -2229,7 +2304,30 @@ function MiniChart({
           </Button>
         )}
       </div>
-      <div ref={containerRef} style={effectiveFlexHeight ? { flex: 1 } : { height }} className={effectiveFlexHeight ? "flex-1 min-h-0" : ""} />
+      {/* lightweight-charts does not reliably emit a final crosshairMove on
+          pointer exit, so clear the readout on DOM mouseleave (as ChartPane does). */}
+      <div
+        style={effectiveFlexHeight ? { flex: 1 } : { height }}
+        className={`relative ${effectiveFlexHeight ? "flex-1 min-h-0" : ""}`}
+        onMouseLeave={() => setHoverReadout(null)}
+      >
+        <div ref={containerRef} className="w-full h-full" />
+        {/* In-plot crosshair readout (same style as the Charts tab panes) */}
+        {hoverReadout && hoverReadout.items.length > 0 && (
+          <div
+            className="absolute left-1/2 -translate-x-1/2 top-1.5 z-20 flex items-center gap-2 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-1rem)] overflow-hidden"
+            data-testid={`pairs-chart-${id}-readout`}
+          >
+            <span className="text-muted-foreground/70">{hoverReadout.time}</span>
+            {hoverReadout.items.map((it, i) => (
+              <span key={i} className="whitespace-nowrap">
+                <span style={{ color: it.color }}>{it.label}</span>{" "}
+                <span className="text-foreground font-semibold">{fmtReadoutVal(it.value)}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
       {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV) */}
       {subCharts.map(sc => (
         <PairsSubIndicatorChart
@@ -3301,18 +3399,8 @@ export default function Pairs() {
               <StatChip label="Half-Life" value={stats.cointStats.halfLife > 0 && stats.cointStats.halfLife < 9999 ? `${stats.cointStats.halfLife.toFixed(1)}d` : "N/A"} />
             </>
           )}
-          {pairsCrosshairData && (
-            <>
-              <div className="h-4 w-px bg-border" />
-              <span className="text-[10px] font-mono text-muted-foreground">{pairsCrosshairData.time}</span>
-              {Object.entries(pairsCrosshairData.values).map(([key, val]) => (
-                <span key={key} className="text-[10px] font-mono whitespace-nowrap">
-                  <span className="text-muted-foreground">{key}: </span>
-                  <span className="text-foreground font-semibold">{typeof val === "number" ? val.toFixed(4) : val}</span>
-                </span>
-              ))}
-            </>
-          )}
+          {/* Crosshair values now render inside each plot (per-chart readout),
+              matching the Charts tab — the merged top-strip readout is gone. */}
         </div>
       )}
 
