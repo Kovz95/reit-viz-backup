@@ -63,11 +63,12 @@ import {
   computeHeikinAshi,
   computeHASignals,
 } from "@/lib/indicators";
-import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
+import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor } from "@/components/IndicatorsPanel";
+import { IndicatorColorEditor, RegistryIndicatorControls } from "@/components/IndicatorsPanel";
+import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
@@ -1130,9 +1131,15 @@ function PairsIndicatorsPanel({
           </div>
         </div>
 
+        {/* ───── More Indicators (registry-driven, same list as the Charts tab) ───── */}
+        <div className="border-t border-border pt-3">
+          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">More Indicators</p>
+          <RegistryIndicatorControls activeIndicators={activeIndicators} onChange={setIndicators} />
+        </div>
+
         <div className="border-t border-border pt-3">
           <p className="text-[10px] text-muted-foreground">
-            MAs, Bollinger, and VWAP overlay the chart. RSI, MACD, ATR, ROC, Stochastic, and OBV render in sub-panes below. Select which chart to apply to above.
+            MAs, Bollinger, VWAP, and overlay-type indicators draw on the chart. RSI, MACD, ATR, ROC, Stochastic, OBV, and sub-pane indicators render below. Select which chart to apply to above.
           </p>
         </div>
 
@@ -1399,9 +1406,18 @@ function OlsScatterChart({
 }
 
 // ── Which indicators get their own sub-pane (oscillators/separate-scale) ──
-type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv";
+// Registry-driven sub-pane indicators (ADX, CCI, Aroon, …) are encoded as
+// "reg:<id>" so one component handles both the bespoke and registry kinds.
+type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv" | `reg:${string}`;
 
 const SUB_CHART_HEIGHT = 70;
+
+// Pairs plots are line series (ratio/z-score/price); registry indicators take
+// OHLC bars, so synthesize flat bars (o=h=l=c) — the same degradation the
+// bespoke ATR/Stochastic/HA on this page already use for line data.
+function lineToBars(data: DataPoint[]): OhlcBar[] {
+  return data.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }));
+}
 
 function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
   const out: PairsSubChartType[] = [];
@@ -1413,6 +1429,11 @@ function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
   if (indicators.stochastic) out.push("stochastic");
   if (typeof indicators.atr === "number") out.push("atr");
   if (indicators.obv) out.push("obv");
+  for (const def of ALL_REGISTRY_INDICATORS) {
+    if (def.renderTarget === "pane" && indicators.registry?.[def.id]?.enabled) {
+      out.push(`reg:${def.id}`);
+    }
+  }
   return out;
 }
 
@@ -1616,9 +1637,40 @@ function PairsSubIndicatorChart({
       }
     }
 
+    // Registry-driven sub-pane indicators (ADX, CCI, Williams %R, Aroon, Slow Stoch, …)
+    if (type.startsWith("reg:")) {
+      const def = getIndicatorDef(type.slice(4));
+      if (def?.renderPane) {
+        const bars = lineToBars(closeData);
+        const p = resolveParams(def, activeIndicators.registry?.[def.id]);
+        def.renderPane(
+          {
+            chart,
+            colors: IC as unknown as Record<string, string>,
+            baseLabel: "",
+            register: (s) => { if (!firstSeries) firstSeries = s; },
+            refLine: (level, color, first, last) => {
+              const rl = chart.addSeries(LineSeries, {
+                color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
+                crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+              });
+              rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
+            },
+          },
+          bars,
+          p,
+        );
+        chart.timeScale().fitContent();
+      }
+    }
+
     // Sync time scale with parent chart using TIME-based range (not logical range)
     // because indicator data may have fewer points than the parent (e.g. HA skips
     // the first data point), so logical indices don't map to the same calendar dates.
+    // Parent-chart subscriptions must be torn down on cleanup: the parent keeps
+    // firing them after this sub-chart (or a re-created parent) is disposed,
+    // which raised "Object is disposed" errors on every indicator change.
+    let removeParentSubs: (() => void) | null = null;
     if (parentChart) {
       // Track which chart initiated the sync to prevent infinite feedback loops.
       // Callbacks fire asynchronously so a simple boolean guard isn't enough.
@@ -1654,8 +1706,9 @@ function PairsSubIndicatorChart({
       });
 
       // Parent → Sub crosshair sync
+      let handleParentCrosshair: ((param: any) => void) | null = null;
       if (firstSeries) {
-        const handleParentCrosshair = (param: any) => {
+        handleParentCrosshair = (param: any) => {
           if (syncingRef.current) return;
           syncingRef.current = true;
           try {
@@ -1669,6 +1722,13 @@ function PairsSubIndicatorChart({
         };
         parentChart.subscribeCrosshairMove(handleParentCrosshair);
       }
+
+      removeParentSubs = () => {
+        try { parentChart.timeScale().unsubscribeVisibleLogicalRangeChange(syncToSub); } catch {}
+        if (handleParentCrosshair) {
+          try { parentChart.unsubscribeCrosshairMove(handleParentCrosshair); } catch {}
+        }
+      };
 
       // Sub → Parent crosshair sync (bidirectional)
       if (parentSeries) {
@@ -1689,6 +1749,7 @@ function PairsSubIndicatorChart({
 
     return () => {
       chartRef.current = null;
+      removeParentSubs?.();
       try { chart.remove(); } catch {}
     };
   }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor]);
@@ -1707,7 +1768,8 @@ function PairsSubIndicatorChart({
   });
 
   const label = type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
-    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV" : type;
+    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV"
+    : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
 
   return (
     <div className="relative w-full border-t border-border/30 flex-shrink-0" style={{ height: type === "ha" ? 100 : SUB_CHART_HEIGHT }}>
@@ -1996,6 +2058,34 @@ function MiniChart({
           haSeries.setData(
             haCandles.map(c => ({ time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close }))
           );
+        }
+      }
+
+      // Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku) —
+      // same registry as the Charts tab, computed on flat bars from the line data.
+      {
+        const regState = activeIndicators.registry ?? {};
+        const anyOverlayOn = ALL_REGISTRY_INDICATORS.some(
+          (d) => d.renderTarget === "overlay" && regState[d.id]?.enabled,
+        );
+        if (anyOverlayOn) {
+          const overlayBars = lineToBars(data);
+          for (const def of ALL_REGISTRY_INDICATORS) {
+            if (def.renderTarget !== "overlay" || !regState[def.id]?.enabled || !def.renderOverlay) continue;
+            const p = resolveParams(def, regState[def.id]);
+            try {
+              def.renderOverlay(
+                {
+                  chart,
+                  colors: IC as unknown as Record<string, string>,
+                  baseLabel: "",
+                  register: () => {},
+                },
+                overlayBars,
+                p,
+              );
+            } catch { /* one bad indicator must not kill the chart */ }
+          }
         }
       }
 

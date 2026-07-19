@@ -30,6 +30,8 @@ import {
 } from "lucide-react";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { ActiveIndicators } from "@/components/ChartPane";
+import { ALL_REGISTRY_INDICATORS, resolveParams } from "@/lib/indicatorRegistry";
+import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
 import GridLayoutPicker, { gridContainerStyle } from "@/components/GridLayoutPicker";
@@ -638,6 +640,65 @@ function MacroPane({
           kLine.priceScale().applyOptions({
             scaleMargins: { top: 0.75, bottom: 0 },
           });
+        }
+      }
+
+      // ── Registry-driven indicators (same list as the Charts tab panel) ──
+      // Overlays draw on the primary scale; sub-pane types draw into their own
+      // bottom scale band like RSI/MACD above (Macro has no true sub-panes).
+      // Bars are synthesized flat (o=h=l=c) from the primary line series.
+      const regState = activeIndicators.registry ?? {};
+      if (ALL_REGISTRY_INDICATORS.some((d) => regState[d.id]?.enabled)) {
+        const bars: OhlcBar[] = primaryData.map((d) => ({
+          time: d.time, open: d.value, high: d.value, low: d.value, close: d.value,
+        }));
+        for (const def of ALL_REGISTRY_INDICATORS) {
+          if (!regState[def.id]?.enabled) continue;
+          const p = resolveParams(def, regState[def.id]);
+          const register = (s: ISeriesApi<any>) => { indicatorSeriesRef.current.push(s); };
+          try {
+            if (def.renderTarget === "overlay" && def.renderOverlay) {
+              def.renderOverlay(
+                { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register },
+                bars, p,
+              );
+            } else if (def.renderPane) {
+              const scaleId = `reg_${def.id}`;
+              let anchor: ISeriesApi<any> | null = null;
+              // Facade that forces every series the indicator adds onto its own
+              // bottom-band price scale.
+              const paneChart = {
+                addSeries: (kind: any, opts: any) => {
+                  const s = chart.addSeries(kind, {
+                    ...opts, priceScaleId: scaleId, priceLineVisible: false, lastValueVisible: false,
+                  });
+                  if (!anchor) anchor = s;
+                  return s;
+                },
+              } as unknown as IChartApi;
+              def.renderPane(
+                {
+                  chart: paneChart,
+                  colors: INDICATOR_COLORS as unknown as Record<string, string>,
+                  baseLabel: "",
+                  register,
+                  refLine: (level, color, first, last) => {
+                    const rl = chart.addSeries(LineSeries, {
+                      color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
+                      priceScaleId: scaleId, crosshairMarkerVisible: false,
+                      priceLineVisible: false, lastValueVisible: false,
+                    });
+                    rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
+                    indicatorSeriesRef.current.push(rl);
+                  },
+                },
+                bars, p,
+              );
+              if (anchor) {
+                (anchor as ISeriesApi<any>).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+              }
+            }
+          } catch { /* one bad indicator must not kill the pane */ }
         }
       }
     }

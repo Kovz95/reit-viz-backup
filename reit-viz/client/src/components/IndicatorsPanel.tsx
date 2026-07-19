@@ -256,7 +256,7 @@ function HeikinAshiControls({
  *  indicatorRegistry.ts). One row per indicator with a toggle + numeric param
  *  inputs, grouped by category. Adding an indicator to the registry makes it
  *  appear here with no edits to this file. */
-function RegistryIndicatorControls({
+export function RegistryIndicatorControls({
   activeIndicators,
   onChange,
 }: {
