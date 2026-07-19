@@ -160,6 +160,7 @@ const STOCK_METRICS_BASE = [
   "FY1 FFO Growth", "FY2 FFO Growth",
   "FY1 AFFO Growth", "FY2 AFFO Growth",
   "FY1 EPS Growth", "FY2 EPS Growth",
+  "EPS (Default)", "EPS Growth (Default)",
   "Implied Cap Rate",
   "P/S LTM", "P/S FY2",
   "Enterprise Value",

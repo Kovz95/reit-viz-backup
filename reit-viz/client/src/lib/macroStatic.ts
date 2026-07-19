@@ -151,8 +151,17 @@ export async function resolveSeriesDataStatic(
   } else {
     // Stock ticker:metric — read from static /data/tickers/TICKER.json
     const ticker = source;
-    const metric = metricOrId;
-    
+    let metric = metricOrId;
+
+    // Default pseudo-metrics ("EPS (Default)" / "EPS Growth (Default)"):
+    // resolve per ticker via the Universe-tab rules before reading the data.
+    const { isDefaultMetricName, resolveDefaultMetricFor } = await import("./defaultEarningsMetric");
+    if (isDefaultMetricName(metric)) {
+      const { getTickers } = await import("./dataService");
+      const metas = await getTickers();
+      metric = resolveDefaultMetricFor(metric, metas.find((t: any) => t.ticker === ticker));
+    }
+
     // Fetch dates and ticker data
     const [datesResp, tickerResp] = await Promise.all([
       fetch("data/dates.json"),

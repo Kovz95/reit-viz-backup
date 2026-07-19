@@ -32,6 +32,7 @@ const METRIC_OPTIONS_BASE = [
   "P/FFO LTM", "P/FFO FY2", "P/AFFO LTM", "P/AFFO FY2",
   "P/E LTM", "P/E FY2", "P/S LTM", "P/S FY2",
   "EV/EBITDA LTM", "EV/EBITDA FY2", "Implied Cap Rate",
+  "EPS (Default)", "EPS Growth (Default)",
   "FFO Yield LTM", "FFO Yield FY2", "AFFO Yield LTM", "AFFO Yield FY2",
   "Dividend Yield",
   "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2", "AFFO FY1", "AFFO FY2",
