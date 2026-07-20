@@ -22,6 +22,8 @@ import { SortAsc, SortDesc } from "lucide-react";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { useBaskets, type Basket } from "@/lib/useBaskets";
+import { getBasketOhlc } from "@/lib/basketOhlc";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +68,109 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 
 const PERIOD_COLUMNS = ["1W", "1M", "3M", "6M", "12M"];
 const QUARTER_COLUMNS = ["Q1", "Q2", "Q3", "Q4"];
+
+// ─── Basket composite rows ────────────────────────────────────────────────────
+// Baskets appear as synthetic rows in the periods / seasonality / monthly
+// views, computed from the equal-weight composite (getBasketOhlc bars).
+
+interface BasketBar { date: string; close: number }
+
+function isoSubtractDays(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** First bar index with date >= iso (or -1). */
+function firstBarAtOrAfter(bars: BasketBar[], iso: string): number {
+  let lo = 0, hi = bars.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].date >= iso) { ans = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  return ans;
+}
+
+function barReturn(bars: BasketBar[], fromIdx: number, toIdx: number): number | null {
+  if (fromIdx < 0 || toIdx <= fromIdx || toIdx >= bars.length) return null;
+  const a = bars[fromIdx].close, b = bars[toIdx].close;
+  return a > 0 && b > 0 ? (b / a - 1) * 100 : null;
+}
+
+/** Periods + seasonality row for a basket composite. */
+function basketPerfRow(basket: Basket, bars: BasketBar[], customStart?: string, customEnd?: string): any {
+  const row: any = {
+    ticker: basket.name,
+    name: `Basket · ${basket.tickers.length} members`,
+    isBasket: true,
+    economy: "", sector: "", subsector: "", industryGroup: "", industry: "", subindustry: "",
+    "1W": null, "1M": null, "3M": null, "6M": null, "12M": null,
+    custom: null, Q1: null, Q2: null, Q3: null, Q4: null, lastClose: null,
+  };
+  if (bars.length < 2) return row;
+  const lastIdx = bars.length - 1;
+  const lastDate = bars[lastIdx].date;
+  const periodOffsets: Record<string, number> = { "1W": 7, "1M": 30, "3M": 91, "6M": 182, "12M": 365 };
+  for (const [key, days] of Object.entries(periodOffsets)) {
+    const fromIdx = firstBarAtOrAfter(bars, isoSubtractDays(lastDate, days));
+    row[key] = barReturn(bars, fromIdx, lastIdx);
+  }
+  if (customStart && customEnd) {
+    const fromIdx = firstBarAtOrAfter(bars, customStart);
+    let toIdx = firstBarAtOrAfter(bars, customEnd);
+    if (toIdx < 0) toIdx = lastIdx;
+    else if (bars[toIdx].date > customEnd) toIdx--;
+    row.custom = barReturn(bars, fromIdx, toIdx);
+  }
+  // Average return per calendar quarter across years
+  const qReturns: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
+  let i = 0;
+  while (i < bars.length) {
+    const y = bars[i].date.slice(0, 4);
+    const q = Math.floor((Number(bars[i].date.slice(5, 7)) - 1) / 3) + 1;
+    let j = i;
+    while (j + 1 < bars.length &&
+      bars[j + 1].date.slice(0, 4) === y &&
+      Math.floor((Number(bars[j + 1].date.slice(5, 7)) - 1) / 3) + 1 === q) j++;
+    const ret = barReturn(bars, i, j);
+    if (ret !== null) qReturns[q].push(ret);
+    i = j + 1;
+  }
+  for (const q of [1, 2, 3, 4]) {
+    const arr = qReturns[q];
+    if (arr.length) row[`Q${q}`] = arr.reduce((s, v) => s + v, 0) / arr.length;
+  }
+  return row;
+}
+
+/** Monthly-seasonality row for a basket composite (avg return per calendar month). */
+function basketMonthlyRow(basket: Basket, bars: BasketBar[]): any {
+  const row: any = { ticker: basket.name, name: `Basket · ${basket.tickers.length} members`, isBasket: true, yearsOfData: 0 };
+  for (const m of MONTHLY_LABELS) row[m] = null;
+  if (bars.length < 2) return row;
+  const byMonth: Record<number, number[]> = {};
+  const years = new Set<string>();
+  let i = 0;
+  while (i < bars.length) {
+    const ym = bars[i].date.slice(0, 7);
+    let j = i;
+    while (j + 1 < bars.length && bars[j + 1].date.slice(0, 7) === ym) j++;
+    const ret = barReturn(bars, i, j);
+    if (ret !== null) {
+      const m = Number(ym.slice(5, 7)) - 1;
+      (byMonth[m] ??= []).push(ret);
+      years.add(ym.slice(0, 4));
+    }
+    i = j + 1;
+  }
+  MONTHLY_LABELS.forEach((label: string, m: number) => {
+    const arr = byMonth[m];
+    if (arr?.length) row[label] = arr.reduce((s, v) => s + v, 0) / arr.length;
+  });
+  row.yearsOfData = years.size;
+  return row;
+}
 
 // ─── Parse MM/DD from string ──────────────────────────────────────────────────
 
@@ -368,6 +473,8 @@ export default function Performance() {
   const [eventStat, setEventStat] = useState("avg");
   const [seasonalMinDays, setSeasonalMinDays] = useState(30);
   const [seasonalMaxDays, setSeasonalMaxDays] = useState(180);
+  const [showBaskets, setShowBaskets] = useState(false);
+  const { baskets } = useBaskets();
 
   // ── Workspace state ──
   const serializeState = useCallback(
@@ -383,8 +490,9 @@ export default function Performance() {
       eventStat,
       seasonalMinDays,
       seasonalMaxDays,
+      showBaskets,
     }),
-    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays]
+    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -399,6 +507,7 @@ export default function Performance() {
     if (state.eventStat !== undefined) setEventStat(state.eventStat);
     if (state.seasonalMinDays !== undefined) setSeasonalMinDays(state.seasonalMinDays);
     if (state.seasonalMaxDays !== undefined) setSeasonalMaxDays(state.seasonalMaxDays);
+    if (state.showBaskets !== undefined) setShowBaskets(state.showBaskets);
   }, []);
 
   useWorkspaceState("performance", serializeState, hydrateState);
@@ -422,6 +531,31 @@ export default function Performance() {
     queryKey: ["/seasonal-patterns", seasonalMinDays, seasonalMaxDays],
     queryFn: () => fetchSeasonalPatterns(5, seasonalMinDays, seasonalMaxDays),
     enabled: viewMode === "seasonal-patterns",
+  });
+
+  // Basket composite rows (periods/seasonality + monthly views)
+  const basketsKey = useMemo(
+    () => baskets.map((b) => `${b.id}:${b.tickers.join(",")}`).join("|"),
+    [baskets]
+  );
+  const { data: basketRowData } = useQuery({
+    queryKey: ["/perf-basket-rows", basketsKey, customStart, customEnd],
+    enabled: showBaskets && baskets.length > 0,
+    queryFn: async () => {
+      const perf: any[] = [];
+      const monthly: any[] = [];
+      for (const b of baskets) {
+        if (!b.tickers?.length) continue;
+        try {
+          const ohlc = await getBasketOhlc(b);
+          if (!ohlc || !ohlc.closes.length) continue;
+          const bars: BasketBar[] = ohlc.priceDates.map((d: string, i: number) => ({ date: d, close: ohlc.closes[i] }));
+          perf.push(basketPerfRow(b, bars, customStart || undefined, customEnd || undefined));
+          monthly.push(basketMonthlyRow(b, bars));
+        } catch { /* skip basket */ }
+      }
+      return { perf, monthly };
+    },
   });
 
   const isLoading =
@@ -458,7 +592,21 @@ export default function Performance() {
       rows = rows.filter((r: any) => basketScope.inScope(r.ticker));
     }
 
-    return [...geo.filterByGeo(filterPerformanceData(rows, filters, searchText, manualTickers))].sort(
+    // Basket composite rows: bypass universe/classification/geo filters
+    // (baskets aren't tickers), but respect the free-text search.
+    let basketExtras: any[] = [];
+    if (showBaskets && basketRowData) {
+      if (viewMode === "periods" || viewMode === "seasonality") basketExtras = basketRowData.perf;
+      else if (viewMode === "monthly") basketExtras = basketRowData.monthly;
+      const q = searchText.trim().toLowerCase();
+      if (q) {
+        basketExtras = basketExtras.filter(
+          (r: any) => r.ticker.toLowerCase().includes(q) || (r.name || "").toLowerCase().includes(q)
+        );
+      }
+    }
+
+    return [...geo.filterByGeo(filterPerformanceData(rows, filters, searchText, manualTickers)), ...basketExtras].sort(
       (a: any, b: any) => {
         let av: any, bv: any;
         if (viewMode === "events" && sortKey.startsWith("w_")) {
@@ -476,7 +624,7 @@ export default function Performance() {
         return sortAsc ? av - bv : bv - av;
       }
     );
-  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo]);
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData]);
 
   const handleSort = useCallback(
     (col: string) => {
@@ -744,6 +892,16 @@ export default function Performance() {
 
           {/* Basket scope + CSV export */}
           <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              variant={showBaskets ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => setShowBaskets((v) => !v)}
+              data-testid="perf-show-baskets"
+              title="Show each basket as a composite row (periods, seasonality, and monthly views)"
+            >
+              Baskets{showBaskets && baskets.length > 0 ? ` (${baskets.length})` : ""}
+            </Button>
             <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
             <Button
               variant="outline"
@@ -932,7 +1090,7 @@ export default function Performance() {
                   className={`border-b border-border/50 hover:bg-accent/50 transition-colors ${idx % 2 === 0 ? "" : "bg-muted/20"}`}
                   data-testid={`perf-row-${row.ticker}`}
                 >
-                  <td className="px-2 py-1.5 font-mono font-semibold text-xs sticky left-0 bg-inherit">{row.ticker}</td>
+                  <td className={`px-2 py-1.5 font-mono font-semibold text-xs sticky left-0 bg-inherit ${row.isBasket ? "text-amber-300" : ""}`}>{row.ticker}</td>
                   <td className="px-2 py-1.5 text-xs text-muted-foreground max-w-[200px] truncate" title={row.name}>{row.name}</td>
                   {viewMode === "periods" && (
                     <>
