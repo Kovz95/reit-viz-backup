@@ -120,10 +120,6 @@ export interface IStorage {
   updateCustomChart(id: number, updates: any): any | undefined;
   deleteCustomChart(id: number): boolean;
 
-  listAlerts(): any[];
-  createAlert(alert: any): any;
-  updateAlert(id: number, updates: any): any | undefined;
-  deleteAlert(id: number): boolean;
 
   listAnnotations(ticker?: string): any[];
   createAnnotation(annotation: any): any;
@@ -250,33 +246,6 @@ export class DatabaseStorage implements IStorage {
   deleteCustomChart(id: number): boolean {
     try {
       return sqlite.prepare("DELETE FROM custom_charts WHERE id = ?").run(id).changes > 0;
-    } catch { return false; }
-  }
-
-  // ── Alerts ──
-  listAlerts(): any[] {
-    try {
-      return (sqlite.prepare("SELECT * FROM alerts ORDER BY created_at DESC").all() as any[]);
-    } catch { return []; }
-  }
-  createAlert(alert: any): any {
-    try {
-      const now = new Date().toISOString();
-      const stmt = sqlite.prepare("INSERT INTO alerts (ticker, metric, operator, threshold, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *");
-      return stmt.get(alert.ticker, alert.metric, alert.operator, alert.threshold, alert.label ?? '', now, now) ?? alert;
-    } catch { return { ...alert, id: Date.now() }; }
-  }
-  updateAlert(id: number, updates: any): any | undefined {
-    try {
-      const existing: any = sqlite.prepare("SELECT * FROM alerts WHERE id = ?").get(id);
-      if (!existing) return undefined;
-      const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
-      return merged;
-    } catch { return undefined; }
-  }
-  deleteAlert(id: number): boolean {
-    try {
-      return sqlite.prepare("DELETE FROM alerts WHERE id = ?").run(id).changes > 0;
     } catch { return false; }
   }
 

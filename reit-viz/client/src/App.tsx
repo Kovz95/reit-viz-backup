@@ -103,7 +103,6 @@ const Attribution = lazy(() => import("@/pages/Attribution"));
 const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
 const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
-const Alerts = lazy(() => import("@/pages/Alerts"));
 const DataExplorer = lazy(() => import("@/pages/DataExplorer"));
 const PCA = lazy(() => import("@/pages/PCA"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -312,7 +311,6 @@ function NavBar() {
     { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
     { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
     { path: "/similar-setups", label: "Similar Setups", icon: Filter },
-    { path: "/alerts", label: "Alerts", icon: Target },
     { path: "/data", label: "Data", icon: Table2 },
   ];
 
@@ -636,7 +634,6 @@ const PAGES = [
   { path: "/setups-screener", label: "Setups Screener" },
   { path: "/rates-forward", label: "Rates Forward" },
   { path: "/yield-correlation", label: "Yield Corr" },
-  { path: "/alerts", label: "Alerts" },
   { path: "/baskets", label: "Baskets" },
   { path: "/data", label: "Data" },
 ];
@@ -756,7 +753,6 @@ function AppShell() {
               <Route path="/sigma-move" component={SigmaMove} />
               <Route path="/attribution" component={Attribution} />
               <Route path="/similar-setups" component={SimilarSetups} />
-              <Route path="/alerts" component={Alerts} />
               <Route path="/data" component={DataExplorer} />
               <Route path="/pca" component={PCA} />
               <Route component={NotFound} />
