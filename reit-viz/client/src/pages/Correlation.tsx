@@ -11,6 +11,7 @@ import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { useBaskets } from "@/lib/useBaskets";
 import {
   createChart,
   ColorType,
@@ -1480,7 +1481,7 @@ const ROLLING_WINDOW_LABELS: Record<number, string> = {
 };
 
 export default function Correlation() {
-  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "drivers">("pairwise");
+  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "basket" | "drivers">("pairwise");
 
   // Pairwise state
   const [specA, setSpecA] = useState("SPG:close");
@@ -1514,6 +1515,9 @@ export default function Correlation() {
   const [uniMode, setUniMode] = useState("returns");
   const [uniWindow, setUniWindow] = useState("252");
   const [uniMetric, setUniMetric] = useState("close");
+  // Basket matrix tab (shares metric/mode/lookback with the universe tab)
+  const { baskets } = useBaskets();
+  const [corrBasketId, setCorrBasketId] = useState("");
 
   const serializeCorrelation = useCallback(() => ({
     activeTab,
@@ -1529,7 +1533,8 @@ export default function Correlation() {
     uniMode,
     uniWindow,
     uniMetric,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, uniMode, uniWindow, uniMetric]);
+    corrBasketId,
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, uniMode, uniWindow, uniMetric, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -1555,6 +1560,7 @@ export default function Correlation() {
     if (state.uniMode !== undefined) setUniMode(state.uniMode);
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
     if (state.uniMetric !== undefined) setUniMetric(state.uniMetric);
+    if (state.corrBasketId !== undefined) setCorrBasketId(state.corrBasketId);
   }, []);
 
   const universeSig = useUniverseSignature();
@@ -1605,6 +1611,33 @@ export default function Correlation() {
     queryFn: () => fetchMatrixCorrelation(universeSpecs, uniMode, uniWindow),
     enabled: activeTab === "universe" && universeSpecs.length >= 2,
   });
+
+  // Basket matrix query: same machinery over the selected basket's members.
+  const activeCorrBasket = useMemo(() => baskets.find(b => b.id === corrBasketId) ?? null, [baskets, corrBasketId]);
+  const basketSpecs = useMemo(
+    () => (activeCorrBasket ? activeCorrBasket.tickers.map(t => `${t}:${uniMetric}`) : []),
+    [activeCorrBasket, uniMetric]
+  );
+  const { data: basketMatrixData, isLoading: basketMatrixLoading } = useQuery<MatrixResult>({
+    queryKey: ["correlation-basket-matrix", basketSpecs.join(","), uniMode, uniWindow],
+    queryFn: () => fetchMatrixCorrelation(basketSpecs, uniMode, uniWindow),
+    enabled: activeTab === "basket" && basketSpecs.length >= 2,
+  });
+
+  const exportBasketMatrixCSV = useCallback(() => {
+    if (!basketMatrixData) return;
+    const labels = basketMatrixData.labels.map(formatSpec);
+    const header = `,${labels.join(",")}`;
+    const lines = basketMatrixData.matrix.map((row, i) =>
+      `${labels[i]},${row.map(v => v.toFixed(4)).join(",")}`
+    );
+    const csv = [header, ...lines].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    a.download = `basket_correlation_matrix.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }, [basketMatrixData]);
 
   // CSV export for pairwise rolling
   const exportPairwiseCSV = useCallback(() => {
@@ -1694,6 +1727,15 @@ export default function Correlation() {
               data-testid="tab-universe-corr"
             >
               <Globe className="w-3 h-3 mr-0.5" /> Univ
+            </Button>
+            <Button
+              variant={activeTab === "basket" ? "default" : "secondary"}
+              size="sm"
+              className="h-7 text-[10px] px-1.5 w-full"
+              onClick={() => setActiveTab("basket")}
+              data-testid="tab-basket-corr"
+            >
+              <Grid3X3 className="w-3 h-3 mr-0.5" /> Basket
             </Button>
             <Button
               variant={activeTab === "drivers" ? "default" : "secondary"}
@@ -1886,7 +1928,7 @@ export default function Correlation() {
               <Download className="w-3 h-3" /> Export CSV
             </Button>
           </div>
-        ) : (
+        ) : activeTab === "universe" ? (
           /* Universe tab sidebar */
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
             <div className="border border-border/30 rounded p-2 bg-card/30">
@@ -1966,6 +2008,93 @@ export default function Correlation() {
               <Download className="w-3 h-3" /> Export CSV
             </Button>
           </div>
+        ) : (
+          /* Basket tab sidebar — matrix across the selected basket's members */
+          <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Basket</div>
+              <Select value={corrBasketId || undefined} onValueChange={setCorrBasketId}>
+                <SelectTrigger className="h-6 text-[11px]" data-testid="corr-basket-select">
+                  <SelectValue placeholder="Pick a basket…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {baskets.map(b => (
+                    <SelectItem key={b.id} value={b.id}>{b.name} ({b.tickers.length})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {baskets.length === 0 && (
+                <div className="text-[10px] text-muted-foreground">No baskets yet — create one on the Baskets tab.</div>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Metric</div>
+              <Select value={uniMetric} onValueChange={setUniMetric}>
+                <SelectTrigger className="h-6 text-[11px]" data-testid="basket-corr-metric">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-h-[260px]">
+                  {uniMetricGroups.map(({ category, metrics }) => (
+                    <div key={category}>
+                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
+                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                    </div>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Mode</div>
+              <Select value={uniMode} onValueChange={setUniMode}>
+                <SelectTrigger className="h-6 text-[11px]" data-testid="basket-corr-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="returns">Log Returns</SelectItem>
+                  <SelectItem value="changes">Simple Changes</SelectItem>
+                  <SelectItem value="levels">Levels</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Lookback</div>
+              <Select value={uniWindow} onValueChange={setUniWindow}>
+                <SelectTrigger className="h-6 text-[11px]" data-testid="basket-corr-window">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 days</SelectItem>
+                  <SelectItem value="60">60 days</SelectItem>
+                  <SelectItem value="120">120 days</SelectItem>
+                  <SelectItem value="252">252 days (1Y)</SelectItem>
+                  <SelectItem value="504">504 days (2Y)</SelectItem>
+                  <SelectItem value="1260">1260 days (5Y)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Member list preview */}
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+                Members ({basketSpecs.length})
+              </div>
+              <div className="space-y-0 max-h-[300px] overflow-y-auto border border-border/20 rounded">
+                {basketSpecs.map(spec => (
+                  <div key={spec} className="px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:bg-accent/30 border-b border-border/10 last:border-b-0">
+                    {formatSpec(spec)}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <Button variant="outline" size="sm" className="w-full h-7 text-xs gap-1.5"
+              onClick={exportBasketMatrixCSV} disabled={!basketMatrixData}>
+              <Download className="w-3 h-3" /> Export CSV
+            </Button>
+          </div>
         )}
       </div>
 
@@ -1989,11 +2118,17 @@ export default function Correlation() {
             data={matrixData}
             loading={matrixLoading}
           />
-        ) : (
+        ) : activeTab === "universe" ? (
           <UniverseMatrixView
             data={uniMatrixData}
             loading={uniMatrixLoading}
             tickerCount={universeSpecs.length}
+          />
+        ) : (
+          <UniverseMatrixView
+            data={basketMatrixData}
+            loading={basketMatrixLoading}
+            tickerCount={basketSpecs.length}
           />
         )}
       </div>
