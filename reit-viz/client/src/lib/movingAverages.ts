@@ -82,12 +82,30 @@ export function computeMA(
     return result;
   } else if (type === "HMA") {
     // HMA = WMA(2*WMA(period/2) - WMA(period), sqrt(period))
-    // Simplified: fall back to SMA for the stub
-    for (let i = period - 1; i < n; i++) {
-      let sum = 0;
-      for (let j = i - period + 1; j <= i; j++) sum += values[j];
-      result[i] = sum / period;
-    }
+    const wma = (src: (number | null)[], p: number): (number | null)[] => {
+      const out: (number | null)[] = new Array(src.length).fill(null);
+      const denom = (p * (p + 1)) / 2;
+      for (let i = p - 1; i < src.length; i++) {
+        let sum = 0;
+        let ok = true;
+        for (let j = 0; j < p; j++) {
+          const v = src[i - p + 1 + j];
+          if (v == null) { ok = false; break; }
+          sum += v * (j + 1);
+        }
+        if (ok) out[i] = sum / denom;
+      }
+      return out;
+    };
+    const half = Math.max(1, Math.round(period / 2));
+    const sqrtP = Math.max(1, Math.round(Math.sqrt(period)));
+    const wmaHalf = wma(values, half);
+    const wmaFull = wma(values, period);
+    const diff: (number | null)[] = values.map((_, i) =>
+      wmaHalf[i] != null && wmaFull[i] != null ? 2 * wmaHalf[i]! - wmaFull[i]! : null
+    );
+    const hma = wma(diff, sqrtP);
+    for (let i = 0; i < n; i++) result[i] = hma[i];
   }
 
   return result;

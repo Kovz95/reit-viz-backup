@@ -1,5 +1,5 @@
 // Reconstructed from recovered-bundle/FactorBacktest-DTdYrgz4.js on 2026-06-11
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useUniverse } from "@/lib/universeContext";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import BasketPicker from "@/components/BasketPicker";
@@ -433,8 +433,22 @@ export default function FactorBacktest() {
     }
   }, [tradingDates.length, startDate, endDate]);
 
-  // Build workbook metrics
-  const workbookMetrics = useMemo<string[]>(() => { try { const m = getWorkbookMetrics(); return Array.isArray(m) ? (m as Array<{ key?: string } | string>).map(x => typeof x === "string" ? x : (x.key ?? "")).filter(Boolean) : []; } catch { return []; } }, [tickersQuery.dataUpdatedAt]);
+  // Build workbook metrics (async: derived from the tickers metadata)
+  const [workbookMetrics, setWorkbookMetrics] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    getWorkbookMetrics()
+      .then((m) => {
+        if (!alive) return;
+        setWorkbookMetrics(
+          (Array.isArray(m) ? m : [])
+            .map((x: { key?: string } | string) => (typeof x === "string" ? x : x.key ?? ""))
+            .filter(Boolean)
+        );
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [tickersQuery.dataUpdatedAt]);
 
   const metricGroups = useMemo(() => {
     // Union curated metrics + the loaded universe's metrics + workbook + derived,

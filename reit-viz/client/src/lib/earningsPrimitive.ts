@@ -1,31 +1,48 @@
-// Stub — TODO: reverse-engineer from production bundle
-// EarningsDatePrimitive renders vertical lines (or markers) on a
-// lightweight-charts chart at each earnings date for a given ticker.
+// EarningsDatePrimitive — vertical earnings-date lines for lightweight-charts.
+// Thin wrapper over VerticalLinePrimitive; PremiumDiscount constructs it with
+// an array of {time, color, label} markers and attaches via attachPrimitive().
+
+import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 
 export interface EarningsDatePrimitiveOptions {
-  ticker: string;
-  dates: string[];
+  ticker?: string;
+  dates?: string[];
   color?: string;
   lineWidth?: number;
   [key: string]: any;
 }
 
-/**
- * A lightweight-charts series primitive that draws vertical earnings markers.
- * Stub — the real implementation attaches to a chart series via .attachPrimitive().
- */
-export class EarningsDatePrimitive {
-  constructor(_options: EarningsDatePrimitiveOptions | any[]) {
-    // Stub — TODO: reverse-engineer from production bundle
+type Marker = { time: string; color?: string; label?: string };
+
+function toEntries(input: EarningsDatePrimitiveOptions | Marker[] | any[]): { time: string; color: string; label?: string }[] {
+  if (Array.isArray(input)) {
+    return input
+      .filter((m: any) => m && typeof m.time === "string")
+      .map((m: any) => ({ time: m.time, color: m.color ?? "#f59e0b", label: m.label ?? "E" }));
+  }
+  const opts = input ?? {};
+  return (opts.dates ?? []).map((d: string) => ({ time: d, color: opts.color ?? "#f59e0b", label: "E" }));
+}
+
+export class EarningsDatePrimitive extends VerticalLinePrimitive {
+  constructor(options: EarningsDatePrimitiveOptions | any[]) {
+    super(toEntries(options));
+  }
+
+  /** LWC calls attached() on attachPrimitive — request a paint immediately so
+   *  the lines appear without waiting for the next chart update. */
+  attached(param: any): void {
+    super.attached(param);
+    try { param.requestUpdate?.(); } catch {}
   }
 
   /** Update the list of earnings dates. */
-  update(_dates: string[]): void {
-    // Stub
+  update(dates: string[]): void {
+    this.setLines((dates ?? []).map((d) => ({ time: d, color: "#f59e0b", label: "E" })));
   }
 
-  /** Detach from the series. */
+  /** Back-compat alias; actual detachment happens via series.detachPrimitive. */
   detach(): void {
-    // Stub
+    this.setLines([]);
   }
 }

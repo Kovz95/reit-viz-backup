@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import { getTickerEvents, getMacroEventDates, MACRO_EVENT_TYPES, getMetricSeries } from "@/lib/dataService";
+import { getChartSignals, onChartSignals } from "@/lib/chartBridge";
 import type { EventType } from "@/lib/dataService";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
@@ -519,6 +520,20 @@ export default function ChartArea({
   // Macro event vertical line toggles
   const [activeMacroEvents, setActiveMacroEvents] = useState<Set<string>>(new Set());
   const [macroEventDates, setMacroEventDates] = useState<Record<string, string[]>>({});
+  // Signals handed off via chartBridge (PriceAction "Show on chart")
+  const [bridgeSignals, setBridgeSignals] = useState<{ date: string; direction?: string; label?: string }[]>([]);
+  useEffect(() => {
+    const load = () => {
+      const payload = activeTicker ? getChartSignals(activeTicker) : null;
+      setBridgeSignals(payload?.signals ?? []);
+    };
+    load();
+    return onChartSignals((payload) => {
+      if (activeTicker && payload.ticker === activeTicker.toUpperCase()) {
+        setBridgeSignals(payload.signals ?? []);
+      }
+    });
+  }, [activeTicker]);
 
   // ── Color-by-variable per pane ──
   // paneId → metric name
@@ -833,8 +848,17 @@ export default function ChartArea({
         entries.push({ time: d, color, label: et.charAt(0) });
       }
     }
+    // Signals handed off from other pages (PriceAction "Show on chart")
+    for (const s of bridgeSignals) {
+      if (!s?.date) continue;
+      entries.push({
+        time: s.date.slice(0, 10),
+        color: s.direction === "down" ? "#ef4444" : "#22c55e",
+        label: s.direction === "down" ? "▼" : "▲",
+      });
+    }
     return entries;
-  }, [activeMacroEvents, macroEventDates]);
+  }, [activeMacroEvents, macroEventDates, bridgeSignals]);
 
   // Fiscal-year boundary lines: the first (earliest) earnings report of each
   // calendar year — marks when the fiscal year switches (FY1 → FY0). Labeled

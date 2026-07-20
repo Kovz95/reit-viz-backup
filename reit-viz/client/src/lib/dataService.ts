@@ -2614,17 +2614,27 @@ export async function getGroupMedianSeries(
   return { groupSeries: Array.from(indexed), peerTickers, peerCount };
 }
 
-/** Fetch close series for a ticker (alias for fetchCloseSeries pattern) */
+/** Fetch a {time,value}[] series for a ticker metric (default "close").
+ *  PremiumDiscount/ChartsPdSubplots call this with arbitrary metric names. */
 export async function getCloseSeries(
-  _ticker: string,
-  _field?: string
+  ticker: string,
+  field?: string
 ): Promise<any[]> {
-  return [];
+  try {
+    return await getMetricSeries(ticker, field || "close");
+  } catch {
+    return [];
+  }
 }
 
-/** Get earnings dates for a ticker */
-export async function getEarningsDates(_ticker: string): Promise<string[]> {
-  return [];
+/** Get the per-ticker events object ({ earnings: string[], ex_dividend: … }).
+ *  Call sites read `res?.earnings`, so this returns the full object. */
+export async function getEarningsDates(ticker: string): Promise<any> {
+  try {
+    return await getTickerEvents(ticker);
+  } catch {
+    return { earnings: [] };
+  }
 }
 
 /** Classification dimension keys (alias for CLASSIFICATION_KEYS) */

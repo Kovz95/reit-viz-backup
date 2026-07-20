@@ -42,14 +42,35 @@ function pearson(a: number[], b: number[]): number {
  * At negative lag w: b is shifted forward by |w|.
  */
 export function crossCorrelate(
-  seriesA: number[],
-  seriesB: number[],
+  seriesA: number[] | { time?: string; value: number }[],
+  seriesB: number[] | { time?: string; value: number }[],
   maxLag = 20
 ): CrossCorrelationResult[] {
+  // Callers pass either raw number[] or {time,value}[] point series
+  // (PremiumDiscount passes points) — align points by time, numbers by index.
+  let numsA: number[];
+  let numsB: number[];
+  const isPts = (s: any[]) => s.length > 0 && typeof s[0] === "object" && s[0] !== null;
+  if (isPts(seriesA as any[]) && isPts(seriesB as any[]) && (seriesA as any[])[0].time != null) {
+    const bMap = new Map<string, number>();
+    for (const p of seriesB as { time: string; value: number }[]) {
+      if (Number.isFinite(p.value)) bMap.set(p.time, p.value);
+    }
+    numsA = [];
+    numsB = [];
+    for (const p of seriesA as { time: string; value: number }[]) {
+      const bv = bMap.get(p.time);
+      if (bv !== undefined && Number.isFinite(p.value)) { numsA.push(p.value); numsB.push(bv); }
+    }
+  } else {
+    numsA = (seriesA as any[]).map((v: any) => (typeof v === "number" ? v : v?.value));
+    numsB = (seriesB as any[]).map((v: any) => (typeof v === "number" ? v : v?.value));
+  }
+
   const results: CrossCorrelationResult[] = [];
-  const n = Math.min(seriesA.length, seriesB.length);
-  const aSlice = seriesA.slice(0, n);
-  const bSlice = seriesB.slice(0, n);
+  const n = Math.min(numsA.length, numsB.length);
+  const aSlice = numsA.slice(0, n);
+  const bSlice = numsB.slice(0, n);
 
   for (let lag = -maxLag; lag <= maxLag; lag++) {
     let aWindow: number[], bWindow: number[];
