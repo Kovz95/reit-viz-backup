@@ -5,6 +5,7 @@ import {
   CrosshairMode,
   LineStyle,
   LineSeries,
+  BaselineSeries,
   CandlestickSeries,
   createSeriesMarkers,
   PriceScaleMode,
@@ -2475,7 +2476,34 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
 
       if (!seriesMapRef.current.has(ps.id)) {
-        const isOverlay = useLeftScale && ps.id !== firstSeriesId;
+        const isOverlay = useLeftScale && ps.id !== firstSeriesId && !ps.sharedScale;
+        if (ps.seriesType === "area") {
+          // Zero-anchored shaded area (baseline series): fill between the value
+          // and zero on both sides, tinted from the series color. Used for
+          // stacked attribution components, which must share one price scale.
+          const fill = (alpha: number) => {
+            const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ps.color);
+            if (!m) return ps.color;
+            return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
+          };
+          const as = chart.addSeries(BaselineSeries, {
+            baseValue: { type: "price", price: 0 },
+            topLineColor: ps.color,
+            bottomLineColor: ps.color,
+            topFillColor1: fill(0.55),
+            topFillColor2: fill(0.15),
+            bottomFillColor1: fill(0.15),
+            bottomFillColor2: fill(0.55),
+            lineWidth: (ps.lineWidth ?? 1) as any,
+            title: ps.label,
+            crosshairMarkerVisible: true,
+            crosshairMarkerRadius: 4,
+            ...(isOverlay ? { priceScaleId: "left" } : {}),
+          });
+          as.setData(ps.data);
+          seriesMapRef.current.set(ps.id, as as any);
+          continue;
+        }
         const ls = chart.addSeries(LineSeries, {
           color: ps.color,
           lineWidth: (ps.lineWidth ?? 2) as any,
@@ -2500,6 +2528,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             },
           });
         }
+      } else if (ps.seriesType === "area") {
+        // Baseline-area series: only the data refreshes; line-style options
+        // don't apply to it.
+        try { seriesMapRef.current.get(ps.id)!.setData(ps.data as any); } catch {}
+        continue;
       } else {
         // Update existing series data and style. Include the point-marker opts
         // so switching Line <-> L+Dot on a series that persists across the

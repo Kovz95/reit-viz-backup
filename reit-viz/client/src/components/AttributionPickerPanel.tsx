@@ -79,7 +79,10 @@ export default function AttributionPickerPanel({
       const tag = `${ticker} ${win}d`;
       const stamp = Date.now();
       const targetPaneId = plotMode === "new" ? undefined : parseInt(plotMode);
-      const mk = (part: string, color: string, data: Array<{ time: string; value: number }>, label: string): PlottedSeries => ({
+      const mk = (
+        part: string, color: string, data: Array<{ time: string; value: number }>, label: string,
+        opts?: Partial<PlottedSeries>,
+      ): PlottedSeries => ({
         id: `attr:${ticker}:${res.basis}:${period}:${win}:${part}:${stamp}`,
         ticker: "ATTR",
         metric: "attribution",
@@ -88,21 +91,30 @@ export default function AttributionPickerPanel({
         data,
         visible: true,
         label,
+        // Components must stay magnitude-comparable — never split them across
+        // the dual-axis left/right scales.
+        sharedScale: true,
+        ...opts,
       });
       const est = path.map((p) => ({ time: p.date, value: p.est }));
       // First series decides new-pane creation; onPlot returns the pane id so
       // the remaining components overlay onto that same pane.
-      const paneId = onPlot(mk("est", COLOR_EST, est, `${tag} Est Δ (${basisLabel})`), targetPaneId);
       if (display === "components") {
         const mult = path.map((p) => ({ time: p.date, value: p.mult }));
         const total = path.map((p) => ({ time: p.date, value: p.total }));
+        const paneId = onPlot(mk("est", COLOR_EST, est, `${tag} Est Δ (${basisLabel})`), targetPaneId);
         onPlot(mk("mult", COLOR_MULT, mult, `${tag} Multiple Δ`), paneId);
         onPlot(mk("total", COLOR_TOTAL, total, `${tag} Total Δ`), paneId);
       } else {
-        // Stacked: estimate line, then est+mult (= total log return) on top —
-        // the band between the two lines is the multiple contribution.
+        // Stacked shaded areas from zero: est+mult (= total log return) drawn
+        // first, estimate layered on top — the visible band between the two
+        // fills is the multiple contribution.
         const sum = path.map((p) => ({ time: p.date, value: p.est + p.mult }));
-        onPlot(mk("stack", COLOR_MULT, sum, `${tag} Est+Mult Δ (total)`), paneId);
+        const paneId = onPlot(
+          mk("stack", COLOR_MULT, sum, `${tag} Est+Mult Δ (total)`, { seriesType: "area" }),
+          targetPaneId,
+        );
+        onPlot(mk("est", COLOR_EST, est, `${tag} Est Δ (${basisLabel})`, { seriesType: "area" }), paneId);
       }
     } catch (e) {
       console.error("Failed to compute attribution series", e);
@@ -220,7 +232,7 @@ export default function AttributionPickerPanel({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="components" className="text-xs">Lines: Est / Multiple / Total</SelectItem>
-              <SelectItem value="stacked" className="text-xs">Stacked: Est, Est+Mult (band = Multiple)</SelectItem>
+              <SelectItem value="stacked" className="text-xs">Stacked area: Est + Multiple band</SelectItem>
             </SelectContent>
           </Select>
         </div>
