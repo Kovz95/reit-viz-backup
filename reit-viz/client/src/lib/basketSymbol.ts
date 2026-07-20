@@ -1,17 +1,16 @@
-// Stub — TODO: reverse-engineer from production bundle
-// Basket symbols are special ticker strings prefixed to distinguish them from
-// normal equity tickers (e.g. "basket:uuid").
+// Basket symbols are special ticker strings prefixed with "BASKET:" to
+// distinguish them from normal equity tickers (e.g. "BASKET:<uuid>").
+// Same semantics as lib/basketUtils isBasketTicker/extractBasketId
+// (case-insensitive prefix check, confirmed from the production bundle).
 
-const BASKET_PREFIX = "basket:";
-
-/** Parse a basket symbol string into its component id (returns the id string). */
-export function parseBasketSymbol(symbol: string): string {
-  // Stub — TODO: reverse-engineer from production bundle
-  return symbol.startsWith(BASKET_PREFIX) ? symbol.slice(BASKET_PREFIX.length) : symbol;
-}
+const BASKET_PREFIX = "BASKET:";
 
 /** Return true if the symbol represents a basket (not a plain ticker). */
 export function isBasketSymbol(symbol: string): boolean {
-  // Stub — TODO: reverse-engineer from production bundle
-  return symbol.startsWith(BASKET_PREFIX);
+  return !!symbol && symbol.toUpperCase().startsWith(BASKET_PREFIX);
+}
+
+/** Parse a basket symbol string into its component id (returns the id string). */
+export function parseBasketSymbol(symbol: string): string {
+  return isBasketSymbol(symbol) ? symbol.slice(BASKET_PREFIX.length) : symbol;
 }

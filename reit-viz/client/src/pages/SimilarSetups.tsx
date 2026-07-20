@@ -28,6 +28,8 @@ import {
 } from "@/lib/similarSetupsAlgorithms";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
+import { getBasketOhlc } from "@/lib/basketOhlc";
+import type { Basket } from "@/lib/baskets";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -257,12 +259,13 @@ async function loadTargetSeries(params: {
   mode: string;
   singleTicker: string;
   basketSymbol: string;
+  basket: Basket | null;
   industryTickers: string[];
   industryLabel: string;
   pairA: string;
   pairB: string;
 }): Promise<PriceSeries | null> {
-  const { mode, singleTicker, basketSymbol, industryTickers, industryLabel, pairA, pairB } = params;
+  const { mode, singleTicker, basketSymbol, basket, industryTickers, industryLabel, pairA, pairB } = params;
 
   if (mode === "single") {
     if (!singleTicker) return null;
@@ -302,28 +305,19 @@ async function loadTargetSeries(params: {
   }
 
   if (mode === "basket") {
-    if (!basketSymbol) return null;
-    const pts = await fetchCloseSeries(basketSymbol);
-    if (!pts.length) return null;
-    const closes = pts.map((p: { close: number }) => p.close);
-    const highs = pts.map((p: { high?: number; close: number }) =>
-      typeof p.high === "number" ? p.high : p.close
-    );
-    const lows = pts.map((p: { low?: number; close: number }) =>
-      typeof p.low === "number" ? p.low : p.close
-    );
-    const opens = pts.map((p: { open?: number; close: number }) =>
-      typeof p.open === "number" ? p.open : p.close
-    );
+    if (!basketSymbol || !basket) return null;
+    const ohlc = await getBasketOhlc(basket);
+    if (!ohlc || !ohlc.closes.length) return null;
+    const volumes = ohlc.volumes ?? new Array(ohlc.closes.length).fill(0);
     return {
-      times: pts.map((p: { time: string }) => p.time),
-      closes,
-      highs,
-      lows,
-      opens,
-      volumes: new Array(closes.length).fill(0),
-      label: basketSymbol,
-      hasVolume: false,
+      times: ohlc.priceDates,
+      closes: ohlc.closes,
+      highs: ohlc.highs,
+      lows: ohlc.lows,
+      opens: ohlc.opens,
+      volumes,
+      label: basket.name || basketSymbol,
+      hasVolume: volumes.some((v: number) => Number.isFinite(v) && v > 0),
       hasOHLC: true,
     };
   }
@@ -344,41 +338,38 @@ async function loadTargetSeries(params: {
     ).filter((s: any): s is { time: string; close: number }[] => !!s && s.length > 0);
     if (allSeries.length === 0) return null;
 
-    // Normalize each series to first valid close
-    const normed = allSeries.map((pts: { time: string; close: number }[]) => {
-      const first = pts.find((p) => p.close > 0);
-      if (!first) return [];
-      const base = first.close;
-      return pts.filter((p) => p.close > 0).map((p) => ({
-        time: p.time,
-        v: p.close / base,
-      }));
-    });
-
-    // Build maps
-    const maps = normed.map((pts: { time: string; v: number }[]) => {
+    // Chain-linked equal-weight composite: average the daily returns of the
+    // members that have data on both ends of each day, then compound. Robust
+    // to staggered listing dates (a short-history member no longer truncates
+    // the whole composite the way a strict date intersection does).
+    const maps = allSeries.map((pts: { time: string; close: number }[]) => {
       const m = new Map<string, number>();
-      for (const p of pts) m.set(p.time, p.v);
+      for (const p of pts) if (p.close > 0) m.set(p.time, p.close);
       return m;
-    });
-    if (maps.length === 0 || maps[0].size === 0) return null;
+    }).filter((m: Map<string, number>) => m.size > 0);
+    if (maps.length === 0) return null;
 
-    // Intersect times
-    const timesSet = new Set<string>(Array.from(maps[0].keys()));
-    for (let k = 1; k < maps.length; k++) {
-      const keep = new Set<string>();
-      for (const t of timesSet) {
-        if (maps[k].has(t)) keep.add(t);
-      }
-      timesSet.clear();
-      keep.forEach((t) => timesSet.add(t));
-    }
-    const times = Array.from(timesSet).sort();
+    const dateSet = new Set<string>();
+    for (const m of maps) for (const t of m.keys()) dateSet.add(t);
+    const times = Array.from(dateSet).sort();
+
     const compositeCloses: number[] = [];
-    for (const t of times) {
-      let sum = 0;
-      for (const m of maps) sum += m.get(t)!;
-      compositeCloses.push(sum / maps.length);
+    let level = 100;
+    for (let k = 0; k < times.length; k++) {
+      if (k > 0) {
+        let sum = 0;
+        let n = 0;
+        for (const m of maps) {
+          const prev = m.get(times[k - 1]);
+          const cur = m.get(times[k]);
+          if (prev !== undefined && cur !== undefined) {
+            sum += cur / prev - 1;
+            n++;
+          }
+        }
+        if (n > 0) level *= 1 + sum / n;
+      }
+      compositeCloses.push(level);
     }
     return {
       times,
@@ -416,14 +407,40 @@ async function loadTargetSeries(params: {
   return null;
 }
 
-async function loadBenchmarkSeries(targetTimes: string[]): Promise<number[] | null> {
-  try {
-    const spy = await fetchOhlcSeries("SPY");
-    if (!spy.dates.length) return null;
-    return alignBenchToTarget(targetTimes, spy.dates, spy.closes);
-  } catch {
-    return null;
+// SPY benchmark series, memoized module-wide (per-ticker runs request it for
+// every constituent). The workbook may not contain SPY, so fall back to the
+// server's Yahoo price cache.
+let spySeriesPromise: Promise<{ dates: string[]; closes: number[] } | null> | null = null;
+function loadSpySeries(): Promise<{ dates: string[]; closes: number[] } | null> {
+  if (!spySeriesPromise) {
+    spySeriesPromise = (async () => {
+      try {
+        const spy = await fetchOhlcSeries("SPY");
+        if (spy.dates.length) return { dates: spy.dates, closes: spy.closes };
+      } catch {}
+      try {
+        const res = await fetch("/api/yahoo-prices/SPY");
+        if (res.ok) {
+          const data = await res.json();
+          const closes: number[] =
+            Array.isArray(data?.adjCloses) && data.adjCloses.length
+              ? data.adjCloses
+              : data?.closes;
+          if (Array.isArray(data?.dates) && Array.isArray(closes) && closes.length) {
+            return { dates: data.dates, closes };
+          }
+        }
+      } catch {}
+      return null;
+    })();
   }
+  return spySeriesPromise;
+}
+
+async function loadBenchmarkSeries(targetTimes: string[]): Promise<number[] | null> {
+  const spy = await loadSpySeries();
+  if (!spy) return null;
+  return alignBenchToTarget(targetTimes, spy.dates, spy.closes);
 }
 
 async function loadTickerData(ticker: string): Promise<PriceSeries | null> {
@@ -471,12 +488,10 @@ async function loadTickerData(ticker: string): Promise<PriceSeries | null> {
 
   if (!series) return null;
 
-  try {
-    const spy = await fetchOhlcSeries("SPY");
-    if (spy.dates.length) {
-      series.benchCloses = alignBenchToTarget(series.times, spy.dates, spy.closes);
-    }
-  } catch {}
+  const spy = await loadSpySeries();
+  if (spy) {
+    series.benchCloses = alignBenchToTarget(series.times, spy.dates, spy.closes);
+  }
 
   return series;
 }
@@ -1401,10 +1416,12 @@ export default function SimilarSetups() {
     setSeriesLoading(true);
     (async () => {
       try {
+        const basketId = basketSymbol ? parseBasketSymbol(basketSymbol) : null;
         const series = await loadTargetSeries({
           mode,
           singleTicker,
           basketSymbol,
+          basket: basketId ? baskets.find((b) => b.id === basketId) ?? null : null,
           industryTickers,
           industryLabel,
           pairA,
@@ -1907,7 +1924,7 @@ export default function SimilarSetups() {
                 <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">
                   Anchor
                 </span>
-                {pairComboCtx.pairs.map(
+                {pairComboCtx.pairs.slice(0, 48).map(
                   (pair) => {
                     const isActive =
                       (pair.a === pairA && pair.b === pairB) ||
@@ -1927,6 +1944,11 @@ export default function SimilarSetups() {
                       </button>
                     );
                   }
+                )}
+                {pairComboCtx.pairs.length > 48 && (
+                  <span className="text-[9px] font-mono text-muted-foreground/70">
+                    +{pairComboCtx.pairs.length - 48} more — use Per-ticker to score all pairs
+                  </span>
                 )}
               </div>
             )}
