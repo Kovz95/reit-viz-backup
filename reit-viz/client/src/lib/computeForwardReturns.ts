@@ -8,9 +8,17 @@ export function computeForwardReturns(
   bandParam?: { minReturn: number; maxReturn: number } | null
 ): Record<string, number[]> {
   if (typeof horizons === "number") {
-    // Called with (prices, signalDates, targetReturn, direction, bandParam)
-    // Return a simple per-signal profile object
-    return {} as Record<string, number[]>;
+    // Called with (prices, signalDates, targetReturn, direction, bandParam):
+    // fall back to the standard horizon set and return the same
+    // per-horizon per-signal fraction returns as the array form.
+    const STD = [
+      { label: "1W", days: 5 },
+      { label: "1M", days: 21 },
+      { label: "3M", days: 63 },
+      { label: "6M", days: 126 },
+      { label: "1Y", days: 252 },
+    ];
+    return computeForwardReturns(priceSeries, signalDates, STD, direction, bandParam);
   }
   const result: Record<string, number[]> = {};
   for (const { label, days } of horizons) {

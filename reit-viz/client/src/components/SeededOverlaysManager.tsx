@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Layers, Eye, EyeOff, Trash2, X, Anchor } from "lucide-react";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 
 // localStorage keys (bundle: n1 / i1 / AT / TT)
 const SR_PERSISTENT_KEY = "reit-viz-srlevel-persistent-v1";
@@ -184,23 +185,193 @@ interface ComputeResult {
   message: string;
 }
 
-// bundle: IWe — single-mode auto trendline seeding.
-// NOTE: the production fractal-detection / Yahoo-fetch algorithm lives in the
-// minified main bundle and is not yet reconstructed in lib. This is a faithful
-// interface stub that performs no fetch and reports that no fractal pair was found.
-async function computeSingle(_args: ComputeSingleArgs): Promise<ComputeResult> {
+// ── Fractal pivots + line scoring (shared by single/multi seeding) ───────────
+
+interface PivotBars {
+  dates: string[];
+  highs: number[];
+  lows: number[];
+  closes: number[];
+}
+
+async function loadPivotBars(ticker: string, timeframe: string): Promise<PivotBars | null> {
+  const freq = timeframe === "weekly" || timeframe === "monthly" ? timeframe : "daily";
+  const ohlcv = await fetchTickerOHLCV(ticker, { freq: freq as "daily" | "weekly" | "monthly" });
+  if (!ohlcv?.dates?.length) return null;
+  return { dates: ohlcv.dates, highs: ohlcv.highs, lows: ohlcv.lows, closes: ohlcv.closes };
+}
+
+function findPivots(bars: PivotBars, n: number): { highIdx: number[]; lowIdx: number[] } {
+  const len = bars.dates.length;
+  const highIdx: number[] = [];
+  const lowIdx: number[] = [];
+  for (let i = n; i < len - n; i++) {
+    let isHigh = true;
+    let isLow = true;
+    for (let j = i - n; j <= i + n && (isHigh || isLow); j++) {
+      if (j === i) continue;
+      if (bars.highs[j] > bars.highs[i]) isHigh = false;
+      if (bars.lows[j] < bars.lows[i]) isLow = false;
+    }
+    if (isHigh) highIdx.push(i);
+    if (isLow) lowIdx.push(i);
+  }
+  return { highIdx, lowIdx };
+}
+
+function daysBetween(d1: string, d2: string): number {
+  return Math.max(1, Math.round((Date.parse(d2) - Date.parse(d1)) / 86400000));
+}
+
+function makeTrendlineSeed(
+  bars: PivotBars,
+  i1: number,
+  i2: number,
+  kind: "resistance" | "support",
+  futureBars: number,
+  source: string,
+  compositeScore?: number
+): SeededTrendline {
+  const price = kind === "resistance" ? bars.highs : bars.lows;
+  const p1 = price[i1];
+  const p2 = price[i2];
+  const d1 = bars.dates[i1];
+  const d2 = bars.dates[i2];
+  const slopePctPerYear = (p2 / p1 - 1) * (365 / daysBetween(d1, d2));
   return {
-    success: false,
-    message: `no recent fractal pair found`,
+    kind,
+    date1: d1,
+    price1: p1,
+    date2: d2,
+    price2: p2,
+    slopePctPerYear,
+    broken: false,
+    futureBars,
+    metric: "close",
+    createdAt: Date.now(),
+    source,
+    compositeScore,
   };
 }
 
-// bundle: DWe — multi-mode auto trendline seeding (ranked diagonals + horizontals).
-// Interface stub — see computeSingle note.
-async function computeMulti(_args: ComputeMultiArgs): Promise<ComputeResult> {
+/** Touch count minus violations for the line through (i1,p1)-(i2,p2). */
+function scoreLine(bars: PivotBars, i1: number, i2: number, kind: "resistance" | "support"): number {
+  const price = kind === "resistance" ? bars.highs : bars.lows;
+  const p1 = price[i1];
+  const p2 = price[i2];
+  if (!(p1 > 0) || !(p2 > 0)) return -Infinity;
+  const slope = (p2 - p1) / (i2 - i1);
+  const tol = 0.005;
+  let touches = 0;
+  let violations = 0;
+  for (let i = i1; i < bars.dates.length; i++) {
+    const lineVal = p1 + slope * (i - i1);
+    if (!(lineVal > 0)) continue;
+    const v = price[i];
+    const rel = (v - lineVal) / lineVal;
+    if (Math.abs(rel) <= tol) touches++;
+    else if (kind === "resistance" ? rel > tol : rel < -tol) violations++;
+  }
+  return touches - violations * 2;
+}
+
+// bundle: IWe — single-mode auto trendline seeding: join the two most recent
+// confirmed fractal highs (resistance) and lows (support).
+async function computeSingle(args: ComputeSingleArgs): Promise<ComputeResult> {
+  const bars = await loadPivotBars(args.ticker, args.timeframe);
+  if (!bars || bars.dates.length < args.n * 2 + 2) {
+    return { success: false, message: "not enough price history" };
+  }
+  const { highIdx, lowIdx } = findPivots(bars, args.n);
+  const seeds: SeededTrendline[] = [];
+  if (highIdx.length >= 2) {
+    const [i1, i2] = highIdx.slice(-2);
+    seeds.push(makeTrendlineSeed(bars, i1, i2, "resistance", args.futureBars, "auto-trendline-single"));
+  }
+  if (lowIdx.length >= 2) {
+    const [i1, i2] = lowIdx.slice(-2);
+    seeds.push(makeTrendlineSeed(bars, i1, i2, "support", args.futureBars, "auto-trendline-single"));
+  }
+  if (seeds.length === 0) {
+    return { success: false, message: "no recent fractal pair found" };
+  }
+  const key = args.ticker.toUpperCase();
+  writeSeeds(TL_SEEDS_KEY, key, [...loadSeeds<SeededTrendline>(TL_SEEDS_KEY, key), ...seeds]);
+  writeSeeds(TL_PERSISTENT_KEY, key, [...loadSeeds<SeededTrendline>(TL_PERSISTENT_KEY, key), ...seeds]);
+  return { success: true, message: `Seeded ${seeds.length} trendline${seeds.length === 1 ? "" : "s"} (n=${args.n})` };
+}
+
+// bundle: DWe — multi-mode seeding: rank candidate diagonals per side by
+// touch score, plus clustered horizontal pivot levels per side.
+async function computeMulti(args: ComputeMultiArgs): Promise<ComputeResult> {
+  const bars = await loadPivotBars(args.ticker, args.timeframe);
+  if (!bars || bars.dates.length < args.n * 2 + 2) {
+    return { success: false, message: "not enough price history" };
+  }
+  const { highIdx, lowIdx } = findPivots(bars, args.n);
+  const key = args.ticker.toUpperCase();
+
+  // Diagonals: score all pairs of the last 10 pivots per side.
+  const tlSeeds: SeededTrendline[] = [];
+  for (const [pivots, kind] of [
+    [highIdx.slice(-10), "resistance"],
+    [lowIdx.slice(-10), "support"],
+  ] as const) {
+    const cands: { i1: number; i2: number; score: number }[] = [];
+    for (let a = 0; a < pivots.length - 1; a++) {
+      for (let b = a + 1; b < pivots.length; b++) {
+        const score = scoreLine(bars, pivots[a], pivots[b], kind);
+        if (score > 0) cands.push({ i1: pivots[a], i2: pivots[b], score });
+      }
+    }
+    cands.sort((x, y) => y.score - x.score);
+    for (const c of cands.slice(0, args.maxDiagonalPerSide)) {
+      tlSeeds.push(makeTrendlineSeed(bars, c.i1, c.i2, kind, args.futureBars, "auto-trendline-multi", c.score));
+    }
+  }
+
+  // Horizontals: cluster pivot prices (0.75% tolerance), rank by touch count.
+  const lastClose = bars.closes[bars.closes.length - 1];
+  const srSeeds: SeededLevel[] = [];
+  for (const [pivots, price] of [
+    [highIdx, bars.highs],
+    [lowIdx, bars.lows],
+  ] as const) {
+    const clusters: { avg: number; count: number }[] = [];
+    for (const i of pivots) {
+      const p = price[i];
+      const hit = clusters.find((c) => Math.abs(p - c.avg) / c.avg <= 0.0075);
+      if (hit) { hit.avg = (hit.avg * hit.count + p) / (hit.count + 1); hit.count++; }
+      else clusters.push({ avg: p, count: 1 });
+    }
+    clusters.sort((x, y) => y.count - x.count);
+    for (const c of clusters.filter((cl) => cl.count >= 2).slice(0, args.maxHorizontalPerSide)) {
+      srSeeds.push({
+        type: "horizontal",
+        price: c.avg,
+        hidden: false,
+        createdAt: Date.now(),
+        source: "auto-trendline-multi",
+        compositeScore: c.count,
+        role: c.avg >= lastClose ? "resistance" : "support",
+      });
+    }
+  }
+
+  if (tlSeeds.length + srSeeds.length === 0) {
+    return { success: false, message: "no significant trendlines found" };
+  }
+  if (tlSeeds.length) {
+    writeSeeds(TL_SEEDS_KEY, key, [...loadSeeds<SeededTrendline>(TL_SEEDS_KEY, key), ...tlSeeds]);
+    writeSeeds(TL_PERSISTENT_KEY, key, [...loadSeeds<SeededTrendline>(TL_PERSISTENT_KEY, key), ...tlSeeds]);
+  }
+  if (srSeeds.length) {
+    writeSeeds(SR_SEEDS_KEY, key, [...loadSeeds<SeededLevel>(SR_SEEDS_KEY, key), ...srSeeds]);
+    writeSeeds(SR_PERSISTENT_KEY, key, [...loadSeeds<SeededLevel>(SR_PERSISTENT_KEY, key), ...srSeeds]);
+  }
   return {
-    success: false,
-    message: `no significant trendlines found`,
+    success: true,
+    message: `Seeded ${tlSeeds.length} trendline${tlSeeds.length === 1 ? "" : "s"} + ${srSeeds.length} level${srSeeds.length === 1 ? "" : "s"}`,
   };
 }
 

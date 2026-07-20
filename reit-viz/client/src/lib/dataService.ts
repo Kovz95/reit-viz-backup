@@ -2467,7 +2467,25 @@ export function filterByDateRange(rows: any, startDate?: any, endDate?: any): an
     if (endDate) result = result.filter((r: any) => r.date <= endDate);
     return result;
   }
-  // Object format (RawTickerData with dates, adjCloses, etc.)
+  // Object format: parallel arrays keyed alongside a `dates: string[]` axis
+  // (e.g. { dates, opens, closes, adjCloses, … }) — slice every parallel
+  // array with the same date mask.
+  if (rows && Array.isArray(rows.dates) && (startDate || endDate)) {
+    const keep: number[] = [];
+    for (let i = 0; i < rows.dates.length; i++) {
+      const d = rows.dates[i];
+      if (startDate && d < startDate) continue;
+      if (endDate && d > endDate) continue;
+      keep.push(i);
+    }
+    const out: any = { ...rows };
+    for (const [k, v] of Object.entries(rows)) {
+      if (Array.isArray(v) && v.length === rows.dates.length) {
+        out[k] = keep.map((i) => (v as any[])[i]);
+      }
+    }
+    return out;
+  }
   return rows;
 }
 
