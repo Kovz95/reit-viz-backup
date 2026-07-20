@@ -11,7 +11,9 @@ import {
   LineStyle,
 } from "lightweight-charts";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
-import { Download, RefreshCw, Info, SortAsc, SortDesc } from "lucide-react";
+import { Download, RefreshCw, Info, SortAsc, SortDesc, Megaphone } from "lucide-react";
+import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
+import { getTickerEvents } from "@/lib/dataService";
 import { ArrowUpDown } from "@/components/ui/icons";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { useGridColor } from "@/lib/gridPref";
@@ -118,11 +120,40 @@ const fmtPct = (v: number, dp = 2) => Number.isFinite(v) ? `${v >= 0 ? "+" : ""}
 const fmtShare = (v: number) => Number.isFinite(v) ? `${(v * 100).toFixed(0)}%` : "—";
 const colorForValue = (v: number) => !Number.isFinite(v) || v === 0 ? "text-muted-foreground" : v > 0 ? "text-emerald-500" : "text-rose-500";
 
+// ── Earnings vertical-line helper (same idea as the Charts tab markers) ──────
+
+function useEarningsLines(
+  seriesRef: { current: ISeriesApi<any> | null },
+  earningsDates: string[],
+  deps: unknown[]
+) {
+  const primRef = useRef<VerticalLinePrimitive | null>(null);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    if (primRef.current) {
+      // setLines([]) fires requestUpdate so the removal actually repaints.
+      try { primRef.current.setLines([]); series.detachPrimitive(primRef.current); } catch {}
+      primRef.current = null;
+    }
+    if (earningsDates.length > 0) {
+      const prim = new VerticalLinePrimitive([]);
+      try {
+        series.attachPrimitive(prim);
+        // setLines AFTER attach so its requestUpdate triggers the initial paint.
+        prim.setLines(earningsDates.map(d => ({ time: d, color: "#f59e0b", label: "E" })));
+        primRef.current = prim;
+      } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earningsDates, ...deps]);
+}
+
 // ── Cumulative Chart Component ────────────────────────────────────────────────
 
-interface CumulativeChartProps { data: CumPoint[] }
+interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[] }
 
-function CumulativeChart({ data }: CumulativeChartProps) {
+function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -180,16 +211,25 @@ function CumulativeChart({ data }: CumulativeChartProps) {
     }
     const seen = new Set<string>();
     const deduped = data.filter(p => { const k = p.date.slice(0, 10); return seen.has(k) ? false : (seen.add(k), true); });
-    totalSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.total })));
-    multSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.mult })));
-    estSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.est })));
+    totalSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.total })));
+    multSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.mult })));
+    estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est })));
     chartRef.current.timeScale().fitContent();
   }, [data, gridColor]);
 
-  if (data.length < 2) return <div className="text-[10px] text-muted-foreground p-4">Insufficient data for cumulative decomposition.</div>;
+  useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
+
+  // NOTE: the container must always mount — the chart is created in a
+  // [gridColor]-keyed effect, so an early return while data is still loading
+  // would leave the chart uncreated forever once data arrives.
   return (
     <div className="relative w-full" style={{ height: 280 }}>
       <div ref={containerRef} className="absolute inset-0" />
+      {data.length < 2 && (
+        <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
+          Insufficient data for cumulative decomposition.
+        </div>
+      )}
       {tooltip && (
         <div className="pointer-events-none absolute z-10 rounded border border-border bg-popover/95 px-2 py-1 text-[10px] shadow-md backdrop-blur"
           style={{ left: Math.min(tooltip.x + 12, (containerRef.current?.clientWidth ?? 0) - 160), top: Math.max(8, tooltip.y - 60) }}>
@@ -205,9 +245,9 @@ function CumulativeChart({ data }: CumulativeChartProps) {
 
 // ── Rolling Chart Component ───────────────────────────────────────────────────
 
-interface RollingChartProps { data: RollingPoint[] }
+interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[] }
 
-function RollingChart({ data }: RollingChartProps) {
+function RollingChart({ data, earningsDates = [] }: RollingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -264,16 +304,23 @@ function RollingChart({ data }: RollingChartProps) {
     }
     const seen = new Set<string>();
     const deduped = data.filter(p => { const k = p.date.slice(0, 10); return seen.has(k) ? false : (seen.add(k), true); });
-    multSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.mult, color: p.mult >= 0 ? COLOR_MULT + "b3" : "#0ea5e9b3" })));
-    estSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.est, color: p.est >= 0 ? COLOR_EST + "b3" : "#d97706b3" })));
-    totalSeriesRef.current.setData(deduped.map(p => ({ time: parseDate(p.date), value: p.total })));
+    multSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.mult, color: p.mult >= 0 ? COLOR_MULT + "b3" : "#0ea5e9b3" })));
+    estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est, color: p.est >= 0 ? COLOR_EST + "b3" : "#d97706b3" })));
+    totalSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.total })));
     chartRef.current.timeScale().fitContent();
   }, [data, gridColor]);
 
-  if (data.length < 2) return <div className="text-[10px] text-muted-foreground p-4">Insufficient data for rolling decomposition (need at least one full rolling window after start).</div>;
+  useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
+
+  // Container must always mount — see CumulativeChart note.
   return (
     <div className="relative w-full" style={{ height: 260 }}>
       <div ref={containerRef} className="absolute inset-0" />
+      {data.length < 2 && (
+        <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
+          Insufficient data for rolling decomposition (need at least one full rolling window after start).
+        </div>
+      )}
       {tooltip && (
         <div className="pointer-events-none absolute z-10 rounded border border-border bg-popover/95 px-2 py-1 text-[10px] shadow-md backdrop-blur"
           style={{ left: Math.min(tooltip.x + 12, (containerRef.current?.clientWidth ?? 0) - 180), top: Math.max(8, tooltip.y - 70) }}>
@@ -366,9 +413,10 @@ interface SinglePanelProps {
   windowDays: number;
   rollingDays: number;
   loadingSingle: boolean;
+  earningsDates: string[];
 }
 
-function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle }: SinglePanelProps) {
+function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
   return (
     <div className="flex h-full">
       {/* Charts */}
@@ -428,7 +476,7 @@ function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cu
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimates</span>
             </div>
           </div>
-          <CumulativeChart data={cumPath} />
+          <CumulativeChart data={cumPath} earningsDates={earningsDates} />
         </div>
         {/* Rolling chart */}
         <div className="p-3">
@@ -440,7 +488,7 @@ function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cu
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Δln(Price)</span>
             </div>
           </div>
-          <RollingChart data={rollingPath} />
+          <RollingChart data={rollingPath} earningsDates={earningsDates} />
         </div>
       </div>
     </div>
@@ -551,6 +599,31 @@ export default function Attribution() {
   const [activeTicker, setActiveTicker] = useState("");
   const [sortKey, setSortKey] = useState("multipleShare");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Earnings-date vertical lines on the single-ticker charts (Charts-tab style)
+  const [showEarnings, setShowEarnings] = useState(false);
+  const [earningsDates, setEarningsDates] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!showEarnings || !activeTicker) {
+      setEarningsDates([]);
+      return;
+    }
+    let cancelled = false;
+    getTickerEvents(activeTicker).then(events => {
+      if (cancelled) return;
+      // Dates may be YYYY-MM-DD or MM/DD/YYYY — normalize to YYYY-MM-DD
+      const normalize = (arr: string[] | undefined) =>
+        (arr || []).map(d => {
+          if (d.includes("-")) return d;
+          const [m, day, y] = d.split("/");
+          return `${y}-${m.padStart(2, "0")}-${day.padStart(2, "0")}`;
+        }).filter(d => d && d.length === 10).sort();
+      setEarningsDates(normalize((events as any)?.earnings));
+    }).catch(() => {
+      if (!cancelled) setEarningsDates([]);
+    });
+    return () => { cancelled = true; };
+  }, [showEarnings, activeTicker]);
 
   // Auto-select first default ticker
   useEffect(() => {
@@ -779,6 +852,19 @@ export default function Attribution() {
               </div>
             </div>
           )}
+          {/* Earnings-date markers (single mode only) */}
+          {mode === "single" && (
+            <Button
+              variant={showEarnings ? "default" : "outline"}
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setShowEarnings(v => !v)}
+              data-testid="attr-toggle-earnings"
+              title="Toggle earnings-date vertical lines on the charts"
+            >
+              <Megaphone className="w-3 h-3 mr-1" /> Earnings
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleExport} className="h-7 px-2 text-[10px]">
             <Download className="w-3 h-3 mr-1" /> CSV
           </Button>
@@ -808,6 +894,7 @@ export default function Attribution() {
             windowDays={windowDays}
             rollingDays={rollingDays}
             loadingSingle={loadingSingle}
+            earningsDates={showEarnings ? earningsDates : []}
           />
         ) : mode === "basket" ? (
           <div>
