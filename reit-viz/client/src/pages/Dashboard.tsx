@@ -518,7 +518,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS", "ATTR",
     ]);
     // Strip data from series that can be re-fetched to keep the blob small.
     // Keep data inline for uploaded series AND derived (synthetic) series.
@@ -550,7 +550,7 @@ export default function Dashboard() {
     const SYNTHETIC_TICKERS = new Set([
       "CORR", "RATIO", "LOGRATIO", "ZSCORE", "SPREADZ",
       "OLSRESIDZ", "PERCENTILE", "BETA", "R2", "BETAADJSPREAD",
-      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS",
+      "SPREAD", "BETASPRD", "PCTRANK", "RELVAL", "PAIRS", "ATTR",
     ]);
     // Per-call cache so a basket's OHLC is fetched once even if it backs both
     // an OHLC pane and multiple metric series.
@@ -1656,24 +1656,27 @@ export default function Dashboard() {
     }, 0);
   }, [activeTicker, activeView, loadViewForTicker]);
 
-  // Add a formula-computed series to a new or existing pane
+  // Add a formula-computed series to a new or existing pane. Returns the pane
+  // id the series landed on so callers can overlay follow-up series onto a
+  // pane they just created.
   const addFormulaSeries = useCallback(
-    (series: PlottedSeries, targetPaneId?: number) => {
+    (series: PlottedSeries, targetPaneId?: number): number => {
       if (targetPaneId !== undefined) {
         // Overlay on existing pane
         setPlottedSeries((prev) => [
           ...prev,
           { ...series, paneIndex: targetPaneId },
         ]);
-      } else {
-        // New pane
-        const paneId = nextPaneId++;
-        setPanes((prev) => [...prev, { id: paneId, label: series.label, ticker: series.ticker }]);
-        setPlottedSeries((prev) => [
-          ...prev,
-          { ...series, paneIndex: paneId },
-        ]);
+        return targetPaneId;
       }
+      // New pane
+      const paneId = nextPaneId++;
+      setPanes((prev) => [...prev, { id: paneId, label: series.label, ticker: series.ticker }]);
+      setPlottedSeries((prev) => [
+        ...prev,
+        { ...series, paneIndex: paneId },
+      ]);
+      return paneId;
     },
     []
   );

@@ -156,6 +156,27 @@ export async function loadBasisAligned(
   return null;
 }
 
+export interface RollingPoint { date: string; total: number; mult: number; est: number }
+
+// Trailing-`rollingDays` decomposition at every aligned date from `startIdx`
+// forward: each point is the log return over the prior `rollingDays` trading
+// days split into multiple vs estimate contributions (all in log-%, so
+// total = mult + est exactly).
+export function buildRollingPath(data: AlignedData, startIdx: number, rollingDays: number): RollingPoint[] {
+  const result: RollingPoint[] = [];
+  for (let i = Math.max(startIdx, rollingDays); i < data.dates.length; i++) {
+    const j = i - rollingDays;
+    if (j < 0 || data.close[j] <= 0 || data.multiple[j] <= 0 || data.estimate[j] <= 0) continue;
+    result.push({
+      date: data.dates[i],
+      total: Math.log(data.close[i] / data.close[j]) * 100,
+      mult: Math.log(data.multiple[i] / data.multiple[j]) * 100,
+      est: Math.log(data.estimate[i] / data.estimate[j]) * 100,
+    });
+  }
+  return result;
+}
+
 // Resolve the window-start index. windowDays === 0 means YTD (first date of the
 // final year); otherwise it's `windowDays` trading days before the last point.
 export function getStartIndex(dates: string[], windowDays: number): number {

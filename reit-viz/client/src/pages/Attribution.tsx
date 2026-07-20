@@ -27,6 +27,8 @@ import {
   getStartIndex,
   loadBasisAligned,
   computeAttributionRow,
+  buildRollingPath,
+  type RollingPoint,
   type BasisMode,
   type BasisFamily,
   type BasisPeriod,
@@ -37,7 +39,6 @@ import {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface CumPoint { date: string; total: number; mult: number; est: number }
-interface RollingPoint { date: string; total: number; mult: number; est: number }
 
 interface AttributionSummary {
   total: number;
@@ -98,21 +99,6 @@ function buildCumulativePath(data: AlignedData, startIdx: number): CumPoint[] {
       total: Math.log(data.close[i] / c0) * 100,
       mult: Math.log(data.multiple[i] / m0) * 100,
       est: Math.log(data.estimate[i] / e0) * 100,
-    });
-  }
-  return result;
-}
-
-function buildRollingPath(data: AlignedData, startIdx: number, rollingDays: number): RollingPoint[] {
-  const result: RollingPoint[] = [];
-  for (let i = Math.max(startIdx, rollingDays); i < data.dates.length; i++) {
-    const j = i - rollingDays;
-    if (j < 0 || data.close[j] <= 0 || data.multiple[j] <= 0 || data.estimate[j] <= 0) continue;
-    result.push({
-      date: data.dates[i],
-      total: Math.log(data.close[i] / data.close[j]) * 100,
-      mult: Math.log(data.multiple[i] / data.multiple[j]) * 100,
-      est: Math.log(data.estimate[i] / data.estimate[j]) * 100,
     });
   }
   return result;

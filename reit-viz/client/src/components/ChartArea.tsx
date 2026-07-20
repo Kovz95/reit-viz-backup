@@ -8,6 +8,7 @@ import type { IChartApi } from "lightweight-charts";
 import ChartPane, { gridColorFor } from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
+import AttributionPickerPanel from "./AttributionPickerPanel";
 import QuickAnalyzePanel from "./QuickAnalyzePanel";
 import SignalEngineAnalyzer from "./SignalEngineAnalyzer";
 import { SeededOverlaysManager } from "./SeededOverlaysManager";
@@ -145,7 +146,7 @@ interface ChartAreaProps {
   /** Open the macro overlay section in the sidebar */
   onOpenMacroOverlay?: () => void;
   /** Called to add a computed series (e.g. rolling correlation) to the chart */
-  onAddFormulaSeries?: (series: PlottedSeries, targetPaneId?: number) => void;
+  onAddFormulaSeries?: (series: PlottedSeries, targetPaneId?: number) => number;
   /** Optional slot rendered at the right side of the top toolbar */
   toolbarRight?: React.ReactNode;
   /** Fires when crosshair time changes (for syncing data table) */
@@ -434,6 +435,7 @@ export default function ChartArea({
   const [timeRange, setTimeRange] = useState("5Y");
   const [showIndicators, setShowIndicators] = useState(false);
   const [showCorrelation, setShowCorrelation] = useState(false);
+  const [showAttribution, setShowAttribution] = useState(false);
   // Per-pane indicator state: paneId → ActiveIndicators
   // Prefer prop from parent (persisted in workspace state), fall back to local.
   const [localIndicatorsMap, setLocalIndicatorsMap] = useState<Record<number, ActiveIndicators>>({});
@@ -2112,10 +2114,21 @@ export default function ChartArea({
           variant={showQuickAnalyze ? "default" : "ghost"}
           size="sm"
           className="h-6 px-2 text-[11px]"
-          onClick={() => { setShowQuickAnalyze(!showQuickAnalyze); setShowIndicators(false); setShowCorrelation(false); }}
+          onClick={() => { setShowQuickAnalyze(!showQuickAnalyze); setShowIndicators(false); setShowCorrelation(false); setShowAttribution(false); }}
           data-testid="toggle-quick-analyze"
         >
           Quick Analyze
+        </Button>
+
+        {/* Attribution (rolling est-vs-multiple decomposition) */}
+        <Button
+          variant={showAttribution ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => { setShowAttribution(!showAttribution); setShowIndicators(false); setShowQuickAnalyze(false); setShowCorrelation(false); }}
+          data-testid="toggle-attribution"
+        >
+          Attribution
         </Button>
 
         {/* Draw tools */}
@@ -2600,6 +2613,16 @@ export default function ChartArea({
             panes={panes}
             onPlot={onAddFormulaSeries}
             onClose={() => setShowCorrelation(false)}
+          />
+        )}
+
+        {showAttribution && onAddFormulaSeries && (
+          <AttributionPickerPanel
+            tickerList={tickerList}
+            panes={panes}
+            activeTicker={activeTicker}
+            onPlot={onAddFormulaSeries}
+            onClose={() => setShowAttribution(false)}
           />
         )}
 
