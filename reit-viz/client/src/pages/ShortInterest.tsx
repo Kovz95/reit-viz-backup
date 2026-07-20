@@ -10,6 +10,7 @@ import { ClassificationFilters } from "@/lib/classificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { getTickers, getDates, getMetricSeries } from "@/lib/dataService";
 import { getLatestMetricForAllTickers } from "@/lib/dataService";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { Button } from "@/components/ui/button";
 import {
   TrendingDown,
@@ -115,6 +116,7 @@ type SortKey = keyof SIRow;
 
 export default function ShortInterest() {
   const { universeTickers } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:short-interest");
   const [viewMode, setViewMode] = useState<"table" | "movers">("table");
   const [classFilters, setClassFilters] = useState(() => emptyClassFilters());
   const [search, setSearch] = useState("");
@@ -232,6 +234,9 @@ export default function ShortInterest() {
     if (universeTickers && universeTickers.size > 0) {
       rows = rows.filter((r) => universeTickers.has(r.ticker));
     }
+    if (basketScope.members) {
+      rows = rows.filter((r) => basketScope.inScope(r.ticker));
+    }
     rows = applyClassFilters(rows as any[], classFilters, search, manualTickers) as unknown as SIRow[];
     rows = geo.filterByGeo(rows);
     rows = [...rows].sort((a, b) => {
@@ -245,7 +250,7 @@ export default function ShortInterest() {
       return sortAsc ? av - bv : bv - av;
     });
     return rows;
-  }, [allRows, classFilters, universeTickers, search, sortKey, sortAsc, manualTickers, geo.filterByGeo]);
+  }, [allRows, classFilters, universeTickers, basketScope.members, search, sortKey, sortAsc, manualTickers, geo.filterByGeo]);
 
   const maxSI = useMemo(
     () => Math.max(...filteredRows.map((r) => r.siPct ?? 0), 1),
@@ -348,6 +353,7 @@ export default function ShortInterest() {
             </button>
           ))}
         </div>
+        <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
         <ClassificationFilters
           filters={classFilters}
           onFiltersChange={setClassFilters}

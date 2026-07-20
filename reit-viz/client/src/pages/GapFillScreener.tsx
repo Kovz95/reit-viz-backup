@@ -18,6 +18,7 @@ import { useWorkspaceState } from "@/lib/workspaceState";
 import { useUniverse } from "@/lib/universeContext";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import ClassificationFilters, {
   emptyClassFilters,
   applyClassFilters,
@@ -64,9 +65,12 @@ export default function GapFillScreener() {
     [allTickers, universeTickers],
   );
   const geo = useGeoFilter(universeNarrowed, "gapfill-geo");
+  // Optional basket scope on top of the universe/class/geo filters (no-op when unset).
+  const basketScope = useBasketScope("reit-viz:basket-scope:gap-fill");
   const filteredPool = useMemo(
-    () => geo.filterByGeo(applyClassFilters(universeNarrowed as any[], classFilters, search, manualTickers)),
-    [universeNarrowed, classFilters, search, manualTickers, geo.filterByGeo],
+    () => geo.filterByGeo(applyClassFilters(universeNarrowed as any[], classFilters, search, manualTickers))
+      .filter((t: TickerMeta) => basketScope.inScope(t.ticker)),
+    [universeNarrowed, classFilters, search, manualTickers, geo.filterByGeo, basketScope.members],
   );
 
   // ── Scan config
@@ -297,6 +301,7 @@ export default function GapFillScreener() {
             testIdPrefix="gapfill"
             extraFilters={geo.geoFilterUI}
           />
+          <BasketScopeSelect scope={basketScope} />
         </div>
 
         {/* Scan config */}

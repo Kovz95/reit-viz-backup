@@ -42,6 +42,7 @@ import { filterScatterPoints } from "@/lib/filterHelpers";
 import { defaultClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/filterHelpers";
 import { ClassificationFiltersWithSource } from "@/lib/filterHelpers";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { CanvasDownloadButton } from "@/lib/exportMenu";
 import { fetchScatterData } from "@/lib/fetchWorkbookData";
 import { useUploadedMetricColumns } from "@/lib/workspaceState";
@@ -486,6 +487,7 @@ interface ScatterPaneProps {
 // ---------------------------------------------------------------------------
 function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPaneProps) {
   const { universeTickers } = useAppContext();
+  const basketScope = useBasketScope("reit-viz:basket-scope:scatter");
   const [metricX, setMetricX] = useState("P/FFO FY2");
   const [metricY, setMetricY] = useState("Dividend Yield");
   const [metricZ, setMetricZ] = useState("none");
@@ -710,10 +712,11 @@ function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPa
   const filteredPoints = useMemo(() => {
     let pts = rawPoints.filter((p) => p.x !== null && p.y !== null);
     if (universeTickers) pts = pts.filter((p) => universeTickers.has(p.ticker));
+    if (basketScope.members) pts = pts.filter((p) => basketScope.inScope(p.ticker));
     pts = filterScatterPoints(pts, classFilters, searchText, manualTickers);
     pts = geo.filterByGeo(pts);
     return pts;
-  }, [rawPoints, searchText, classFilters, manualTickers, universeTickers, geo.filterByGeo]);
+  }, [rawPoints, searchText, classFilters, manualTickers, universeTickers, basketScope.members, geo.filterByGeo]);
 
   const transformedPoints = useMemo(
     () =>
@@ -943,10 +946,11 @@ function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPa
   const eligibleTickers = useMemo(() => {
     let pts = rawPoints;
     if (universeTickers) pts = pts.filter((p) => universeTickers.has(p.ticker));
+    if (basketScope.members) pts = pts.filter((p) => basketScope.inScope(p.ticker));
     pts = filterScatterPoints(pts, classFilters, searchText, manualTickers);
     pts = geo.filterByGeo(pts);
     return new Set(pts.map((p) => p.ticker));
-  }, [rawPoints, universeTickers, classFilters, searchText, manualTickers, geo.filterByGeo]);
+  }, [rawPoints, universeTickers, basketScope.members, classFilters, searchText, manualTickers, geo.filterByGeo]);
 
   const { data: btData, isFetching: btLoading, error: btError } = useQuery({
     queryKey: ["scatter-backtest", btRun],
@@ -2228,6 +2232,7 @@ function ScatterPane({ stateKey, paneId, paneCount, onAdd, onRemove }: ScatterPa
 
       {/* Toolbar row 3: filters */}
       <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/50 flex-wrap">
+        <BasketScopeSelect scope={basketScope} />
         <ClassificationFiltersWithSource
           filters={classFilters}
           onFiltersChange={setClassFilters}

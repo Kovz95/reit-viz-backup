@@ -35,6 +35,7 @@ import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import {
   buildPriceMatrix,
   alignAndClean,
@@ -613,6 +614,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
 
 export default function PCA() {
   const { filteredTickersList } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:pca");
 
   const [mode, setMode] = usePersistedState<PcaMode>("pca.mode", "factors");
   const [minObs, setMinObs] = usePersistedState<number>("pca.minObs", 120);
@@ -663,8 +665,11 @@ export default function PCA() {
   }, [setSelectedMetrics]);
 
   const universeTickers = useMemo(
-    () => filteredTickersList.map((t) => t.ticker),
-    [filteredTickersList],
+    () =>
+      filteredTickersList
+        .filter((t) => basketScope.inScope(t.ticker))
+        .map((t) => t.ticker),
+    [filteredTickersList, basketScope.members],
   );
   const sectorByTicker = useMemo(() => {
     const m: Record<string, string> = {};
@@ -863,6 +868,13 @@ export default function PCA() {
         <span className="text-[10px] text-muted-foreground hidden md:inline">{activeMode.hint}</span>
 
         <div className="flex items-center gap-3 ml-auto">
+          <label className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
+            Basket
+            <BasketScopeSelect
+              scope={basketScope}
+              className="h-6 w-[140px] text-[10px] font-mono"
+            />
+          </label>
           {mode !== "fundamentals" && (
             <label className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
               Min obs

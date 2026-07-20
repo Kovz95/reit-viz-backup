@@ -19,6 +19,7 @@ import { applyClassFilters } from "@/lib/classificationFilters";
 import { ClassificationFilters } from "@/lib/classificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { navigateToTicker } from "@/lib/navigateToTicker";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -218,6 +219,7 @@ interface SummaryStats {
 
 export default function Valuation() {
   const { universeTickers } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:valuation");
   const [metric, setMetric] = useState("P/FFO FY2");
   const [lookback, setLookback] = useState(1260);
   const [sortCol, setSortCol] = useState("zScore");
@@ -320,6 +322,7 @@ export default function Valuation() {
   const filteredRows = useMemo<ValuationRow[]>(() => {
     let rows = enrichedRows.filter((r) => r.current !== null);
     if (universeTickers) rows = rows.filter((r) => universeTickers.has(r.ticker));
+    if (basketScope.members) rows = rows.filter((r) => basketScope.inScope(r.ticker));
     rows = applyClassFilters(rows, classFilters, search, manualTickers);
     rows = geo.filterByGeo(rows);
     rows.sort((a, b) => {
@@ -350,7 +353,7 @@ export default function Valuation() {
       return sortDir === "asc" ? va - vb : vb - va;
     });
     return rows;
-  }, [enrichedRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers, geo.filterByGeo]);
+  }, [enrichedRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers, basketScope.members, geo.filterByGeo]);
 
   const groupedRows = useMemo<[string, ValuationRow[]][] | null>(() => {
     if (groupByLevel === "none") return null;
@@ -613,6 +616,10 @@ export default function Valuation() {
             <SelectItem value="subindustry">Subindustry</SelectItem>
           </SelectContent>
         </Select>
+
+        <div className="h-5 w-px bg-border mx-1" />
+
+        <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
 
         {summaryStats && (
           <div className="flex items-center gap-2 ml-auto mr-2">

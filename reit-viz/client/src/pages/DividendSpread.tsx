@@ -20,6 +20,7 @@ import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
 import { getDividendYieldMultiplier } from "@/lib/getDividendYieldMultiplier";
 import { fetchTickerData } from "@/lib/fetchTickerData";
 import { filterTickers } from "@/lib/classFilters";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 
 const TREASURY_OPTIONS = [
   { id: "DGS10", label: "10Y Treasury" },
@@ -433,6 +434,7 @@ export default function DividendSpread() {
   const [classFilters, setClassFilters] = useState(makeDefaultFilters);
   const [manualTickers, setManualTickers] = useState(new Set<string>());
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const basketScope = useBasketScope("reit-viz:basket-scope:spread");
 
   const treasuryLabel = TREASURY_OPTIONS.find(t => t.id === treasuryId)?.label ?? treasuryId;
 
@@ -473,6 +475,7 @@ export default function DividendSpread() {
   const sortedRows = useMemo(() => {
     let rows = allRows.filter(r => r.spread !== null);
     if (universeTickers) rows = rows.filter(r => universeTickers.has(r.ticker));
+    rows = rows.filter(r => basketScope.inScope(r.ticker));
     rows = filterTickers(rows, classFilters, search, manualTickers);
     rows = geo.filterByGeo(rows);
     rows.sort((a, b) => {
@@ -497,7 +500,7 @@ export default function DividendSpread() {
       return sortDir === "asc" ? va - vb : vb - va;
     });
     return rows;
-  }, [allRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers, geo.filterByGeo]);
+  }, [allRows, sortCol, sortDir, search, classFilters, manualTickers, universeTickers, basketScope.members, geo.filterByGeo]);
 
   const summary = useMemo(() => {
     const withZ = sortedRows.filter(r => r.zScore !== null);
@@ -592,6 +595,9 @@ export default function DividendSpread() {
             ))}
           </SelectContent>
         </Select>
+        <div className="h-5 w-px bg-border mx-1" />
+        <span className="text-xs font-semibold text-muted-foreground">Basket</span>
+        <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-[150px]" />
         <div className="h-5 w-px bg-border mx-1" />
         {summary && (
           <div className="flex items-center gap-2 ml-auto mr-2">

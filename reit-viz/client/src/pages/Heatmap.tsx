@@ -15,6 +15,7 @@ import ClassificationFilters, {
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useUniverse } from "@/lib/universeContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import {
   Select,
   SelectContent,
@@ -220,6 +221,7 @@ const LOOKBACK_PRESETS = [
 
 export default function Heatmap() {
   const { universeTickers } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:heatmap");
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState("pffo_fy2");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -369,8 +371,9 @@ export default function Heatmap() {
   const filtered = useMemo(() => {
     let base = enrichedRows;
     if (universeTickers) base = base.filter(r => universeTickers.has(r.ticker));
+    if (basketScope.members) base = base.filter(r => basketScope.inScope(r.ticker));
     return geo.filterByGeo(applyClassFilters(base, classFilters, search, manualTickers));
-  }, [enrichedRows, classFilters, search, manualTickers, universeTickers, geo.filterByGeo]);
+  }, [enrichedRows, classFilters, search, manualTickers, universeTickers, basketScope.members, geo.filterByGeo]);
 
   // Sort
   const sorted = useMemo(() => {
@@ -548,6 +551,8 @@ export default function Heatmap() {
           testIdPrefix="heatmap"
           extraFilters={geo.geoFilterUI}
         />
+
+        <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
 
         <div className="mx-1 w-px h-4 bg-border" />
 

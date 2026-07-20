@@ -33,6 +33,7 @@ import {
   LineChart,
 } from "lucide-react";
 import RatingsChart from "@/components/RatingsChart";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 
 // ── Types ──
 
@@ -101,6 +102,7 @@ function barSegment(
 
 export default function Ratings() {
   const { activeTickers } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:ratings");
 
   const [groupBy, setGroupBy] = useState<GroupByKey>("subsector");
   const [sortKey, setSortKey] = useState<SortKey>("buyPct");
@@ -170,7 +172,9 @@ export default function Ratings() {
     if (!rawData) return [];
     const activeSet = activeTickers ? new Set(activeTickers) : null;
 
-    const universeFiltered = rawData.filter((t) => !activeSet || activeSet.has(t.ticker));
+    const universeFiltered = rawData.filter(
+      (t) => (!activeSet || activeSet.has(t.ticker)) && basketScope.inScope(t.ticker)
+    );
     const classFiltered = geo.filterByGeo(applyClassFilters(universeFiltered, classFilters, search, manualTickers));
 
     return classFiltered
@@ -209,7 +213,7 @@ export default function Ratings() {
         } as RatingsRow;
       })
       .filter((r) => r.totalCount > 0);
-  }, [rawData, activeTickers, classFilters, search, manualTickers, geo.filterByGeo]);
+  }, [rawData, activeTickers, basketScope.members, classFilters, search, manualTickers, geo.filterByGeo]);
 
   // ── Sort ──
   const sortedRows = useMemo(() => {
@@ -381,9 +385,23 @@ export default function Ratings() {
   }
 
   if (rows.length === 0) {
+    // A basket scope can filter out every row — keep an escape hatch visible
+    // so the selection (persisted in localStorage) can still be cleared.
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        No ratings data available. Upload a workbook with Buy/Hold/Sell ratings.
+      <div className="flex flex-col items-center justify-center gap-2 h-full text-muted-foreground text-sm">
+        {basketScope.members ? (
+          <>
+            <span>No ratings rows in basket “{basketScope.basketName}”.</span>
+            <button
+              className="h-6 px-2 rounded bg-muted text-[11px] text-foreground hover:bg-muted/80"
+              onClick={() => basketScope.setBasketId("")}
+            >
+              Clear basket filter
+            </button>
+          </>
+        ) : (
+          <span>No ratings data available. Upload a workbook with Buy/Hold/Sell ratings.</span>
+        )}
       </div>
     );
   }
@@ -442,6 +460,14 @@ export default function Ratings() {
               <SelectItem value="subindustry">Sub-Industry</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-muted-foreground">Basket:</span>
+          <BasketScopeSelect
+            scope={basketScope}
+            className="h-6 text-[11px] w-auto min-w-[130px] bg-muted border-0"
+          />
         </div>
 
         <ClassificationFilters

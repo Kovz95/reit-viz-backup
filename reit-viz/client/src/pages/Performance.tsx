@@ -21,6 +21,7 @@ import { ArrowUpDown } from "@/lib/arrow-up-down";
 import { SortAsc, SortDesc } from "lucide-react";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -353,6 +354,7 @@ function HeatCell({ value }: { value: number | null }) {
 
 export default function Performance() {
   const { universeTickers } = useAppContext();
+  const basketScope = useBasketScope("reit-viz:basket-scope:performance");
 
   const [viewMode, setViewMode] = useState("periods");
   const [filters, setFilters] = useState(getDefaultFilters);
@@ -452,6 +454,10 @@ export default function Performance() {
       rows = rows.filter((r: any) => universeTickers.has(r.ticker));
     }
 
+    if (basketScope.members) {
+      rows = rows.filter((r: any) => basketScope.inScope(r.ticker));
+    }
+
     return [...geo.filterByGeo(filterPerformanceData(rows, filters, searchText, manualTickers))].sort(
       (a: any, b: any) => {
         let av: any, bv: any;
@@ -470,7 +476,7 @@ export default function Performance() {
         return sortAsc ? av - bv : bv - av;
       }
     );
-  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, eventStat, geo.filterByGeo]);
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo]);
 
   const handleSort = useCallback(
     (col: string) => {
@@ -736,8 +742,9 @@ export default function Performance() {
             </div>
           )}
 
-          {/* CSV export */}
-          <div className="ml-auto">
+          {/* Basket scope + CSV export */}
+          <div className="ml-auto flex items-center gap-1.5">
+            <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
             <Button
               variant="outline"
               size="sm"

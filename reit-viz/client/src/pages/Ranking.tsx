@@ -23,6 +23,7 @@ import ClassificationFilters, {
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useUniverse } from "@/lib/universeContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import {
   Select,
   SelectContent,
@@ -495,6 +496,7 @@ interface CompositeRow extends ClassifiedBase {
 export default function Ranking() {
   const qc = useQueryClient();
   const { universeTickers } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:ranking");
   const [metrics, setMetrics] = useState<string[]>(["P/FFO FY2"]);
   const [pendingMetric, setPendingMetric] = useState("");
   // Warm the tickers cache so the metric list below can enumerate every metric
@@ -914,6 +916,7 @@ export default function Ranking() {
       metrics.some((m) => r.values[m] !== null)
     );
     if (universeTickers) filtered = filtered.filter(r => universeTickers.has(r.ticker));
+    if (basketScope.members) filtered = filtered.filter(r => basketScope.inScope(r.ticker));
     filtered = applyClassFilters(filtered, classFilters, search, manualTickers);
     filtered = geo.filterByGeo(filtered);
 
@@ -942,7 +945,7 @@ export default function Ranking() {
       }
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, attributionMap, universeTickers, geo.filterByGeo]);
+  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, attributionMap, universeTickers, basketScope.members, geo.filterByGeo]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -1617,6 +1620,7 @@ export default function Ranking() {
 
       {/* Controls Row 2: Classification Filters */}
       <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/50 flex-wrap">
+        <BasketScopeSelect scope={basketScope} />
         <ClassificationFilters
           filters={classFilters}
           onFiltersChange={setClassFilters}

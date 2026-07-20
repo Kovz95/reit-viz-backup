@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X } from "lucide-react";
 import { LOOKBACKS, getRerateMetric, type RerateMetric } from "@/lib/valuationRerate";
 import RerateMetricPicker from "@/components/RerateMetricPicker";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import {
   buildResidence, RESIDENCE_BAND_LABELS, type ResidenceResult, type PctBasis,
 } from "@/lib/percentileResidence";
@@ -154,6 +155,9 @@ export default function ValuationResidence() {
   // Country/exchange filter (workbook universe has no geo — resolved via geo map).
   const geo = useGeoFilter(tickers, "residence-geo");
 
+  // Optional basket scope on top of the universe filter (no-op when unset).
+  const basketScope = useBasketScope("reit-viz:basket-scope:val-residence");
+
   // Cascading options for each classification dropdown: each level's choices are
   // the distinct values present under the coarser selections above it.
   const classOptions = useMemo(() => {
@@ -206,12 +210,13 @@ export default function ValuationResidence() {
     const legs = tickers
       .filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]))
       .filter((t) => geo.matchesGeo(t.ticker))
+      .filter((t) => basketScope.inScope(t.ticker))
       .filter((t) => !q || t.ticker.includes(q) || t.name.toUpperCase().includes(q))
       .sort((a, b) => a.ticker.localeCompare(b.ticker));
     return legs.slice(0, MAX_PAIR_LEGS);
-  }, [tickers, classFilters, geo.matchesGeo, search]);
+  }, [tickers, classFilters, geo.matchesGeo, basketScope.members, search]);
   const pairLegOverflow = pairMode
-    ? tickers.filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]) && geo.matchesGeo(t.ticker)).length - pairLegs.length
+    ? tickers.filter((t) => CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (t as any)[d.key] === classFilters[d.key]) && geo.matchesGeo(t.ticker) && basketScope.inScope(t.ticker)).length - pairLegs.length
     : 0;
   const pairMetricKey = metricKeys[0];
   const pairLegKey = useMemo(() => pairLegs.map((t) => t.ticker).join(","), [pairLegs]);
@@ -294,7 +299,8 @@ export default function ValuationResidence() {
       ? rows.slice()
       : rows.filter((x) =>
           CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
-          && geo.matchesGeo(x.meta.ticker));
+          && geo.matchesGeo(x.meta.ticker)
+          && basketScope.inScope(x.meta.ticker));
     if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       // Keep low-sample tails out of the top of a forward-return sort (both directions).
@@ -308,7 +314,7 @@ export default function ValuationResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo, pairMode]);
+  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo, basketScope.members, pairMode]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -506,6 +512,10 @@ export default function ValuationResidence() {
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Geography</div>
           <div className="flex items-center gap-1.5 h-7">{geo.geoFilterUI}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Basket</div>
+          <BasketScopeSelect scope={basketScope} />
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Group by</div>

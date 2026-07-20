@@ -24,6 +24,7 @@ import {
   type TV,
 } from "@/lib/pairMath";
 import { useUniverse } from "@/lib/universeContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import {
   Select,
@@ -1261,6 +1262,7 @@ export default function Screener() {
     manualTickers: universeManualTickers,
     setManualTickers: setUniverseManualTickers,
   } = useUniverse();
+  const basketScope = useBasketScope("reit-viz:basket-scope:screener");
   const [showUniverseFilter, setShowUniverseFilter] = useState(true);
 
   const [conditions, setConditions] = useState<ScreenerCondition[]>([newCondition()]);
@@ -1360,11 +1362,12 @@ export default function Screener() {
   const geo = useGeoFilter(allTickers, "screener-universe-geo");
 
   const scopedTickers = useMemo(() => {
-    const base = universeTickers
+    let base = universeTickers
       ? allTickers.filter((t) => universeTickers.has(t.ticker))
       : allTickers;
+    if (basketScope.members) base = base.filter((t) => basketScope.inScope(t.ticker));
     return geo.filterByGeo(base);
-  }, [allTickers, universeTickers, geo.filterByGeo]);
+  }, [allTickers, universeTickers, basketScope.members, geo.filterByGeo]);
 
   // ── Workspace persistence ──
   const serialize = useCallback(() => ({
@@ -2090,6 +2093,9 @@ export default function Screener() {
             </PopoverContent>
           </Popover>
         )}
+
+        {/* Basket scope */}
+        <BasketScopeSelect scope={basketScope} />
 
         {/* Universe filter toggle */}
         <button

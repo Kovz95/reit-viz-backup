@@ -8,6 +8,7 @@ import { getDates } from "@/lib/dataService";
 import { getTickerRaw } from "@/lib/dataService";
 import { metricMultiplier, isPercentMetric } from "@/lib/dataService";
 import { categorizeMetric, groupMetricsByCategory } from "@/lib/metricCategories";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -262,6 +263,7 @@ const DataRow = memo(function DataRow({ row, colWindow, pinnedMetrics, rowHeight
 
 export default function DataExplorer() {
   const [tickers, setTickers] = useState<TickerEntry[]>([]);
+  const basketScope = useBasketScope("reit-viz:basket-scope:data");
   const [activeTicker, setActiveTicker] = useState("ESS");
   const [tickerSearch, setTickerSearch] = useState("");
   const [dates, setDates] = useState<string[]>([]);
@@ -403,7 +405,14 @@ export default function DataExplorer() {
       .catch(() => setLoading(false));
   }, [activeTicker]);
 
-  const tickerIndex = tickers.findIndex((t) => t.ticker === activeTicker);
+  // Basket scope applied upstream of the picker list and prev/next navigation
+  // (no-op when no basket is selected).
+  const scopedTickers = useMemo(
+    () => (basketScope.members ? tickers.filter((t) => basketScope.inScope(t.ticker)) : tickers),
+    [tickers, basketScope.members]
+  );
+
+  const tickerIndex = scopedTickers.findIndex((t) => t.ticker === activeTicker);
 
   // The active ticker's group filter: its own if it has one (checked with `in`
   // so an explicit "All groups"/null still wins), else the last-used selection.
@@ -440,15 +449,15 @@ export default function DataExplorer() {
   const setCustomUnit = useCallback((unit: "Y" | "M") => patchLookback({ unit }), [patchLookback]);
 
   const filteredTickers = useMemo(() => {
-    if (!tickerSearch) return tickers;
+    if (!tickerSearch) return scopedTickers;
     const q = tickerSearch.toLowerCase();
-    return tickers.filter(
+    return scopedTickers.filter(
       (t) =>
         t.ticker.toLowerCase().includes(q) ||
         (t.name || "").toLowerCase().includes(q) ||
         (t.subindustry || "").toLowerCase().includes(q)
     );
-  }, [tickers, tickerSearch]);
+  }, [scopedTickers, tickerSearch]);
 
   const allMetrics = useMemo(
     () => Object.keys(rawData).sort((a, b) => a.localeCompare(b)),
@@ -969,7 +978,7 @@ export default function DataExplorer() {
             size="sm"
             className="h-7 w-7 p-0"
             disabled={tickerIndex <= 0}
-            onClick={() => tickerIndex > 0 && setActiveTicker(tickers[tickerIndex - 1].ticker)}
+            onClick={() => tickerIndex > 0 && setActiveTicker(scopedTickers[tickerIndex - 1].ticker)}
             data-testid="data-ticker-prev"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
@@ -978,16 +987,20 @@ export default function DataExplorer() {
             variant="ghost"
             size="sm"
             className="h-7 w-7 p-0"
-            disabled={tickerIndex >= tickers.length - 1}
+            disabled={tickerIndex < 0 || tickerIndex >= scopedTickers.length - 1}
             onClick={() =>
-              tickerIndex < tickers.length - 1 &&
-              setActiveTicker(tickers[tickerIndex + 1].ticker)
+              tickerIndex >= 0 &&
+              tickerIndex < scopedTickers.length - 1 &&
+              setActiveTicker(scopedTickers[tickerIndex + 1].ticker)
             }
             data-testid="data-ticker-next"
           >
             <ChevronRight className="w-3.5 h-3.5" />
           </Button>
         </div>
+
+        {/* Basket scope */}
+        <BasketScopeSelect scope={basketScope} />
 
         {activeMeta && (
           <span className="text-[10px] text-muted-foreground">
