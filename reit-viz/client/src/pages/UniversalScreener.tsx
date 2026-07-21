@@ -8,7 +8,7 @@
 // Evaluation runs through the shared buildBacktestResult kernel via
 // lib/universalSweep; signal definitions live in lib/universalSignalCatalog.
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import { useLocation } from "wouter";
 import { useBaskets } from "@/lib/baskets";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -703,9 +703,8 @@ export default function UniversalScreener() {
               {visibleRows.map((r) => {
                 const expanded = expandedKey === r.key;
                 return (
-                  <>
+                  <Fragment key={r.key}>
                     <tr
-                      key={r.key}
                       className="border-b border-border/40 hover:bg-card/60 cursor-pointer"
                       onClick={() => setExpandedKey(expanded ? null : r.key)}
                       data-testid={`uhs-row-${r.key}`}
@@ -757,7 +756,7 @@ export default function UniversalScreener() {
                       </td>
                     </tr>
                     {expanded && (
-                      <tr key={`${r.key}-x`} className="border-b border-border/40 bg-card/40">
+                      <tr className="border-b border-border/40 bg-card/40">
                         <td colSpan={13} className="py-1.5 px-8">
                           <table className="text-[10px] font-mono">
                             <thead>
@@ -790,7 +789,7 @@ export default function UniversalScreener() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </tbody>

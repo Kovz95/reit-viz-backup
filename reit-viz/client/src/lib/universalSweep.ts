@@ -52,7 +52,7 @@ export interface SweepSettings {
 
 export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   mode: "single",
-  horizon: "1M",
+  horizon: "3M",
   hitRateThreshold: 0.5,
   minOccurrences: 8,
   freqFloorPerYear: 4,
