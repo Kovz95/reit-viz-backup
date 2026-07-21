@@ -176,11 +176,22 @@ export function refreshAutoBaskets(): Promise<void> {
 }
 
 /** Idempotent bootstrap: first build + rebuild on reclassification changes
- *  (this tab via the change event, other tabs via the storage event). */
+ *  (this tab via the change event, other tabs via the storage event). If the
+ *  geo dataset wasn't available yet (slow/failed first fetch), the country and
+ *  exchange baskets come out missing — retry a few times until they appear. */
 export function initAutoBaskets(): void {
   if (initDone || typeof window === "undefined") return;
   initDone = true;
-  void refreshAutoBaskets();
+  const hasGeoBaskets = () => cache.some((b) => b.id.startsWith("auto:country:"));
+  let retries = 0;
+  const buildWithRetry = () =>
+    refreshAutoBaskets().then(() => {
+      if (cache.length > 0 && !hasGeoBaskets() && retries < 3) {
+        retries += 1;
+        setTimeout(buildWithRetry, 4000);
+      }
+    });
+  void buildWithRetry();
   window.addEventListener(OVERRIDES_CHANGE_EVENT, () => void refreshAutoBaskets());
   window.addEventListener("storage", (e) => {
     if (e.key === OVERRIDES_STORAGE_KEY) void refreshAutoBaskets();

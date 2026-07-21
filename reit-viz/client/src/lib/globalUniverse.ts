@@ -61,7 +61,9 @@ export async function loadGlobalRecords(): Promise<GlobalRecord[]> {
       (await tryFetch("/data/global-universe.json")) ??
       (await tryFetch("/api/global-universe")) ??
       [];
-    _cache = records;
+    // Don't cache an empty result: a transient fetch failure would otherwise
+    // permanently blank geo/global data for the whole session.
+    _cache = records.length > 0 ? records : null;
     _inFlight = null;
     return records;
   })();
