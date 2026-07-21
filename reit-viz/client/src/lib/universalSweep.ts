@@ -1,0 +1,380 @@
+// Universal Hit-Rate Screener — sweep engine.
+//
+// Orchestrates a Run: fetches each subject's series, evaluates every enabled
+// catalog signal × preset × direction through the shared backtest kernel
+// (buildBacktestResult — the same kernel every optimizer page uses), and
+// qualifies setups by hit rate + occurrence count + firing frequency.
+//
+// Main-thread batched async (no web worker): the workload is fetch-dominated
+// and per-subject compute is tens of ms — the same regime SetupsScreener
+// handles with batches and Promise.all. Backtests run WITHOUT a benchmark
+// series so hit rates are absolute-return based, matching the optimizers'
+// default semantics.
+
+import { buildBacktestResult, type HorizonRow } from "@/components/EvaluatorPanel";
+import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
+import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
+import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
+import {
+  signalsForBundle,
+  type CatalogSignal,
+  type SeriesBundle,
+  type SignalDirection,
+  type SignalFamily,
+} from "@/lib/universalSignalCatalog";
+
+export interface SweepSettings {
+  mode: "single" | "pair" | "both";
+  /** HORIZONS label the qualification reads (1W/2W/1M/3M/6M/1Y). */
+  horizon: string;
+  /** Strict > threshold on the horizon hit rate. */
+  hitRateThreshold: number;
+  minOccurrences: number;
+  /** Signals must have fired at least this often per year of series span. */
+  freqFloorPerYear: number;
+  targetPct: number;
+  cooldown: number;
+  /** "Firing now" = last signal within this many bars of the series end. */
+  firingLookbackBars: number;
+  families: SignalFamily[];
+  enabledSignalIds: string[];
+  pairCohortDim: "subindustry" | "industry" | "sector";
+  maxPairs: number;
+  minYearsData: number;
+}
+
+export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
+  mode: "single",
+  horizon: "1M",
+  hitRateThreshold: 0.5,
+  minOccurrences: 8,
+  freqFloorPerYear: 4,
+  targetPct: 0.05,
+  cooldown: 10,
+  firingLookbackBars: 5,
+  families: ["technical", "event", "valuation", "pair"],
+  enabledSignalIds: [],
+  pairCohortDim: "subindustry",
+  maxPairs: 400,
+  minYearsData: 2,
+};
+
+export interface SweepProgress {
+  done: number;
+  total: number;
+  subject?: string;
+}
+
+export interface QualifiedSetup {
+  /** `${subject}|${signalId}|${presetId}|${direction}` */
+  key: string;
+  subject: string;
+  mode: "single" | "pair";
+  family: SignalFamily;
+  signalId: string;
+  signalLabel: string;
+  presetId: string;
+  paramsLabel: string;
+  direction: SignalDirection;
+  horizon: string;
+  hitRate: number;
+  winRate: number;
+  avgReturn: number;
+  medianReturn: number;
+  tStat: number;
+  occurrences: number;
+  freqPerYear: number;
+  firstSignalDate: string | null;
+  lastSignalDate: string | null;
+  lastSignalBarsAgo: number | null;
+  firingNow: boolean;
+  allHorizons: HorizonRow[];
+  /** Most recent signal dates (≤ 20) for chart hand-off. */
+  recentSignalDates: string[];
+}
+
+type Subject =
+  | { kind: "single"; ticker: string }
+  | { kind: "pair"; a: string; b: string };
+
+function subjectLabel(s: Subject): string {
+  return s.kind === "single" ? s.ticker : `${s.a}/${s.b}`;
+}
+
+// ---------------------------------------------------------------------------
+// Bundle building
+// ---------------------------------------------------------------------------
+
+async function buildSingleBundle(ticker: string, minBars: number): Promise<SeriesBundle | null> {
+  let dates: string[] = [];
+  let opens: number[] | undefined;
+  let highs: number[] | undefined;
+  let lows: number[] | undefined;
+  let closes: number[] = [];
+  let volumes: number[] | undefined;
+
+  try {
+    const r = await fetchTickerOHLCV(ticker);
+    if (r.dates.length > 0) {
+      dates = r.dates;
+      opens = r.opens;
+      highs = r.highs;
+      lows = r.lows;
+      closes = r.adjCloses.length === r.dates.length ? r.adjCloses : r.closes;
+      volumes = r.volumes;
+    }
+  } catch {
+    /* fall through to fallback */
+  }
+
+  if (dates.length === 0) {
+    try {
+      const r = await fetchOhlcSeries(ticker);
+      dates = r.dates;
+      opens = r.opens;
+      highs = r.highs;
+      lows = r.lows;
+      closes = r.closes;
+      volumes = undefined; // fetchOhlcSeries volumes are always 0 — don't pretend
+    } catch {
+      return null;
+    }
+  }
+
+  if (dates.length < minBars) return null;
+  if (volumes && !volumes.some((v) => v > 0)) volumes = undefined;
+
+  return { subject: ticker, dates, closes, opens, highs, lows, volumes };
+}
+
+async function buildPairBundle(a: string, b: string, minBars: number): Promise<SeriesBundle | null> {
+  try {
+    const r = await getYahooPairsRatio(a, b);
+    if (!r || !r.dates || r.dates.length < minBars) return null;
+    return {
+      subject: `${a}/${b}`,
+      dates: r.dates,
+      closes: r.ratio,
+      pair: { aCloses: [], bCloses: [] },
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation
+// ---------------------------------------------------------------------------
+
+function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): QualifiedSetup[] {
+  const families = new Set<SignalFamily>(settings.families);
+  const ids = new Set(settings.enabledSignalIds);
+  const signals = signalsForBundle(bundle, families, ids);
+  const out: QualifiedSetup[] = [];
+
+  const spanMs =
+    new Date(bundle.dates[bundle.dates.length - 1]).getTime() -
+    new Date(bundle.dates[0]).getTime();
+  const spanYears = Math.max(spanMs / (365.25 * 24 * 3600 * 1000), 0.25);
+  const lastBar = bundle.dates.length - 1;
+
+  for (const sig of signals) {
+    for (const preset of sig.paramPresets) {
+      for (const dir of sig.directions) {
+        let indices: number[];
+        try {
+          indices = sig.detect(bundle, preset.params, dir);
+        } catch {
+          continue;
+        }
+        if (indices.length < settings.minOccurrences) continue;
+
+        const result = buildBacktestResult(
+          bundle.closes,
+          bundle.dates,
+          indices,
+          dir,
+          settings.targetPct,
+          settings.cooldown,
+          undefined,
+          settings.horizon,
+        );
+
+        const row = result.rows.find((r) => r.horizon === settings.horizon);
+        if (!row) continue;
+        if (row.count < settings.minOccurrences) continue;
+        if (row.hitRate <= settings.hitRateThreshold) continue;
+
+        const freqPerYear = result.signalCount / spanYears;
+        if (freqPerYear < settings.freqFloorPerYear) continue;
+
+        // Firing state from the raw detector indices (pre-cooldown is fine for
+        // "is the condition on today": the condition fired regardless).
+        const lastIdx = indices[indices.length - 1];
+        const lastSignalBarsAgo = lastBar - lastIdx;
+        const recentSignalDates = result.signals.slice(-20).map((s) => s.date);
+
+        out.push({
+          key: `${bundle.subject}|${sig.id}|${preset.id}|${dir}`,
+          subject: bundle.subject,
+          mode: bundle.pair ? "pair" : "single",
+          family: sig.family,
+          signalId: sig.id,
+          signalLabel: sig.label,
+          presetId: preset.id,
+          paramsLabel: preset.label,
+          direction: dir,
+          horizon: settings.horizon,
+          hitRate: row.hitRate,
+          winRate: row.winRate,
+          avgReturn: row.avgReturn,
+          medianReturn: row.medianReturn,
+          tStat: row.tStat,
+          occurrences: result.signalCount,
+          freqPerYear,
+          firstSignalDate: result.firstSignalDate,
+          lastSignalDate: result.lastSignalDate,
+          lastSignalBarsAgo,
+          firingNow: lastSignalBarsAgo < settings.firingLookbackBars,
+          allHorizons: result.rows,
+          recentSignalDates,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The sweep
+// ---------------------------------------------------------------------------
+
+const BATCH = 5;
+
+export async function runUniversalSweep(opts: {
+  tickers: string[];
+  pairList: [string, string][];
+  settings: SweepSettings;
+  onProgress: (p: SweepProgress) => void;
+  onRows: (rows: QualifiedSetup[]) => void;
+  cancelRef: { current: boolean };
+}): Promise<QualifiedSetup[]> {
+  const { settings, onProgress, onRows, cancelRef } = opts;
+  const minBars = Math.round(settings.minYearsData * 252);
+
+  const subjects: Subject[] = [];
+  if (settings.mode !== "pair") {
+    for (const t of opts.tickers) subjects.push({ kind: "single", ticker: t });
+  }
+  if (settings.mode !== "single") {
+    for (const [a, b] of opts.pairList) subjects.push({ kind: "pair", a, b });
+  }
+
+  const all: QualifiedSetup[] = [];
+  let done = 0;
+  onProgress({ done, total: subjects.length });
+
+  const queue = [...subjects];
+  while (queue.length > 0 && !cancelRef.current) {
+    const batch = queue.splice(0, BATCH);
+    const bundles = await Promise.all(
+      batch.map((s) =>
+        s.kind === "single"
+          ? buildSingleBundle(s.ticker, minBars)
+          : buildPairBundle(s.a, s.b, minBars),
+      ),
+    );
+
+    for (let i = 0; i < batch.length; i++) {
+      if (cancelRef.current) break;
+      const bundle = bundles[i];
+      if (bundle) {
+        const rows = evaluateBundle(bundle, settings);
+        if (rows.length > 0) {
+          all.push(...rows);
+          onRows(rows);
+        }
+      }
+      done++;
+      onProgress({ done, total: subjects.length, subject: subjectLabel(batch[i]) });
+      // Yield to the event loop so the UI stays responsive between subjects.
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+
+  return all;
+}
+
+/**
+ * Cheap daily refresh: re-detect only the (signal, preset, direction) combos
+ * present in an existing library's rows and rewrite their firing fields.
+ * Historical hit-rate stats are intentionally left as-built — one new bar
+ * cannot meaningfully move them; a full Run rebuilds everything.
+ */
+export async function refreshFiringStatus(
+  rows: QualifiedSetup[],
+  settings: SweepSettings,
+  onProgress?: (p: SweepProgress) => void,
+  cancelRef?: { current: boolean },
+): Promise<QualifiedSetup[]> {
+  const minBars = Math.round(settings.minYearsData * 252);
+  const bySubject = new Map<string, QualifiedSetup[]>();
+  for (const r of rows) {
+    const list = bySubject.get(r.subject) ?? [];
+    list.push(r);
+    bySubject.set(r.subject, list);
+  }
+
+  const updated: QualifiedSetup[] = [];
+  const subjects = [...bySubject.keys()];
+  let done = 0;
+
+  for (const subject of subjects) {
+    if (cancelRef?.current) {
+      // Cancelled: pass through the untouched remainder.
+      for (const s of subjects.slice(done)) updated.push(...bySubject.get(s)!);
+      break;
+    }
+    const subjectRows = bySubject.get(subject)!;
+    const isPair = subject.includes("/");
+    const bundle = isPair
+      ? await buildPairBundle(subject.split("/")[0], subject.split("/")[1], minBars)
+      : await buildSingleBundle(subject, minBars);
+
+    for (const r of subjectRows) {
+      if (!bundle) {
+        updated.push(r);
+        continue;
+      }
+      const sig = signalsForBundle(bundle, new Set([r.family]), new Set([r.signalId]))[0] as
+        | CatalogSignal
+        | undefined;
+      const preset = sig?.paramPresets.find((p) => p.id === r.presetId);
+      if (!sig || !preset) {
+        updated.push(r);
+        continue;
+      }
+      let indices: number[] = [];
+      try {
+        indices = sig.detect(bundle, preset.params, r.direction);
+      } catch {
+        updated.push(r);
+        continue;
+      }
+      const lastBar = bundle.dates.length - 1;
+      const lastIdx = indices.length > 0 ? indices[indices.length - 1] : null;
+      const lastSignalBarsAgo = lastIdx === null ? null : lastBar - lastIdx;
+      updated.push({
+        ...r,
+        lastSignalDate: lastIdx === null ? r.lastSignalDate : bundle.dates[lastIdx],
+        lastSignalBarsAgo,
+        firingNow: lastSignalBarsAgo !== null && lastSignalBarsAgo < settings.firingLookbackBars,
+      });
+    }
+    done++;
+    onProgress?.({ done, total: subjects.length, subject });
+    await new Promise((res) => setTimeout(res, 0));
+  }
+
+  return updated;
+}
