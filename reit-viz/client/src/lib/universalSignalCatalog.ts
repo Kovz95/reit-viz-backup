@@ -506,10 +506,239 @@ const technicalSignals: CatalogSignal[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Event family (7 signals)
+// ---------------------------------------------------------------------------
+
+const eventSignals: CatalogSignal[] = [
+  {
+    id: "event.gap_reversion",
+    family: "event",
+    label: "Price gap (fill trade)",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { ohlc: true },
+    paramPresets: [
+      { id: "g2", label: "≥2% gap", params: { minGapPct: 2 } },
+      { id: "g4", label: "≥4% gap", params: { minGapPct: 4 } },
+    ],
+    // Full gaps on adjusted OHLC, same definition as GapFillScreener:
+    // gap DOWN at t (high[t] < low[t-1]) → long the fill (rally back);
+    // gap UP at t (low[t] > high[t-1])   → short the fill (fade back).
+    detect: (b, p, dir) => {
+      const g = Number(p.minGapPct);
+      const out: number[] = [];
+      for (let t = 1; t < b.dates.length; t++) {
+        if (dir === "long") {
+          const prevLow = b.lows![t - 1];
+          const gapPct = prevLow > 0 ? (100 * (prevLow - b.highs![t])) / prevLow : 0;
+          if (b.highs![t] < prevLow && gapPct >= g) out.push(t);
+        } else {
+          const prevHigh = b.highs![t - 1];
+          const gapPct = prevHigh > 0 ? (100 * (b.lows![t] - prevHigh)) / prevHigh : 0;
+          if (b.lows![t] > prevHigh && gapPct >= g) out.push(t);
+        }
+      }
+      return out;
+    },
+  },
+  {
+    id: "event.52wk_break",
+    family: "event",
+    label: "New high/low break",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "n252", label: "252d", params: { window: 252 } },
+      { id: "n126", label: "126d", params: { window: 126 } },
+    ],
+    // Long = new N-day closing high (continuation); short = new N-day low.
+    detect: (b, p, dir) => {
+      const w = Number(p.window);
+      const out: number[] = [];
+      let prevExtreme: boolean | null = null;
+      for (let i = w; i < b.closes.length; i++) {
+        let ext = dir === "long" ? -Infinity : Infinity;
+        for (let j = i - w; j < i; j++) {
+          const c = b.closes[j];
+          if (dir === "long" ? c > ext : c < ext) ext = c;
+        }
+        const isBreak = dir === "long" ? b.closes[i] > ext : b.closes[i] < ext;
+        if (prevExtreme === false && isBreak) out.push(i);
+        prevExtreme = isBreak;
+      }
+      return out;
+    },
+  },
+  {
+    id: "event.capitulation",
+    family: "event",
+    label: "Capitulation day",
+    mode: "single",
+    directions: ["long"],
+    requires: {},
+    paramPresets: [
+      { id: "k25", label: "< −2.5σ day", params: { k: 2.5 } },
+      { id: "k3", label: "< −3σ day", params: { k: 3 } },
+    ],
+    // 1-day return below −k × trailing-252d daily return σ → long reversion.
+    detect: (b, p) => {
+      const k = Number(p.k);
+      const rets: (number | null)[] = [null];
+      for (let i = 1; i < b.closes.length; i++) {
+        rets.push(b.closes[i - 1] > 0 ? b.closes[i] / b.closes[i - 1] - 1 : null);
+      }
+      const out: number[] = [];
+      const W = 252;
+      let sum = 0;
+      let sumSq = 0;
+      let n = 0;
+      for (let i = 1; i < rets.length; i++) {
+        const r = rets[i];
+        if (i > W) {
+          const old = rets[i - W];
+          if (old !== null) {
+            sum -= old;
+            sumSq -= old * old;
+            n--;
+          }
+        }
+        if (r === null) continue;
+        if (n > 60) {
+          const mean = sum / n;
+          const std = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+          if (std > 0 && r < -k * std) out.push(i);
+        }
+        sum += r;
+        sumSq += r * r;
+        n++;
+      }
+      return out;
+    },
+  },
+  {
+    id: "event.down_streak",
+    family: "event",
+    label: "Down-streak reversion",
+    mode: "single",
+    directions: ["long"],
+    requires: {},
+    paramPresets: [
+      { id: "s5", label: "5 down closes", params: { streak: 5 } },
+      { id: "s7", label: "7 down closes", params: { streak: 7 } },
+    ],
+    // Fire on the Nth consecutive down close (cross-into: exactly N, not N+1…
+    // handled by only firing when the streak length equals N).
+    detect: (b, p) => {
+      const need = Number(p.streak);
+      const out: number[] = [];
+      let streak = 0;
+      for (let i = 1; i < b.closes.length; i++) {
+        streak = b.closes[i] < b.closes[i - 1] ? streak + 1 : 0;
+        if (streak === need) out.push(i);
+      }
+      return out;
+    },
+  },
+  {
+    id: "event.volume_spike",
+    family: "event",
+    label: "Volume spike",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { volume: true },
+    paramPresets: [{ id: "m3", label: "3× 63d avg", params: { mult: 3 } }],
+    // Volume > mult × trailing-63d avg with a down close (long capitulation)
+    // or an up close (short exhaustion).
+    detect: (b, p, dir) => {
+      if (!b.volumes) return [];
+      const avg = rollingMean(b.volumes, 63);
+      const out: number[] = [];
+      for (let i = 63; i < b.closes.length; i++) {
+        const a = avg[i - 1];
+        if (a === null || a <= 0) continue;
+        if (b.volumes[i] <= Number(p.mult) * a) continue;
+        const down = b.closes[i] < b.closes[i - 1];
+        if ((dir === "long" && down) || (dir === "short" && !down)) out.push(i);
+      }
+      return out;
+    },
+  },
+  {
+    id: "event.drawdown_extreme",
+    family: "event",
+    label: "Drawdown extreme",
+    mode: "single",
+    directions: ["long"],
+    requires: {},
+    paramPresets: [
+      { id: "d25", label: "−25% off 252d high", params: { dd: 25 } },
+      { id: "d35", label: "−35% off 252d high", params: { dd: 35 } },
+    ],
+    // % off the trailing 252d closing high crosses below −dd%.
+    detect: (b, p) => {
+      const W = 252;
+      const dd = Number(p.dd);
+      const vals: (number | null)[] = new Array(b.closes.length).fill(null);
+      for (let i = W; i < b.closes.length; i++) {
+        let hi = -Infinity;
+        for (let j = i - W; j <= i; j++) if (b.closes[j] > hi) hi = b.closes[j];
+        if (hi > 0) vals[i] = (100 * (b.closes[i] - hi)) / hi;
+      }
+      return detectCrossings(vals, (v) => v <= -dd);
+    },
+  },
+  {
+    id: "event.channel_break",
+    family: "event",
+    label: "Regression channel break",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    costly: true,
+    paramPresets: [{ id: "c100", label: "100d ±2σ", params: { window: 100, k: 2 } }],
+    // Rolling linear-regression channel breakout. (detectChannels in
+    // computeAutoTrendlines only describes CURRENT end-of-series structures,
+    // so historical events use this backtestable equivalent instead.)
+    detect: (b, p, dir) => {
+      const w = Number(p.window);
+      const k = Number(p.k);
+      const n = b.closes.length;
+      const vals: (number | null)[] = new Array(n).fill(null);
+      for (let i = w - 1; i < n; i++) {
+        // OLS fit over the window ending at i.
+        let sx = 0, sy = 0, sxy = 0, sxx = 0;
+        for (let j = 0; j < w; j++) {
+          const y = b.closes[i - w + 1 + j];
+          sx += j; sy += y; sxy += j * y; sxx += j * j;
+        }
+        const denom = w * sxx - sx * sx;
+        if (denom === 0) continue;
+        const slope = (w * sxy - sx * sy) / denom;
+        const intercept = (sy - slope * sx) / w;
+        let sse = 0;
+        for (let j = 0; j < w; j++) {
+          const resid = b.closes[i - w + 1 + j] - (intercept + slope * j);
+          sse += resid * resid;
+        }
+        const sigma = Math.sqrt(sse / w);
+        if (sigma <= 0) continue;
+        const fitted = intercept + slope * (w - 1);
+        vals[i] = (b.closes[i] - fitted) / sigma;
+      }
+      return detectCrossings(vals, dir === "long" ? (v) => v >= k : (v) => v <= -k);
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Catalog assembly
 // ---------------------------------------------------------------------------
 
-export const UNIVERSAL_SIGNAL_CATALOG: CatalogSignal[] = [...technicalSignals];
+export const UNIVERSAL_SIGNAL_CATALOG: CatalogSignal[] = [
+  ...technicalSignals,
+  ...eventSignals,
+];
 
 export function getCatalogSignal(id: string): CatalogSignal | undefined {
   return UNIVERSAL_SIGNAL_CATALOG.find((s) => s.id === id);
