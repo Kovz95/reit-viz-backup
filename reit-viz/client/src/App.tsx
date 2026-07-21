@@ -273,7 +273,6 @@ function NavBar() {
         { path: "/pair-ratios", label: "Ratios", icon: GitCompareArrows },
       ],
     },
-    { path: "/scanner", label: "Scanner", icon: Target, universeControlled: true },
     {
       path: "__macro_group",
       label: "Macro",
@@ -597,6 +596,7 @@ const PAGES = [
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
+  { path: "/scanner", label: "Scanner" },
   { path: "/gap-fill", label: "Gap Fill Screener" },
   { path: "/screener", label: "Screener" },
   { path: "/ratings", label: "Ratings" },
