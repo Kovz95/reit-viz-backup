@@ -36,6 +36,12 @@ import {
   type SweepProgress,
   type QualifiedSetup,
 } from "@/lib/universalSweep";
+import {
+  computeScopeHash,
+  saveLibrary,
+  loadLatest,
+  type SweepLibrary,
+} from "@/lib/universalScreenerCache";
 import { emitChartSignals } from "@/lib/chartBridge";
 import { Play, Loader2, Flame, LineChart, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
 
@@ -225,7 +231,63 @@ export default function UniversalScreener() {
   const [rows, setRows] = useState<QualifiedSetup[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastRunAt, setLastRunAt] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
+  const [loadedScopeHash, setLoadedScopeHash] = useState<string | null>(null);
+  const [loadedScopeDesc, setLoadedScopeDesc] = useState<string | null>(null);
   const cancelRef = useRef(false);
+
+  const resolvedSettings = useMemo<SweepSettings>(
+    () => ({ ...settings, enabledSignalIds: defaultEnabledSignalIds() }),
+    [settings],
+  );
+  const scopeHash = useMemo(
+    () => computeScopeHash({ tickers: universeTickers, pairList, settings: resolvedSettings }),
+    [universeTickers, pairList, resolvedSettings],
+  );
+  const scopeDescription = useMemo(() => {
+    const modeDesc =
+      universeMode === "classification" ? `${classifyDim}=${classifyVal}`
+      : universeMode === "basket" ? (baskets.find((b) => b.id === basketId)?.name ?? "basket")
+      : universeMode === "global" ? `global${globalDimVal ? ` ${globalDim}=${globalDimVal}` : ""}`
+      : "all workbook";
+    const pairsDesc = settings.mode !== "single" ? ` · ${pairList.length} pairs` : "";
+    return `${modeDesc} · ${universeTickers.length} tickers${pairsDesc}`;
+  }, [universeMode, classifyDim, classifyVal, basketId, baskets, globalDim, globalDimVal, universeTickers.length, pairList.length, settings.mode]);
+
+  // Restore the most recent cached library on mount (staleness surfaced in
+  // the header; a differing current scope shows a "Run to rebuild" note).
+  useEffect(() => {
+    let active = true;
+    loadLatest().then((lib) => {
+      if (!active || !lib) return;
+      setRows((prev) => (prev.length === 0 ? lib.rows : prev));
+      setLastRunAt(lib.builtAt);
+      setRefreshedAt(lib.refreshedAt ?? null);
+      setLoadedScopeHash(lib.scopeHash);
+      setLoadedScopeDesc(lib.scopeDescription);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const persistLibrary = useCallback(
+    (nextRows: QualifiedSetup[], builtAt: string, opts: { hash: string; desc: string; refreshed?: string }) => {
+      const lib: SweepLibrary = {
+        version: 1,
+        builtAt,
+        refreshedAt: opts.refreshed,
+        scopeHash: opts.hash,
+        scopeDescription: opts.desc,
+        universeCount: universeTickers.length,
+        pairCount: pairList.length,
+        settings: resolvedSettings,
+        rows: nextRows,
+      };
+      void saveLibrary(lib);
+      setLoadedScopeHash(opts.hash);
+      setLoadedScopeDesc(opts.desc);
+    },
+    [universeTickers.length, pairList.length, resolvedSettings],
+  );
 
   const handleRun = async () => {
     const singleCount = settings.mode === "pair" ? 0 : universeTickers.length;
@@ -237,18 +299,22 @@ export default function UniversalScreener() {
     setIsRunning(true);
     cancelRef.current = false;
     setRows([]);
-    const fullSettings: SweepSettings = { ...settings, enabledSignalIds: defaultEnabledSignalIds() };
     try {
       const finalRows = await runUniversalSweep({
         tickers: universeTickers,
         pairList,
-        settings: fullSettings,
+        settings: resolvedSettings,
         onProgress: setProgress,
         onRows: (r) => setRows((prev) => [...prev, ...r]),
         cancelRef,
       });
       setRows(finalRows);
-      setLastRunAt(new Date().toISOString());
+      const builtAt = new Date().toISOString();
+      setLastRunAt(builtAt);
+      setRefreshedAt(null);
+      if (!cancelRef.current) {
+        persistLibrary(finalRows, builtAt, { hash: scopeHash, desc: scopeDescription });
+      }
     } catch (e: any) {
       setErrorMsg(String(e?.message ?? e));
     } finally {
@@ -263,6 +329,15 @@ export default function UniversalScreener() {
     try {
       const updated = await refreshFiringStatus(rows, settings, setProgress, cancelRef);
       setRows(updated);
+      const now = new Date().toISOString();
+      setRefreshedAt(now);
+      if (loadedScopeHash && lastRunAt) {
+        persistLibrary(updated, lastRunAt, {
+          hash: loadedScopeHash,
+          desc: loadedScopeDesc ?? scopeDescription,
+          refreshed: now,
+        });
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -527,8 +602,15 @@ export default function UniversalScreener() {
           </button>
         </div>
         {lastRunAt && (
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[10px] text-muted-foreground" data-testid="uhs-staleness">
             Library built {new Date(lastRunAt).toLocaleString()}
+            {refreshedAt && ` · firing refreshed ${new Date(refreshedAt).toLocaleString()}`}
+            {loadedScopeDesc && ` · ${loadedScopeDesc}`}
+          </span>
+        )}
+        {rows.length > 0 && loadedScopeHash && loadedScopeHash !== scopeHash && !busy && (
+          <span className="text-[10px] text-yellow-500" data-testid="uhs-scope-mismatch">
+            Current scope/settings differ from the cached library — Run to rebuild.
           </span>
         )}
       </div>
