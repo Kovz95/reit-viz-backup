@@ -11,7 +11,10 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  SelectGroup,
+  SelectLabel,
 } from "@/components/ui/select";
+import { groupMetricsByCategory } from "@/lib/metricCategories";
 import { ChevronDown, ChevronUp, Plus, X, Calculator } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
 import {
@@ -39,6 +42,9 @@ export default function DefaultEpsPanel() {
     () => [...new Set(metas.flatMap((t) => t.metrics || []))].sort() as string[],
     [metas]
   );
+  // Grouped by the shared metric categorizer (same grouping as the other
+  // metric pickers across the app) so the dropdown isn't one long flat list.
+  const groupedMetrics = useMemo(() => groupMetricsByCategory(allMetrics), [allMetrics]);
 
   const valuesFor = (field: string): string[] => {
     if (field === "ticker") return metas.map((t) => t.ticker).sort();
@@ -59,9 +65,16 @@ export default function DefaultEpsPanel() {
       <SelectTrigger className="h-6 text-[11px] w-[280px]" data-testid={testId}>
         <SelectValue placeholder="metric…" />
       </SelectTrigger>
-      <SelectContent>
-        {allMetrics.map((m) => (
-          <SelectItem key={m} value={m}>{m}</SelectItem>
+      <SelectContent className="max-h-[320px]">
+        {groupedMetrics.map(({ category, metrics }) => (
+          <SelectGroup key={category}>
+            <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
+              {category}
+            </SelectLabel>
+            {metrics.map((m) => (
+              <SelectItem key={m} value={m}>{m}</SelectItem>
+            ))}
+          </SelectGroup>
         ))}
       </SelectContent>
     </Select>
