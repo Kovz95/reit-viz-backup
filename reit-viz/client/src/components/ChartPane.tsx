@@ -3637,46 +3637,81 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     }
   }, [activeTicker, chartReady, ohlcData, paneSeries, seedRestoreNonce]);
 
-  // Time range
+  // Time range — applied on button change AND re-applied when the pane's series
+  // data arrives/changes (rangeDataKey). A pane restored before its series load
+  // has an empty chart: setVisibleRange throws ("Value is null"), the fallback
+  // is a no-op, and without the re-apply the pane stays stuck on a stale window
+  // with the range buttons dead until something else reloads the series.
+  const rangeDataKey =
+    paneSeries.map((s) => `${s.id}:${s.data.length}:${s.visible}`).join("|") +
+    `|ohlc:${ohlcData?.length ?? 0}`;
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
 
-    if (timeRange === "Max") {
-      chart.timeScale().fitContent();
-      return;
-    }
-
     const now = new Date();
-    let from: Date;
+    let from: Date | null = null;
     switch (timeRange) {
       case "1Y": from = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()); break;
       case "3Y": from = new Date(now.getFullYear() - 3, now.getMonth(), now.getDate()); break;
       case "5Y": from = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate()); break;
       case "YTD": from = new Date(now.getFullYear(), 0, 1); break;
-      default: chart.timeScale().fitContent(); return;
+      default: from = null; // Max
     }
+
+    if (intraday) {
+      // Epoch-second axis in hourly mode
+      try {
+        if (from === null) {
+          chart.timeScale().fitContent();
+        } else {
+          chart.timeScale().setVisibleRange({
+            from: Math.floor(from.getTime() / 1000) as unknown as Time,
+            to: Math.floor(now.getTime() / 1000) as unknown as Time,
+          });
+        }
+      } catch {
+        try { chart.timeScale().fitContent(); } catch {}
+      }
+      return;
+    }
+
+    // Daily axis: clamp the window to the pane's REAL data extent. The spacer
+    // series spans the full global date axis, so Max via fitContent() would zoom
+    // far past the pane's own data, and an unclamped window can sit entirely on
+    // empty axis (blank pane).
+    const realTimes: string[] = [];
+    for (const s of paneSeries) {
+      if (s.visible && s.data.length) {
+        realTimes.push(String(s.data[0].time), String(s.data[s.data.length - 1].time));
+      }
+    }
+    if (ohlcData?.length) {
+      realTimes.push(String(ohlcData[0].time), String(ohlcData[ohlcData.length - 1].time));
+    }
+    if (!realTimes.length) {
+      // Nothing loaded yet — rangeDataKey re-runs this effect once data lands.
+      try { chart.timeScale().fitContent(); } catch {}
+      return;
+    }
+    realTimes.sort();
+    const first = realTimes[0];
+    const last = realTimes[realTimes.length - 1];
 
     const fmt = (d: Date) =>
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    let fromStr = from === null ? first : fmt(from);
+    let toStr = fmt(now);
+    if (fromStr < first) fromStr = first;
+    if (toStr > last) toStr = last;
+    if (fromStr > toStr) fromStr = first;
 
     try {
-      if (intraday) {
-        // Epoch-second axis in hourly mode
-        chart.timeScale().setVisibleRange({
-          from: Math.floor(from.getTime() / 1000) as unknown as Time,
-          to: Math.floor(now.getTime() / 1000) as unknown as Time,
-        });
-      } else {
-        chart.timeScale().setVisibleRange({
-          from: fmt(from) as Time,
-          to: fmt(now) as Time,
-        });
-      }
+      chart.timeScale().setVisibleRange({ from: fromStr as Time, to: toStr as Time });
     } catch {
-      chart.timeScale().fitContent();
+      try { chart.timeScale().fitContent(); } catch {}
     }
-  }, [timeRange, chartReady, intraday]);
+  }, [timeRange, chartReady, intraday, rangeDataKey]);
 
   // Resize when container changes
   useEffect(() => {
