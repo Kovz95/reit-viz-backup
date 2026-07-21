@@ -193,16 +193,25 @@ function formatValue(val: number | null, metric: string): string {
   return scaled.toFixed(4);
 }
 
-// Fixed widths (px) so the horizontal virtualizer can compute which columns are
-// on screen, size the spacer cells, and keep the total table width constant.
-const COL_W = 120;
+// Column sizing (px). Widths are computed per column so header text and the
+// widest formatted value both fit (see colWidths below); these bound the result
+// so degenerate names/values can't produce cramped or absurd columns. The
+// virtualizer works off prefix-sum offsets rather than a uniform width.
+const MIN_COL_W = 90;
+const MAX_COL_W = 380;
 const DATE_W = 128; // sticky Date / stat-label column
+// Estimated glyph widths for the two fonts in play — used to size columns
+// without measuring the DOM (the virtualizer needs widths before render).
+const HEADER_CHAR_W = 5.6; // 10px sans, font-medium
+const VALUE_CHAR_W = 6.8; // 11px mono, tabular-nums
+const HEADER_EXTRA = 34; // pin icon + gap + px-2 cell padding
+const VALUE_EXTRA = 18; // px-2 cell padding + slack
 
 // The set of metric columns currently within the horizontal viewport (plus
 // overscan), and the spacer widths standing in for the off-screen columns on
 // each side. `idx` is the column's index into displayMetrics/row.values.
 interface ColWindow {
-  cols: { m: string; idx: number }[];
+  cols: { m: string; idx: number; w: number }[];
   leftPad: number;
   rightPad: number;
 }
@@ -216,14 +225,16 @@ const DataCell = memo(function DataCell({
   value,
   metric,
   pinned,
+  w,
 }: {
   value: number | null;
   metric: string;
   pinned: boolean;
+  w: number;
 }) {
   return (
     <td
-      style={{ width: COL_W, maxWidth: COL_W }}
+      style={{ width: w, maxWidth: w }}
       className={`text-right px-2 py-0.5 font-mono tabular-nums border-b border-border/20 overflow-hidden ${pinned ? "bg-primary/5" : ""} ${value !== null && value < 0 ? "text-red-400" : ""}`}
     >
       {formatValue(value, metric)}
@@ -253,8 +264,8 @@ const DataRow = memo(function DataRow({ row, colWindow, pinnedMetrics, rowHeight
         {row.date}
       </td>
       {leftPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: leftPad }} />}
-      {cols.map(({ m, idx }) => (
-        <DataCell key={idx} value={row.values[idx]} metric={m} pinned={pinnedMetrics.has(m)} />
+      {cols.map(({ m, idx, w }) => (
+        <DataCell key={idx} value={row.values[idx]} metric={m} pinned={pinnedMetrics.has(m)} w={w} />
       ))}
       {rightPad > 0 && <td aria-hidden className="p-0 border-0" style={{ width: rightPad }} />}
     </tr>
@@ -295,7 +306,6 @@ export default function DataExplorer() {
   const ROW_HEIGHT = 20;
   const OVERSCAN = 8;
   const COL_OVERSCAN = 2;
-  const COL_BLOCK = 3; // re-window (and re-render) only every N columns of h-scroll
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
@@ -643,29 +653,61 @@ export default function DataExplorer() {
 
   const activeMeta = tickers.find((t) => t.ticker === activeTicker);
 
+  // Per-column widths, auto-fit to content: the wider of the header label and
+  // the longest formatted value in the column (estimated from the extreme raw
+  // values — formatValue length grows monotonically with magnitude, and the
+  // most-negative value carries the sign). Prefix-sum offsets feed the
+  // horizontal virtualizer, which no longer assumes a uniform width.
+  const { colWidths, colOffsets } = useMemo(() => {
+    const widths: number[] = new Array(displayMetrics.length);
+    for (let i = 0; i < displayMetrics.length; i++) {
+      const m = displayMetrics[i];
+      const headerW = m.length * HEADER_CHAR_W + HEADER_EXTRA;
+      let lo = 0;
+      let hi = 0;
+      const pairs = rawData[m];
+      if (pairs) {
+        for (const [, v] of pairs) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+      const valueChars = Math.max(formatValue(lo, m).length, formatValue(hi, m).length);
+      const valueW = valueChars * VALUE_CHAR_W + VALUE_EXTRA;
+      widths[i] = Math.round(Math.min(MAX_COL_W, Math.max(MIN_COL_W, headerW, valueW)));
+    }
+    const offsets: number[] = new Array(widths.length + 1);
+    offsets[0] = 0;
+    for (let i = 0; i < widths.length; i++) offsets[i + 1] = offsets[i] + widths[i];
+    return { colWidths: widths, colOffsets: offsets };
+  }, [displayMetrics, rawData]);
+
   // Horizontal virtualization: which metric columns are on screen right now.
-  // colStart/colEnd are quantized to whole columns, and colWindow is memoized on
-  // them (NOT raw scrollLeft) so it keeps a STABLE reference while you scroll
-  // within a column — the browser native-scrolls those pixels and we only
-  // re-render when a column boundary is crossed. The overscan covers the sticky
-  // Date column's width, so the window never drops a genuinely-visible column.
+  // colStart/colEnd are quantized (via a pixel block on scrollLeft), and
+  // colWindow is memoized on them (NOT raw scrollLeft) so it keeps a STABLE
+  // reference while you scroll within a block — the browser native-scrolls
+  // those pixels and we only re-render when a block boundary is crossed. The
+  // overscan covers the sticky Date column's width, so the window never drops
+  // a genuinely-visible column.
   const nMetrics = displayMetrics.length;
-  // Quantize the window to blocks of COL_BLOCK columns so colStart/colEnd only
-  // change once every few columns of horizontal scroll (the browser native-
-  // scrolls the pixels between re-renders). Rendered width = block + viewport +
-  // 2·overscan columns — barely wider than a tight window, so vertical stays cheap.
-  const visCols = Math.ceil(containerWidth / COL_W);
-  const colBlock = Math.floor(scrollLeft / (COL_W * COL_BLOCK)) * COL_BLOCK;
-  const colStart = Math.max(0, colBlock - COL_OVERSCAN);
-  const colEnd = Math.min(nMetrics, colBlock + COL_BLOCK + visCols + COL_OVERSCAN);
+  const totalColsW = colOffsets[nMetrics] ?? 0;
+  const BLOCK_PX = 360; // re-window only every ~3 typical columns of h-scroll
+  const qLeft = Math.floor(scrollLeft / BLOCK_PX) * BLOCK_PX;
+  let firstVis = 0;
+  while (firstVis < nMetrics && colOffsets[firstVis + 1] <= qLeft) firstVis++;
+  const rightEdge = qLeft + BLOCK_PX + containerWidth;
+  let lastVis = firstVis;
+  while (lastVis < nMetrics && colOffsets[lastVis] < rightEdge) lastVis++;
+  const colStart = Math.max(0, firstVis - COL_OVERSCAN);
+  const colEnd = Math.min(nMetrics, lastVis + COL_OVERSCAN);
   const colWindow = useMemo<ColWindow>(() => {
-    const cols: { m: string; idx: number }[] = [];
-    for (let i = colStart; i < colEnd; i++) cols.push({ m: displayMetrics[i], idx: i });
-    return { cols, leftPad: colStart * COL_W, rightPad: (nMetrics - colEnd) * COL_W };
-  }, [displayMetrics, colStart, colEnd, nMetrics]);
+    const cols: { m: string; idx: number; w: number }[] = [];
+    for (let i = colStart; i < colEnd; i++) cols.push({ m: displayMetrics[i], idx: i, w: colWidths[i] });
+    return { cols, leftPad: colOffsets[colStart], rightPad: totalColsW - colOffsets[colEnd] };
+  }, [displayMetrics, colStart, colEnd, colWidths, colOffsets, totalColsW]);
   // Full scrollable content width (all columns), independent of what's rendered,
   // so the horizontal scrollbar stays put while columns virtualize in and out.
-  const tableWidth = DATE_W + nMetrics * COL_W;
+  const tableWidth = DATE_W + totalColsW;
 
   // Virtual scroll
   const totalRows = tableRows.length;
@@ -689,12 +731,12 @@ export default function DataExplorer() {
             Date
           </th>
           {colWindow.leftPad > 0 && <td aria-hidden className="bg-card border-b border-border" style={{ width: colWindow.leftPad }} />}
-          {colWindow.cols.map(({ m }) => (
+          {colWindow.cols.map(({ m, w }) => (
             <th
               key={m}
               title={m}
               className="text-right px-2 py-1.5 font-medium border-b border-border whitespace-nowrap group cursor-default bg-card overflow-hidden"
-              style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null) }}
+              style={{ width: w, maxWidth: w, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null) }}
             >
               <div className="flex items-center justify-end gap-1">
                 <button
@@ -781,12 +823,12 @@ export default function DataExplorer() {
                 </div>
               </th>
               {colWindow.leftPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.leftPad }} />}
-              {colWindow.cols.map(({ m, idx }) => {
+              {colWindow.cols.map(({ m, idx, w }) => {
                 const s = columnStats[idx];
                 return (
                   <td
                     key={idx}
-                    style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(0.6)) }}
+                    style={{ width: w, maxWidth: w, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(0.6)) }}
                     className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/90 whitespace-nowrap bg-card overflow-hidden transition-[filter] group-hover/sttoggle:brightness-125 ${statsExpanded ? "border-b border-border/20" : "border-b-2 border-b-border"}`}
                   >
                     {!statsExpanded && s ? formatStat(s, previewStat, m) : ""}
@@ -814,12 +856,12 @@ export default function DataExplorer() {
                       {sr.label}
                     </th>
                     {colWindow.leftPad > 0 && <td aria-hidden className="bg-card" style={{ width: colWindow.leftPad }} />}
-                    {colWindow.cols.map(({ m, idx }) => {
+                    {colWindow.cols.map(({ m, idx, w }) => {
                       const s = columnStats[idx];
                       return (
                         <td
                           key={idx}
-                          style={{ width: COL_W, maxWidth: COL_W, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(isMedian ? 0.8 : 0.4)) }}
+                          style={{ width: w, maxWidth: w, backgroundImage: cellTint(pinnedMetrics.has(m) ? primaryTint(0.05) : null, mutedTint(isMedian ? 0.8 : 0.4)) }}
                           className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card overflow-hidden ${isMedian ? "text-foreground font-medium" : "text-muted-foreground/90"} ${isLast ? "border-b border-b-border/60" : "border-b border-border/20"}`}
                         >
                           {s ? formatStat(s, sr.key, m) : ""}
@@ -860,7 +902,7 @@ export default function DataExplorer() {
                         style={{ width: colWindow.leftPad }}
                       />
                     )}
-                    {colWindow.cols.map(({ m, idx }) => {
+                    {colWindow.cols.map(({ m, idx, w }) => {
                       const s = columnStats[idx];
                       const pct = s?.percentile ?? null;
                       const heatColor = pctHeatColor(pct);
@@ -878,8 +920,8 @@ export default function DataExplorer() {
                           key={idx}
                           className={`text-right px-2 py-0.5 font-mono text-[10px] tabular-nums whitespace-nowrap bg-card overflow-hidden ${isCurrent ? "border-t border-t-border/60" : ""} ${isLast ? "border-b-2 border-b-border" : "border-b border-border/20"} ${weight} ${base}`}
                           style={{
-                            width: COL_W,
-                            maxWidth: COL_W,
+                            width: w,
+                            maxWidth: w,
                             color: heatColor,
                             backgroundImage: cellTint(
                               heatBg,
