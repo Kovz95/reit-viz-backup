@@ -199,7 +199,9 @@ export default function ValuationRerateResidence() {
       skipFirstYear: true,
     });
     const vals = series.map((p) => p.value);
-    const trailing = lookbackDays < vals.length ? vals.slice(-lookbackDays) : vals;
+    // Match the residence basis: expanding judges vs ALL history, trailing vs
+    // the window — so Rich% and the re-rate stats share one reference frame.
+    const trailing = basis === "expanding" || lookbackDays >= vals.length ? vals : vals.slice(-lookbackDays);
     const rr = buildRerateRow(meta, trailing, pctMove, metric);
     if (!rr && !res) return null;
     return { rr, res };
@@ -705,7 +707,7 @@ export default function ValuationRerateResidence() {
                 <div><div className="text-[10px] uppercase text-muted-foreground">Now</div><div className="text-lg font-mono">{fmtVal(rr?.m0 ?? res?.m0)}</div></div>
                 <div><div className="text-[10px] uppercase text-muted-foreground">Richness</div><div className={`text-lg font-mono ${richColor(rich)}`}>{fmtPct(rich)}</div></div>
                 <div><div className="text-[10px] uppercase text-muted-foreground">After {fmtMove(pctMove)}</div><div className={`text-lg font-mono ${richColor(pfRich)}`}>{fmtPct(pfRich)}{res?.proFormaUnprecedented && <span className="ml-1 text-[10px] text-red-400 font-bold align-middle">ATH</span>}</div></div>
-                <div><div className="text-[10px] uppercase text-muted-foreground">Seen this rich</div><div className="text-lg font-mono text-muted-foreground">{fmtPct(res?.proFormaFreqRicher)}%<span className="text-[10px]"> of history</span></div></div>
+                <div><div className="text-[10px] uppercase text-muted-foreground">Seen this rich</div><div className="text-lg font-mono text-muted-foreground">{res ? <>{fmtPct(res.proFormaFreqRicher)}%<span className="text-[10px]"> of history</span></> : "—"}</div></div>
               </div>
 
               {/* Re-rate room */}
