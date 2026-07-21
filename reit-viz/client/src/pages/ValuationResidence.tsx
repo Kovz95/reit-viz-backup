@@ -456,14 +456,14 @@ export default function ValuationResidence() {
                 <button key={bss} type="button" onClick={() => setPairBasis(bss)}
                   data-testid={`residence-basis-${bss}`}
                   className={`px-2.5 text-xs font-medium ${pairBasis === bss ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
-                  {bss === "price" ? "Price" : "Multiple"}
+                  {bss === "price" ? "Price" : "Metric"}
                 </button>
               ))}
             </div>
           </div>
         )}
         <div className={pairMode && pairBasis === "price" ? "opacity-40 pointer-events-none" : ""}>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Multiple (for ratio)" : "Multiples"}</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Metric (for ratio)" : "Metrics"}</div>
           <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
         <div>
@@ -485,8 +485,8 @@ export default function ValuationResidence() {
             </SelectContent>
           </Select>
         </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Price move %</div>
+        <div title="For valuation multiples this is a PRICE move (the metric re-rates with it). For any other metric, read it as a move in the metric itself.">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Move %</div>
           <Input type="number" value={pctMove} onChange={(e) => setPctMove(Number(e.target.value))} className="h-7 w-20 text-xs" step={5} />
         </div>
         <div>
@@ -542,8 +542,8 @@ export default function ValuationResidence() {
       <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-b border-border flex items-start gap-1.5">
         <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
         <span>
-          Percentiles are <b>richness</b> (100 = most expensive ever, 0 = cheapest), as-of each date ({basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding / all history"}).
-          {" "}<b>+{pctMove}%</b> = pro-forma richness after the move (<b>ATH</b> = never been this rich). <b>Fwd@90 / Fwd@10</b> = median {hLabel} forward price return on days the multiple was in the rich (≥90) / cheap (≤10) tail; <b>Edge</b> = rich-tail minus the unconditional baseline. Forward returns are price-only and use overlapping windows; <b className="text-amber-400/80">dimmed values (*)</b> have fewer than {MIN_TAIL_N} tail days — low confidence, and they sink to the bottom when you sort by a forward-return column.
+          Percentiles are <b>richness</b> (100 = highest/most expensive ever, 0 = lowest/cheapest; inverted for yields), as-of each date ({basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding / all history"}).
+          {" "}<b>+{pctMove}%</b> = pro-forma richness after the move (<b>ATH</b> = never been this rich). <b>Fwd@90 / Fwd@10</b> = median {hLabel} forward price return on days the metric was in the rich (≥90) / cheap (≤10) tail; <b>Edge</b> = rich-tail minus the unconditional baseline. Forward returns are price-only and use overlapping windows; <b className="text-amber-400/80">dimmed values (*)</b> have fewer than {MIN_TAIL_N} tail days — low confidence, and they sink to the bottom when you sort by a forward-return column.
         </span>
       </div>
 
@@ -571,7 +571,7 @@ export default function ValuationResidence() {
           </thead>
           <tbody>
             {isLoading && <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">Computing residence across the universe…</td></tr>}
-            {!isLoading && visible.length === 0 && <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiples / universe.</td></tr>}
+            {!isLoading && visible.length === 0 && <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">No data for the selected metrics / universe.</td></tr>}
             {!isLoading && !grouped && visible.map(renderRow)}
             {!isLoading && grouped && grouped.map(([name, gr]) => (
               <Fragment key={name}>

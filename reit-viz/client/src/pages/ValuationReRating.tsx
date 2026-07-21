@@ -321,13 +321,13 @@ export default function ValuationReRating() {
   // The 10 stat headers for one metric's column group.
   const metricHeaderCells = (m: RerateMetric) => (
     <>
-      <Th col="m0" label="Now" title="Current multiple" metricKey={m.key} sep />
-      <Th col="nowPctile" label="%ile" title="Where the current multiple sits in its history (0=low, 100=high)" metricKey={m.key} />
-      <Th col="nowZ" label="z" title="Current multiple z-score vs history" metricKey={m.key} />
-      <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma multiple after a ${fmtMove(pctMove)} price move`} metricKey={m.key} />
-      <Th col="proFormaPctile" label="%ile" title="Pro-forma multiple's historical percentile" metricKey={m.key} />
-      <Th col="proFormaZ" label="z" title="Pro-forma multiple z-score" metricKey={m.key} />
-      <Th col="toMedian" label="→Med" title="Implied % price move to re-rate to the historical median multiple" metricKey={m.key} />
+      <Th col="m0" label="Now" title="Current value" metricKey={m.key} sep />
+      <Th col="nowPctile" label="%ile" title="Where the current value sits in its history (0=low, 100=high)" metricKey={m.key} />
+      <Th col="nowZ" label="z" title="Current z-score vs history" metricKey={m.key} />
+      <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma value after a ${fmtMove(pctMove)} move`} metricKey={m.key} />
+      <Th col="proFormaPctile" label="%ile" title="Pro-forma value's historical percentile" metricKey={m.key} />
+      <Th col="proFormaZ" label="z" title="Pro-forma z-score" metricKey={m.key} />
+      <Th col="toMedian" label="→Med" title="Implied % move to re-rate to the historical median" metricKey={m.key} />
       <Th col="toRich" label="↑Rich" title="Implied % move to the rich end of history (upside room)" metricKey={m.key} />
       <Th col="toCheap" label="↓Cheap" title="Implied % move to the cheap end of history (downside risk)" metricKey={m.key} />
       <Th col="rr" label="R:R" title="Reward/risk = upside ÷ |downside|" metricKey={m.key} />
@@ -421,18 +421,18 @@ export default function ValuationReRating() {
                 <button key={bss} type="button" onClick={() => setPairBasis(bss)}
                   data-testid={`rerate-basis-${bss}`}
                   className={`px-2.5 text-xs font-medium ${pairBasis === bss ? "bg-sky-500/20 text-sky-200" : "text-muted-foreground hover:bg-accent"}`}>
-                  {bss === "price" ? "Price" : "Multiple"}
+                  {bss === "price" ? "Price" : "Metric"}
                 </button>
               ))}
             </div>
           </div>
         )}
         <div className={pairMode && pairBasis === "price" ? "opacity-40 pointer-events-none" : ""}>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Multiple (for ratio)" : "Multiples"}</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Metric (for ratio)" : "Metrics"}</div>
           <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Price move %</div>
+        <div title="For valuation multiples this is a PRICE move (the metric re-rates with it). For any other metric, read it as a move in the metric itself.">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Move %</div>
           <Input
             type="number" value={pctMove}
             onChange={(e) => setPctMove(Number(e.target.value))}
@@ -499,10 +499,10 @@ export default function ValuationReRating() {
       <div className="px-3 py-1.5 text-[11px] text-muted-foreground border-b border-border flex items-start gap-1.5">
         <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
         <span>
-          <b>Pro-forma</b> = the multiple if price moves {fmtMove(pctMove)}, with its percentile/z vs the stock's own {LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? ""} history.
-          {" "}<b>→Median / ↑Rich / ↓Cheap</b> = implied % price move to re-rate to that historical level — your upside/downside room.
+          <b>Pro-forma</b> = the metric after a {fmtMove(pctMove)} move (a price move for valuation multiples; a move in the metric itself for anything else), with its percentile/z vs the stock's own {LOOKBACKS.find((l) => l.days === lookbackDays)?.label ?? ""} history.
+          {" "}<b>→Median / ↑Rich / ↓Cheap</b> = implied % move to re-rate to that historical level — your upside/downside room.
           {effMetrics.some((m) => m.approx) && <em className="text-amber-400"> EV-based multiples assume EV moves with equity (ignores leverage) — approximate.</em>}
-          {pairMode && <em className="text-sky-300/80"> Pairs: each row is the A/B {pairBasis === "price" ? "price" : "multiple"} ratio; ↑Rich / ↓Cheap are implied relative moves to re-rate the ratio to its own extremes.</em>}
+          {pairMode && <em className="text-sky-300/80"> Pairs: each row is the A/B {pairBasis === "price" ? "price" : "metric"} ratio; ↑Rich / ↓Cheap are implied relative moves to re-rate the ratio to its own extremes.</em>}
         </span>
       </div>
 
@@ -544,7 +544,7 @@ export default function ValuationReRating() {
               <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {!isLoading && visible.length === 0 && (
-              <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">No data for the selected multiples / universe.</td></tr>
+              <tr><td colSpan={totalCols} className="px-3 py-6 text-center text-muted-foreground">No data for the selected metrics / universe.</td></tr>
             )}
             {!isLoading && !grouped && visible.map(renderRow)}
             {!isLoading && grouped && grouped.map(([groupName, groupRows]) => (

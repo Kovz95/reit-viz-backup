@@ -1,5 +1,3 @@
-import { categorizeMetric } from "@/lib/metricCategories";
-
 // Valuation re-rating math for the Re-Rating tab.
 //
 // Idea: a valuation multiple = Price / Fundamental (or Fundamental / Price for a
@@ -87,20 +85,18 @@ export function getRerateMetric(key: string): RerateMetric {
 
 /**
  * Full re-rating metric list: the curated set (nice labels + FY1 derived
- * variants + yields) unioned with every valuation/yield metric present in the
- * ticker data, so the dropdown offers ALL valuation multiples, not just 15.
- * Data-only metrics (P/S, P/B, EV/S, P/FCF, FCF/EV, Implied cap rate, …) are
- * added with inferred orientation. Curated entries win on key collisions.
+ * variants + yields) unioned with EVERY metric present in the ticker data —
+ * the percentile / z-score / residence machinery is metric-agnostic, so the
+ * Re-Rating and Residence pages run over any metric, not just valuation
+ * multiples. Non-curated metrics get inferred orientation (yields/cap-rates
+ * invert; everything else is direct with low = "cheap"). Curated entries win
+ * on key collisions.
  */
 export function buildRerateMetrics(availableKeys: string[]): RerateMetric[] {
   const out: RerateMetric[] = [...RERATE_METRICS];
   const seen = new Set(out.map((m) => m.key));
   for (const key of availableKeys) {
     if (seen.has(key)) continue;
-    // Only valuation-family metrics belong here. categorizeMetric puts price
-    // multiples under "Valuation" and yields/cap-rate under "Yields".
-    const cat = categorizeMetric(key);
-    if (cat !== "Valuation" && cat !== "Yields") continue;
     seen.add(key);
     out.push(inferRerateMetric(key));
   }
@@ -221,6 +217,11 @@ export interface RerateRow extends RerateClassification {
   toRich: number;
 }
 
+// Implied moves beyond ±10,000% (100×) carry no decision value and are almost
+// always a data artifact (e.g. a near-zero denominator spiking one history
+// point) — show "—" instead.
+const saneMove = (v: number): number => (Math.abs(v) > 10000 ? NaN : v);
+
 /**
  * Build a re-rating row from a ticker's trailing multiple history.
  * Returns null if there isn't enough history.
@@ -238,7 +239,16 @@ export function buildRerateRow(
   const stats = distStats(finite);
   if (!stats) return null;
 
-  const proForma = proFormaMultiple(m0, pctMove, metric.dir);
+  // Multiplicative re-rating (pro-forma & implied moves) is only defined on a
+  // strictly positive scale. Metrics that cross or touch zero (growth rates,
+  // spreads, deltas…) keep their rank stats (percentile / z) but the
+  // ratio-based stats would explode near zero — suppress them instead.
+  const positiveScale = stats.min > 0;
+  // A near-constant history leaves std as float noise — z-scores against it are
+  // meaningless (they explode into the trillions for any real move).
+  const degenerate = !(stats.std > Math.max(Math.abs(stats.mean), 1e-6) * 1e-9);
+
+  const proForma = positiveScale ? proFormaMultiple(m0, pctMove, metric.dir) : NaN;
   // Cheap / rich extremes depend on orientation: for P/x multiples the cheap
   // end is the LOW multiple (p10) and rich end is the HIGH multiple (p90);
   // for yields/cap-rate it's flipped.
@@ -257,12 +267,12 @@ export function buildRerateRow(
     m0,
     stats,
     nowPctile: percentileRank(m0, finite),
-    nowZ: zScore(m0, stats.mean, stats.std),
+    nowZ: degenerate ? NaN : zScore(m0, stats.mean, stats.std),
     proForma,
-    proFormaPctile: percentileRank(proForma, finite),
-    proFormaZ: zScore(proForma, stats.mean, stats.std),
-    toMedian: impliedMoveToMultiple(m0, stats.median, metric.dir),
-    toCheap: impliedMoveToMultiple(m0, cheapTarget, metric.dir),
-    toRich: impliedMoveToMultiple(m0, richTarget, metric.dir),
+    proFormaPctile: positiveScale ? Math.min(100, percentileRank(proForma, finite)) : NaN,
+    proFormaZ: positiveScale && !degenerate ? zScore(proForma, stats.mean, stats.std) : NaN,
+    toMedian: positiveScale ? saneMove(impliedMoveToMultiple(m0, stats.median, metric.dir)) : NaN,
+    toCheap: positiveScale ? saneMove(impliedMoveToMultiple(m0, cheapTarget, metric.dir)) : NaN,
+    toRich: positiveScale ? saneMove(impliedMoveToMultiple(m0, richTarget, metric.dir)) : NaN,
   };
 }
