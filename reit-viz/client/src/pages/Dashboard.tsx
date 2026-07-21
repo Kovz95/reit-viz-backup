@@ -585,11 +585,13 @@ export default function Dashboard() {
     // Re-fetch data for all non-uploaded, non-derived series with empty data.
     // (BASKET: series persist their data inline, so they normally skip this;
     //  the basket-aware getMetricSeriesResolved handles any that are empty.)
+    // close/open/high/low are included: candlestick panes render from ohlcCache,
+    // but line/L+Dot panes and the Data Table read the series' own data, so a
+    // restored workspace in line mode stays blank until these are refilled.
     const seriesToFetch = stateSeries.filter(
       (s: any) => !s.id.startsWith("uploaded:") && !s.metric.startsWith("xl:") && !SYNTHETIC_TICKERS.has(s.ticker) && (!s.data || s.data.length === 0)
     );
     for (const s of seriesToFetch) {
-      if (s.metric === "close" || s.metric === "open" || s.metric === "high" || s.metric === "low") continue;
       if (s.id.startsWith("macro:")) {
         const macroId = s.id.replace("macro:", "");
         fetch(`data/macro/${macroId}.json`)
