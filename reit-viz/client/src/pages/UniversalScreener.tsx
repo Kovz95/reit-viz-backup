@@ -237,7 +237,11 @@ export default function UniversalScreener() {
   const cancelRef = useRef(false);
 
   const resolvedSettings = useMemo<SweepSettings>(
-    () => ({ ...settings, enabledSignalIds: defaultEnabledSignalIds() }),
+    () => ({
+      ...settings,
+      enabledSignalIds:
+        settings.enabledSignalIds.length > 0 ? settings.enabledSignalIds : defaultEnabledSignalIds(),
+    }),
     [settings],
   );
   const scopeHash = useMemo(
@@ -346,6 +350,7 @@ export default function UniversalScreener() {
   // ── View + sort ────────────────────────────────────────────────────────────
   const [view, setView] = useState<"firing" | "library">("firing");
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [signalPickerOpen, setSignalPickerOpen] = useState(false);
   const sort = useTableSort<QualifiedSetup>("hitRate", "desc", "desc", "universal-screener");
 
   const visibleRows = useMemo(() => {
@@ -538,6 +543,57 @@ export default function UniversalScreener() {
               onChange={(e) => set("firingLookbackBars", Math.max(1, Math.round(parseFloat(e.target.value) || 1)))}
               className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-lookback" />
           </label>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSignalPickerOpen((o) => !o)}
+              data-testid="uhs-signals-toggle"
+              className="text-[10px] font-mono px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+            >
+              Signals ({resolvedSettings.enabledSignalIds.length}/{UNIVERSAL_SIGNAL_CATALOG.length})
+            </button>
+            {signalPickerOpen && (
+              <div className="absolute left-0 top-full mt-1 z-30 bg-card border border-border rounded shadow-lg p-2 w-[340px] max-h-[380px] overflow-auto text-[11px]" data-testid="uhs-signals-popover">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-[10px] uppercase tracking-wider text-muted-foreground">Signals in sweep</span>
+                  <button type="button" className="text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => set("enabledSignalIds", [])}>
+                    Reset to defaults
+                  </button>
+                </div>
+                {(Object.keys(FAMILY_LABELS) as SignalFamily[]).map((f) => {
+                  const sigs = UNIVERSAL_SIGNAL_CATALOG.filter((s) => s.family === f);
+                  if (sigs.length === 0) return null;
+                  return (
+                    <div key={f} className="mb-1.5">
+                      <div className="text-[10px] font-bold text-muted-foreground">{FAMILY_LABELS[f]}</div>
+                      {sigs.map((s) => {
+                        const on = resolvedSettings.enabledSignalIds.includes(s.id);
+                        return (
+                          <label key={s.id} className="flex items-center gap-1.5 py-0.5 cursor-pointer hover:text-foreground">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => {
+                                const cur = new Set(resolvedSettings.enabledSignalIds);
+                                if (cur.has(s.id)) cur.delete(s.id); else cur.add(s.id);
+                                set("enabledSignalIds", [...cur]);
+                              }}
+                            />
+                            <span>{s.label}</span>
+                            {s.costly && <span className="text-[9px] text-yellow-500">(slow)</span>}
+                            <span className="ml-auto text-[9px] text-muted-foreground">
+                              {s.paramPresets.length}×{s.directions.length}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {settings.mode !== "single" && (
             <label className="flex items-center gap-1 text-muted-foreground">
               Pair cohort
