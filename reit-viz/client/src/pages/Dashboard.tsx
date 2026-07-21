@@ -614,14 +614,28 @@ export default function Dashboard() {
     }
   }, [resolveBasket]);
 
+  // Set when the page was entered via a cross-page ?ticker= navigation (gap
+  // screener, Ranking, etc.). The async workspace restore must NOT clobber that
+  // navigation: bumping paneGeneration would abort the target ticker's in-flight
+  // load, and the saved panes/activeTicker would put the previous ticker back.
+  const navIntentRef = useRef<string | null>(null);
+
   const restoreCharts = useCallback((state: any) => {
     if (!state) return;
-    paneGeneration++;
-    if (state.nextPaneId) nextPaneId = state.nextPaneId;
-    if (state.panes) setPanes(state.panes);
-    if (state.activeTicker) setActiveTicker(state.activeTicker);
+    const navPending = navIntentRef.current !== null;
+    if (navPending) navIntentRef.current = null;
+    if (!navPending) {
+      paneGeneration++;
+      if (state.nextPaneId) nextPaneId = state.nextPaneId;
+      if (state.panes) setPanes(state.panes);
+      if (state.activeTicker) setActiveTicker(state.activeTicker);
+      if (state.activeView) setActiveView(state.activeView);
+      if (state.plottedSeries) {
+        setPlottedSeries(state.plottedSeries);
+        refetchSeriesData(state.plottedSeries);
+      }
+    }
     if (state.chartConfig) setChartConfig(state.chartConfig);
-    if (state.activeView) setActiveView(state.activeView);
     if (state.uploadedSheets) {
       setFundamentalSheets(state.uploadedSheets);
     }
@@ -629,10 +643,6 @@ export default function Dashboard() {
     if (state.layoutMode) setLayoutMode(state.layoutMode);
     if (state.indicatorsMap) setIndicatorsMap(state.indicatorsMap);
     setColorByMap(state.colorByMap && typeof state.colorByMap === "object" ? state.colorByMap : {});
-    if (state.plottedSeries) {
-      setPlottedSeries(state.plottedSeries);
-      refetchSeriesData(state.plottedSeries);
-    }
   }, [refetchSeriesData]);
 
   // Register with workspace tab system so charts state is auto-saved/loaded
@@ -1556,6 +1566,7 @@ export default function Dashboard() {
     const t = params.get("ticker");
     if (t) {
       pendingTickerRef.current = t;
+      navIntentRef.current = t;
       // Clean up URL param immediately
       const url = new URL(window.location.href);
       url.searchParams.delete("ticker");

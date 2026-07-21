@@ -36,12 +36,24 @@ interface GapRow {
   gapDate: string;
   gapSizePct: number;   // size of the gap itself, %
   fillLevel: number;    // adjusted price that closes the gap
+  farLevel?: number;    // the gap's other edge (up: gap day's low; down: gap day's high)
   currentPrice: number; // last adjusted close
   pctToFill: number;    // (fillLevel / currentPrice − 1) × 100
   daysOpen: number;     // trading bars since the gap (to fill date when filled)
   filled: boolean;
   fillDate: string | null;
 }
+
+/** The gap's far edge; derived from gapSizePct for rows saved before farLevel existed. */
+function gapFarLevel(row: GapRow): number {
+  if (Number.isFinite(row.farLevel)) return row.farLevel as number;
+  return row.direction === "up"
+    ? row.fillLevel * (1 + row.gapSizePct / 100)
+    : row.fillLevel * (1 - row.gapSizePct / 100);
+}
+
+/** Stable identity for row selection across sorts. */
+const rowKey = (row: GapRow) => `${row.ticker}|${row.gapDate}|${row.direction}`;
 
 interface SkippedEntry { ticker: string; reason: string; }
 
@@ -186,6 +198,7 @@ export default function GapFillScreener() {
             gapDate: dates[t],
             gapSizePct,
             fillLevel,
+            farLevel: direction === "up" ? curLow : curHigh,
             currentPrice,
             pctToFill: (fillLevel / currentPrice - 1) * 100,
             daysOpen: (filled ? fillIdx : n - 1) - t,
@@ -226,26 +239,53 @@ export default function GapFillScreener() {
   const openCount = results.filter((r) => !r.filled).length;
   const tickerCount = useMemo(() => new Set(results.map((r) => r.ticker)).size, [results]);
 
-  // ── Send fill level to Charts as a horizontal overlay (same handoff as Levels).
-  const sendToCharts = useCallback((row: GapRow) => {
+  // ── Multi-select for sending several gaps at once.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const toggleSelected = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
+
+  // ── Send gaps to Charts as shaded gap zones (fill level + far edge + band).
+  // Accepts any number of rows, possibly across tickers: seeds are written per
+  // ticker and the chart opens on the first row's ticker — the other tickers'
+  // zones appear when you switch to them.
+  const sendToCharts = useCallback((rowsToSend: GapRow[]) => {
+    if (rowsToSend.length === 0) return;
     try {
-      const primary = row.ticker.toUpperCase();
-      const payload = [{
-        type: "horizontal", price: row.fillLevel, maType: null, maPeriod: null, fibLevel: null,
-        touchCount: 0, bounceReverseRate: 0, holdRate: 0, compositeScore: Math.min(1, row.gapSizePct / 10),
-        futureBars: 60, createdAt: Date.now(),
-      }];
+      const byTicker = new Map<string, GapRow[]>();
+      for (const row of rowsToSend) {
+        const t = row.ticker.toUpperCase();
+        if (!byTicker.has(t)) byTicker.set(t, []);
+        byTicker.get(t)!.push(row);
+      }
       for (const key of ["reit-viz-srlevel-seeds-v1", "reit-viz-srlevel-persistent-v1"]) {
         const raw = localStorage.getItem(key);
         let store: Record<string, any[]> = {};
         try { store = raw ? JSON.parse(raw) : {}; } catch { store = {}; }
-        const existing = Array.isArray(store[primary]) ? store[primary] : [];
-        existing.push(...payload);
-        store[primary] = existing;
+        for (const [ticker, tickerRows] of byTicker) {
+          const existing = Array.isArray(store[ticker]) ? store[ticker] : [];
+          existing.push(...tickerRows.map((row) => ({
+            type: "gapzone", price: row.fillLevel, price2: gapFarLevel(row),
+            direction: row.direction, gapDate: row.gapDate,
+            maType: null, maPeriod: null, fibLevel: null,
+            touchCount: 0, bounceReverseRate: 0, holdRate: 0,
+            compositeScore: Math.min(1, row.gapSizePct / 10),
+            futureBars: 60, createdAt: Date.now(),
+          })));
+          store[ticker] = existing;
+        }
         localStorage.setItem(key, JSON.stringify(store));
       }
+      const primary = rowsToSend[0].ticker.toUpperCase();
       const toast = document.createElement("div");
-      toast.textContent = `Sent gap-fill level $${row.fillLevel.toFixed(2)} for ${primary} → Charts`;
+      toast.textContent =
+        rowsToSend.length === 1
+          ? `Sent gap zone $${rowsToSend[0].fillLevel.toFixed(2)} for ${primary} → Charts`
+          : `Sent ${rowsToSend.length} gap zones (${byTicker.size} ticker${byTicker.size > 1 ? "s" : ""}) → Charts`;
       toast.className = "fixed top-4 right-4 z-50 px-3 py-2 rounded bg-cyan-500/20 text-cyan-300 text-xs font-mono border border-cyan-500/40 shadow-lg";
       document.body.appendChild(toast);
       setTimeout(() => toast.remove(), 2500);
@@ -357,6 +397,14 @@ export default function GapFillScreener() {
               {includeFilled && results.length > openCount && (<span className="ml-2 text-[10px] text-muted-foreground">(+{results.length - openCount} filled)</span>)}
               {skipped.length > 0 && (<span className="ml-2 text-[10px] text-muted-foreground">({skipped.length} skipped)</span>)}
             </span>
+            <button
+              onClick={() => sendToCharts(sortedResults.filter((r) => selectedKeys.has(rowKey(r))))}
+              disabled={selectedKeys.size === 0}
+              className="px-2 py-0.5 rounded text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="gapfill-send-selected"
+              title="Draw every checked gap on the Charts tab as a shaded zone">
+              → Charts ({selectedKeys.size})
+            </button>
             <button onClick={exportCsv} disabled={sortedResults.length === 0}
               className="mx-2 px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80 disabled:opacity-40 disabled:cursor-not-allowed"
               data-testid="gapfill-export-csv">
@@ -370,6 +418,17 @@ export default function GapFillScreener() {
               <table className="w-full text-[11px]">
                 <thead className="bg-card/40 sticky top-0">
                   <tr>
+                    <th className="px-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={sortedResults.length > 0 && sortedResults.every((r) => selectedKeys.has(rowKey(r)))}
+                        onChange={(e) =>
+                          setSelectedKeys(e.target.checked ? new Set(sortedResults.map(rowKey)) : new Set())
+                        }
+                        title="Select all"
+                        data-testid="gapfill-select-all"
+                      />
+                    </th>
                     <th className="text-left px-2 py-1 font-mono"><SortHeader label="Ticker" columnKey="ticker" sort={sort} /></th>
                     <th className="text-left px-2 py-1 font-mono"><SortHeader label="Dir" columnKey="direction" sort={sort} /></th>
                     <th className="text-left px-2 py-1 font-mono"><SortHeader label="Gap date" columnKey="gapDate" sort={sort} /></th>
@@ -384,6 +443,14 @@ export default function GapFillScreener() {
                 <tbody>
                   {sortedResults.map((row, idx) => (
                     <tr key={`${row.ticker}-${row.gapDate}-${idx}`} className="border-t border-border hover:bg-card/40" data-testid={`gapfill-row-${row.ticker}-${idx}`}>
+                      <td className="px-2 py-1">
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(rowKey(row))}
+                          onChange={() => toggleSelected(rowKey(row))}
+                          data-testid={`gapfill-check-${row.ticker}-${idx}`}
+                        />
+                      </td>
                       <td className="px-2 py-1 font-bold">{row.ticker}</td>
                       <td className="px-2 py-1">
                         <span className={row.direction === "up" ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}
@@ -401,10 +468,10 @@ export default function GapFillScreener() {
                       </td>
                       <td className="px-2 py-1 text-right">{row.daysOpen}</td>
                       <td className="px-2 py-1">
-                        <button onClick={() => sendToCharts(row)}
+                        <button onClick={() => sendToCharts([row])}
                           className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/30"
                           data-testid={`gapfill-send-${row.ticker}-${idx}`}
-                          title="Send the fill level to the Charts tab as a horizontal overlay">
+                          title="Draw this gap on the Charts tab as a shaded zone">
                           → Charts
                         </button>
                       </td>

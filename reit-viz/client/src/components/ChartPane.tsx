@@ -50,6 +50,7 @@ import type { DataTransform } from "@/lib/transforms";
 import { Info, Maximize2, Minimize2, Trash2, Rows3 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
+import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
 import { d as detectSRLevels, D as DEFAULT_SR_CFG } from "@/components/SupportResistance";
 import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
@@ -3475,7 +3476,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const visibleSeeds = seedList.filter((x: any) => !x?.hidden && isFresh(x));
     const visiblePersist = persistList.filter((x: any) => !x?.hidden && isFresh(x));
     const sig = (x: any) =>
-      `sr|${x.type}|${x.price}|${x.maType ?? ""}|${x.maPeriod ?? ""}|${x.fibLevel ?? ""}|${x.futureBars}`;
+      `sr|${x.type}|${x.price}|${x.price2 ?? ""}|${x.maType ?? ""}|${x.maPeriod ?? ""}|${x.fibLevel ?? ""}|${x.futureBars}`;
     const persistToApply = visiblePersist.filter((x: any) => !appliedSeedsRef.current.has(sig(x)));
 
     const seen = new Set<string>();
@@ -3582,6 +3583,56 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             }
           }
           applied++;
+        } else if (seed.type === "gapzone" && Number.isFinite(Number(seed.price2))) {
+          // Unfilled price gap: shaded band between the fill level (solid edge)
+          // and the far edge of the gap (dashed), extended futureBars ahead.
+          // Colored by gap direction: up-gaps green (support below), down-gaps red.
+          const price2 = Number(seed.price2);
+          const dirUp = seed.direction !== "down";
+          const zoneColor = dirUp ? "#22c55e" : "#ef4444";
+          const zoneFill = dirUp ? "rgba(34, 197, 94, 0.22)" : "rgba(239, 68, 68, 0.22)";
+          // Start the band at the gap date when it's inside the series range.
+          const startIdx = typeof seed.gapDate === "string" ? seriesTimes.indexOf(seed.gapDate) : -1;
+          const bandTimes = seriesTimes.slice(Math.max(0, startIdx));
+          const futureTimes = fb > 0 ? generateFutureBars(lastTime, fb) : [];
+          const allTimes = [...bandTimes, ...futureTimes];
+          if (allTimes.length >= 2) {
+            const mkLine = (level: number, style: LineStyle) => {
+              const s = chart.addSeries(LineSeries, {
+                color: zoneColor,
+                lineWidth: style === LineStyle.Solid ? 2 : 1,
+                lineStyle: style,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                title: "",
+                crosshairMarkerVisible: false,
+                autoscaleInfoProvider: () => null,
+              });
+              s.setData(allTimes.map((t) => ({ time: t, value: level })) as any);
+              drawingsRef.current.push({
+                id: `sr-seed-gap-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                type: "trendline",
+                color: zoneColor,
+                points: [
+                  { time: allTimes[0], price: level },
+                  { time: allTimes[allTimes.length - 1], price: level },
+                ],
+                seriesRef: s,
+              });
+              return s;
+            };
+            const fillLine = mkLine(price, LineStyle.Solid);
+            mkLine(price2, LineStyle.Dashed);
+            // Shade between the two edges (per-bar points so the fill survives
+            // edges scrolling off-screen, same approach as the Ichimoku kumo).
+            const top = Math.max(price, price2);
+            const bottom = Math.min(price, price2);
+            const topPts = allTimes.map((t) => ({ time: t, value: top })) as unknown as CloudPoint[];
+            const botPts = allTimes.map((t) => ({ time: t, value: bottom })) as unknown as CloudPoint[];
+            const band = new IchimokuCloudPrimitive(topPts, botPts, { up: zoneFill, down: zoneFill });
+            (fillLine as unknown as { attachPrimitive: (p: unknown) => void }).attachPrimitive(band);
+            applied++;
+          }
         } else if (seed.type === "ma" && seed.maType && seed.maPeriod && seriesValues.length >= seed.maPeriod) {
           // Build time-keyed data points and run the matching MA from the indicators lib.
           const maInput: { time: string; value: number }[] = [];

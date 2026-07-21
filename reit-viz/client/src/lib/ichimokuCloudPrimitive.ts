@@ -26,12 +26,19 @@ interface AttachedParams {
 const UP_FILL = "rgba(67, 160, 71, 0.15)";
 const DOWN_FILL = "rgba(244, 67, 54, 0.15)";
 
+/** Fill colors for the band: `up` where A >= B, `down` where A < B. */
+export interface CloudFills {
+  up: string;
+  down: string;
+}
+
 class CloudRenderer {
   constructor(
     private _leadA: CloudPoint[],
     private _leadB: CloudPoint[],
     private _chart: IChartApi,
     private _series: ISeriesApi<any>,
+    private _fills: CloudFills,
   ) {}
 
   draw(target: any): void {
@@ -81,15 +88,15 @@ class CloudRenderer {
         const up1 = p1.d >= 0;
 
         if (up0 === up1) {
-          fillQuad(p0.x, p0.ya, p0.yb, p1.x, p1.ya, p1.yb, up0 ? UP_FILL : DOWN_FILL);
+          fillQuad(p0.x, p0.ya, p0.yb, p1.x, p1.ya, p1.yb, up0 ? this._fills.up : this._fills.down);
         } else {
           // A/B cross between p0 and p1 — split at the intersection (where the
           // two spans meet, so ya == yb there) and fill each side by its sign.
           const t = p0.d / (p0.d - p1.d); // in (0,1)
           const xc = p0.x + t * (p1.x - p0.x);
           const yc = p0.ya + t * (p1.ya - p0.ya); // == interpolated yb at crossover
-          fillQuad(p0.x, p0.ya, p0.yb, xc, yc, yc, up0 ? UP_FILL : DOWN_FILL);
-          fillQuad(xc, yc, yc, p1.x, p1.ya, p1.yb, up1 ? UP_FILL : DOWN_FILL);
+          fillQuad(p0.x, p0.ya, p0.yb, xc, yc, yc, up0 ? this._fills.up : this._fills.down);
+          fillQuad(xc, yc, yc, p1.x, p1.ya, p1.yb, up1 ? this._fills.up : this._fills.down);
         }
       }
 
@@ -104,6 +111,7 @@ class CloudPaneView {
     private _leadB: CloudPoint[],
     private _chart: IChartApi,
     private _series: ISeriesApi<any>,
+    private _fills: CloudFills,
   ) {}
 
   zOrder(): string {
@@ -112,7 +120,7 @@ class CloudPaneView {
 
   renderer(): CloudRenderer | null {
     if (this._leadA.length < 2 || this._leadB.length < 2) return null;
-    return new CloudRenderer(this._leadA, this._leadB, this._chart, this._series);
+    return new CloudRenderer(this._leadA, this._leadB, this._chart, this._series, this._fills);
   }
 }
 
@@ -123,9 +131,12 @@ export class IchimokuCloudPrimitive {
   private _series: ISeriesApi<any> | null = null;
   private _requestUpdate: (() => void) | null = null;
 
-  constructor(leadA: CloudPoint[], leadB: CloudPoint[]) {
+  private _fills: CloudFills;
+
+  constructor(leadA: CloudPoint[], leadB: CloudPoint[], fills?: CloudFills) {
     this._leadA = leadA;
     this._leadB = leadB;
+    this._fills = fills ?? { up: UP_FILL, down: DOWN_FILL };
   }
 
   attached(param: AttachedParams): void {
@@ -148,6 +159,6 @@ export class IchimokuCloudPrimitive {
 
   paneViews(): any[] {
     if (!this._chart || !this._series) return [];
-    return [new CloudPaneView(this._leadA, this._leadB, this._chart, this._series)];
+    return [new CloudPaneView(this._leadA, this._leadB, this._chart, this._series, this._fills)];
   }
 }
