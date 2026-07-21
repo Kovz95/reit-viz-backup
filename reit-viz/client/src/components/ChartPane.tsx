@@ -215,6 +215,10 @@ interface ChartPaneProps {
   /** Hourly-frequency mode: series use epoch-second times; date-keyed extras
    *  (seeds, annotations, quarter shading) are skipped. */
   intraday?: boolean;
+  /** Override for the invisible spacer axis (non-daily frequencies). When set,
+   *  the pane's shared time axis uses these times instead of the global daily
+   *  date list, keeping logical-range sync aligned across panes. */
+  spacerTimes?: (string | number)[] | null;
   drawColor: string;
   /** Measure tool: fill the shaded rectangle (vs. line + box only). */
   measureShade?: boolean;
@@ -864,6 +868,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   timeRange,
   activeTool,
   intraday = false,
+  spacerTimes = null,
   drawColor,
   measureShade = true,
   measureMagnet = false,
@@ -1438,7 +1443,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // sync in ChartArea to keep them aligned by date.
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !chartReady || fullDates.length === 0) return;
+    if (!chart || !chartReady) return;
+    // Non-daily frequencies swap in their own axis (weekly/monthly period-end
+    // dates or hourly epoch seconds) so logical indexes still match the data.
+    const axisTimes: (string | number)[] = spacerTimes?.length ? spacerTimes : fullDates;
+    if (axisTimes.length === 0) return;
     if (!spacerSeriesRef.current) {
       try {
         spacerSeriesRef.current = chart.addSeries(LineSeries, {
@@ -1454,11 +1463,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (spacerSeriesRef.current) {
       try {
         spacerSeriesRef.current.setData(
-          fullDates.map((t) => ({ time: t as unknown as Time }))
+          axisTimes.map((t) => ({ time: t as unknown as Time }))
         );
+        // On a custom axis (frequency switch), any previously-saved visible
+        // range points at daily logical indexes — refit to the new axis.
+        if (spacerTimes?.length) chart.timeScale().fitContent();
       } catch {}
     }
-  }, [chartReady, fullDates]);
+  }, [chartReady, fullDates, spacerTimes]);
 
   // Store last known pointer position so we can re-extract values after scroll/zoom
   const lastPointerXRef = useRef<number | null>(null);

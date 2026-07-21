@@ -1055,6 +1055,7 @@ export default function ChartArea({
       const axisDates = downsampleOhlc(baseOhlc, frequency).map((b: any) => b.time);
       return {
         intraday: false as const,
+        spacerTimes: axisDates as (string | number)[],
         seriesByPane: sbp,
         ohlcFor: (ohlc: any[], _paneTicker?: string) => downsampleOhlc(ohlc || [], frequency),
         earnings: (dates: string[]) => snapDatesToAxisDates(dates, axisDates),
@@ -1090,6 +1091,7 @@ export default function ChartArea({
     }
     return {
       intraday: true as const,
+      spacerTimes: axis.map((b) => b.time) as (string | number)[],
       seriesByPane: sbp,
       ohlcFor: (_ohlc: any[], paneTicker?: string) =>
         paneTicker === activeTicker ? intradayToOhlc(axis) : [],
@@ -2605,6 +2607,7 @@ export default function ChartArea({
                   activeTicker={paneTicker}
                   chartConfig={chartConfig}
                   intraday={isIntraday}
+                  spacerTimes={freqView ? freqView.spacerTimes : null}
                   activeIndicators={indicatorsMap[pane.id] || {}}
                   timeRange={timeRange}
                   activeTool={isIntraday ? "" : activeTool}
