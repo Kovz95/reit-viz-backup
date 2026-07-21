@@ -102,6 +102,7 @@ const Attribution = lazy(() => import("@/pages/Attribution"));
 const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
 const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
+const UniversalScreener = lazy(() => import("@/pages/UniversalScreener"));
 const DataExplorer = lazy(() => import("@/pages/DataExplorer"));
 const PCA = lazy(() => import("@/pages/PCA"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -596,6 +597,7 @@ const PAGES = [
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
+  { path: "/universal-screener", label: "Universal Hit-Rate Screener" },
   { path: "/scanner", label: "Scanner" },
   { path: "/gap-fill", label: "Gap Fill Screener" },
   { path: "/screener", label: "Screener" },
@@ -725,6 +727,7 @@ function AppShell() {
               <Route path="/performance" component={Performance} />
               <Route path="/short-interest" component={ShortInterest} />
               <Route path="/screeners" component={AllScreeners} />
+              <Route path="/universal-screener" component={UniversalScreener} />
               <Route path="/gap-fill" component={GapFillScreener} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings" component={Ratings} />

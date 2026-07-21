@@ -18,6 +18,7 @@ interface ScreenerDef {
 // Order mirrors the old Screeners nav group. Scanner leads: it was its own nav
 // tab until 2026-07-21, when it was rolled into this page.
 const REGISTRY: ScreenerDef[] = [
+  { key: "universal", label: "Universal Hit-Rate", Component: lazy(() => import("@/pages/UniversalScreener")) },
   { key: "scanner", label: "Scanner", Component: lazy(() => import("@/pages/Scanner")) },
   { key: "stock", label: "Stock Screener", Component: lazy(() => import("@/pages/Screener")) },
   { key: "pair", label: "Pair Screener", Component: lazy(() => import("@/pages/PairsScreener")) },

@@ -1,0 +1,664 @@
+// Universal Hit-Rate Screener — one page that amalgamates the app's signal
+// engines (technical / event / valuation / pair) and screens the universe for
+// setups with a historically high hit rate AND real firing frequency, then
+// shows which of those qualified setups are firing today.
+//
+// Universe/filter wiring mirrors SetupsScreener (the reference implementation
+// for universe mode + 6-level classification + Country/Exchange filters).
+// Evaluation runs through the shared buildBacktestResult kernel via
+// lib/universalSweep; signal definitions live in lib/universalSignalCatalog.
+
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useLocation } from "wouter";
+import { useBaskets } from "@/lib/baskets";
+import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import ClassificationFilters, {
+  emptyClassFilters,
+  applyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  type ClassFilters,
+} from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useGlobalUniverse } from "@/lib/globalUniverse";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
+import { formatHitRate, hitRateColorClass, HORIZONS } from "@/lib/signalUtils";
+import {
+  UNIVERSAL_SIGNAL_CATALOG,
+  defaultEnabledSignalIds,
+  type SignalFamily,
+} from "@/lib/universalSignalCatalog";
+import {
+  runUniversalSweep,
+  refreshFiringStatus,
+  DEFAULT_SWEEP_SETTINGS,
+  type SweepSettings,
+  type SweepProgress,
+  type QualifiedSetup,
+} from "@/lib/universalSweep";
+import { emitChartSignals } from "@/lib/chartBridge";
+import { Play, Loader2, Flame, LineChart, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+
+type UniverseMode = "all" | "classification" | "basket" | "global";
+
+interface TickerRow {
+  ticker: string;
+  [key: string]: unknown;
+}
+
+const CLASSIFICATION_DIMS = ["sector", "industry", "subindustry", "subsector", "supersector"];
+const SETTINGS_KEY = "reit-viz:universal-screener:settings";
+const CLASS_FILTERS_KEY = "reit-viz:universal-screener:class-filters";
+
+const FAMILY_LABELS: Record<SignalFamily, string> = {
+  technical: "Technical",
+  event: "Events",
+  valuation: "Valuation",
+  pair: "Pairs",
+};
+
+function loadSettings(): SweepSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return { ...DEFAULT_SWEEP_SETTINGS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...DEFAULT_SWEEP_SETTINGS };
+}
+
+function fmtPct(v: number | null | undefined, decimals = 1): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(decimals)}%`;
+}
+
+function retColor(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "text-muted-foreground";
+  return v >= 0 ? "text-green-400" : "text-red-400";
+}
+
+export default function UniversalScreener() {
+  const { baskets } = useBaskets();
+  const [, navigate] = useLocation();
+  const [workbookTickers, setWorkbookTickers] = useState<TickerRow[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    fetchWorkbookTickers()
+      .then((t: TickerRow[]) => { if (active) setWorkbookTickers(t); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  // ── Universe controls (SetupsScreener wiring) ──────────────────────────────
+  const [universeMode, setUniverseMode] = useState<UniverseMode>("all");
+  const [classifyDim, setClassifyDim] = useState("sector");
+  const [classifyVal, setClassifyVal] = useState("");
+  const [basketId, setBasketId] = useState("");
+  const { metas: globalMetas } = useGlobalUniverse();
+  const [globalDim, setGlobalDim] = useState("sector");
+  const [globalDimVal, setGlobalDimVal] = useState("");
+
+  const classifyValues = useMemo(() => {
+    const vals = new Set<string>();
+    for (const t of workbookTickers) { const v = t[classifyDim]; if (v) vals.add(String(v)); }
+    return Array.from(vals).sort();
+  }, [workbookTickers, classifyDim]);
+
+  const globalDimValues = useMemo(() => {
+    const vals = new Set<string>();
+    for (const m of globalMetas) { const v = (m as Record<string, unknown>)[globalDim]; if (v) vals.add(String(v)); }
+    return Array.from(vals).sort();
+  }, [globalMetas, globalDim]);
+
+  useEffect(() => {
+    if (universeMode === "classification" && classifyValues.length && !classifyValues.includes(classifyVal)) {
+      setClassifyVal(classifyValues[0]);
+    }
+  }, [universeMode, classifyValues, classifyVal]);
+
+  const baseUniverseTickers = useMemo(() => {
+    if (universeMode === "global") {
+      if (globalMetas.length === 0) return [];
+      if (globalDimVal) {
+        return globalMetas
+          .filter((m) => String((m as Record<string, unknown>)[globalDim] ?? "") === globalDimVal)
+          .map((m) => (m as { ticker: string }).ticker);
+      }
+      return globalMetas.map((m) => (m as { ticker: string }).ticker);
+    }
+    if (workbookTickers.length === 0) return [];
+    if (universeMode === "all") return workbookTickers.map((t) => t.ticker);
+    if (universeMode === "classification" && classifyVal) {
+      return workbookTickers.filter((t) => String(t[classifyDim] ?? "") === classifyVal).map((t) => t.ticker);
+    }
+    if (universeMode === "basket" && basketId) {
+      const b = baskets.find((b) => b.id === basketId);
+      return b ? b.tickers : [];
+    }
+    return [];
+  }, [workbookTickers, universeMode, classifyDim, classifyVal, basketId, baskets, globalMetas, globalDim, globalDimVal]);
+
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() => {
+    try {
+      const s = localStorage.getItem(CLASS_FILTERS_KEY);
+      if (s) return deserializeClassFilters(JSON.parse(s));
+    } catch {}
+    return emptyClassFilters();
+  });
+  useEffect(() => {
+    try { localStorage.setItem(CLASS_FILTERS_KEY, JSON.stringify(serializeClassFilters(classFilters))); } catch {}
+  }, [classFilters]);
+  const [classSearch, setClassSearch] = useState("");
+  const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
+  const geoPool = universeMode === "global" ? (globalMetas as any[]) : (workbookTickers as any[]);
+  const geo = useGeoFilter(geoPool, "universal-geo");
+
+  const clfActive = useMemo(
+    () =>
+      Object.values(classFilters).some((s) => s.size > 0) ||
+      classSearch !== "" ||
+      manualTickers.size > 0 ||
+      geo.hasActiveGeo,
+    [classFilters, classSearch, manualTickers, geo.hasActiveGeo],
+  );
+
+  const universeTickers = useMemo(() => {
+    if (!clfActive) return baseUniverseTickers;
+    const metaBy = new Map<string, any>();
+    for (const m of workbookTickers) metaBy.set(String(m.ticker).toUpperCase(), m);
+    for (const m of globalMetas as any[]) {
+      const k = String(m.ticker).toUpperCase();
+      if (!metaBy.has(k)) metaBy.set(k, m);
+    }
+    const metas = baseUniverseTickers.map((t) => metaBy.get(String(t).toUpperCase()) ?? { ticker: t });
+    const filtered = geo.filterByGeo(applyClassFilters(metas as any[], classFilters, classSearch, manualTickers));
+    return filtered.map((m: any) => m.ticker);
+  }, [baseUniverseTickers, clfActive, workbookTickers, globalMetas, classFilters, classSearch, manualTickers, geo.filterByGeo]);
+
+  // ── Settings ───────────────────────────────────────────────────────────────
+  const [settings, setSettings] = useState<SweepSettings>(loadSettings);
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+  }, [settings]);
+  const set = useCallback(<K extends keyof SweepSettings>(k: K, v: SweepSettings[K]) => {
+    setSettings((prev) => ({ ...prev, [k]: v }));
+  }, []);
+
+  const toggleFamily = (f: SignalFamily) => {
+    setSettings((prev) => ({
+      ...prev,
+      families: prev.families.includes(f) ? prev.families.filter((x) => x !== f) : [...prev.families, f],
+    }));
+  };
+
+  // ── Pair enumeration (within-cohort, capped) ───────────────────────────────
+  const pairList = useMemo((): [string, string][] => {
+    if (settings.mode === "single" || !settings.families.includes("pair")) return [];
+    const metaBy = new Map<string, any>();
+    for (const m of workbookTickers) metaBy.set(String(m.ticker).toUpperCase(), m);
+    for (const m of globalMetas as any[]) {
+      const k = String(m.ticker).toUpperCase();
+      if (!metaBy.has(k)) metaBy.set(k, m);
+    }
+    const byCohort = new Map<string, string[]>();
+    for (const t of universeTickers) {
+      const m = metaBy.get(String(t).toUpperCase());
+      const cohort = String(m?.[settings.pairCohortDim] ?? "");
+      if (!cohort) continue;
+      const list = byCohort.get(cohort) ?? [];
+      list.push(t);
+      byCohort.set(cohort, list);
+    }
+    const pairs: [string, string][] = [];
+    for (const members of byCohort.values()) {
+      const capped = members.slice(0, 12); // cap per cohort — C(12,2)=66 pairs max
+      for (let i = 0; i < capped.length; i++) {
+        for (let j = i + 1; j < capped.length; j++) pairs.push([capped[i], capped[j]]);
+      }
+    }
+    return pairs.slice(0, settings.maxPairs);
+  }, [settings.mode, settings.families, settings.pairCohortDim, settings.maxPairs, universeTickers, workbookTickers, globalMetas]);
+
+  // ── Run state ──────────────────────────────────────────────────────────────
+  const [isRunning, setIsRunning] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [progress, setProgress] = useState<SweepProgress>({ done: 0, total: 0 });
+  const [rows, setRows] = useState<QualifiedSetup[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [lastRunAt, setLastRunAt] = useState<string | null>(null);
+  const cancelRef = useRef(false);
+
+  const handleRun = async () => {
+    const singleCount = settings.mode === "pair" ? 0 : universeTickers.length;
+    if (singleCount === 0 && pairList.length === 0) {
+      setErrorMsg("Universe is empty — nothing to screen.");
+      return;
+    }
+    setErrorMsg(null);
+    setIsRunning(true);
+    cancelRef.current = false;
+    setRows([]);
+    const fullSettings: SweepSettings = { ...settings, enabledSignalIds: defaultEnabledSignalIds() };
+    try {
+      const finalRows = await runUniversalSweep({
+        tickers: universeTickers,
+        pairList,
+        settings: fullSettings,
+        onProgress: setProgress,
+        onRows: (r) => setRows((prev) => [...prev, ...r]),
+        cancelRef,
+      });
+      setRows(finalRows);
+      setLastRunAt(new Date().toISOString());
+    } catch (e: any) {
+      setErrorMsg(String(e?.message ?? e));
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const handleRefreshFiring = async () => {
+    if (rows.length === 0) return;
+    setIsRefreshing(true);
+    cancelRef.current = false;
+    try {
+      const updated = await refreshFiringStatus(rows, settings, setProgress, cancelRef);
+      setRows(updated);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // ── View + sort ────────────────────────────────────────────────────────────
+  const [view, setView] = useState<"firing" | "library">("firing");
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const sort = useTableSort<QualifiedSetup>("hitRate", "desc", "desc", "universal-screener");
+
+  const visibleRows = useMemo(() => {
+    const base = view === "firing" ? rows.filter((r) => r.firingNow) : rows;
+    return sort.apply(base, (row, key) => {
+      switch (key) {
+        case "subject": return row.subject;
+        case "family": return row.family;
+        case "signal": return `${row.signalLabel} ${row.paramsLabel}`;
+        case "direction": return row.direction;
+        case "lastSignalDate": return row.lastSignalDate;
+        default: return row[key as keyof QualifiedSetup] as number;
+      }
+    });
+  }, [rows, view, sort]);
+
+  const firingCount = useMemo(() => rows.filter((r) => r.firingNow).length, [rows]);
+
+  const openOnChart = (r: QualifiedSetup) => {
+    if (r.mode === "single") {
+      emitChartSignals({
+        ticker: r.subject,
+        label: `${r.signalLabel} ${r.paramsLabel} (${r.direction})`,
+        signals: r.recentSignalDates.map((date) => ({
+          ticker: r.subject,
+          date,
+          direction: r.direction === "long" ? "up" : "down",
+          label: r.signalLabel,
+        })),
+      });
+    }
+  };
+
+  const busy = isRunning || isRefreshing;
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  return (
+    <div className="flex flex-col h-full bg-background text-foreground" data-testid="universal-screener-page">
+      {/* Universe bar */}
+      <div className="flex flex-col gap-2 px-3 py-2 border-b border-border bg-card/30 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+          <span className="inline-flex items-center gap-1 text-sm font-bold">
+            <Flame className="w-4 h-4 text-primary" /> Universal Hit-Rate Screener
+          </span>
+          <span className="text-[10px] text-muted-foreground">
+            Screens every signal family for setups with historical hit rate above your threshold that fire regularly — then shows what's on today.
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+          <select
+            value={universeMode}
+            onChange={(e) => setUniverseMode(e.target.value as UniverseMode)}
+            className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px]"
+            data-testid="uhs-universe-mode"
+          >
+            <option value="all">All workbook</option>
+            <option value="classification">Classification</option>
+            <option value="basket">Basket</option>
+            <option value="global">Global universe</option>
+          </select>
+          {universeMode === "classification" && (
+            <>
+              <select value={classifyDim} onChange={(e) => setClassifyDim(e.target.value)}
+                className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px]">
+                {CLASSIFICATION_DIMS.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <select value={classifyVal} onChange={(e) => setClassifyVal(e.target.value)}
+                className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px] max-w-[180px]">
+                {classifyValues.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </>
+          )}
+          {universeMode === "basket" && (
+            <select value={basketId} onChange={(e) => setBasketId(e.target.value)}
+              className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px] max-w-[200px]"
+              data-testid="uhs-basket-select">
+              <option value="">Pick basket…</option>
+              {baskets.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          )}
+          {universeMode === "global" && (
+            <>
+              <select value={globalDim} onChange={(e) => setGlobalDim(e.target.value)}
+                className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px]">
+                {["sector", "industry", "subindustry", "nation", "exchange"].map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+              <select value={globalDimVal} onChange={(e) => setGlobalDimVal(e.target.value)}
+                className="bg-background border border-border rounded px-1.5 py-0.5 text-[11px] max-w-[180px]">
+                <option value="">All</option>
+                {globalDimValues.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </>
+          )}
+          <span className="text-[10px] text-muted-foreground font-mono" data-testid="uhs-universe-count">
+            {universeTickers.length} tickers
+            {settings.mode !== "single" && settings.families.includes("pair") && ` → ${pairList.length} pairs`}
+          </span>
+          {geo.geoFilterUI}
+        </div>
+
+        <ClassificationFilters
+          filters={classFilters}
+          onFiltersChange={setClassFilters}
+          search={classSearch}
+          onSearchChange={setClassSearch}
+          manualTickers={manualTickers}
+          onManualTickersChange={setManualTickers}
+          filteredCount={universeTickers.length}
+          totalCount={baseUniverseTickers.length}
+          testIdPrefix="uhs-clf"
+        />
+
+        {/* Settings row */}
+        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+          <div className="flex items-center rounded border border-border overflow-hidden">
+            {(["single", "both", "pair"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => set("mode", m)}
+                data-testid={`uhs-mode-${m}`}
+                className={`px-2 py-0.5 text-[10px] font-mono ${settings.mode === m ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {m === "single" ? "Singles" : m === "pair" ? "Pairs" : "Both"}
+              </button>
+            ))}
+          </div>
+          {UNIVERSAL_SIGNAL_CATALOG.length > 0 &&
+            (Object.keys(FAMILY_LABELS) as SignalFamily[]).map((f) => {
+              const on = settings.families.includes(f);
+              const available = UNIVERSAL_SIGNAL_CATALOG.some((s) => s.family === f);
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  disabled={!available}
+                  onClick={() => toggleFamily(f)}
+                  data-testid={`uhs-family-${f}`}
+                  title={available ? undefined : "No signals in this family yet"}
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                    !available
+                      ? "opacity-40 border-border text-muted-foreground"
+                      : on
+                        ? "bg-primary/15 text-primary border-primary/40"
+                        : "bg-background text-muted-foreground border-border hover:text-foreground"
+                  }`}
+                >
+                  {on ? "✓ " : "+ "}{FAMILY_LABELS[f]}
+                </button>
+              );
+            })}
+          <label className="flex items-center gap-1 text-muted-foreground">
+            Horizon
+            <select value={settings.horizon} onChange={(e) => set("horizon", e.target.value)}
+              className="bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-horizon">
+              {HORIZONS.map((h) => <option key={h.label} value={h.label}>{h.label}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-muted-foreground">
+            Hit% &gt;
+            <input type="number" min={0} max={100} step={5}
+              value={Math.round(settings.hitRateThreshold * 100)}
+              onChange={(e) => set("hitRateThreshold", (parseFloat(e.target.value) || 0) / 100)}
+              className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-hit-threshold" />
+          </label>
+          <label className="flex items-center gap-1 text-muted-foreground">
+            Target%
+            <input type="number" min={0} step={1} value={settings.targetPct}
+              onChange={(e) => set("targetPct", parseFloat(e.target.value) || 0)}
+              className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" />
+          </label>
+          <label className="flex items-center gap-1 text-muted-foreground">
+            Min occ
+            <input type="number" min={1} step={1} value={settings.minOccurrences}
+              onChange={(e) => set("minOccurrences", Math.max(1, Math.round(parseFloat(e.target.value) || 1)))}
+              className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" />
+          </label>
+          <label className="flex items-center gap-1 text-muted-foreground" title="Signals must fire at least this many times per year on average">
+            Freq/yr ≥
+            <input type="number" min={0} step={1} value={settings.freqFloorPerYear}
+              onChange={(e) => set("freqFloorPerYear", parseFloat(e.target.value) || 0)}
+              className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" />
+          </label>
+          <label className="flex items-center gap-1 text-muted-foreground" title="A setup is 'firing now' when its last signal is within this many bars of today">
+            Lookback
+            <input type="number" min={1} step={1} value={settings.firingLookbackBars}
+              onChange={(e) => set("firingLookbackBars", Math.max(1, Math.round(parseFloat(e.target.value) || 1)))}
+              className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-lookback" />
+          </label>
+          {settings.mode !== "single" && (
+            <label className="flex items-center gap-1 text-muted-foreground">
+              Pair cohort
+              <select value={settings.pairCohortDim} onChange={(e) => set("pairCohortDim", e.target.value as SweepSettings["pairCohortDim"])}
+                className="bg-background border border-border rounded px-1 py-0.5 text-[11px]">
+                {["subindustry", "industry", "sector"].map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+          )}
+
+          <button
+            type="button"
+            onClick={busy ? () => { cancelRef.current = true; } : handleRun}
+            data-testid="uhs-run"
+            className={`inline-flex items-center gap-1 px-3 py-1 rounded text-[11px] font-bold border ${
+              busy
+                ? "border-destructive/50 text-destructive"
+                : "bg-primary text-primary-foreground border-primary hover:opacity-90"
+            }`}
+          >
+            {busy ? <><Loader2 className="w-3 h-3 animate-spin" /> Cancel</> : <><Play className="w-3 h-3" /> Run</>}
+          </button>
+          {rows.length > 0 && !busy && (
+            <button
+              type="button"
+              onClick={handleRefreshFiring}
+              data-testid="uhs-refresh-firing"
+              className="text-[10px] px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground"
+              title="Re-detect only the latest firing state for qualified setups (does not rebuild hit rates)"
+            >
+              Refresh firing status
+            </button>
+          )}
+        </div>
+
+        {busy && (
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground" data-testid="uhs-progress">
+            <div className="flex-1 h-1.5 bg-border rounded overflow-hidden max-w-[400px]">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: progress.total > 0 ? `${(100 * progress.done) / progress.total}%` : "0%" }}
+              />
+            </div>
+            <span className="font-mono">
+              {progress.done}/{progress.total}{progress.subject ? ` · ${progress.subject}` : ""}
+            </span>
+          </div>
+        )}
+        {errorMsg && <div className="text-[11px] text-destructive">{errorMsg}</div>}
+      </div>
+
+      {/* View toggle + results */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border text-[11px] flex-shrink-0">
+        <div className="flex items-center rounded border border-border overflow-hidden">
+          <button type="button" onClick={() => setView("firing")} data-testid="uhs-view-firing"
+            className={`px-2 py-0.5 text-[10px] font-mono ${view === "firing" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+            Firing now ({firingCount})
+          </button>
+          <button type="button" onClick={() => setView("library")} data-testid="uhs-view-library"
+            className={`px-2 py-0.5 text-[10px] font-mono ${view === "library" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}>
+            Full library ({rows.length})
+          </button>
+        </div>
+        {lastRunAt && (
+          <span className="text-[10px] text-muted-foreground">
+            Library built {new Date(lastRunAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {visibleRows.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-sm text-muted-foreground px-6 text-center">
+            {rows.length === 0
+              ? "Run a sweep to build the qualified-setup library."
+              : view === "firing"
+                ? "No qualified setups are firing within the lookback window. Switch to Full library to see everything."
+                : "No rows."}
+          </div>
+        ) : (
+          <table className="w-full text-[11px] font-mono border-collapse" data-testid="uhs-results-table">
+            <thead className="sticky top-0 bg-card z-10">
+              <tr className="text-muted-foreground text-[10px] border-b border-border">
+                <th className="text-left py-1 px-2"><SortHeader label="Subject" columnKey="subject" sort={sort} /></th>
+                <th className="text-left py-1 pr-2"><SortHeader label="Family" columnKey="family" sort={sort} /></th>
+                <th className="text-left py-1 pr-2"><SortHeader label="Signal" columnKey="signal" sort={sort} /></th>
+                <th className="text-left py-1 pr-2"><SortHeader label="Dir" columnKey="direction" sort={sort} /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Hit%" columnKey="hitRate" sort={sort} align="right" title="Share of signals whose favorable move reached the target within the horizon" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Win%" columnKey="winRate" sort={sort} align="right" title="Share of signals with a directionally-correct horizon return" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Avg" columnKey="avgReturn" sort={sort} align="right" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Med" columnKey="medianReturn" sort={sort} align="right" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Occ" columnKey="occurrences" sort={sort} align="right" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Freq/yr" columnKey="freqPerYear" sort={sort} align="right" /></th>
+                <th className="text-right py-1 pr-2"><SortHeader label="Last fired" columnKey="lastSignalDate" sort={sort} align="right" /></th>
+                <th className="text-center py-1 pr-2">Firing</th>
+                <th className="text-right py-1 pr-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((r) => {
+                const expanded = expandedKey === r.key;
+                return (
+                  <>
+                    <tr
+                      key={r.key}
+                      className="border-b border-border/40 hover:bg-card/60 cursor-pointer"
+                      onClick={() => setExpandedKey(expanded ? null : r.key)}
+                      data-testid={`uhs-row-${r.key}`}
+                    >
+                      <td className="py-0.5 px-2 font-bold whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          {r.subject}
+                        </span>
+                      </td>
+                      <td className="py-0.5 pr-2 text-muted-foreground">{FAMILY_LABELS[r.family]}</td>
+                      <td className="py-0.5 pr-2 whitespace-nowrap">{r.signalLabel} <span className="text-muted-foreground">{r.paramsLabel}</span></td>
+                      <td className={`py-0.5 pr-2 ${r.direction === "long" ? "text-green-400" : "text-red-400"}`}>{r.direction}</td>
+                      <td className={`text-right py-0.5 pr-2 font-bold ${hitRateColorClass(r.hitRate)}`}>{formatHitRate(r.hitRate)}</td>
+                      <td className={`text-right py-0.5 pr-2 ${hitRateColorClass(r.winRate)}`}>{formatHitRate(r.winRate)}</td>
+                      <td className={`text-right py-0.5 pr-2 ${retColor(r.avgReturn)}`}>{fmtPct(r.avgReturn)}</td>
+                      <td className={`text-right py-0.5 pr-2 ${retColor(r.medianReturn)}`}>{fmtPct(r.medianReturn)}</td>
+                      <td className="text-right py-0.5 pr-2">{r.occurrences}</td>
+                      <td className="text-right py-0.5 pr-2">{r.freqPerYear.toFixed(1)}</td>
+                      <td className="text-right py-0.5 pr-2 whitespace-nowrap">{r.lastSignalDate ?? "—"}</td>
+                      <td className="text-center py-0.5 pr-2">
+                        {r.firingNow ? (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 rounded bg-primary/15 text-primary border border-primary/40" data-testid="uhs-firing-badge">
+                            <Flame className="w-2.5 h-2.5" /> ON
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground text-[10px]">
+                            {r.lastSignalBarsAgo != null ? `${r.lastSignalBarsAgo}b ago` : "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-right py-0.5 pr-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {r.mode === "single" && (
+                          <button type="button" onClick={() => openOnChart(r)} title="Show signals on Charts"
+                            className="text-muted-foreground hover:text-primary p-0.5" data-testid={`uhs-chart-${r.key}`}>
+                            <LineChart className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {UNIVERSAL_SIGNAL_CATALOG.find((s) => s.id === r.signalId)?.optimizerRoute && (
+                          <button
+                            type="button"
+                            title="Refine in optimizer"
+                            onClick={() => navigate(UNIVERSAL_SIGNAL_CATALOG.find((s) => s.id === r.signalId)!.optimizerRoute!)}
+                            className="text-muted-foreground hover:text-primary p-0.5"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr key={`${r.key}-x`} className="border-b border-border/40 bg-card/40">
+                        <td colSpan={13} className="py-1.5 px-8">
+                          <table className="text-[10px] font-mono">
+                            <thead>
+                              <tr className="text-muted-foreground">
+                                <th className="text-left pr-4">Horizon</th>
+                                {r.allHorizons.map((h) => <th key={h.horizon} className="text-right pr-4">{h.horizon}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td className="text-muted-foreground pr-4">Hit%</td>
+                                {r.allHorizons.map((h) => (
+                                  <td key={h.horizon} className={`text-right pr-4 ${hitRateColorClass(h.hitRate)}`}>{formatHitRate(h.hitRate)}</td>
+                                ))}
+                              </tr>
+                              <tr>
+                                <td className="text-muted-foreground pr-4">Avg ret</td>
+                                {r.allHorizons.map((h) => (
+                                  <td key={h.horizon} className={`text-right pr-4 ${retColor(h.avgReturn)}`}>{fmtPct(h.avgReturn)}</td>
+                                ))}
+                              </tr>
+                              <tr>
+                                <td className="text-muted-foreground pr-4">t-stat</td>
+                                {r.allHorizons.map((h) => (
+                                  <td key={h.horizon} className="text-right pr-4">{Number.isFinite(h.tStat) ? h.tStat.toFixed(2) : "—"}</td>
+                                ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
