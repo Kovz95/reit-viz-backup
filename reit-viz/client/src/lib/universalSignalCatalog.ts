@@ -732,12 +732,132 @@ const eventSignals: CatalogSignal[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Valuation family (workbook tickers only — gated on metric availability).
+// Metric keys match the EvaluatorPanel fundamental fetch path
+// ("P/FFO FY2", "FFO Yield FY2", "Dividend Yield", "EV/EBITDA FY2").
+// ---------------------------------------------------------------------------
+
+/** Rolling z-score over a nullable series (nulls skipped, window = bars). */
+function rollingZScoreN(values: (number | null)[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  for (let i = window - 1; i < values.length; i++) {
+    const cur = values[i];
+    if (cur === null) continue;
+    let sum = 0;
+    let sumSq = 0;
+    let n = 0;
+    for (let j = i - window + 1; j <= i; j++) {
+      const v = values[j];
+      if (v === null) continue;
+      sum += v;
+      sumSq += v * v;
+      n++;
+    }
+    if (n < Math.floor(window / 2)) continue;
+    const mean = sum / n;
+    const std = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+    if (std > 0) out[i] = (cur - mean) / std;
+  }
+  return out;
+}
+
+function valuationZSignal(opts: {
+  id: string;
+  label: string;
+  metric: string;
+  /** true = LOW metric value is cheap (multiples); false = HIGH is cheap (yields). */
+  lowIsCheap: boolean;
+  presets: { id: string; label: string; z: number }[];
+  longOnly?: boolean;
+}): CatalogSignal {
+  return {
+    id: opts.id,
+    family: "valuation",
+    label: opts.label,
+    mode: "single",
+    directions: opts.longOnly ? ["long"] : ["long", "short"],
+    requires: { valuation: [opts.metric] },
+    paramPresets: opts.presets.map((p) => ({ id: p.id, label: p.label, params: { z: p.z } })),
+    detect: (b, p, dir) => {
+      const series = b.valuation?.[opts.metric];
+      if (!series) return [];
+      const z = rollingZScoreN(series, 252);
+      const lim = Number(p.z);
+      // "Cheap" fires long, "rich" fires short.
+      const cheapTest = opts.lowIsCheap ? (v: number) => v <= -lim : (v: number) => v >= lim;
+      const richTest = opts.lowIsCheap ? (v: number) => v >= lim : (v: number) => v <= -lim;
+      return detectCrossings(z, dir === "long" ? cheapTest : richTest);
+    },
+  };
+}
+
+const valuationSignals: CatalogSignal[] = [
+  valuationZSignal({
+    id: "val.pffo_z",
+    label: "P/FFO z-score extreme",
+    metric: "P/FFO FY2",
+    lowIsCheap: true,
+    presets: [
+      { id: "z15", label: "252d ±1.5σ", z: 1.5 },
+      { id: "z2", label: "252d ±2σ", z: 2 },
+    ],
+  }),
+  valuationZSignal({
+    id: "val.ev_ebitda_z",
+    label: "EV/EBITDA z-score extreme",
+    metric: "EV/EBITDA FY2",
+    lowIsCheap: true,
+    presets: [
+      { id: "z15", label: "252d ±1.5σ", z: 1.5 },
+      { id: "z2", label: "252d ±2σ", z: 2 },
+    ],
+  }),
+  valuationZSignal({
+    id: "val.ffo_yield_z",
+    label: "FFO yield rich vs history",
+    metric: "FFO Yield FY2",
+    lowIsCheap: false,
+    longOnly: true,
+    presets: [{ id: "z15", label: "252d +1.5σ", z: 1.5 }],
+  }),
+  {
+    id: "val.div_yield_pctile",
+    family: "valuation",
+    label: "Dividend yield percentile",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: ["Dividend Yield"] },
+    paramPresets: [{ id: "p90", label: "252d 90th/10th", params: { hi: 90, lo: 10 } }],
+    // High yield percentile = cheap → long; low percentile = rich → short.
+    detect: (b, p, dir) => {
+      const series = b.valuation?.["Dividend Yield"];
+      if (!series) return [];
+      const pct = rollingPercentileRank(series, 252);
+      return dir === "long"
+        ? detectCrossings(pct, (v) => v >= Number(p.hi))
+        : detectCrossings(pct, (v) => v <= Number(p.lo));
+    },
+  },
+];
+
+/** Union of valuation metric keys needed by a set of enabled signal ids. */
+export function requiredValuationMetrics(enabledIds: Set<string>): string[] {
+  const metrics = new Set<string>();
+  for (const s of UNIVERSAL_SIGNAL_CATALOG) {
+    if (!enabledIds.has(s.id) || !s.requires.valuation) continue;
+    for (const m of s.requires.valuation) metrics.add(m);
+  }
+  return [...metrics];
+}
+
+// ---------------------------------------------------------------------------
 // Catalog assembly
 // ---------------------------------------------------------------------------
 
 export const UNIVERSAL_SIGNAL_CATALOG: CatalogSignal[] = [
   ...technicalSignals,
   ...eventSignals,
+  ...valuationSignals,
 ];
 
 export function getCatalogSignal(id: string): CatalogSignal | undefined {

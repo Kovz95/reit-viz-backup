@@ -15,8 +15,10 @@ import { buildBacktestResult, type HorizonRow } from "@/components/EvaluatorPane
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
+import { getMetricSeries } from "@/lib/dataService";
 import {
   signalsForBundle,
+  requiredValuationMetrics,
   type CatalogSignal,
   type SeriesBundle,
   type SignalDirection,
@@ -32,6 +34,11 @@ export interface SweepSettings {
   minOccurrences: number;
   /** Signals must have fired at least this often per year of series span. */
   freqFloorPerYear: number;
+  /**
+   * Target favorable excursion in PERCENT units (5 = +5%): the kernel's
+   * buildSignalProfile compares targetPct against percent-scale returns, so a
+   * "hit" = the trade saw a ≥ targetPct% favorable move within the horizon.
+   */
   targetPct: number;
   cooldown: number;
   /** "Firing now" = last signal within this many bars of the series end. */
@@ -49,7 +56,7 @@ export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   hitRateThreshold: 0.5,
   minOccurrences: 8,
   freqFloorPerYear: 4,
-  targetPct: 0.05,
+  targetPct: 5,
   cooldown: 10,
   firingLookbackBars: 5,
   families: ["technical", "event", "valuation", "pair"],
@@ -105,7 +112,31 @@ function subjectLabel(s: Subject): string {
 // Bundle building
 // ---------------------------------------------------------------------------
 
-async function buildSingleBundle(ticker: string, minBars: number): Promise<SeriesBundle | null> {
+/** Forward-fill a sparse {time,value}[] metric series onto the price dates. */
+function alignMetricToDates(
+  pts: { time: string; value: number }[],
+  dates: string[],
+): (number | null)[] {
+  const out: (number | null)[] = new Array(dates.length).fill(null);
+  if (pts.length === 0) return out;
+  const sorted = [...pts].sort((a, b) => (a.time < b.time ? -1 : 1));
+  let p = 0;
+  let last: number | null = null;
+  for (let i = 0; i < dates.length; i++) {
+    while (p < sorted.length && sorted[p].time <= dates[i]) {
+      if (Number.isFinite(sorted[p].value)) last = sorted[p].value;
+      p++;
+    }
+    out[i] = last;
+  }
+  return out;
+}
+
+async function buildSingleBundle(
+  ticker: string,
+  minBars: number,
+  valuationMetrics: string[] = [],
+): Promise<SeriesBundle | null> {
   let dates: string[] = [];
   let opens: number[] | undefined;
   let highs: number[] | undefined;
@@ -144,7 +175,27 @@ async function buildSingleBundle(ticker: string, minBars: number): Promise<Serie
   if (dates.length < minBars) return null;
   if (volumes && !volumes.some((v) => v > 0)) volumes = undefined;
 
-  return { subject: ticker, dates, closes, opens, highs, lows, volumes };
+  let valuation: SeriesBundle["valuation"];
+  if (valuationMetrics.length > 0) {
+    const fetched = await Promise.all(
+      valuationMetrics.map(async (m) => {
+        try {
+          const pts = await getMetricSeries(ticker, m);
+          return [m, alignMetricToDates(pts ?? [], dates)] as const;
+        } catch {
+          return [m, null] as const;
+        }
+      }),
+    );
+    for (const [m, series] of fetched) {
+      if (series && series.some((v) => v !== null)) {
+        valuation = valuation ?? {};
+        valuation[m] = series;
+      }
+    }
+  }
+
+  return { subject: ticker, dates, closes, opens, highs, lows, volumes, valuation };
 }
 
 async function buildPairBundle(a: string, b: string, minBars: number): Promise<SeriesBundle | null> {
@@ -261,6 +312,9 @@ export async function runUniversalSweep(opts: {
 }): Promise<QualifiedSetup[]> {
   const { settings, onProgress, onRows, cancelRef } = opts;
   const minBars = Math.round(settings.minYearsData * 252);
+  const valMetrics = settings.families.includes("valuation")
+    ? requiredValuationMetrics(new Set(settings.enabledSignalIds))
+    : [];
 
   const subjects: Subject[] = [];
   if (settings.mode !== "pair") {
@@ -280,7 +334,7 @@ export async function runUniversalSweep(opts: {
     const bundles = await Promise.all(
       batch.map((s) =>
         s.kind === "single"
-          ? buildSingleBundle(s.ticker, minBars)
+          ? buildSingleBundle(s.ticker, minBars, valMetrics)
           : buildPairBundle(s.a, s.b, minBars),
       ),
     );
@@ -337,9 +391,10 @@ export async function refreshFiringStatus(
     }
     const subjectRows = bySubject.get(subject)!;
     const isPair = subject.includes("/");
+    const valMetrics = requiredValuationMetrics(new Set(subjectRows.map((r) => r.signalId)));
     const bundle = isPair
       ? await buildPairBundle(subject.split("/")[0], subject.split("/")[1], minBars)
-      : await buildSingleBundle(subject, minBars);
+      : await buildSingleBundle(subject, minBars, valMetrics);
 
     for (const r of subjectRows) {
       if (!bundle) {
