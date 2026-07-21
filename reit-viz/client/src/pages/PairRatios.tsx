@@ -595,6 +595,22 @@ export default function PairRatios() {
     [routerState, navigate]
   );
 
+  // Clicking a pair row jumps to the Charts tab with the A/B ratio loaded —
+  // stash the pair in sessionStorage (mirrors the Re-Rating → Charts hand-off)
+  // and let Dashboard drain it on mount.
+  const openPairOnCharts = useCallback(
+    (tickerA: string, tickerB: string, m: string) => {
+      try {
+        sessionStorage.setItem(
+          "reit-viz:pair-to-charts",
+          JSON.stringify({ tickerA, tickerB, metric: m }),
+        );
+      } catch {}
+      navigate("/");
+    },
+    [navigate]
+  );
+
   const tickerList = useMemo(
     () =>
       ((isFiltered ? filteredTickersList : allTickers) as { ticker: string }[])
@@ -1162,7 +1178,7 @@ export default function PairRatios() {
                       key={`${pair.tickerA}-${pair.tickerB}`}
                       className="border-b border-border/20 hover:bg-accent/30 cursor-pointer group"
                       style={{ backgroundColor: zScoreBgColor(pair.zScore) }}
-                      onClick={() => setSelectedPair(pair)}
+                      onClick={() => openPairOnCharts(pair.tickerA, pair.tickerB, metric)}
                       data-testid={`pair-row-${idx}`}
                     >
                       <td className="px-3 py-1.5 font-bold">
