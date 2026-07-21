@@ -995,7 +995,15 @@ export default function PairRatios() {
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
               Sort By
             </div>
-            <Select value={sortBy} onValueChange={setSortBy}>
+            <Select
+              value={sortBy}
+              onValueChange={(v) => {
+                setSortBy(v);
+                // A header click-sort overrides the dropdown (and persists);
+                // picking a Sort By must clear it or the dropdown looks dead.
+                headerSort.setSort("", "desc");
+              }}
+            >
               <SelectTrigger className="h-7 text-[11px]" data-testid="ratio-sort">
                 <SelectValue />
               </SelectTrigger>
