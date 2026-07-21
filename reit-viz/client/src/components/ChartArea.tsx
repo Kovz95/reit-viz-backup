@@ -1,6 +1,18 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import { getTickerEvents, getMacroEventDates, MACRO_EVENT_TYPES, getMetricSeries } from "@/lib/dataService";
 import { getChartSignals, onChartSignals } from "@/lib/chartBridge";
+import { fetchIntradayBars, type IntradayBar } from "@/lib/fetchIntradayBars";
+import {
+  downsampleSeries,
+  downsampleOhlc,
+  intradayToOhlc,
+  intradayToLine,
+  fillDailyOntoHourlyAxis,
+  alignIntradayToAxis,
+  snapDatesToAxisDates,
+  datesToAxisTimestamps,
+  type ChartFrequency,
+} from "@/lib/chartFrequency";
 import type { EventType } from "@/lib/dataService";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
@@ -1001,6 +1013,98 @@ export default function ChartArea({
     }
     return map;
   }, [plottedSeries, panes]);
+
+  // ── Price-bar frequency (chartConfig.frequency): hourly / daily / weekly / monthly ──
+  const frequency: ChartFrequency = (chartConfig.frequency as ChartFrequency) ?? "daily";
+  const [intradayCache, setIntradayCache] = useState<Record<string, IntradayBar[]>>({});
+  useEffect(() => {
+    if (frequency !== "hourly") return;
+    let alive = true;
+    const wanted = new Set<string>();
+    if (activeTicker) wanted.add(activeTicker);
+    for (const p of panes) {
+      const pt = p.ticker || (seriesByPane[p.id] || []).find((s) => s.metric === "close")?.ticker;
+      if (pt && !pt.startsWith("BASKET:") && !pt.startsWith("__")) wanted.add(pt);
+    }
+    for (const t of wanted) {
+      if (intradayCache[t]) continue;
+      fetchIntradayBars(t).then((bars) => {
+        if (!alive || !bars.length) return;
+        setIntradayCache((prev) => (prev[t] ? prev : { ...prev, [t]: bars }));
+      });
+    }
+    return () => { alive = false; };
+  }, [frequency, activeTicker, panes, seriesByPane, intradayCache]);
+
+  // Per-frequency view of series/OHLC/vertical-line props. null = plain daily.
+  // Pane sync is logical-range based, so all panes must share bar density:
+  // weekly/monthly downsample everything; hourly puts every pane on the active
+  // ticker's hourly timestamp axis (daily series forward-filled per day).
+  const freqView = useMemo(() => {
+    if (frequency === "daily") return null;
+
+    if (frequency === "weekly" || frequency === "monthly") {
+      const sbp: Record<number, PlottedSeries[]> = {};
+      for (const [pid, list] of Object.entries(seriesByPane)) {
+        sbp[Number(pid)] = (list as PlottedSeries[]).map((s) => ({
+          ...s,
+          data: downsampleSeries(s.data as any, frequency) as any,
+        }));
+      }
+      const baseOhlc: any[] = (activeTicker ? ohlcCache[activeTicker] : ohlcData) || [];
+      const axisDates = downsampleOhlc(baseOhlc, frequency).map((b: any) => b.time);
+      return {
+        intraday: false as const,
+        seriesByPane: sbp,
+        ohlcFor: (ohlc: any[], _paneTicker?: string) => downsampleOhlc(ohlc || [], frequency),
+        earnings: (dates: string[]) => snapDatesToAxisDates(dates, axisDates),
+        lineEntries: (entries: { time: string; color: string; label: string }[]) => {
+          const out: { time: any; color: string; label: string }[] = [];
+          for (const e of entries) {
+            const snapped = snapDatesToAxisDates([e.time], axisDates);
+            if (snapped.length) out.push({ ...e, time: snapped[0] });
+          }
+          return out;
+        },
+      };
+    }
+
+    // hourly
+    const axis = activeTicker ? intradayCache[activeTicker] : undefined;
+    if (!axis?.length) return null; // bars still loading (or unavailable) → stay daily
+    const sbp: Record<number, PlottedSeries[]> = {};
+    for (const [pid, list] of Object.entries(seriesByPane)) {
+      sbp[Number(pid)] = (list as PlottedSeries[]).map((s) => {
+        if (s.metric === "close") {
+          const own = intradayCache[s.ticker];
+          const data =
+            s.ticker === activeTicker
+              ? intradayToLine(axis)
+              : own?.length
+              ? alignIntradayToAxis(own, axis)
+              : fillDailyOntoHourlyAxis(s.data as any, axis);
+          return { ...s, data: data as any };
+        }
+        return { ...s, data: fillDailyOntoHourlyAxis(s.data as any, axis) as any };
+      });
+    }
+    return {
+      intraday: true as const,
+      seriesByPane: sbp,
+      ohlcFor: (_ohlc: any[], paneTicker?: string) =>
+        paneTicker === activeTicker ? intradayToOhlc(axis) : [],
+      earnings: (dates: string[]) => datesToAxisTimestamps(dates, axis) as any,
+      lineEntries: (entries: { time: string; color: string; label: string }[]) => {
+        const out: { time: any; color: string; label: string }[] = [];
+        for (const e of entries) {
+          const ts = datesToAxisTimestamps([e.time], axis);
+          if (ts.length) out.push({ ...e, time: ts[0] });
+        }
+        return out;
+      },
+    };
+  }, [frequency, seriesByPane, ohlcCache, ohlcData, activeTicker, intradayCache]);
+
 
   // Grid dimensions (mirrors gridContainerStyle): cols from layout, rows to fit.
   const gridDims = useMemo(() => {
@@ -2474,7 +2578,11 @@ export default function ChartArea({
           {visiblePanes.map((pane) => {
             // Determine this pane's primary ticker for OHLC
             const paneTicker = pane.ticker || (seriesByPane[pane.id] || []).find(s => s.metric === "close")?.ticker || activeTicker;
-            const paneOhlc = paneTicker ? ohlcCache[paneTicker] : ohlcData;
+            const paneOhlcDaily = paneTicker ? ohlcCache[paneTicker] : ohlcData;
+            // Frequency view: transformed series/OHLC when not in daily mode
+            const paneSeriesView = freqView ? (freqView.seriesByPane[pane.id] || []) : (seriesByPane[pane.id] || []);
+            const paneOhlc = freqView ? freqView.ohlcFor(paneOhlcDaily, paneTicker ?? undefined) : paneOhlcDaily;
+            const isIntraday = !!freqView?.intraday;
             const isPaneMaximized = maximizedPaneId === pane.id;
             return (
               <div
@@ -2492,13 +2600,14 @@ export default function ChartArea({
                   }}
                   paneId={pane.id}
                   paneLabel={pane.label}
-                  series={seriesByPane[pane.id] || []}
+                  series={paneSeriesView}
                   ohlcData={paneOhlc}
                   activeTicker={paneTicker}
                   chartConfig={chartConfig}
+                  intraday={isIntraday}
                   activeIndicators={indicatorsMap[pane.id] || {}}
                   timeRange={timeRange}
-                  activeTool={activeTool}
+                  activeTool={isIntraday ? "" : activeTool}
                   drawColor={drawColor}
                   measureShade={measureShade}
                   measureMagnet={measureMagnet}
@@ -2514,11 +2623,11 @@ export default function ChartArea({
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}
                   onSeriesMapUpdate={handleSeriesMapUpdate}
-                  showQuarterShading={showQuarterShading}
-                  earningsDates={showEarnings ? earningsDates : []}
-                  fyBoundaryLines={showFyBoundaries ? fyBoundaryLines : []}
-                  exDivDates={showExDiv ? exDivDates : []}
-                  macroEventLines={macroEventLines}
+                  showQuarterShading={showQuarterShading && !isIntraday}
+                  earningsDates={showEarnings ? (freqView ? (freqView.earnings(earningsDates) as any) : earningsDates) : []}
+                  fyBoundaryLines={showFyBoundaries ? (freqView ? (freqView.lineEntries(fyBoundaryLines) as any) : fyBoundaryLines) : []}
+                  exDivDates={showExDiv ? (freqView ? (freqView.earnings(exDivDates) as any) : exDivDates) : []}
+                  macroEventLines={freqView ? (freqView.lineEntries(macroEventLines) as any) : macroEventLines}
                   colorByData={colorByDataMap[pane.id]?.data ?? null}
                   colorByMetric={colorByMap[pane.id]}
                   colorByRange={colorByDataMap[pane.id]?.range ?? null}

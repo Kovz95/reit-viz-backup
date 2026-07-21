@@ -55,6 +55,8 @@ export interface ChartConfig {
   showVolume: boolean;
   /** Prominence of the chart background grid lines. */
   gridProminence?: "off" | "normal" | "bold";
+  /** Price-bar frequency: hourly (Yahoo intraday, ~2y) / daily / weekly / monthly. */
+  frequency?: "hourly" | "daily" | "weekly" | "monthly";
 }
 
 export interface PaneInfo {

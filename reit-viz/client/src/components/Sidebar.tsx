@@ -739,6 +739,32 @@ export default function Sidebar({
                   L+Dot
                 </Button>
               </div>
+              {/* Price-bar frequency */}
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                  Frequency
+                </div>
+                <div className="flex gap-1">
+                  {([
+                    ["hourly", "1H", "Hourly bars (Yahoo intraday, ~2 years of history)"],
+                    ["daily", "D", "Daily bars (workbook data)"],
+                    ["weekly", "W", "Weekly bars (downsampled)"],
+                    ["monthly", "M", "Monthly bars (downsampled)"],
+                  ] as const).map(([key, label, title]) => (
+                    <Button
+                      key={key}
+                      variant={(chartConfig.frequency ?? "daily") === key ? "default" : "secondary"}
+                      size="sm"
+                      className="flex-1 h-7 text-xs"
+                      onClick={() => onChartConfigChange({ ...chartConfig, frequency: key })}
+                      title={title}
+                      data-testid={`btn-freq-${key}`}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
               {/* Background grid line prominence */}
               <div>
                 <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">

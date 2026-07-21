@@ -212,6 +212,9 @@ interface ChartPaneProps {
   activeIndicators: ActiveIndicators;
   timeRange: string;
   activeTool: string;
+  /** Hourly-frequency mode: series use epoch-second times; date-keyed extras
+   *  (seeds, annotations, quarter shading) are skipped. */
+  intraday?: boolean;
   drawColor: string;
   /** Measure tool: fill the shaded rectangle (vs. line + box only). */
   measureShade?: boolean;
@@ -860,6 +863,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   activeIndicators,
   timeRange,
   activeTool,
+  intraday = false,
   drawColor,
   measureShade = true,
   measureMagnet = false,
@@ -2472,7 +2476,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         ps.ticker === activeTicker &&
         dataTransform === "raw"
       ) {
-        continue; // Rendered as candlestick instead
+        // Rendered as candlestick instead — and remove any line series left
+        // over from a previous non-candle render, or it lingers with stale
+        // data (invisible under daily candles, visibly divergent in hourly).
+        const leftover = seriesMapRef.current.get(ps.id);
+        if (leftover) {
+          try { chart.removeSeries(leftover); } catch {}
+          seriesMapRef.current.delete(ps.id);
+        }
+        continue;
       }
 
       if (!seriesMapRef.current.has(ps.id)) {
@@ -3222,10 +3234,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return () => window.removeEventListener("reit-viz-seeds-restored", handleSeedsRestored);
   }, []);
 
+  // Hour marks on the time axis in intraday mode
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartReady) return;
+    try {
+      chart.applyOptions({ timeScale: { timeVisible: intraday, secondsVisible: false } });
+    } catch {}
+  }, [intraday, chartReady]);
+
   // ── Restore persisted trendline seeds for the active ticker ──
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !chartReady || !activeTicker) return;
+    if (!chart || !chartReady || !activeTicker || intraday) return;
     // Collect the metrics rendered in this pane so each seed lands on a matching pane.
     const paneMetrics = new Set<string>();
     for (const s of paneSeries) {
@@ -3412,7 +3433,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // ── Restore persisted support/resistance level seeds for the active ticker ──
   useEffect(() => {
     const chart = chartRef.current;
-    if (!chart || !chartReady || !activeTicker) return;
+    if (!chart || !chartReady || !activeTicker || intraday) return;
     // S/R levels only apply to close/ratio panes.
     if (!paneSeries.some((s) => s?.metric === "close" || s?.metric === "ratio")) return;
 
@@ -3628,14 +3649,22 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
     try {
-      chart.timeScale().setVisibleRange({
-        from: fmt(from) as Time,
-        to: fmt(now) as Time,
-      });
+      if (intraday) {
+        // Epoch-second axis in hourly mode
+        chart.timeScale().setVisibleRange({
+          from: Math.floor(from.getTime() / 1000) as unknown as Time,
+          to: Math.floor(now.getTime() / 1000) as unknown as Time,
+        });
+      } else {
+        chart.timeScale().setVisibleRange({
+          from: fmt(from) as Time,
+          to: fmt(now) as Time,
+        });
+      }
     } catch {
       chart.timeScale().fitContent();
     }
-  }, [timeRange, chartReady]);
+  }, [timeRange, chartReady, intraday]);
 
   // Resize when container changes
   useEffect(() => {

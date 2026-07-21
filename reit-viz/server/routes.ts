@@ -11,6 +11,7 @@ import { registerChatRoute } from "./chatRoute";
 import { realignTickerFiles, rleDecode, rleEncode, type RleArray } from "./realign";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
+import { fetchYahooIntraday } from "./intradayPrices";
 import { getAdvBatch } from "./adv";
 import { engleGranger } from "./cointegration";
 
@@ -4884,6 +4885,23 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ── Yahoo Finance price history routes ──────────────────────────────────
+
+  // GET /api/intraday/:ticker?interval=60m&days=180 — intraday bars (Yahoo)
+  app.get("/api/intraday/:ticker", async (req, res) => {
+    const ticker = req.params.ticker.toUpperCase();
+    const interval = String(req.query.interval || "60m");
+    const days = req.query.days ? parseInt(String(req.query.days)) : undefined;
+    try {
+      const data = await fetchYahooIntraday(ticker, interval, Number.isFinite(days) ? days : undefined);
+      res.set("Cache-Control", "public, max-age=300");
+      res.json(data);
+    } catch (e: any) {
+      res.status(502).json({
+        error: `Could not load intraday history for ${ticker}`,
+        detail: e?.message ?? String(e),
+      });
+    }
+  });
 
   // GET /api/yahoo-prices/:ticker  — returns PriceBars JSON
   app.get("/api/yahoo-prices/:ticker", async (req, res) => {
