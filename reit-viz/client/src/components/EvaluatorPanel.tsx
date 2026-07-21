@@ -2539,6 +2539,8 @@ export function buildBacktestResult(
   dates: string[],
   signalIndices: number[],
   direction: "long" | "short",
+  // Fraction units (0.05 = 5% favorable-excursion target), same convention
+  // as forwardReturns.computeForwardProfile.
   targetPct = 0.05,
   cooldown = 0,
   benchmarkPrices?: number[],

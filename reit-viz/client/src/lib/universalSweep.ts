@@ -35,9 +35,9 @@ export interface SweepSettings {
   /** Signals must have fired at least this often per year of series span. */
   freqFloorPerYear: number;
   /**
-   * Target favorable excursion in PERCENT units (5 = +5%): the kernel's
-   * buildSignalProfile compares targetPct against percent-scale returns, so a
-   * "hit" = the trade saw a ≥ targetPct% favorable move within the horizon.
+   * Target favorable excursion in PERCENT units for the UI (5 = +5%); the
+   * sweep converts to the kernel's fraction convention (0.05) at the call.
+   * A "hit" = the trade saw a ≥ targetPct% favorable move within the horizon.
    */
   targetPct: number;
   cooldown: number;
@@ -273,7 +273,7 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
           bundle.dates,
           indices,
           dir,
-          settings.targetPct,
+          settings.targetPct / 100,
           settings.cooldown,
           undefined,
           settings.horizon,

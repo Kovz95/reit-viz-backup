@@ -218,9 +218,11 @@ export function buildSignalProfile(
       if (r < maxDown) maxDown = r;
     }
     const favorableExtreme = side === "buy" ? maxUp : -maxDown;
+    // targetPct is a FRACTION (0.05 = 5%) like forwardReturns' targetPct;
+    // favorableExtreme is percent-scale, so convert before comparing.
     hitTarget[label] =
       targetPct != null && targetPct > 0
-        ? Number.isFinite(favorableExtreme) && favorableExtreme >= targetPct
+        ? Number.isFinite(favorableExtreme) && favorableExtreme >= targetPct * 100
         : (side === "buy" ? ret > 0 : ret < 0);
     const adverse = side === "buy" ? maxDown : -maxUp;
     trough[label] = Number.isFinite(adverse) ? Math.min(0, adverse) : null;
