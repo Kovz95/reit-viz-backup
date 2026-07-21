@@ -25,6 +25,7 @@ import {
 import DateInput from "@/components/DateInput";
 import { Button } from "@/components/ui/button";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
+import { computeBasketWeights } from "@/lib/basketWeights";
 import { getTickers, getTickersCacheSync } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -180,7 +181,7 @@ function formatPercent(value: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Basket weighting helpers (bundle Od/dd/bY/wY/ug)
+// Basket weighting helpers — shared with the basket price pipeline.
 // ---------------------------------------------------------------------------
 
 function getBasketConfig(basket: InspectableBasket): BasketConfig {
@@ -190,200 +191,6 @@ function getBasketConfig(basket: InspectableBasket): BasketConfig {
     customWeights: basket.customWeights ?? {},
     volLookback: basket.volLookback ?? 60,
   };
-}
-
-// Normalize a raw weight map to sum to 1 (equal-weight fallback when total ≤ 0).
-function normalizeWeights(raw: Record<string, number>): Record<string, number> {
-  const keys = Object.keys(raw);
-  if (keys.length === 0) return {};
-  const total = keys.reduce((acc, key) => acc + (raw[key] || 0), 0);
-  if (total <= 0) {
-    const equal = 1 / keys.length;
-    return Object.fromEntries(keys.map((key) => [key, equal]));
-  }
-  return Object.fromEntries(keys.map((key) => [key, (raw[key] || 0) / total]));
-}
-
-// Population standard deviation.
-function stdev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const mean = values.reduce((acc, v) => acc + v, 0) / values.length;
-  const variance =
-    values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length;
-  return Math.sqrt(variance);
-}
-
-// Resolve a single ticker's market cap (bundle wY) via the metric fetcher.
-async function fetchMarketCap(
-  ticker: string,
-  fetcher: MetricFetcher,
-): Promise<number | null> {
-  const sources = [
-    "Fund: Market Cap",
-    "Market Cap",
-    "Fund: Enterprise Value",
-    "Enterprise Value",
-  ];
-  for (const source of sources) {
-    try {
-      const series = await fetcher(ticker, source);
-      if (series.length > 0) {
-        const latest = series[series.length - 1].value;
-        if (latest > 0 && isFinite(latest)) return latest;
-      }
-    } catch {
-      // try next source
-    }
-  }
-  return null;
-}
-
-interface BasketWeightsResult {
-  weights: Record<string, number>;
-  usingEqualWeight: boolean;
-}
-
-// Compute basket weights (bundle ug). `closeSeriesByTicker` provides per-ticker close
-// series for price/inverse-vol schemes; `fetcher` is used for market-cap lookups.
-async function computeBasketWeights(
-  basket: InspectableBasket,
-  closeSeriesByTicker: Record<string, MetricSeriesPoint[]>,
-  fetcher: MetricFetcher,
-): Promise<BasketWeightsResult> {
-  const { weighting, volLookback, customWeights } = getBasketConfig(basket);
-  const tickers = basket.tickers;
-
-  if (tickers.length === 0) return { weights: {}, usingEqualWeight: false };
-
-  if (weighting === "equal") {
-    const equal = 1 / tickers.length;
-    return {
-      weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-      usingEqualWeight: false,
-    };
-  }
-
-  if (weighting === "price") {
-    const raw: Record<string, number> = {};
-    for (const ticker of tickers) {
-      const series = closeSeriesByTicker[ticker];
-      raw[ticker] = series && series.length > 0 ? series[series.length - 1].value : 1;
-    }
-    return { weights: normalizeWeights(raw), usingEqualWeight: false };
-  }
-
-  if (weighting === "custom") {
-    const raw: Record<string, number> = {};
-    for (const ticker of tickers) {
-      raw[ticker] = customWeights[ticker] ?? 1 / tickers.length;
-    }
-    return { weights: normalizeWeights(raw), usingEqualWeight: false };
-  }
-
-  if (weighting === "fmp_cap_daily") {
-    const snapshot = basket.fmpHistCapsSnapshot;
-    if (!snapshot || !snapshot.series) {
-      const equal = 1 / tickers.length;
-      return {
-        weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-        usingEqualWeight: true,
-      };
-    }
-    const raw: Record<string, number> = {};
-    for (const ticker of tickers) {
-      const series = snapshot.series[ticker.toUpperCase()] || [];
-      const cap = series.length ? series[series.length - 1].marketCap : 0;
-      raw[ticker] = cap > 0 ? cap : 0;
-    }
-    if (Object.values(raw).reduce((acc, v) => acc + v, 0) <= 0) {
-      const equal = 1 / tickers.length;
-      return {
-        weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-        usingEqualWeight: true,
-      };
-    }
-    return { weights: normalizeWeights(raw), usingEqualWeight: false };
-  }
-
-  if (weighting === "yahoo_cap") {
-    const snapshot = basket.yahooCapSnapshot;
-    if (!snapshot || !snapshot.caps || Object.keys(snapshot.caps).length === 0) {
-      const equal = 1 / tickers.length;
-      return {
-        weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-        usingEqualWeight: true,
-      };
-    }
-    const raw: Record<string, number> = {};
-    const missing: string[] = [];
-    for (const ticker of tickers) {
-      const cap = snapshot.caps[ticker];
-      if (cap && cap > 0) {
-        raw[ticker] = cap;
-      } else {
-        missing.push(ticker);
-        raw[ticker] = 0;
-      }
-    }
-    if (missing.length > 0) {
-      console.warn(
-        `[basketSeries] yahoo_cap: missing caps for ${missing.join(", ")} — excluded from weights`,
-      );
-    }
-    if (Object.values(raw).reduce((acc, v) => acc + v, 0) <= 0) {
-      const equal = 1 / tickers.length;
-      return {
-        weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-        usingEqualWeight: true,
-      };
-    }
-    return { weights: normalizeWeights(raw), usingEqualWeight: false };
-  }
-
-  if (weighting === "inverse_vol") {
-    const lookback = volLookback;
-    const raw: Record<string, number> = {};
-    for (const ticker of tickers) {
-      const series = closeSeriesByTicker[ticker];
-      if (!series || series.length < 2) {
-        raw[ticker] = 1;
-        continue;
-      }
-      const window = series.slice(Math.max(0, series.length - lookback));
-      const returns: number[] = [];
-      for (let i = 1; i < window.length; i++) {
-        if (window[i - 1].value > 0) {
-          returns.push(Math.log(window[i].value / window[i - 1].value));
-        }
-      }
-      const vol = stdev(returns);
-      raw[ticker] = vol > 0 ? 1 / vol : 1;
-    }
-    return { weights: normalizeWeights(raw), usingEqualWeight: false };
-  }
-
-  // Default: market_cap (resolved live via the metric fetcher).
-  const raw: Record<string, number> = {};
-  let missing = false;
-  await Promise.all(
-    tickers.map(async (ticker) => {
-      const cap = await fetchMarketCap(ticker, fetcher);
-      if (cap !== null) {
-        raw[ticker] = cap;
-      } else {
-        missing = true;
-        raw[ticker] = 0;
-      }
-    }),
-  );
-  if (Object.values(raw).reduce((acc, v) => acc + v, 0) <= 0 || missing) {
-    const equal = 1 / tickers.length;
-    return {
-      weights: Object.fromEntries(tickers.map((t) => [t, equal])),
-      usingEqualWeight: true,
-    };
-  }
-  return { weights: normalizeWeights(raw), usingEqualWeight: false };
 }
 
 // ---------------------------------------------------------------------------

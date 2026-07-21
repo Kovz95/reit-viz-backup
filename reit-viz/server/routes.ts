@@ -5921,13 +5921,17 @@ export async function registerRoutes(server: Server, app: Express) {
       if (!tickers.length) return res.json([]);
       const dates = getDates();
 
-      // Load constituent close/open/high/low maps.
+      // Load constituent close/open/high/low maps. Pair each ticker with its
+      // weight BEFORE filtering unresolvable tickers, so a missing constituent
+      // doesn't silently knock the whole basket back to equal weighting.
+      const rawW = Array.isArray(weights) && weights.length === tickers.length ? weights : null;
       const constituents = tickers
-        .map((tk) => {
+        .map((tk, i) => {
           const raw = readTickerRaw(tk);
           if (!raw || !raw.close) return null;
           return {
             ticker: tk,
+            weight: rawW ? Number(rawW[i]) || 0 : 1,
             close: decodeMetricToMap(raw.close),
             open: decodeMetricToMap(raw.open || []),
             high: decodeMetricToMap(raw.high || []),
@@ -5938,9 +5942,7 @@ export async function registerRoutes(server: Server, app: Express) {
         .filter((c): c is NonNullable<typeof c> => c !== null);
       if (!constituents.length) return res.json([]);
 
-      const w = weights && weights.length === constituents.length
-        ? weights
-        : new Array(constituents.length).fill(1 / constituents.length);
+      const w = constituents.map((c) => c.weight);
       const wSum = w.reduce((s, v) => s + v, 0) || 1;
       const wn = w.map((v) => v / wSum);
 
@@ -6001,13 +6003,23 @@ export async function registerRoutes(server: Server, app: Express) {
       if (!tickers.length) return res.json(empty);
       const dates = getDates();
 
+      // Pair weights with tickers BEFORE filtering unresolvable ones (see
+      // /api/basket/ohlc) so missing constituents don't collapse to equal.
+      const rawW = Array.isArray(weights) && weights.length === tickers.length ? weights : null;
+
       if (metric) {
         // Weighted average of a non-price metric across constituents per date.
-        const maps = tickers
-          .map((tk) => { const raw = readTickerRaw(tk); return raw && raw[metric] ? decodeMetricToMap(raw[metric]) : null; })
-          .filter((m): m is Map<number, number> => m !== null);
-        if (!maps.length) return res.json(empty);
-        const w = weights && weights.length === maps.length ? weights : new Array(maps.length).fill(1);
+        const paired = tickers
+          .map((tk, i) => {
+            const raw = readTickerRaw(tk);
+            return raw && raw[metric]
+              ? { map: decodeMetricToMap(raw[metric]), weight: rawW ? Number(rawW[i]) || 0 : 1 }
+              : null;
+          })
+          .filter((m): m is NonNullable<typeof m> => m !== null);
+        if (!paired.length) return res.json(empty);
+        const maps = paired.map((p) => p.map);
+        const w = paired.map((p) => p.weight);
         const closes: number[] = [], pdates: string[] = [];
         for (let i = 0; i < dates.length; i++) {
           let sum = 0, totW = 0;
@@ -6026,11 +6038,17 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       // Default: reuse the basket OHLC index and reshape to parallel arrays.
-      const constituents = tickers
-        .map((tk) => { const raw = readTickerRaw(tk); return raw && raw.close ? decodeMetricToMap(raw.close) : null; })
-        .filter((m): m is Map<number, number> => m !== null);
-      if (!constituents.length) return res.json(empty);
-      const w = weights && weights.length === constituents.length ? weights : new Array(constituents.length).fill(1);
+      const pairedC = tickers
+        .map((tk, i) => {
+          const raw = readTickerRaw(tk);
+          return raw && raw.close
+            ? { map: decodeMetricToMap(raw.close), weight: rawW ? Number(rawW[i]) || 0 : 1 }
+            : null;
+        })
+        .filter((m): m is NonNullable<typeof m> => m !== null);
+      if (!pairedC.length) return res.json(empty);
+      const constituents = pairedC.map((p) => p.map);
+      const w = pairedC.map((p) => p.weight);
       const bases = constituents.map((m) => {
         let firstIdx = Infinity, firstClose = NaN;
         for (const [idx, val] of m.entries()) if (idx < firstIdx) { firstIdx = idx; firstClose = val; }

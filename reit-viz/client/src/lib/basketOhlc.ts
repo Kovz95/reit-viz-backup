@@ -1,6 +1,8 @@
 // Hand-written stub — basketOhlc: builds and caches basket-level OHLCV data
 // by combining individual ticker OHLCV series with basket weights.
 
+import { computeStaticBasketWeights, type WeightableBasket } from "@/lib/basketWeights";
+
 export interface BasketOhlcBar {
   date: string;
   open: number;
@@ -36,14 +38,45 @@ export interface BasketOhlcResult {
  * Builds a basket definition object synchronously (does NOT fetch data).
  * Returns a BasketDef that can be passed to getBasketOhlc for data fetching.
  * Call sites use: const bkt = buildBasketOhlc(basketTickers, baskets)
+ *
+ * When the 2nd arg is a single basket object (has a `weighting`) — or opts
+ * carry one — its weighting config rides along on the def so getBasketOhlc can
+ * weight the price index by the configured scheme. Call sites that pass the
+ * whole baskets LIST (the optimizers' plain ticker unions) keep equal weights.
  */
 export function buildBasketOhlc(
   tickers: string[],
-  baskets?: any,
-  _opts?: any
+  basketOrList?: any,
+  opts?: any
 ): BasketDef {
   const name = Array.isArray(tickers) ? tickers.join("+") : String(tickers);
-  return { name, tickers: Array.isArray(tickers) ? tickers : [tickers] };
+  const def: BasketDef = { name, tickers: Array.isArray(tickers) ? tickers : [tickers] };
+  const src =
+    basketOrList && !Array.isArray(basketOrList) && typeof basketOrList === "object" && "weighting" in basketOrList
+      ? basketOrList
+      : undefined;
+  for (const key of ["weighting", "customWeights", "volLookback", "fmpHistCapsSnapshot", "yahooCapSnapshot"]) {
+    const v = opts?.[key] ?? src?.[key];
+    if (v !== undefined) (def as any)[key] = v;
+  }
+  return def;
+}
+
+/** Resolve the def's static weights (ordered like def.tickers) per its
+ *  weighting scheme; null → equal weight (server default). */
+async function resolveDefWeights(basket: BasketDef): Promise<number[] | null> {
+  if (Array.isArray(basket.weights) && basket.weights.length === basket.tickers.length) {
+    return basket.weights;
+  }
+  const weighting = (basket as WeightableBasket).weighting;
+  if (!weighting || weighting === "equal" || basket.tickers.length === 0) return null;
+  try {
+    const { weights } = await computeStaticBasketWeights(basket as WeightableBasket);
+    const arr = basket.tickers.map((t) => weights[t] ?? weights[t.toUpperCase()] ?? 0);
+    return arr.some((w) => w > 0) ? arr : null;
+  } catch {
+    return null; // fall back to the server's equal weighting
+  }
 }
 
 /**
@@ -56,7 +89,8 @@ export async function getBasketOhlc(
 ): Promise<BasketOhlcResult | null> {
   if (!basket) return null;
   try {
-    const body: any = { basket };
+    const weights = await resolveDefWeights(basket);
+    const body: any = { basket: weights ? { ...basket, weights } : basket };
     if (dateRange) body.dateRange = dateRange;
     const res = await fetch("/api/basket/ohlc", {
       method: "POST",
