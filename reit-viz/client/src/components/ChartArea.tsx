@@ -1107,6 +1107,23 @@ export default function ChartArea({
     };
   }, [frequency, seriesByPane, ohlcCache, ohlcData, activeTicker, intradayCache]);
 
+  // After a frequency/axis switch, force a coordinated fit across all panes —
+  // the logical-range sync can otherwise echo a stale range (saved from the
+  // previous axis) over the per-pane refits, leaving the viewport in dead space.
+  const freqAxisKey = `${frequency}|${freqView?.spacerTimes?.length ?? 0}`;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      syncingRef.current = true;
+      for (const chart of chartsRef.current.values()) {
+        try { chart.timeScale().fitContent(); } catch {}
+      }
+      syncingRef.current = false;
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freqAxisKey]);
+
+
 
   // Grid dimensions (mirrors gridContainerStyle): cols from layout, rows to fit.
   const gridDims = useMemo(() => {
