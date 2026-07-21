@@ -10,8 +10,9 @@
  */
 import { createContext, useContext, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getTickers } from "@/lib/dataService";
+import { getTickers, CLASSIFICATION_KEYS } from "@/lib/dataService";
 import type { ClassifiedBase } from "@/lib/dataService";
+import { useReclassificationOverrides } from "@/lib/reclassificationOverrides";
 import {
   emptyClassFilters,
   applyClassFilters,
@@ -114,8 +115,10 @@ export interface UniverseContextValue {
   filteredCount: number;
   /** Total ticker count */
   totalCount: number;
-  /** All ticker metadata (for the Universe page grid) */
+  /** All ticker metadata with reclassification overrides applied (for the Universe page grid) */
   allTickers: ClassifiedBase[];
+  /** Workbook ticker metadata WITHOUT overrides — the classification baseline */
+  rawTickers: ClassifiedBase[];
   /** Filtered ticker metadata */
   filteredTickersList: ClassifiedBase[];
   /** Serialize for workspace save */
@@ -149,7 +152,24 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     queryFn: getTickers,
   });
 
-  const allTickers = tickersMeta as ClassifiedBase[];
+  // User reclassifications are applied here, at the universe choke point, so
+  // every consumer (Universe table, classification filters, group-bys) sees the
+  // effective taxonomy. rawTickers keeps the workbook originals — the Universe
+  // editor needs them to tell "override" apart from "back to the default".
+  const overrides = useReclassificationOverrides();
+  const rawTickers = tickersMeta as ClassifiedBase[];
+  const allTickers = useMemo(() => {
+    if (Object.keys(overrides).length === 0) return rawTickers;
+    return rawTickers.map((t) => {
+      const o = overrides[t.ticker];
+      if (!o) return t;
+      const merged: any = { ...t };
+      for (const key of CLASSIFICATION_KEYS) {
+        if (o[key] !== undefined) merged[key] = o[key];
+      }
+      return merged as ClassifiedBase;
+    });
+  }, [rawTickers, overrides]);
 
   // Workbook tickers carry no volume of their own. Two sources of $ ADV:
   //  • global-universe dataset (instant, static estimate, ~98% coverage)
@@ -391,6 +411,7 @@ export function UniverseProvider({ children }: { children: React.ReactNode }) {
     filteredCount: filteredTickersList.length,
     totalCount: allTickers.length,
     allTickers,
+    rawTickers,
     filteredTickersList,
     serialize,
     restore,

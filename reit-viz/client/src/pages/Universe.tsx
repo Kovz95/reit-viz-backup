@@ -69,6 +69,7 @@ export default function Universe() {
     filteredCount,
     totalCount,
     allTickers,
+    rawTickers,
     filteredTickersList,
     clearAll,
   } = useUniverse();
@@ -179,27 +180,13 @@ export default function Universe() {
     excludeTickersBulk("workbook", offFilterExchangeTickers.map((t: any) => t.ticker));
   };
 
-  const effectiveClassMap = useMemo(() => {
+  // Workbook (pre-override) classification per ticker: the baseline that decides
+  // whether an edited value is an override or a return to the default.
+  const baseClassMap = useMemo(() => {
     const map = new Map<string, any>();
-    for (const ticker of allTickers) {
-      const override = overrides[(ticker as any).ticker];
-      const classData: any = {
-        economy: (ticker as any).economy,
-        sector: (ticker as any).sector,
-        subsector: (ticker as any).subsector,
-        industryGroup: (ticker as any).industryGroup,
-        industry: (ticker as any).industry,
-        subindustry: (ticker as any).subindustry,
-      };
-      if (override) {
-        for (const key of CLASSIFICATION_KEYS) {
-          if (override[key] !== undefined) classData[key] = override[key];
-        }
-      }
-      map.set((ticker as any).ticker, classData);
-    }
+    for (const ticker of rawTickers) map.set((ticker as any).ticker, ticker);
     return map;
-  }, [allTickers, overrides]);
+  }, [rawTickers]);
 
   const availableValues = useMemo(() => {
     const sets: Record<string, Set<string>> = {
@@ -243,8 +230,11 @@ export default function Universe() {
 
   const commitEdit = () => {
     if (!editingCell) return;
-    const original = effectiveClassMap.get(editingCell.ticker)?.[editingCell.field] || "";
-    commitClassificationOverride(editingCell.ticker, editingCell.field, editValue, original);
+    const value = editValue.trim();
+    const base = baseClassMap.get(editingCell.ticker)?.[editingCell.field] || "";
+    // Clearing the text reverts the field to the workbook value (per the cell
+    // tooltip); typing the workbook value itself also drops the override.
+    commitClassificationOverride(editingCell.ticker, editingCell.field, value, value === "" ? "" : base);
     setEditingCell(null);
     setEditValue("");
   };
