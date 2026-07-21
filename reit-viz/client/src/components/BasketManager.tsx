@@ -20,6 +20,7 @@ import {
   GitMerge,
 } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
+import { isAutoBasketId } from "@/lib/autoBaskets";
 import BulkAddByGroup from "./BulkAddByGroup";
 import BasketMetricInspector, {
   type InspectableBasket,
@@ -533,6 +534,92 @@ function BasketCard({
   );
 }
 
+// ── Compact read-only card for a derived (auto) basket ────────────────────────
+// Auto baskets are live views over the current classifications — no rename,
+// delete, or ticker editing. They can be inspected, merge-selected, and
+// duplicated into a normal editable basket.
+function AutoBasketCard({
+  basket,
+  onInspect,
+  selected,
+  onToggleSelect,
+}: {
+  basket: Basket;
+  onInspect: (id: string) => void;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
+}) {
+  const { baskets, addBasket } = useBaskets();
+  const [expanded, setExpanded] = useState(false);
+
+  const duplicate = useCallback(() => {
+    const names = new Set(baskets.map((b) => b.name));
+    const name = uniqueName(`${basket.name} (copy)`, names);
+    addBasket(name, [...basket.tickers], {
+      weighting: basket.weighting,
+      rebalance: basket.rebalance,
+    });
+  }, [baskets, basket, addBasket]);
+
+  return (
+    <div
+      className={`rounded-md border bg-card/60 ${selected ? "border-sky-500/70" : "border-border/60"}`}
+      data-testid={`basket-card-${basket.id}`}
+    >
+      <div className="flex items-center gap-2 px-2 py-1">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(basket.id)}
+          className="flex-shrink-0 w-3.5 h-3.5 accent-sky-500 cursor-pointer"
+          title="Select for merge"
+          data-testid={`basket-select-${basket.id}`}
+        />
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-muted-foreground hover:text-foreground flex-shrink-0"
+          title={expanded ? "Collapse" : "Expand"}
+          data-testid={`basket-toggle-${basket.id}`}
+        >
+          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </button>
+        <span className="flex-1 min-w-0 text-xs text-foreground truncate">{basket.name}</span>
+        <span className="text-[9px] font-mono text-muted-foreground flex-shrink-0">
+          {basket.tickers.length} · live
+        </span>
+        <button
+          type="button"
+          onClick={() => onInspect(basket.id)}
+          className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border border-amber-500/50 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 flex-shrink-0"
+          title="Inspect the metric math for this basket"
+          data-testid={`basket-inspect-${basket.id}`}
+        >
+          <Sigma className="w-3 h-3" />
+        </button>
+        <button
+          type="button"
+          onClick={duplicate}
+          className="text-muted-foreground hover:text-sky-300 flex-shrink-0"
+          title={`Duplicate ${basket.name} into an editable saved basket`}
+          data-testid={`basket-duplicate-${basket.id}`}
+        >
+          <Copy className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {expanded && (
+        <div className="border-t border-border/60 px-2 py-1.5 flex flex-wrap gap-1" data-testid={`basket-tickers-${basket.id}`}>
+          {basket.tickers.map((t) => (
+            <span key={t} className="text-[10px] font-mono bg-sky-500/10 border border-sky-500/30 text-sky-200 rounded px-1.5 py-0.5">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Manager (list of cards + shared inspector dialog) ─────────────────────────
 export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
   const { baskets, addBasket } = useBaskets();
@@ -557,6 +644,37 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
         b.tickers.some((t) => t.includes(q)),
     );
   }, [baskets, filter]);
+
+  // Saved vs derived (auto) baskets — autos render in their own read-only
+  // section below, grouped by kind, and are always live-derived from the
+  // current classifications (see lib/autoBaskets.ts).
+  const userFiltered = useMemo(() => filtered.filter((b) => !isAutoBasketId(b.id)), [filtered]);
+  const autoFiltered = useMemo(() => filtered.filter((b) => isAutoBasketId(b.id)), [filtered]);
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [openAutoGroups, setOpenAutoGroups] = useState<Set<string>>(new Set());
+  const autoGroups = useMemo(() => {
+    const groups = new Map<string, Basket[]>();
+    for (const b of autoFiltered) {
+      const key = b.name.split(":")[0]; // "Auto Sub", "Auto Ctry", …
+      const arr = groups.get(key);
+      if (arr) arr.push(b);
+      else groups.set(key, [b]);
+    }
+    const order = ["Auto Econ", "Auto Sect", "Auto Subsect", "Auto IndGrp", "Auto Ind", "Auto Sub", "Auto Ctry", "Auto Exch"];
+    return [...groups.entries()].sort(
+      (a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99),
+    );
+  }, [autoFiltered]);
+  const AUTO_GROUP_LABELS: Record<string, string> = {
+    "Auto Econ": "Economy",
+    "Auto Sect": "Sector",
+    "Auto Subsect": "Subsector",
+    "Auto IndGrp": "Industry Group",
+    "Auto Ind": "Industry",
+    "Auto Sub": "Subindustry (incl. country / exchange splits)",
+    "Auto Ctry": "Country",
+    "Auto Exch": "Exchange",
+  };
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -620,7 +738,7 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
     <div data-testid="basket-manager">
       <div className="flex items-center justify-between gap-2 mb-2">
         <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
-          Saved baskets ({baskets.length})
+          Saved baskets ({baskets.filter((b) => !isAutoBasketId(b.id)).length})
         </div>
         {baskets.length > 3 && (
           <input
@@ -676,18 +794,18 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
         </div>
       )}
 
-      {baskets.length === 0 ? (
+      {userFiltered.length === 0 && autoFiltered.length === 0 && filter.trim() ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">
+          No baskets match “{filter}”.
+        </div>
+      ) : userFiltered.length === 0 ? (
         <div className="text-xs text-muted-foreground py-6 text-center">
           No saved baskets yet. Create one above and it will appear here with
           full details, weighting math, and per-metric inspection.
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="text-xs text-muted-foreground py-4 text-center">
-          No baskets match “{filter}”.
-        </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {filtered.map((b) => (
+          {userFiltered.map((b) => (
             <BasketCard
               key={b.id}
               basket={b}
@@ -697,6 +815,63 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
               onToggleSelect={toggleSelect}
             />
           ))}
+        </div>
+      )}
+
+      {/* Auto baskets — always-live views derived from the current
+          classifications (uploads / reclassifications / deletions reflect
+          automatically). Read-only; duplicate one to make it editable. */}
+      {autoFiltered.length > 0 && (
+        <div className="mt-3" data-testid="auto-baskets-section">
+          <button
+            type="button"
+            onClick={() => setAutoOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground"
+            data-testid="auto-baskets-toggle"
+          >
+            {autoOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            Auto baskets ({autoFiltered.length}) — live from classifications
+          </button>
+          {autoOpen && (
+            <div className="mt-1.5 flex flex-col gap-2">
+              {autoGroups.map(([groupKey, groupBaskets]) => {
+                const open = openAutoGroups.has(groupKey);
+                return (
+                  <div key={groupKey}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenAutoGroups((prev) => {
+                          const next = new Set(prev);
+                          next.has(groupKey) ? next.delete(groupKey) : next.add(groupKey);
+                          return next;
+                        })
+                      }
+                      className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground hover:text-foreground py-0.5"
+                      data-testid={`auto-group-toggle-${groupKey.replace(/\s+/g, "-")}`}
+                    >
+                      {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      {AUTO_GROUP_LABELS[groupKey] ?? groupKey}
+                      <span className="font-mono text-muted-foreground/70">({groupBaskets.length})</span>
+                    </button>
+                    {open && (
+                      <div className="flex flex-col gap-1 pl-4 mt-0.5">
+                        {groupBaskets.map((b) => (
+                          <AutoBasketCard
+                            key={b.id}
+                            basket={b}
+                            onInspect={setInspectId}
+                            selected={selectedIds.has(b.id)}
+                            onToggleSelect={toggleSelect}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

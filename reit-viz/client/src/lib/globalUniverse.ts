@@ -35,7 +35,7 @@ interface GlobalUniverseState {
 let _cache: GlobalRecord[] | null = null;
 let _inFlight: Promise<GlobalRecord[]> | null = null;
 
-async function loadGlobalRecords(): Promise<GlobalRecord[]> {
+export async function loadGlobalRecords(): Promise<GlobalRecord[]> {
   if (_cache) return _cache;
   if (_inFlight) return _inFlight;
 

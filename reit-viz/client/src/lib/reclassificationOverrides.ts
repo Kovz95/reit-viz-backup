@@ -4,8 +4,10 @@
 
 import { useState, useEffect } from "react";
 
-const STORAGE_KEY = "reit-viz:classification-overrides:v1";
-const CHANGE_EVENT = "reit-viz:classification-overrides:changed";
+export const OVERRIDES_STORAGE_KEY = "reit-viz:classification-overrides:v1";
+export const OVERRIDES_CHANGE_EVENT = "reit-viz:classification-overrides:changed";
+const STORAGE_KEY = OVERRIDES_STORAGE_KEY;
+const CHANGE_EVENT = OVERRIDES_CHANGE_EVENT;
 
 export type ClassificationField =
   | "economy"
@@ -20,7 +22,7 @@ export type ClassificationOverride = Partial<Record<ClassificationField, string>
 /** Map from ticker → override record. */
 export type OverridesMap = Record<string, ClassificationOverride>;
 
-function loadOverrides(): OverridesMap {
+export function loadOverrides(): OverridesMap {
   if (typeof window === "undefined") return {};
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);

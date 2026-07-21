@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBaskets } from "@/lib/useBaskets";
+import { isAutoBasketId } from "@/lib/autoBaskets";
 import { getTickers } from "@/lib/dataService";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { BasketEditorPanel } from "@/lib/basketEditorPanel";
@@ -29,7 +30,8 @@ export default function Baskets() {
           <FolderOpen className="w-5 h-5 text-amber-400" />
           <h1 className="text-base font-semibold text-foreground">Baskets</h1>
           <span className="text-[11px] font-mono text-muted-foreground ml-2">
-            {baskets.length} saved
+            {baskets.filter((b) => !isAutoBasketId(b.id)).length} saved ·{" "}
+            {baskets.filter((b) => isAutoBasketId(b.id)).length} auto
           </span>
         </div>
         <p className="text-xs text-muted-foreground mb-4 leading-relaxed">

@@ -6,6 +6,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import {
+  getAutoBaskets,
+  initAutoBaskets,
+  isAutoBasketId,
+  AUTO_BASKETS_CHANGED,
+} from "@/lib/autoBaskets";
 
 export interface Basket {
   id: string;
@@ -51,6 +57,11 @@ function emitChanged(): void {
 
 function sortByName(list: Basket[]): Basket[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Saved baskets first (name-sorted), then the derived auto baskets. */
+function combined(): Basket[] {
+  return [...cache, ...getAutoBaskets()];
 }
 
 function normalizeBasket(b: any): Basket | null {
@@ -141,23 +152,26 @@ function refresh(): Promise<Basket[]> {
 }
 
 export function useBaskets(): UseBasketsReturn {
-  const [baskets, setBaskets] = useState<Basket[]>(() => cache);
+  const [baskets, setBaskets] = useState<Basket[]>(() => combined());
 
   useEffect(() => {
     let alive = true;
-    const sync = () => { if (alive) setBaskets(cache); };
+    const sync = () => { if (alive) setBaskets(combined()); };
     // Cross-tab sync: another tab's write hits the server but we can't hear its
     // in-memory event, so force a re-fetch (not just a cache read) on focus.
     const onFocus = () => {
       inflight = null; // bypass the load-once guard so focus always re-fetches
       void refresh().then(sync);
     };
+    initAutoBaskets();
     refresh().then(sync);
     window.addEventListener(CHANGE_EVENT, sync);
+    window.addEventListener(AUTO_BASKETS_CHANGED, sync);
     window.addEventListener("focus", onFocus);
     return () => {
       alive = false;
       window.removeEventListener(CHANGE_EVENT, sync);
+      window.removeEventListener(AUTO_BASKETS_CHANGED, sync);
       window.removeEventListener("focus", onFocus);
     };
   }, []);
@@ -195,6 +209,7 @@ export function useBaskets(): UseBasketsReturn {
         Pick<Basket, "name" | "tickers" | "weighting" | "rebalance" | "customWeights" | "volLookback">
       >
     ): void => {
+      if (isAutoBasketId(id)) return; // auto baskets are derived — read-only
       const existing = cache.find((b) => b.id === id);
       if (!existing) return;
       const updated: Basket = {
@@ -217,6 +232,7 @@ export function useBaskets(): UseBasketsReturn {
   );
 
   const deleteBasket = useCallback((id: string): void => {
+    if (isAutoBasketId(id)) return; // auto baskets are derived — read-only
     cache = cache.filter((b) => b.id !== id);
     emitChanged();
     void (async () => {
