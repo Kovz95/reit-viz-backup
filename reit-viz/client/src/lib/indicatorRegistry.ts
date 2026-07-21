@@ -31,6 +31,7 @@ import {
   computeDonchian,
   computeIchimoku,
   computeSlowStochastic,
+  computeMADistance,
 } from "./indicators";
 
 export type IndicatorParam = {
@@ -206,6 +207,39 @@ const SLOW_STOCH: IndicatorDef = {
     ctx.register(dS);
     ctx.refLine(80, ctx.colors.slowstoch_ref, k[0].time, k[k.length - 1].time);
     ctx.refLine(20, ctx.colors.slowstoch_ref, k[0].time, k[k.length - 1].time);
+  },
+};
+
+const MA_DIST: IndicatorDef = {
+  id: "madist",
+  label: "% from MA",
+  category: "Oscillators",
+  renderTarget: "pane",
+  params: [
+    { key: "period", label: "MA Period", default: 200, min: 2, max: 400 },
+    { key: "band", label: "Band %ile", default: 90, min: 51, max: 99 },
+  ],
+  colorKeys: ["madist_line", "madist_band", "madist_zero"],
+  renderPane: (ctx, bars, p) => {
+    const data = computeMADistance(bars, p.period);
+    if (!data.length) return;
+    const s = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.madist_line,
+      lineWidth: 1,
+      title: `% from MA ${p.period}${ctx.baseLabel}`,
+    });
+    s.setData(asLine(data));
+    ctx.register(s);
+    const f = data[0].time;
+    const l = data[data.length - 1].time;
+    // Band lines sit at the series' own historical percentiles (band-th and
+    // its mirror), so "stretched" is calibrated per ticker rather than fixed.
+    const sorted = data.map((d) => d.value).sort((a, b) => a - b);
+    const q = (frac: number) =>
+      sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(frac * (sorted.length - 1))))];
+    ctx.refLine(q(p.band / 100), ctx.colors.madist_band, f, l);
+    ctx.refLine(q(1 - p.band / 100), ctx.colors.madist_band, f, l);
+    ctx.refLine(0, ctx.colors.madist_zero, f, l);
   },
 };
 
@@ -497,7 +531,7 @@ const ICHIMOKU: IndicatorDef = {
 };
 
 // ── The registry ──
-export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON];
+export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 

@@ -705,6 +705,25 @@ export function computeCCI(bars: OhlcBar[], period = 20): DataPoint[] {
   return result;
 }
 
+/** Percent distance of close from its own SMA: (close / SMA(period) - 1) * 100.
+ *  Oscillator centered on 0; positive = price extended above trend. Emits from
+ *  bar period-1 onward (rolling-sum SMA, O(n)). */
+export function computeMADistance(bars: OhlcBar[], period = 200): DataPoint[] {
+  const n = bars.length;
+  if (n < period) return [];
+  const result: DataPoint[] = [];
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    sum += bars[i].close;
+    if (i >= period) sum -= bars[i - period].close;
+    if (i >= period - 1) {
+      const ma = sum / period;
+      if (ma !== 0) result.push({ time: bars[i].time, value: (bars[i].close / ma - 1) * 100 });
+    }
+  }
+  return result;
+}
+
 /** Williams %R. Ranges -100 (oversold) .. 0 (overbought). */
 export function computeWilliamsR(bars: OhlcBar[], period = 14): DataPoint[] {
   const n = bars.length;
