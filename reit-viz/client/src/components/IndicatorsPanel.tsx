@@ -305,19 +305,34 @@ export function RegistryIndicatorControls({
                     {def.params.map((pr) => (
                       <div key={pr.key} className="flex items-center gap-1">
                         <span className="text-[9px] text-muted-foreground/70">{pr.label}</span>
-                        <Input
-                          type="number"
-                          className="h-6 w-14 text-[10px] px-1.5"
-                          value={p[pr.key]}
-                          min={pr.min}
-                          max={pr.max}
-                          step={pr.step ?? 1}
-                          onChange={(e) => {
-                            const v = Number(e.target.value);
-                            if (Number.isFinite(v)) setParam(def, pr.key, v);
-                          }}
-                          data-testid={`param-${def.id}-${pr.key}`}
-                        />
+                        {pr.options ? (
+                          <select
+                            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                            value={p[pr.key]}
+                            onChange={(e) => setParam(def, pr.key, Number(e.target.value))}
+                            data-testid={`param-${def.id}-${pr.key}`}
+                          >
+                            {pr.options.map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <Input
+                            type="number"
+                            className="h-6 w-14 text-[10px] px-1.5"
+                            value={p[pr.key]}
+                            min={pr.min}
+                            max={pr.max}
+                            step={pr.step ?? 1}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              if (Number.isFinite(v)) setParam(def, pr.key, v);
+                            }}
+                            data-testid={`param-${def.id}-${pr.key}`}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>

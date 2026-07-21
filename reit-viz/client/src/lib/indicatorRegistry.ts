@@ -19,6 +19,7 @@
 
 import { LineSeries, LineStyle, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
 import type { OhlcBar } from "./indicators";
+import { MA_TYPES } from "./maEngine";
 import { IchimokuCloudPrimitive, type CloudPoint } from "./ichimokuCloudPrimitive";
 import {
   computeADX,
@@ -42,6 +43,9 @@ export type IndicatorParam = {
   max: number;
   /** Input step; use a fraction for decimal params (e.g. PSAR 0.02). Default 1. */
   step?: number;
+  /** When set, the panel renders a dropdown of these choices instead of a
+   *  number input. Values are still numbers (stored in params like any other). */
+  options?: { value: number; label: string }[];
 };
 
 export type RenderTarget = "pane" | "overlay";
@@ -217,16 +221,25 @@ const MA_DIST: IndicatorDef = {
   renderTarget: "pane",
   params: [
     { key: "period", label: "MA Period", default: 200, min: 2, max: 400 },
+    {
+      key: "maType",
+      label: "Type",
+      default: 0,
+      min: 0,
+      max: MA_TYPES.length - 1,
+      options: MA_TYPES.map((t, i) => ({ value: i, label: t })),
+    },
     { key: "band", label: "Band %ile", default: 90, min: 51, max: 99 },
   ],
   colorKeys: ["madist_line", "madist_band", "madist_zero"],
   renderPane: (ctx, bars, p) => {
-    const data = computeMADistance(bars, p.period);
+    const maType = MA_TYPES[p.maType] ?? "SMA";
+    const data = computeMADistance(bars, p.period, maType);
     if (!data.length) return;
     const s = ctx.chart.addSeries(LineSeries, {
       color: ctx.colors.madist_line,
       lineWidth: 1,
-      title: `% from MA ${p.period}${ctx.baseLabel}`,
+      title: `% from ${maType} ${p.period}${ctx.baseLabel}`,
     });
     s.setData(asLine(data));
     ctx.register(s);
