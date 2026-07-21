@@ -202,11 +202,39 @@ async function buildPairBundle(a: string, b: string, minBars: number): Promise<S
   try {
     const r = await getYahooPairsRatio(a, b);
     if (!r || !r.dates || r.dates.length < minBars) return null;
+
+    // Best-effort real legs (needed by the OLS-spread signal). Leg fetches hit
+    // dataService's per-ticker cache, so pairs sharing a leg don't refetch.
+    let pair = { aCloses: [] as number[], bCloses: [] as number[] };
+    try {
+      const [legA, legB] = await Promise.all([
+        buildSingleBundle(a, 0),
+        buildSingleBundle(b, 0),
+      ]);
+      if (legA && legB) {
+        const mapA = new Map(legA.dates.map((d, i) => [d, legA.closes[i]]));
+        const mapB = new Map(legB.dates.map((d, i) => [d, legB.closes[i]]));
+        const aCloses: number[] = [];
+        const bCloses: number[] = [];
+        let ok = true;
+        for (const d of r.dates) {
+          const va = mapA.get(d);
+          const vb = mapB.get(d);
+          if (va === undefined || vb === undefined) { ok = false; break; }
+          aCloses.push(va);
+          bCloses.push(vb);
+        }
+        if (ok) pair = { aCloses, bCloses };
+      }
+    } catch {
+      /* legs stay empty — OLS signal self-gates */
+    }
+
     return {
       subject: `${a}/${b}`,
       dates: r.dates,
       closes: r.ratio,
-      pair: { aCloses: [], bCloses: [] },
+      pair,
     };
   } catch {
     return null;

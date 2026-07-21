@@ -851,6 +851,122 @@ export function requiredValuationMetrics(enabledIds: Set<string>): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Pair family (mode "pair": bundle.closes is the ratio A÷B; direction "long"
+// = long the ratio, i.e. long A / short B)
+// ---------------------------------------------------------------------------
+
+const pairSignals: CatalogSignal[] = [
+  {
+    id: "pair.ratio_z",
+    family: "pair",
+    label: "Ratio z-score extreme",
+    mode: "pair",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/pair-optimizer",
+    paramPresets: [
+      { id: "w126", label: "126d ±2σ", params: { window: 126, z: 2 } },
+      { id: "w252", label: "252d ±2σ", params: { window: 252, z: 2 } },
+    ],
+    detect: (b, p, dir) => {
+      const z = rollingZScore(b.closes, Number(p.window));
+      const lim = Number(p.z);
+      return detectCrossings(z, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    id: "pair.ratio_rsi",
+    family: "pair",
+    label: "Ratio RSI extreme",
+    mode: "pair",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/pair-optimizer",
+    paramPresets: [{ id: "r14", label: "RSI(14) 30/70", params: { period: 14, low: 30, high: 70 } }],
+    detect: (b, p, dir) => {
+      const rsi = alignToBars(b, computeRSI(toPoints(b), Number(p.period)));
+      return dir === "long"
+        ? detectCrossings(rsi, (v) => v <= Number(p.low))
+        : detectCrossings(rsi, (v) => v >= Number(p.high));
+    },
+  },
+  {
+    id: "pair.ratio_dist200",
+    family: "pair",
+    label: "Ratio % from 200d MA",
+    mode: "pair",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/pair-optimizer",
+    paramPresets: [
+      { id: "d10", label: "±10%", params: { dist: 10 } },
+      { id: "d15", label: "±15%", params: { dist: 15 } },
+    ],
+    detect: (b, p, dir) => {
+      const ma = rollingMean(b.closes, 200);
+      const dist: (number | null)[] = b.closes.map((c, i) => {
+        const m = ma[i];
+        return m && m > 0 ? (100 * (c - m)) / m : null;
+      });
+      const d = Number(p.dist);
+      return detectCrossings(dist, dir === "long" ? (v) => v <= -d : (v) => v >= d);
+    },
+  },
+  {
+    id: "pair.ols_spread_z",
+    family: "pair",
+    label: "OLS spread z-score",
+    mode: "pair",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/pair-optimizer",
+    paramPresets: [{ id: "w252", label: "252d ±2σ", params: { window: 252, z: 2 } }],
+    // Rolling OLS of log(A) on log(B); z of the current residual vs the
+    // window's residual distribution. Needs real legs — the bundle builder
+    // attaches them best-effort; without legs this signal is skipped.
+    detect: (b, p, dir) => {
+      const legs = b.pair;
+      if (!legs || legs.aCloses.length !== b.closes.length || legs.aCloses.length === 0) return [];
+      const w = Number(p.window);
+      const lim = Number(p.z);
+      const n = b.closes.length;
+      const la = legs.aCloses.map((v) => (v > 0 ? Math.log(v) : NaN));
+      const lb = legs.bCloses.map((v) => (v > 0 ? Math.log(v) : NaN));
+      const vals: (number | null)[] = new Array(n).fill(null);
+      for (let i = w - 1; i < n; i++) {
+        let sx = 0, sy = 0, sxy = 0, sxx = 0, m = 0;
+        for (let j = i - w + 1; j <= i; j++) {
+          const x = lb[j];
+          const y = la[j];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          sx += x; sy += y; sxy += x * y; sxx += x * x; m++;
+        }
+        if (m < Math.floor(w / 2)) continue;
+        const denom = m * sxx - sx * sx;
+        if (denom === 0) continue;
+        const beta = (m * sxy - sx * sy) / denom;
+        const alpha = (sy - beta * sx) / m;
+        // Residual distribution over the window.
+        let rs = 0, rss = 0, rn = 0;
+        for (let j = i - w + 1; j <= i; j++) {
+          const x = lb[j];
+          const y = la[j];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          const resid = y - (alpha + beta * x);
+          rs += resid; rss += resid * resid; rn++;
+        }
+        const mean = rs / rn;
+        const std = Math.sqrt(Math.max(0, rss / rn - mean * mean));
+        if (std <= 0) continue;
+        const cur = la[i] - (alpha + beta * lb[i]);
+        vals[i] = (cur - mean) / std;
+      }
+      return detectCrossings(vals, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Catalog assembly
 // ---------------------------------------------------------------------------
 
@@ -858,6 +974,7 @@ export const UNIVERSAL_SIGNAL_CATALOG: CatalogSignal[] = [
   ...technicalSignals,
   ...eventSignals,
   ...valuationSignals,
+  ...pairSignals,
 ];
 
 export function getCatalogSignal(id: string): CatalogSignal | undefined {
