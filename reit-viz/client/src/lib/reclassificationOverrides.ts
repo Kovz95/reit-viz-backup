@@ -41,6 +41,53 @@ function saveOverrides(overrides: OverridesMap): void {
   } catch {
     // quota exceeded — ignore
   }
+  pushOverridesToServer(overrides);
+}
+
+// ── Server sync ──
+// localStorage is only a per-browser cache; the server copy
+// (/api/classification-overrides → DATA_DIR/classification-overrides.json)
+// is the durable record, so reclassifications survive storage clears and
+// follow the user across browsers/devices. Last write wins.
+
+function pushOverridesToServer(overrides: OverridesMap): void {
+  try {
+    void fetch("/api/classification-overrides", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overrides }),
+    }).catch(() => {});
+  } catch {
+    /* offline / legacy server — localStorage-only mode */
+  }
+}
+
+let serverHydrateStarted = false;
+async function hydrateOverridesFromServer(): Promise<void> {
+  if (typeof window === "undefined" || serverHydrateStarted) return;
+  serverHydrateStarted = true;
+  try {
+    const res = await fetch("/api/classification-overrides");
+    if (!res.ok) return;
+    const text = await res.text();
+    if (!text || text.trimStart().startsWith("<")) return; // SPA fallback (legacy server)
+    const server = JSON.parse(text)?.overrides;
+    if (server && typeof server === "object" && !Array.isArray(server) && Object.keys(server).length > 0) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(server));
+      window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
+    } else {
+      // Server empty: migrate any existing browser-local overrides up so the
+      // durable copy is seeded from what this browser already has.
+      const local = loadOverrides();
+      if (Object.keys(local).length > 0) pushOverridesToServer(local);
+    }
+  } catch {
+    /* offline / legacy server — localStorage-only mode */
+  }
+}
+
+if (typeof window !== "undefined") {
+  void hydrateOverridesFromServer();
 }
 
 /** Hook returning the current overrides map. Re-renders on changes. */

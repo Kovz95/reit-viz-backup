@@ -5136,6 +5136,34 @@ export async function registerRoutes(server: Server, app: Express) {
     fs.writeFileSync(excludedFile, JSON.stringify(map, null, 2));
   }
 
+  // ── Classification overrides (Universe-tab reclassifications) ──
+  // Server-backed so they survive browser storage clears and follow the user
+  // across devices; stored beside the exclusions in DATA_DIR (survives
+  // deploys). The client keeps localStorage as a cache and syncs through
+  // these routes (lib/reclassificationOverrides.ts).
+  const overridesFile = path.join(DATA_DIR, "classification-overrides.json");
+  app.get("/api/classification-overrides", (_req, res) => {
+    try {
+      if (!fs.existsSync(overridesFile)) return res.json({ overrides: {} });
+      const j = readJSON(overridesFile);
+      res.json({ overrides: j && typeof j === "object" && !Array.isArray(j) ? j : {} });
+    } catch {
+      res.json({ overrides: {} });
+    }
+  });
+  app.put("/api/classification-overrides", (req, res) => {
+    const overrides = (req.body as any)?.overrides;
+    if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+      return res.status(400).json({ error: "Body must be { overrides: { TICKER: { field: value } } }" });
+    }
+    try {
+      fs.writeFileSync(overridesFile, JSON.stringify(overrides, null, 2));
+      res.json({ overrides });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "write failed" });
+    }
+  });
+
   app.get("/api/excluded-tickers/:namespace", (req, res) => {
     const ns = String(req.params.namespace);
     res.json({ tickers: loadExcluded()[ns] ?? [] });
