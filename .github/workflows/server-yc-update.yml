@@ -40,8 +40,14 @@ jobs:
           # Kick off the ~2-min rebuild fully detached: setsid gives it its own
           # session so sshd's SIGHUP on disconnect can't reach it (nohup alone
           # left node in the session's process group and it died with the ssh).
+          # Kill stale hung updaters in a SEPARATE call; the [e] bracket keeps
+          # the pattern from matching this command's own cmdline (a plain
+          # pkill -f here killed its own shell and took the ssh session down).
+          timeout 30 sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" \
+            'pkill -f "node updat[e]-data.cjs" 2>/dev/null; sleep 1; echo "cleaned: $(pgrep -fc "node updat[e]-data.cjs" || echo 0) left"'
+
           sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" \
-            'pkill -f "update-data.cjs" 2>/dev/null; cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && setsid bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" < /dev/null > /tmp/yc-first-run.log 2>&1 & echo kicked'
+            'cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && setsid bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" < /dev/null > /tmp/yc-first-run.log 2>&1 & echo kicked'
 
           echo "════ waiting for first run to finish ════"
           # Few, spaced polls (rapid password logins trip sshd throttling and
