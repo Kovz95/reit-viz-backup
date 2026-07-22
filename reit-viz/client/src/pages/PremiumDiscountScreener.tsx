@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useBaskets } from "@/lib/useBaskets";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { availableDefaultPseudoMetrics } from "@/lib/defaultEarningsMetric";
 import { useUniverseDefaults } from "@/lib/universeDefaults";
 import { fetchPeerRelative } from "@/lib/fetchPeerRelative";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
@@ -38,10 +39,6 @@ const VALUATION_METRICS = [
 ];
 
 const GROWTH_METRICS = [
-  // Universe-tab default pseudo-metrics — fetchPeerRelative resolves them
-  // per target ticker before hitting the server.
-  { id: "EPS Growth (Default)", label: "EPS Growth (Default)" },
-  { id: "EPS Growth FY1 (Default)", label: "EPS Growth FY1 (Default)" },
   { id: "FY1 EPS Growth", label: "FY1 EPS Growth" },
   { id: "FY2 EPS Growth", label: "FY2 EPS Growth" },
   { id: "FY1 FFO Growth", label: "FY1 FFO Growth" },
@@ -262,6 +259,14 @@ export default function PremiumDiscountScreener() {
     return () => { active = false; };
   }, []);
 
+  // Growth-slot default pseudo-metrics — fetchPeerRelative resolves them per
+  // target ticker before hitting the server; availability-probed so a
+  // data-less default isn't offered.
+  const defaultGrowthOptions = useMemo(
+    () => availableDefaultPseudoMetrics(allTickers as any[], ["growth", "growthFy1"]),
+    [allTickers],
+  );
+
   const universeTickers = useMemo(() => {
     if (universeMode === "workbook") return filteredPool.map(t => t.ticker);
     if (universeMode === "basket") {
@@ -467,13 +472,15 @@ export default function PremiumDiscountScreener() {
           <Select value={growthMetricSel} onValueChange={v => { growthLockedRef.current = true; setGrowthMetricSel(v); }}>
             <SelectTrigger className="h-7 w-auto min-w-[265px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectGroup>
-                <SelectLabel className="text-[10px]">Default</SelectLabel>
-                {GROWTH_METRICS.filter(m => /\(Default\)$/.test(m.id)).map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
-              </SelectGroup>
+              {defaultGrowthOptions.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Default</SelectLabel>
+                  {defaultGrowthOptions.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                </SelectGroup>
+              )}
               <SelectGroup>
                 <SelectLabel className="text-[10px]">Growth</SelectLabel>
-                {GROWTH_METRICS.filter(m => !/\(Default\)$/.test(m.id)).map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+                {GROWTH_METRICS.map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
               </SelectGroup>
             </SelectContent>
           </Select>

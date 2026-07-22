@@ -105,6 +105,37 @@ export function setDefaultMetricConfigs(cfgs: Record<DefaultSlot, DefaultMetricC
   } catch { /* storage unavailable */ }
 }
 
+/** All pseudo-metric names, in slot order — derive lists from this rather
+ *  than hardcoding the strings so new slots reach every picker. */
+export const DEFAULT_PSEUDO_METRIC_NAMES: string[] = DEFAULT_SLOT_KEYS.map(
+  (k) => DEFAULT_METRIC_SLOTS[k].pseudo,
+);
+
+/**
+ * Pseudo-metrics that are actually usable for the given ticker metas: offered
+ * only when at least one ticker's resolved concrete metric appears in that
+ * ticker's own `metrics` list. Keeps pickers from offering a default that
+ * resolves to data-less metrics everywhere (which runs silently empty).
+ * Optionally restrict to specific slots (e.g. growth-only pickers).
+ */
+export function availableDefaultPseudoMetrics(
+  metas: Array<{ ticker: string; metrics?: unknown[] } & Record<string, any>>,
+  slots: DefaultSlot[] = DEFAULT_SLOT_KEYS,
+): string[] {
+  if (!metas?.length) return [];
+  const out: string[] = [];
+  for (const slot of slots) {
+    const pseudo = DEFAULT_METRIC_SLOTS[slot].pseudo;
+    const usable = metas.some((m) => {
+      const resolved = resolveDefaultMetricFor(pseudo, m);
+      const list = m.metrics;
+      return Array.isArray(list) && list.some((x: any) => (typeof x === "string" ? x : x?.name) === resolved);
+    });
+    if (usable) out.push(pseudo);
+  }
+  return out;
+}
+
 /** Which slot a metric name belongs to, or null for concrete metrics. */
 export function defaultMetricSlot(metric: string | undefined | null): DefaultSlot | null {
   for (const k of DEFAULT_SLOT_KEYS) {

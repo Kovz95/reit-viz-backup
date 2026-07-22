@@ -6,6 +6,7 @@ import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useAppContext } from "@/lib/appContext";
 import { useWorkspaceState } from "@/lib/workspaceState";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { availableDefaultPseudoMetrics } from "@/lib/defaultEarningsMetric";
 import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
 import { getMetricScalar, getMetricInverseFlag } from "@/lib/metricHelpers";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
@@ -212,12 +213,10 @@ export default function PairOptimizer() {
         const metricNames = tickers[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
         const filtered = DEFAULT_METRICS.filter((m) => metricNames.includes(m));
         // Default pseudo-metrics lead the list — the raw-tuple loaders alias
-        // them per ticker, so pair spreads can be built on them directly.
+        // them per ticker; availability-probed so a default that resolves to
+        // data-less metrics everywhere isn't offered (silent empty run).
         if (filtered.length > 0) {
-          setAvailableMetrics([
-            "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
-            ...filtered,
-          ]);
+          setAvailableMetrics([...availableDefaultPseudoMetrics(tickers), ...filtered]);
         }
       }
     });

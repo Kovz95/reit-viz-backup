@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useAppContext } from "@/lib/useAppContext";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
+import { availableDefaultPseudoMetrics } from "@/lib/defaultEarningsMetric";
 import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { fetchTickerData } from "@/lib/fetchTickerData";
 import { getMetricMultiplier } from "@/lib/getMetricMultiplier";
@@ -93,12 +94,10 @@ export default function ValuationRegime() {
       }
       const filtered = DEFAULT_METRICS.filter(m => metricsInWorkbook.has(m));
       // Default pseudo-metrics lead the list — fetchTickerData resolves them
-      // per ticker, and the fallback rule guarantees a concrete metric.
+      // per ticker; availability-probed so a default that resolves to
+      // data-less metrics everywhere isn't offered (silent empty run).
       if (filtered.length > 0) {
-        setAvailableMetrics([
-          "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
-          ...filtered,
-        ]);
+        setAvailableMetrics([...availableDefaultPseudoMetrics(tickers), ...filtered]);
       }
     });
   }, []);

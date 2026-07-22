@@ -24,6 +24,7 @@ import { TARGET_RETURN_OPTIONS } from "@/lib/optimizerConstants";
 import { filterByDateRange, isBasketTicker } from "@/lib/optimizerInputSeries";
 import { getTickers, getDates, getTickerRaw, refreshTickerData } from "@/lib/dataService";
 import { groupMetricsByCategory } from "@/lib/metricCategories";
+import { availableDefaultPseudoMetrics } from "@/lib/defaultEarningsMetric";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
@@ -278,8 +279,11 @@ export default function MomentumOptimizer() {
         ...discovered,
       ])].sort();
       // Level-type default pseudo-metrics lead the list — getTickerRaw aliases
-      // them per ticker, so revision momentum can run on them directly.
-      if (merged.length > 0) setAvailableRevMetrics(["EPS (Default)", "EPS FY1 (Default)", ...merged]);
+      // them per ticker; availability-probed so a data-less default isn't
+      // offered (silent empty run).
+      if (merged.length > 0) {
+        setAvailableRevMetrics([...availableDefaultPseudoMetrics(ts as any[], ["eps", "epsFy1"]), ...merged]);
+      }
     });
   }, []);
 

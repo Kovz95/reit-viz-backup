@@ -22,6 +22,7 @@ import {
   metricMultiplier,
 } from "@/lib/dataService";
 import type { TickerMeta } from "@/lib/dataService";
+import { availableDefaultPseudoMetrics } from "@/lib/defaultEarningsMetric";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { sliceDateRange } from "@/lib/datePresets";
 import { resampleWeekly, isBasketTicker } from "@/lib/optimizerInputSeries";
@@ -64,11 +65,6 @@ const WINDOW_LABELS: Record<number, string> = {
 };
 
 const METRICS = [
-  // Universe-tab default pseudo-metrics (resolved per ticker by getTickerRaw).
-  "EPS (Default)",
-  "EPS FY1 (Default)",
-  "EPS Growth (Default)",
-  "EPS Growth FY1 (Default)",
   "close",
   "P/E LTM",
   "P/E FY2",
@@ -411,6 +407,10 @@ export default function ZScoreOptimizer() {
   const pairComboPicker = usePairComboPicker(allTickers, mode === "pairCombo", "zs-pc");
   const { frequency, setFrequency, frequencyUI } = useFrequency("zs", "daily", running);
   const freqKey = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
+
+  // Default pseudo-metrics on top of the metric picker — availability-probed
+  // against the universe so a data-less default isn't offered.
+  const defaultMetricOptions = useMemo(() => availableDefaultPseudoMetrics(allTickers as any[]), [allTickers]);
 
   useEffect(() => {
     getTickers().then((t) => {
@@ -987,11 +987,13 @@ export default function ZScoreOptimizer() {
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Metric</label>
                 <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary min-w-[140px]" value={selectedMetric} onChange={(e) => setSelectedMetric(e.target.value)} disabled={running} data-testid="optimizer-metric">
-                  <optgroup label="Default">
-                    {METRICS.filter((m) => /\(Default\)$/.test(m)).map((e) => <option key={e} value={e}>{e}</option>)}
-                  </optgroup>
+                  {defaultMetricOptions.length > 0 && (
+                    <optgroup label="Default">
+                      {defaultMetricOptions.map((e) => <option key={e} value={e}>{e}</option>)}
+                    </optgroup>
+                  )}
                   <optgroup label="Metrics">
-                    {METRICS.filter((m) => !/\(Default\)$/.test(m)).map((e) => <option key={e} value={e}>{e}</option>)}
+                    {METRICS.map((e) => <option key={e} value={e}>{e}</option>)}
                   </optgroup>
                 </select>
               </div>

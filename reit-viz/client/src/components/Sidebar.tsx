@@ -34,6 +34,7 @@ import ChartsComparePanel from "./ChartsComparePanel";
 import BasketMetricInspector, { type InspectableBasket } from "./BasketMetricInspector";
 import { useBaskets } from "@/lib/useBaskets";
 import { isAutoBasketId, groupAutoBaskets, AUTO_BASKET_GROUP_LABELS } from "@/lib/autoBaskets";
+import { DEFAULT_PSEUDO_METRIC_NAMES, referencedMetricsFor } from "@/lib/defaultEarningsMetric";
 import { extractBasketId } from "@/lib/basketUtils";
 import {
   ChevronDown,
@@ -2556,11 +2557,12 @@ function PairsFormulaSection({
   const metricOptions = useMemo(() => {
     // Default pseudo-metrics included: getTickerRaw aliases them per leg, so
     // pair ratios can be built on e.g. "EPS (Default)" ÷ "EPS (Default)".
-    const opts = new Set<string>([
-      "close",
-      "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
-      ...allMetrics,
-    ]);
+    // Offered only when some metric the default can resolve to exists in the
+    // workbook (otherwise selecting it would run silently empty).
+    const usableDefaults = DEFAULT_PSEUDO_METRIC_NAMES.filter((pseudo) =>
+      referencedMetricsFor(pseudo).some((m) => allMetrics.includes(m)),
+    );
+    const opts = new Set<string>(["close", ...usableDefaults, ...allMetrics]);
     return Array.from(opts);
   }, [allMetrics]);
 
