@@ -52,6 +52,8 @@ jobs:
             echo "── pm2 reit-yc-backend log tail ──"
             tail -n 25 /root/.pm2/logs/reit-yc-backend-error.log 2>/dev/null || true
             tail -n 15 /root/.pm2/logs/reit-yc-backend-out.log 2>/dev/null || true
+            echo "── server.js routes + refresh/fetch mechanisms ──"
+            grep -nE "app\.(get|post)\(|setInterval|cron|refresh|fetchData|buildData|fmpFetch|node-cron" /opt/reit-yc-backend/server.js 2>/dev/null | head -30
 
             echo; echo "════ bundle self-test from the box (10x direct :3000) ════"
             ASSET=$(ls /opt/reit-viz/dist/public/assets/index-*.js | head -1 | xargs -n1 basename)
