@@ -39,6 +39,20 @@ jobs:
             tail -n 40 /var/log/nginx/error.log 2>/dev/null || true
             echo; echo "════ nginx reit-viz site config ════"
             cat /etc/nginx/sites-enabled/reit-viz-https 2>/dev/null || true
+            echo; echo "════ yield-corr app (:8091) — who serves it, how fresh is its data ════"
+            ss -ltnp 2>/dev/null | grep ":8091" || true
+            echo "── /opt/reit-yc-backend (top-level + data files by mtime) ──"
+            ls -lat /opt/reit-yc-backend 2>/dev/null | head -15
+            find /opt/reit-yc-backend -maxdepth 2 \( -name "*.json" -o -name "*.csv" -o -name "*.parquet" -o -name "*.db" \) -printf "%TY-%Tm-%Td %TH:%TM  %10s  %p\n" 2>/dev/null | sort -r | head -15
+            echo "── update mechanism (cron/systemd timers mentioning yc/yield) ──"
+            crontab -l 2>/dev/null | grep -iE "yc|yield|corr" || echo "(no matching cron entries)"
+            systemctl list-timers 2>/dev/null | grep -iE "yc|yield|corr" || echo "(no matching timers)"
+            echo "── scripts in the app dir ──"
+            find /opt/reit-yc-backend -maxdepth 2 \( -name "*.sh" -o -name "*.py" -o -name "*.mjs" \) 2>/dev/null | head -10
+            echo "── pm2 reit-yc-backend log tail ──"
+            tail -n 25 /root/.pm2/logs/reit-yc-backend-error.log 2>/dev/null || true
+            tail -n 15 /root/.pm2/logs/reit-yc-backend-out.log 2>/dev/null || true
+
             echo; echo "════ bundle self-test from the box (10x direct :3000) ════"
             ASSET=$(ls /opt/reit-viz/dist/public/assets/index-*.js | head -1 | xargs -n1 basename)
             echo "asset: $ASSET  real size: $(stat -c%s /opt/reit-viz/dist/public/assets/$ASSET)"
