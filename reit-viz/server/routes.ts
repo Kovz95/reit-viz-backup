@@ -1125,7 +1125,14 @@ export async function registerRoutes(server: Server, app: Express) {
       const tickerDataA: Map<string, Map<number, number>> = new Map();
       const tickerDataB: Map<string, Map<number, number>> = new Map();
       const sameMetric = metricA === metricB;
+      let loadedCount = 0;
       for (const ticker of tickers) {
+        // The synchronous file reads + decodes for a large universe take
+        // seconds — yield periodically so other requests aren't starved
+        // during the load phase (the pair loop below yields the same way).
+        if (++loadedCount % 10 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
         const filePath = path.join(DATA_DIR, "tickers", `${ticker.toUpperCase()}.json`);
         if (!fs.existsSync(filePath)) continue;
         const raw = readJSON(filePath);
