@@ -44,26 +44,39 @@ jobs:
             fi
             echo "8091 responds OK"
 
-            if grep -q "yield-corr-app" "$CONF"; then
-              echo "location already present — nothing to do"
+            NEED_APP=1; NEED_API=1
+            grep -q "yield-corr-app" "$CONF" && NEED_APP=0
+            grep -q "yield-corr-api" "$CONF" && NEED_API=0
+            if [ "$NEED_APP" = "0" ] && [ "$NEED_API" = "0" ]; then
+              echo "locations already present — nothing to do"
             else
               TS=$(date +%Y%m%d-%H%M%S)
               cp "$CONF" "/root/reit-viz-https.pre-yieldcorr.$TS"
-              echo "backed up to /root/reit-viz-https.pre-yieldcorr.$TS"
-              # Insert the location before the FIRST top-level closing brace
-              # (end of the HTTPS server block; the redirect block comes later).
-              awk 'BEGIN{done=0}
+              echo "backed up to /root/reit-viz-https.pre-yieldcorr.$TS (app=$NEED_APP api=$NEED_API)"
+              # Insert the missing block(s) before the FIRST top-level closing
+              # brace (end of the HTTPS server block; redirect block is later).
+              awk -v needapp="$NEED_APP" -v needapi="$NEED_API" 'BEGIN{done=0}
                 /^}/ && !done {
-                  print "    # yield-correlation embed: same-origin HTTPS proxy for the :8091 app";
-                  print "    location /yield-corr-app/ {";
-                  print "        proxy_pass http://127.0.0.1:8091/;";
-                  print "        proxy_http_version 1.1;";
-                  print "        proxy_set_header Host $host;";
-                  print "        proxy_set_header X-Real-IP $remote_addr;";
-                  print "        proxy_set_header Upgrade $http_upgrade;";
-                  print "        proxy_set_header Connection \"upgrade\";";
-                  print "        proxy_read_timeout 120s;";
-                  print "    }";
+                  if (needapp == 1) {
+                    print "    # yield-correlation embed: same-origin HTTPS proxy for the :8091 app";
+                    print "    location /yield-corr-app/ {";
+                    print "        proxy_pass http://127.0.0.1:8091/;";
+                    print "        proxy_http_version 1.1;";
+                    print "        proxy_set_header Host $host;";
+                    print "        proxy_set_header X-Real-IP $remote_addr;";
+                    print "        proxy_set_header Upgrade $http_upgrade;";
+                    print "        proxy_set_header Connection \"upgrade\";";
+                    print "        proxy_read_timeout 120s;";
+                    print "    }";
+                  }
+                  if (needapi == 1) {
+                    print "    # yield-corr-api: the embedded app fetches these absolute paths; they";
+                    print "    # do not exist in the reit-viz backend (verified), so route to :8091.";
+                    print "    location /api/dashboard { proxy_pass http://127.0.0.1:8091; }";
+                    print "    location /api/sector-heatmap { proxy_pass http://127.0.0.1:8091; }";
+                    print "    location /api/curve-ranking { proxy_pass http://127.0.0.1:8091; }";
+                    print "    location /api/data-freshness { proxy_pass http://127.0.0.1:8091; }";
+                  }
                   done=1;
                 }
                 { print }' "$CONF" > /tmp/reit-viz-https.new
