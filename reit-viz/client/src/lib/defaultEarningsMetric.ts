@@ -68,18 +68,31 @@ function buildConfigs(parsed: any): Record<DefaultSlot, DefaultMetricConfig> {
   return out;
 }
 
+// Memoized: resolveDefaultMetricFor runs in per-ticker fetch loops (thousands
+// of calls per screen), so re-reading + re-parsing localStorage every call is
+// measurable main-thread waste. Invalidated on our own change event and on
+// cross-tab storage events.
+let configsCache: Record<DefaultSlot, DefaultMetricConfig> | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("default-eps-config-changed", () => { configsCache = null; });
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORAGE_KEY || e.key === LEGACY_KEY) configsCache = null;
+  });
+}
+
 export function getDefaultMetricConfigs(): Record<DefaultSlot, DefaultMetricConfig> {
+  if (configsCache) return configsCache;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) return buildConfigs(JSON.parse(raw));
+    if (raw) return (configsCache = buildConfigs(JSON.parse(raw)));
     // Migrate the legacy single-slot (EPS-only) config once.
     const legacy = window.localStorage.getItem(LEGACY_KEY);
     if (legacy) {
       const migrated = buildConfigs({ eps: JSON.parse(legacy) });
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-      return migrated;
+      return (configsCache = migrated);
     }
-    return buildConfigs(null);
+    return (configsCache = buildConfigs(null));
   } catch {
     return buildConfigs(null);
   }

@@ -264,10 +264,26 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
   const signals = signalsForBundle(bundle, families, ids);
   const out: QualifiedSetup[] = [];
 
-  const spanMs =
-    new Date(bundle.dates[bundle.dates.length - 1]).getTime() -
-    new Date(bundle.dates[0]).getTime();
-  const spanYears = Math.max(spanMs / (365.25 * 24 * 3600 * 1000), 0.25);
+  const yearsBetween = (fromIdx: number) => {
+    const ms =
+      new Date(bundle.dates[bundle.dates.length - 1]).getTime() -
+      new Date(bundle.dates[fromIdx]).getTime();
+    return Math.max(ms / (365.25 * 24 * 3600 * 1000), 0.25);
+  };
+  const priceSpanYears = yearsBetween(0);
+  // Valuation series usually start later than prices (forward-filled nulls
+  // before the first observation); their firing frequency must be measured
+  // over the metric's own span or late-starting signals get diluted out.
+  const valuationStartIdx = (metrics: string[]): number => {
+    let start = bundle.dates.length;
+    for (const m of metrics) {
+      const series = bundle.valuation?.[m];
+      if (!series) continue;
+      const first = series.findIndex((v) => v !== null);
+      if (first >= 0) start = Math.min(start, first);
+    }
+    return start >= bundle.dates.length ? 0 : start;
+  };
   const lastBar = bundle.dates.length - 1;
 
   for (const sig of signals) {
@@ -302,6 +318,9 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
         const qualStat = sig.family === "pair" ? row.winRate : row.hitRate;
         if (qualStat <= settings.hitRateThreshold) continue;
 
+        const spanYears = sig.requires.valuation?.length
+          ? yearsBetween(valuationStartIdx(sig.requires.valuation))
+          : priceSpanYears;
         const freqPerYear = result.signalCount / spanYears;
         const freqFloor =
           sig.family === "valuation"
@@ -309,8 +328,10 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
             : settings.freqFloorPerYear;
         if (freqPerYear < freqFloor) continue;
 
-        // Firing state from the raw detector indices (pre-cooldown is fine for
-        // "is the condition on today": the condition fired regardless).
+        // Firing fields all come from the raw detector indices (pre-cooldown):
+        // "is the condition on today" doesn't care that a backtest entry was
+        // suppressed by cooldown, and refreshFiringStatus re-detects the same
+        // way — keeping lastSignalDate consistent with firingNow.
         const lastIdx = indices[indices.length - 1];
         const lastSignalBarsAgo = lastBar - lastIdx;
         const recentSignalDates = result.signals.slice(-20).map((s) => s.date);
@@ -334,7 +355,7 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
           occurrences: result.signalCount,
           freqPerYear,
           firstSignalDate: result.firstSignalDate,
-          lastSignalDate: result.lastSignalDate,
+          lastSignalDate: bundle.dates[lastIdx] ?? result.lastSignalDate,
           lastSignalBarsAgo,
           firingNow: lastSignalBarsAgo < settings.firingLookbackBars,
           allHorizons: result.rows,

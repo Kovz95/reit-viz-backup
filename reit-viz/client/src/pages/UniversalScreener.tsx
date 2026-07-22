@@ -56,6 +56,12 @@ const CLASSIFICATION_DIMS = ["sector", "industry", "subindustry", "subsector", "
 const SETTINGS_KEY = "reit-viz:universal-screener:settings";
 const CLASS_FILTERS_KEY = "reit-viz:universal-screener:class-filters";
 
+// signalId → optimizer drill-through route (module-level: the catalog is
+// static, and the actions cell renders per row per frame).
+const OPTIMIZER_ROUTE_BY_SIGNAL = new Map(
+  UNIVERSAL_SIGNAL_CATALOG.filter((s) => s.optimizerRoute).map((s) => [s.id, s.optimizerRoute!]),
+);
+
 const FAMILY_LABELS: Record<SignalFamily, string> = {
   technical: "Technical",
   event: "Events",
@@ -284,39 +290,62 @@ export default function UniversalScreener() {
     return `${modeDesc} · ${universeTickers.length} tickers${pairsDesc}`;
   }, [universeMode, classifyDim, classifyVal, basketId, baskets, globalDim, globalDimVal, universeTickers.length, pairList.length, settings.mode]);
 
+  // The loaded library's own build inputs — used when re-persisting on a
+  // firing refresh so the saved record keeps the settings/counts that
+  // actually produced its rows (not whatever the controls show right now).
+  const loadedLibRef = useRef<{ settings: SweepSettings; universeCount: number; pairCount: number } | null>(null);
+  const hasRunRef = useRef(false);
+
   // Restore the most recent cached library on mount (staleness surfaced in
   // the header; a differing current scope shows a "Run to rebuild" note).
   useEffect(() => {
     let active = true;
     loadLatest().then((lib) => {
-      if (!active || !lib) return;
+      // A run that started before this async load resolved wins outright —
+      // stamping the old library's metadata over it would mislabel the rows.
+      if (!active || !lib || hasRunRef.current) return;
       setRows((prev) => (prev.length === 0 ? lib.rows : prev));
       setLastRunAt(lib.builtAt);
       setRefreshedAt(lib.refreshedAt ?? null);
       setLoadedScopeHash(lib.scopeHash);
       setLoadedScopeDesc(lib.scopeDescription);
+      loadedLibRef.current = {
+        settings: lib.settings,
+        universeCount: lib.universeCount,
+        pairCount: lib.pairCount,
+      };
     });
     return () => { active = false; };
   }, []);
 
   const persistLibrary = useCallback(
-    (nextRows: QualifiedSetup[], builtAt: string, opts: { hash: string; desc: string; refreshed?: string; pairCount?: number }) => {
+    (
+      nextRows: QualifiedSetup[],
+      builtAt: string,
+      opts: {
+        hash: string;
+        desc: string;
+        refreshed?: string;
+        meta: { settings: SweepSettings; universeCount: number; pairCount: number };
+      },
+    ) => {
       const lib: SweepLibrary = {
         version: 1,
         builtAt,
         refreshedAt: opts.refreshed,
         scopeHash: opts.hash,
         scopeDescription: opts.desc,
-        universeCount: universeTickers.length,
-        pairCount: opts.pairCount ?? pairList.length,
-        settings: resolvedSettings,
+        universeCount: opts.meta.universeCount,
+        pairCount: opts.meta.pairCount,
+        settings: opts.meta.settings,
         rows: nextRows,
       };
       void saveLibrary(lib);
       setLoadedScopeHash(opts.hash);
       setLoadedScopeDesc(opts.desc);
+      loadedLibRef.current = opts.meta;
     },
-    [universeTickers.length, pairList.length, resolvedSettings],
+    [],
   );
 
   const handleRun = async () => {
@@ -329,6 +358,7 @@ export default function UniversalScreener() {
     setErrorMsg(null);
     setIsRunning(true);
     cancelRef.current = false;
+    hasRunRef.current = true;
     setRows([]);
     try {
       let runPairList = pairList;
@@ -351,15 +381,27 @@ export default function UniversalScreener() {
         cancelRef,
       });
       setRows(finalRows);
-      const builtAt = new Date().toISOString();
-      setLastRunAt(builtAt);
       setRefreshedAt(null);
       if (!cancelRef.current) {
+        const builtAt = new Date().toISOString();
+        setLastRunAt(builtAt);
         persistLibrary(finalRows, builtAt, {
           hash: scopeHash,
           desc: scopeDescription,
-          pairCount: usesCoint ? runPairList.length : undefined,
+          meta: {
+            settings: resolvedSettings,
+            universeCount: universeTickers.length,
+            pairCount: runPairList.length,
+          },
         });
+      } else {
+        // Cancelled: the partial rows belong to NO library. Drop the loaded-
+        // library linkage so a firing refresh can't overwrite a saved library
+        // with this incomplete set.
+        setLastRunAt(null);
+        setLoadedScopeHash(null);
+        setLoadedScopeDesc(null);
+        loadedLibRef.current = null;
       }
     } catch (e: any) {
       setErrorMsg(String(e?.message ?? e));
@@ -377,11 +419,14 @@ export default function UniversalScreener() {
       setRows(updated);
       const now = new Date().toISOString();
       setRefreshedAt(now);
-      if (loadedScopeHash && lastRunAt) {
+      // Re-persist ONLY when a saved library is loaded, under its own
+      // metadata — never the current controls' settings/counts.
+      if (loadedScopeHash && lastRunAt && loadedScopeDesc && loadedLibRef.current) {
         persistLibrary(updated, lastRunAt, {
           hash: loadedScopeHash,
-          desc: loadedScopeDesc ?? scopeDescription,
+          desc: loadedScopeDesc,
           refreshed: now,
+          meta: loadedLibRef.current,
         });
       }
     } finally {
@@ -395,9 +440,13 @@ export default function UniversalScreener() {
   const [signalPickerOpen, setSignalPickerOpen] = useState(false);
   const sort = useTableSort<QualifiedSetup>("hitRate", "desc", "desc", "universal-screener");
 
+  // Depend on sort.apply (stable per sortKey/sortDir), not the sort object —
+  // useTableSort returns a fresh object literal every render, which would
+  // defeat this memo and re-sort the full library on every progress tick.
+  const sortApply = sort.apply;
   const visibleRows = useMemo(() => {
     const base = view === "firing" ? rows.filter((r) => r.firingNow) : rows;
-    return sort.apply(base, (row, key) => {
+    return sortApply(base, (row, key) => {
       switch (key) {
         case "subject": return row.subject;
         case "family": return row.family;
@@ -407,7 +456,7 @@ export default function UniversalScreener() {
         default: return row[key as keyof QualifiedSetup] as number;
       }
     });
-  }, [rows, view, sort]);
+  }, [rows, view, sortApply]);
 
   const firingCount = useMemo(() => rows.filter((r) => r.firingNow).length, [rows]);
 
@@ -808,11 +857,11 @@ export default function UniversalScreener() {
                             <LineChart className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        {UNIVERSAL_SIGNAL_CATALOG.find((s) => s.id === r.signalId)?.optimizerRoute && (
+                        {OPTIMIZER_ROUTE_BY_SIGNAL.has(r.signalId) && (
                           <button
                             type="button"
                             title="Refine in optimizer"
-                            onClick={() => navigate(UNIVERSAL_SIGNAL_CATALOG.find((s) => s.id === r.signalId)!.optimizerRoute!)}
+                            onClick={() => navigate(OPTIMIZER_ROUTE_BY_SIGNAL.get(r.signalId)!)}
                             className="text-muted-foreground hover:text-primary p-0.5"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />

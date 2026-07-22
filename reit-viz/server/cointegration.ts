@@ -17,7 +17,13 @@ export interface EngleGrangerResult {
   ouHalfLife: number;
   hurstH: number;
   isCointegrated: boolean;
+  /** OLS hedge ratio β from logA = α + β·logB. */
+  hedgeRatio: number;
+  /** OLS intercept α from the cointegrating regression. */
+  alpha: number;
   /** ADF t-statistic on the residual level term (more negative = stronger). */
+  adfStat: number;
+  /** @deprecated alias of adfStat, kept for early consumers. */
   adfTStat?: number;
   [key: string]: any;
 }
@@ -27,42 +33,34 @@ const NOT_COINTEGRATED: EngleGrangerResult = {
   ouHalfLife: NaN,
   hurstH: 0.5,
   isCointegrated: false,
+  hedgeRatio: NaN,
+  alpha: NaN,
+  adfStat: NaN,
 };
 
-/** Solve the normal equations X'X b = X'y via Gaussian elimination. */
-function olsSolve(X: number[][], y: number[]): number[] | null {
-  const n = X.length;
-  if (n === 0) return null;
-  const k = X[0].length;
-  const xtx: number[][] = Array.from({ length: k }, () => new Array(k + 1).fill(0));
-  for (let i = 0; i < k; i++) {
-    for (let j = i; j < k; j++) {
-      let s = 0;
-      for (let r = 0; r < n; r++) s += X[r][i] * X[r][j];
-      xtx[i][j] = s;
-      if (j !== i) xtx[j][i] = s;
-    }
-    let sy = 0;
-    for (let r = 0; r < n; r++) sy += X[r][i] * y[r];
-    xtx[i][k] = sy;
-  }
-  // Gaussian elimination with partial pivoting on the augmented matrix.
+/**
+ * Solve the symmetric linear system A·x = b via Gaussian elimination with
+ * partial pivoting (A is copied; inputs untouched). Returns null if singular.
+ */
+function solveLinear(a: number[][], b: number[]): number[] | null {
+  const k = b.length;
+  const aug: number[][] = a.map((row, i) => [...row, b[i]]);
   for (let col = 0; col < k; col++) {
     let pivot = col;
     for (let r = col + 1; r < k; r++) {
-      if (Math.abs(xtx[r][col]) > Math.abs(xtx[pivot][col])) pivot = r;
+      if (Math.abs(aug[r][col]) > Math.abs(aug[pivot][col])) pivot = r;
     }
-    if (Math.abs(xtx[pivot][col]) < 1e-12) return null;
-    if (pivot !== col) [xtx[col], xtx[pivot]] = [xtx[pivot], xtx[col]];
+    if (Math.abs(aug[pivot][col]) < 1e-12) return null;
+    if (pivot !== col) [aug[col], aug[pivot]] = [aug[pivot], aug[col]];
     for (let r = 0; r < k; r++) {
       if (r === col) continue;
-      const f = xtx[r][col] / xtx[col][col];
-      for (let c = col; c <= k; c++) xtx[r][c] -= f * xtx[col][c];
+      const f = aug[r][col] / aug[col][col];
+      for (let c = col; c <= k; c++) aug[r][c] -= f * aug[col][c];
     }
   }
-  const b = new Array(k);
-  for (let i = 0; i < k; i++) b[i] = xtx[i][k] / xtx[i][i];
-  return b;
+  const x = new Array(k);
+  for (let i = 0; i < k; i++) x[i] = aug[i][k] / aug[i][i];
+  return x;
 }
 
 /**
@@ -133,52 +131,40 @@ export function engleGranger(logA: number[], logB: number[]): EngleGrangerResult
     X[r] = row;
     y[r] = de[t];
   }
-  const coef = olsSolve(X, y);
+  // Assemble the Gram matrix X'X and X'y ONCE (the dominant cost at
+  // O(rows·k²)); both the coefficient solve and the se(φ) covariance solve
+  // reuse it, halving the per-pair ADF cost.
+  const k = 1 + lags;
+  const xtx: number[][] = Array.from({ length: k }, () => new Array(k).fill(0));
+  const xty: number[] = new Array(k).fill(0);
+  for (let r = 0; r < rows; r++) {
+    const row = X[r];
+    for (let i = 0; i < k; i++) {
+      const ri = row[i];
+      xty[i] += ri * y[r];
+      for (let j = i; j < k; j++) xtx[i][j] += ri * row[j];
+    }
+  }
+  for (let i = 0; i < k; i++) {
+    for (let j = 0; j < i; j++) xtx[i][j] = xtx[j][i];
+  }
+  const coef = solveLinear(xtx, xty);
   if (!coef) return { ...NOT_COINTEGRATED };
 
-  // Residual variance + se(φ) from (X'X)⁻¹₀₀ — recompute via projection.
+  // Residual variance + se(φ) from [ (X'X)⁻¹ ]₀₀.
   let sse = 0;
   for (let r = 0; r < rows; r++) {
     let fit = 0;
-    for (let c = 0; c < coef.length; c++) fit += X[r][c] * coef[c];
+    for (let c = 0; c < k; c++) fit += X[r][c] * coef[c];
     const resid = y[r] - fit;
     sse += resid * resid;
   }
-  const sigma2 = sse / (rows - coef.length);
-  // se(φ): φ is coefficient 0 — need [ (X'X)^-1 ]_00. Solve X'X v = unit0.
-  const unit: number[] = new Array(coef.length).fill(0);
+  const sigma2 = sse / (rows - k);
+  const unit: number[] = new Array(k).fill(0);
   unit[0] = 1;
-  // Reuse olsSolve on the system X'X v = e0 by passing an identity-style
-  // trick: build pseudo-X = chol? Simpler: solve normal equations directly.
-  const k = coef.length;
-  const xtx: number[][] = Array.from({ length: k }, () => new Array(k).fill(0));
-  for (let i = 0; i < k; i++) {
-    for (let j = i; j < k; j++) {
-      let s = 0;
-      for (let r = 0; r < rows; r++) s += X[r][i] * X[r][j];
-      xtx[i][j] = s;
-      xtx[j][i] = s;
-    }
-  }
-  // Gaussian elimination to solve xtx · v = unit.
-  const aug: number[][] = xtx.map((row, i) => [...row, unit[i]]);
-  let ok = true;
-  for (let col = 0; col < k && ok; col++) {
-    let pivot = col;
-    for (let r = col + 1; r < k; r++) {
-      if (Math.abs(aug[r][col]) > Math.abs(aug[pivot][col])) pivot = r;
-    }
-    if (Math.abs(aug[pivot][col]) < 1e-12) { ok = false; break; }
-    if (pivot !== col) [aug[col], aug[pivot]] = [aug[pivot], aug[col]];
-    for (let r = 0; r < k; r++) {
-      if (r === col) continue;
-      const f = aug[r][col] / aug[col][col];
-      for (let c = col; c <= k; c++) aug[r][c] -= f * aug[col][c];
-    }
-  }
-  if (!ok) return { ...NOT_COINTEGRATED };
-  const invDiag0 = aug[0][k] / aug[0][0];
-  const sePhi = Math.sqrt(Math.max(sigma2 * invDiag0, 1e-18));
+  const v = solveLinear(xtx, unit);
+  if (!v) return { ...NOT_COINTEGRATED };
+  const sePhi = Math.sqrt(Math.max(sigma2 * v[0], 1e-18));
   const tStat = coef[0] / sePhi;
 
   const adfPValue = egPValue(tStat);
@@ -229,5 +215,14 @@ export function engleGranger(logA: number[], logB: number[]): EngleGrangerResult
     }
   }
 
-  return { adfPValue, ouHalfLife, hurstH, isCointegrated, adfTStat: tStat };
+  return {
+    adfPValue,
+    ouHalfLife,
+    hurstH,
+    isCointegrated,
+    hedgeRatio: beta,
+    alpha,
+    adfStat: tStat,
+    adfTStat: tStat,
+  };
 }

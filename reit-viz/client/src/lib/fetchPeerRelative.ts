@@ -23,19 +23,28 @@ export async function fetchPeerRelative(
 ): Promise<{ targetSeries: any[]; groupSeries: any[]; [key: string]: any }> {
   const empty = { targetSeries: [], groupSeries: [] };
   // Default pseudo-metrics: resolve client-side for the TARGET ticker before
-  // hitting the server (the rules live in this browser's localStorage). The
-  // rules key off classification fields and this comparison is within a
-  // classification cohort, so target and peers resolve to the same concrete
-  // metric in practice.
+  // hitting the server (the rules live in this browser's localStorage).
+  // LIMITATION: the whole peer cohort is then aggregated on the target's
+  // concrete metric. Classification-keyed rules make peers match, but
+  // ticker/region-keyed rules (e.g. GB → EPRA) can differ within a cohort —
+  // per-peer resolution would need the server to accept a per-ticker metric
+  // map.
   try {
     const { isDefaultMetricName, resolveDefaultMetricFor } = await import("@/lib/defaultEarningsMetric");
     if (isDefaultMetricName(metric)) {
       const { getTickers } = await import("@/lib/dataService");
       const metas = await getTickers();
-      metric = resolveDefaultMetricFor(metric, metas.find((t) => t.ticker === ticker));
+      const key = ticker.toUpperCase();
+      metric = resolveDefaultMetricFor(metric, metas.find((t) => t.ticker.toUpperCase() === key));
+      // The server only knows concrete workbook metrics — if resolution
+      // failed to produce one, don't send the pseudo name (it would return an
+      // all-null 200 that looks like real data).
+      if (isDefaultMetricName(metric)) return empty;
     }
   } catch {
-    /* fall through with the raw name */
+    // Resolution machinery unavailable — concrete metrics still work; only a
+    // still-pseudo name must not reach the server.
+    if (/\(Default\)$/.test(metric)) return empty;
   }
   const params = new URLSearchParams({ ticker, dimension, peerClass, metric });
   if (aggregation) params.set("aggregation", aggregation);

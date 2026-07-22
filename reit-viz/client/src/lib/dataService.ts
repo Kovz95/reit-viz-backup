@@ -123,7 +123,19 @@ export function injectEvents(events: Record<string, any>, mode: "replace" | "mer
   }
 }
 export function injectTickerData(symbol: string, data: RawTickerData) {
-  tickerDataCache.set(symbol.toUpperCase(), data);
+  // Strip default pseudo-metric alias keys before caching: getTickerRaw
+  // attaches them per call (rules live in localStorage and can change), so a
+  // caller that mutates a fetched record and re-injects it must not bake a
+  // point-in-time alias into the base cache as if it were a stored metric.
+  let clean = data;
+  for (const slot of DEFAULT_SLOT_KEYS) {
+    const pseudo = DEFAULT_METRIC_SLOTS[slot].pseudo;
+    if (pseudo in clean) {
+      if (clean === data) clean = { ...data };
+      delete clean[pseudo];
+    }
+  }
+  tickerDataCache.set(symbol.toUpperCase(), clean);
 }
 export function clearTickerDataCache() {
   tickerDataCache.clear();
@@ -428,10 +440,22 @@ async function fetchWithApiFallback<T>(apiPath: string, staticFile: string): Pro
 
 // ---- Core data loaders ----
 
+let tickersInFlight: Promise<TickerMeta[]> | null = null;
+
 export async function getTickers(): Promise<TickerMeta[]> {
   if (tickersCache) return tickersCache;
-  tickersCache = await fetchWithApiFallback<TickerMeta[]>("/api/tickers", "tickers.json");
-  return tickersCache;
+  // In-flight dedup: getTickerRaw awaits this on every call, so a cold cache
+  // with N concurrent ticker fetches must not stampede /api/tickers N times.
+  if (tickersInFlight) return tickersInFlight;
+  tickersInFlight = (async () => {
+    try {
+      tickersCache = await fetchWithApiFallback<TickerMeta[]>("/api/tickers", "tickers.json");
+      return tickersCache;
+    } finally {
+      tickersInFlight = null;
+    }
+  })();
+  return tickersInFlight;
 }
 
 export async function getDates(): Promise<string[]> {

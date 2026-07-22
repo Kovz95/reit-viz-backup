@@ -1105,7 +1105,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ── Pairs screening: compute quick pair stats for many pairs at once ──
   // POST /api/pairs-screen { tickers, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow }
-  app.post("/api/pairs-screen", (req, res) => {
+  app.post("/api/pairs-screen", async (req, res) => {
     try {
       const {
         tickers,
@@ -1137,8 +1137,16 @@ export async function registerRoutes(server: Server, app: Express) {
       const validTickers = Array.from(tickerDataA.keys()).filter(t => tickerDataB.has(t));
       const results: any[] = [];
 
+      // The full O(n²) screen with per-pair Engle-Granger runs for many
+      // seconds on large universes — yield to the event loop periodically so
+      // the server keeps serving other requests while it computes.
+      let processedPairs = 0;
+
       for (let i = 0; i < validTickers.length; i++) {
         for (let j = i + 1; j < validTickers.length; j++) {
+          if (++processedPairs % 25 === 0) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
           const tA = validTickers[i];
           const tB = validTickers[j];
           const mapA = tickerDataA.get(tA)!;

@@ -60,7 +60,13 @@ export function computeScopeHash(input: {
   const payload = stableStringify({
     tickers: [...input.tickers].sort(),
     pairs: input.pairList.map(([a, b]) => `${a}/${b}`).sort(),
-    settings: input.settings,
+    // Membership arrays are order-insensitive semantically (toggling a family
+    // off/on reorders them) — sort so identical settings hash identically.
+    settings: {
+      ...input.settings,
+      families: [...input.settings.families].sort(),
+      enabledSignalIds: [...input.settings.enabledSignalIds].sort(),
+    },
   });
   return fnv1a(payload) + "-" + fnv1a(payload.split("").reverse().join(""));
 }
