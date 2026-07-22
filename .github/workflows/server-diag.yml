@@ -58,6 +58,25 @@ jobs:
             for u in linuxuser root nick; do echo "· $u:"; crontab -l -u "$u" 2>/dev/null | grep -v "^#" | head -12 || true; done
             ls -la /etc/cron.d/ 2>/dev/null | head -10
             grep -rl "yc\|yield\|8091\|data.json" /etc/cron.d/ 2>/dev/null || echo "(nothing in /etc/cron.d)"
+            echo "── data.json schema (for rebuilding the pipeline) ──"
+            node -e '
+              const d = require("/opt/reit-yc-backend/data.json");
+              const shape = (v, depth) => {
+                if (Array.isArray(v)) return `array[${v.length}]` + (v.length && depth > 0 ? ` of ${shape(v[0], depth - 1)}` : "");
+                if (v && typeof v === "object") {
+                  const ks = Object.keys(v);
+                  if (depth <= 0) return `object{${ks.length} keys}`;
+                  return "{" + ks.slice(0, 12).map((k) => `${k}: ${shape(v[k], depth - 1)}`).join(", ") + (ks.length > 12 ? ", …" : "") + "}";
+                }
+                return typeof v === "string" ? `"${String(v).slice(0, 24)}"` : String(v);
+              };
+              console.log("top:", shape(d, 1));
+              for (const k of Object.keys(d)) console.log(" ", k, "→", shape(d[k], 2).slice(0, 500));
+            ' 2>&1 | head -30
+            echo "── server.js RAW field usage ──"
+            grep -noE "RAW\.[A-Za-z_]+" /opt/reit-yc-backend/server.js | sort -t: -k2 -u | head -20
+            echo "── .env keys (names only) ──"
+            grep -oE "^[A-Z_]+" /opt/reit-yc-backend/.env 2>/dev/null || true
             echo "── how data.json gets built (writers) ──"
             grep -rn "data.json" /opt/reit-yc-backend/*.js /opt/reit-yc-backend/*.sh 2>/dev/null | grep -vE "read|require|loadRaw" | head -10
             find /home/linuxuser /root -maxdepth 3 \( -name "*yc*" -o -name "*yield*" \) -not -path "*/node_modules/*" 2>/dev/null | head -10
