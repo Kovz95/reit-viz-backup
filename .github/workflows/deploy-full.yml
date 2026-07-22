@@ -21,6 +21,7 @@ on:
     branches: [main]
     paths-ignore:
       - '.github/**'   # ops/workflow changes alone should not redeploy the app
+      - 'ops/**'       # server-side ops scripts ship via their own workflows
   workflow_dispatch:
     inputs:
       confirm:
