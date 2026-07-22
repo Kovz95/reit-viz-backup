@@ -1,0 +1,86 @@
+name: Server nginx — proxy yield-corr app over HTTPS
+
+# The /yield-correlation page iframes http://<host>:8091, which HTTPS blocks
+# as mixed content. This adds an nginx location on the reit-viz HTTPS site
+# that proxies /yield-corr-app/ → 127.0.0.1:8091, so the iframe can be
+# same-origin HTTPS. Idempotent; backs up the site config outside
+# sites-enabled (never inside — nginx globs every file there) and rolls back
+# on a failed nginx -t.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type NGINX to confirm editing the reit-viz HTTPS site config'
+        type: string
+        required: true
+
+jobs:
+  nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard
+        if: ${{ inputs.confirm != 'NGINX' }}
+        run: |
+          echo "::error::confirm must be NGINX"; exit 1
+
+      - name: Apply over SSH
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VHOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VUSER: ${{ vars.VULTR_USER || 'root' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'bash -s' <<'REMOTE'
+            set -euo pipefail
+            CONF=/etc/nginx/sites-enabled/reit-viz-https
+            echo "════ probe 127.0.0.1:8091 ════"
+            if ! curl -s -o /dev/null -w "%{http_code}" --max-time 8 http://127.0.0.1:8091/ | grep -qE "^(200|30.)"; then
+              echo "::error::nothing healthy on 127.0.0.1:8091 — aborting (no nginx change)"
+              curl -s -o /dev/null -w "code=%{http_code}\n" --max-time 8 http://127.0.0.1:8091/ || true
+              exit 1
+            fi
+            echo "8091 responds OK"
+
+            if grep -q "yield-corr-app" "$CONF"; then
+              echo "location already present — nothing to do"
+            else
+              TS=$(date +%Y%m%d-%H%M%S)
+              cp "$CONF" "/root/reit-viz-https.pre-yieldcorr.$TS"
+              echo "backed up to /root/reit-viz-https.pre-yieldcorr.$TS"
+              # Insert the location before the FIRST top-level closing brace
+              # (end of the HTTPS server block; the redirect block comes later).
+              awk 'BEGIN{done=0}
+                /^}/ && !done {
+                  print "    # yield-correlation embed: same-origin HTTPS proxy for the :8091 app";
+                  print "    location /yield-corr-app/ {";
+                  print "        proxy_pass http://127.0.0.1:8091/;";
+                  print "        proxy_http_version 1.1;";
+                  print "        proxy_set_header Host $host;";
+                  print "        proxy_set_header X-Real-IP $remote_addr;";
+                  print "        proxy_set_header Upgrade $http_upgrade;";
+                  print "        proxy_set_header Connection \"upgrade\";";
+                  print "        proxy_read_timeout 120s;";
+                  print "    }";
+                  done=1;
+                }
+                { print }' "$CONF" > /tmp/reit-viz-https.new
+              mv /tmp/reit-viz-https.new "$CONF"
+              if nginx -t; then
+                systemctl reload nginx
+                echo "nginx reloaded with /yield-corr-app/ proxy"
+              else
+                echo "::error::nginx -t failed — rolling back"
+                cp "/root/reit-viz-https.pre-yieldcorr.$TS" "$CONF"
+                nginx -t && systemctl reload nginx || true
+                exit 1
+              fi
+            fi
+
+            echo "════ verify through nginx ════"
+            curl -sk -o /dev/null -w "https://localhost/yield-corr-app/ → %{http_code}\n" --max-time 10 https://127.0.0.1/yield-corr-app/ -H "Host: 45-63-20-126.sslip.io"
+            echo "════ config location block ════"
+            grep -A 9 "yield-corr-app" "$CONF"
+          REMOTE
