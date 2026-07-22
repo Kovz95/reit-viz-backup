@@ -52,10 +52,11 @@ function saveOverrides(overrides: OverridesMap): void {
 
 function pushOverridesToServer(overrides: OverridesMap): void {
   try {
-    void fetch("/api/classification-overrides", {
-      method: "PUT",
+    // The server's existing bulk route; "replace" mirrors the full local map.
+    void fetch("/api/classification-overrides/_bulk", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
+      body: JSON.stringify({ overrides, mode: "replace" }),
     }).catch(() => {});
   } catch {
     /* offline / legacy server — localStorage-only mode */
