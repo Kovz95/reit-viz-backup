@@ -54,6 +54,13 @@ jobs:
             tail -n 15 /root/.pm2/logs/reit-yc-backend-out.log 2>/dev/null || true
             echo "── server.js routes + refresh/fetch mechanisms ──"
             grep -nE "app\.(get|post)\(|setInterval|cron|refresh|fetchData|buildData|fmpFetch|node-cron" /opt/reit-yc-backend/server.js 2>/dev/null | head -30
+            echo "── all crontabs (data.json is owned by linuxuser — root's was empty) ──"
+            for u in linuxuser root nick; do echo "· $u:"; crontab -l -u "$u" 2>/dev/null | grep -v "^#" | head -12 || true; done
+            ls -la /etc/cron.d/ 2>/dev/null | head -10
+            grep -rl "yc\|yield\|8091\|data.json" /etc/cron.d/ 2>/dev/null || echo "(nothing in /etc/cron.d)"
+            echo "── how data.json gets built (writers) ──"
+            grep -rn "data.json" /opt/reit-yc-backend/*.js /opt/reit-yc-backend/*.sh 2>/dev/null | grep -vE "read|require|loadRaw" | head -10
+            find /home/linuxuser /root -maxdepth 3 \( -name "*yc*" -o -name "*yield*" \) -not -path "*/node_modules/*" 2>/dev/null | head -10
 
             echo; echo "════ bundle self-test from the box (10x direct :3000) ════"
             ASSET=$(ls /opt/reit-viz/dist/public/assets/index-*.js | head -1 | xargs -n1 basename)
