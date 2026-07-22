@@ -2554,7 +2554,13 @@ function PairsFormulaSection({
   }, []);
 
   const metricOptions = useMemo(() => {
-    const opts = new Set<string>(["close", ...allMetrics]);
+    // Default pseudo-metrics included: getTickerRaw aliases them per leg, so
+    // pair ratios can be built on e.g. "EPS (Default)" ÷ "EPS (Default)".
+    const opts = new Set<string>([
+      "close",
+      "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
+      ...allMetrics,
+    ]);
     return Array.from(opts);
   }, [allMetrics]);
 

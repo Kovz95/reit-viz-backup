@@ -211,7 +211,14 @@ export default function PairOptimizer() {
       if (tickers.length > 0 && tickers[0].metrics) {
         const metricNames = tickers[0].metrics.map((m: any) => typeof m === "string" ? m : m.name || m);
         const filtered = DEFAULT_METRICS.filter((m) => metricNames.includes(m));
-        if (filtered.length > 0) setAvailableMetrics(filtered);
+        // Default pseudo-metrics lead the list — the raw-tuple loaders alias
+        // them per ticker, so pair spreads can be built on them directly.
+        if (filtered.length > 0) {
+          setAvailableMetrics([
+            "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
+            ...filtered,
+          ]);
+        }
       }
     });
   }, []);
@@ -585,9 +592,16 @@ export default function PairOptimizer() {
               onChange={(e) => setSelectedMetric(e.target.value)}
               disabled={showLoading}
             >
-              {availableMetrics.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
+              <optgroup label="Default">
+                {availableMetrics.filter((m) => /\(Default\)$/.test(m)).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Metrics">
+                {availableMetrics.filter((m) => !/\(Default\)$/.test(m)).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
 

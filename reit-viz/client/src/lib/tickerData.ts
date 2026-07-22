@@ -45,6 +45,32 @@ async function tryFetchJson(url: string): Promise<any | null> {
 
 /** Fetch raw { dates, metrics } for a ticker, static-first with API fallback. */
 export async function fetchTickerRaw(ticker: string): Promise<RawTicker | null> {
+  const raw = await fetchTickerRawBase(ticker);
+  if (!raw) return raw;
+  // Alias the Universe-tab default pseudo-metrics onto the metrics record so
+  // consumers of this path (fetchTickerData, fetchTickerOHLCV pages) resolve
+  // them for free. Per call, not cached — the rules live in localStorage.
+  try {
+    const [{ DEFAULT_SLOT_KEYS, DEFAULT_METRIC_SLOTS, resolveDefaultMetricFor }, { getTickers }] =
+      await Promise.all([import("@/lib/defaultEarningsMetric"), import("@/lib/dataService")]);
+    const metas = await getTickers();
+    const meta = metas.find((t: any) => String(t.ticker).toUpperCase() === ticker.toUpperCase());
+    let metrics: Record<string, any[]> | null = null;
+    for (const slot of DEFAULT_SLOT_KEYS) {
+      const pseudo = DEFAULT_METRIC_SLOTS[slot].pseudo;
+      const arr = raw.metrics[resolveDefaultMetricFor(pseudo, meta)];
+      if (arr) {
+        metrics = metrics ?? { ...raw.metrics };
+        metrics[pseudo] = arr;
+      }
+    }
+    return metrics ? { ...raw, metrics } : raw;
+  } catch {
+    return raw;
+  }
+}
+
+async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
   if (_cache.has(ticker)) return _cache.get(ticker)!;
   const existing = _inFlight.get(ticker);
   if (existing) return existing;

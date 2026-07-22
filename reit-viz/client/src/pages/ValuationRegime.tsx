@@ -92,7 +92,14 @@ export default function ValuationRegime() {
         }
       }
       const filtered = DEFAULT_METRICS.filter(m => metricsInWorkbook.has(m));
-      if (filtered.length > 0) setAvailableMetrics(filtered);
+      // Default pseudo-metrics lead the list — fetchTickerData resolves them
+      // per ticker, and the fallback rule guarantees a concrete metric.
+      if (filtered.length > 0) {
+        setAvailableMetrics([
+          "EPS (Default)", "EPS FY1 (Default)", "EPS Growth (Default)", "EPS Growth FY1 (Default)",
+          ...filtered,
+        ]);
+      }
     });
   }, []);
 

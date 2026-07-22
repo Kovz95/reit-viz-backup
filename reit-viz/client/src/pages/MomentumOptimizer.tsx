@@ -277,7 +277,9 @@ export default function MomentumOptimizer() {
         ...DEFAULT_REVISION_METRICS.filter(m => metricSet.has(m)),
         ...discovered,
       ])].sort();
-      if (merged.length > 0) setAvailableRevMetrics(merged);
+      // Level-type default pseudo-metrics lead the list — getTickerRaw aliases
+      // them per ticker, so revision momentum can run on them directly.
+      if (merged.length > 0) setAvailableRevMetrics(["EPS (Default)", "EPS FY1 (Default)", ...merged]);
     });
   }, []);
 
@@ -1125,7 +1127,12 @@ export default function MomentumOptimizer() {
                       value={evalRevMetric}
                       onChange={e => setEvalRevMetric(e.target.value)}
                     >
-                      {availableRevMetrics.map(m => <option key={m} value={m}>{m}</option>)}
+                      <optgroup label="Default">
+                        {availableRevMetrics.filter(m => /\(Default\)$/.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
+                      </optgroup>
+                      <optgroup label="Estimates">
+                        {availableRevMetrics.filter(m => !/\(Default\)$/.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
+                      </optgroup>
                     </select>
                   </div>
                   <div className="flex flex-col gap-0.5">
@@ -1233,7 +1240,12 @@ export default function MomentumOptimizer() {
                   onChange={e => setSelectedRevMetric(e.target.value)}
                   disabled={running}
                 >
-                  {availableRevMetrics.map(m => <option key={m} value={m}>{m}</option>)}
+                  <optgroup label="Default">
+                    {availableRevMetrics.filter(m => /\(Default\)$/.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
+                  </optgroup>
+                  <optgroup label="Estimates">
+                    {availableRevMetrics.filter(m => !/\(Default\)$/.test(m)).map(m => <option key={m} value={m}>{m}</option>)}
+                  </optgroup>
                 </select>
               </div>
               {frequencyUI}

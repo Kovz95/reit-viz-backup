@@ -273,6 +273,8 @@ import {
   isDefaultMetricName,
   referencedMetricsFor,
   resolveDefaultMetricFor,
+  DEFAULT_METRIC_SLOTS,
+  DEFAULT_SLOT_KEYS,
 } from "./defaultEarningsMetric";
 
 // ---- Percentage conversion ----
@@ -507,6 +509,30 @@ function flatToTuples(metrics: Record<string, (number | string | null)[]>): RawT
 
 export async function getTickerRaw(symbol: string): Promise<RawTickerData> {
   const key = symbol.toUpperCase();
+  const raw = await getTickerRawBase(key);
+  // Alias the Universe-tab default pseudo-metrics ("EPS (Default)" …) onto the
+  // record so every tuple-level consumer (pair-ratio legs, optimizer metric
+  // selects, exports) resolves them for free. Attached per call — NOT cached —
+  // because the resolution rules live in localStorage and can change.
+  try {
+    const metas = await getTickers();
+    const meta = metas.find((t) => t.ticker.toUpperCase() === key);
+    let out: RawTickerData | null = null;
+    for (const slot of DEFAULT_SLOT_KEYS) {
+      const pseudo = DEFAULT_METRIC_SLOTS[slot].pseudo;
+      const tuples = raw[resolveDefaultMetricFor(pseudo, meta)];
+      if (tuples) {
+        out = out ?? { ...raw };
+        out[pseudo] = tuples;
+      }
+    }
+    return out ?? raw;
+  } catch {
+    return raw;
+  }
+}
+
+async function getTickerRawBase(key: string): Promise<RawTickerData> {
   if (tickerDataCache.has(key)) return tickerDataCache.get(key)!;
 
   // Dedup: if this ticker is already being fetched, wait for that promise
