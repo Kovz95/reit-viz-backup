@@ -197,8 +197,10 @@ export default function UniversalScreener() {
   };
 
   // ── Pair enumeration (within-cohort, capped) ───────────────────────────────
+  // Cointegration source resolves at Run time instead (server pairs-screen).
   const pairList = useMemo((): [string, string][] => {
     if (settings.mode === "single" || !settings.families.includes("pair")) return [];
+    if (settings.pairSource === "cointegration") return [];
     const metaBy = new Map<string, any>();
     for (const m of workbookTickers) metaBy.set(String(m.ticker).toUpperCase(), m);
     for (const m of globalMetas as any[]) {
@@ -222,7 +224,23 @@ export default function UniversalScreener() {
       }
     }
     return pairs.slice(0, settings.maxPairs);
-  }, [settings.mode, settings.families, settings.pairCohortDim, settings.maxPairs, universeTickers, workbookTickers, globalMetas]);
+  }, [settings.mode, settings.families, settings.pairCohortDim, settings.pairSource, settings.maxPairs, universeTickers, workbookTickers, globalMetas]);
+
+  /** Resolve the pair list from the server cointegration screen (Run time). */
+  const resolveCointegratedPairs = useCallback(async (): Promise<[string, string][]> => {
+    const resp = await fetch("/api/pairs-screen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tickers: universeTickers }),
+    });
+    if (!resp.ok) throw new Error(`pairs-screen failed: ${resp.status}`);
+    const data = await resp.json();
+    return ((data.results ?? []) as any[])
+      .filter((r) => r.isCointegrated)
+      .sort((a, b) => (a.adfPValue ?? 1) - (b.adfPValue ?? 1))
+      .slice(0, settings.maxPairs)
+      .map((r) => [r.tickerA, r.tickerB] as [string, string]);
+  }, [universeTickers, settings.maxPairs]);
 
   // ── Run state ──────────────────────────────────────────────────────────────
   const [isRunning, setIsRunning] = useState(false);
@@ -234,6 +252,7 @@ export default function UniversalScreener() {
   const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
   const [loadedScopeHash, setLoadedScopeHash] = useState<string | null>(null);
   const [loadedScopeDesc, setLoadedScopeDesc] = useState<string | null>(null);
+  const [resolvedPairCount, setResolvedPairCount] = useState<number | null>(null);
   const cancelRef = useRef(false);
 
   const resolvedSettings = useMemo<SweepSettings>(
@@ -244,9 +263,16 @@ export default function UniversalScreener() {
     }),
     [settings],
   );
+  // In cointegration mode the pair list is resolved server-side at Run time,
+  // so it stays out of the hash — pairSource + tickers + settings determine it.
   const scopeHash = useMemo(
-    () => computeScopeHash({ tickers: universeTickers, pairList, settings: resolvedSettings }),
-    [universeTickers, pairList, resolvedSettings],
+    () =>
+      computeScopeHash({
+        tickers: universeTickers,
+        pairList: settings.pairSource === "cointegration" ? [] : pairList,
+        settings: resolvedSettings,
+      }),
+    [universeTickers, pairList, resolvedSettings, settings.pairSource],
   );
   const scopeDescription = useMemo(() => {
     const modeDesc =
@@ -274,7 +300,7 @@ export default function UniversalScreener() {
   }, []);
 
   const persistLibrary = useCallback(
-    (nextRows: QualifiedSetup[], builtAt: string, opts: { hash: string; desc: string; refreshed?: string }) => {
+    (nextRows: QualifiedSetup[], builtAt: string, opts: { hash: string; desc: string; refreshed?: string; pairCount?: number }) => {
       const lib: SweepLibrary = {
         version: 1,
         builtAt,
@@ -282,7 +308,7 @@ export default function UniversalScreener() {
         scopeHash: opts.hash,
         scopeDescription: opts.desc,
         universeCount: universeTickers.length,
-        pairCount: pairList.length,
+        pairCount: opts.pairCount ?? pairList.length,
         settings: resolvedSettings,
         rows: nextRows,
       };
@@ -295,7 +321,8 @@ export default function UniversalScreener() {
 
   const handleRun = async () => {
     const singleCount = settings.mode === "pair" ? 0 : universeTickers.length;
-    if (singleCount === 0 && pairList.length === 0) {
+    const usesCoint = settings.mode !== "single" && settings.pairSource === "cointegration";
+    if (singleCount === 0 && pairList.length === 0 && !usesCoint) {
       setErrorMsg("Universe is empty — nothing to screen.");
       return;
     }
@@ -304,9 +331,20 @@ export default function UniversalScreener() {
     cancelRef.current = false;
     setRows([]);
     try {
+      let runPairList = pairList;
+      if (usesCoint) {
+        setProgress({ done: 0, total: 0, subject: "cointegration screen…" });
+        runPairList = await resolveCointegratedPairs();
+        setResolvedPairCount(runPairList.length);
+        if (runPairList.length === 0 && singleCount === 0) {
+          setErrorMsg("Cointegration screen returned no qualifying pairs for this universe.");
+          setIsRunning(false);
+          return;
+        }
+      }
       const finalRows = await runUniversalSweep({
         tickers: universeTickers,
-        pairList,
+        pairList: runPairList,
         settings: resolvedSettings,
         onProgress: setProgress,
         onRows: (r) => setRows((prev) => [...prev, ...r]),
@@ -317,7 +355,11 @@ export default function UniversalScreener() {
       setLastRunAt(builtAt);
       setRefreshedAt(null);
       if (!cancelRef.current) {
-        persistLibrary(finalRows, builtAt, { hash: scopeHash, desc: scopeDescription });
+        persistLibrary(finalRows, builtAt, {
+          hash: scopeHash,
+          desc: scopeDescription,
+          pairCount: usesCoint ? runPairList.length : undefined,
+        });
       }
     } catch (e: any) {
       setErrorMsg(String(e?.message ?? e));
@@ -449,7 +491,10 @@ export default function UniversalScreener() {
           )}
           <span className="text-[10px] text-muted-foreground font-mono" data-testid="uhs-universe-count">
             {universeTickers.length} tickers
-            {settings.mode !== "single" && settings.families.includes("pair") && ` → ${pairList.length} pairs`}
+            {settings.mode !== "single" && settings.families.includes("pair") &&
+              (settings.pairSource === "cointegration"
+                ? ` → cointegrated pairs${resolvedPairCount !== null ? ` (${resolvedPairCount})` : " (resolved at Run)"}`
+                : ` → ${pairList.length} pairs`)}
           </span>
           {geo.geoFilterUI}
         </div>
@@ -603,13 +648,25 @@ export default function UniversalScreener() {
             )}
           </div>
           {settings.mode !== "single" && (
-            <label className="flex items-center gap-1 text-muted-foreground">
-              Pair cohort
-              <select value={settings.pairCohortDim} onChange={(e) => set("pairCohortDim", e.target.value as SweepSettings["pairCohortDim"])}
-                className="bg-background border border-border rounded px-1 py-0.5 text-[11px]">
-                {["subindustry", "industry", "sector"].map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </label>
+            <>
+              <label className="flex items-center gap-1 text-muted-foreground" title="Cohort = all within-classification combinations. Cointegrated = /api/pairs-screen survivors (Engle-Granger ADF p<0.05), ranked by p-value, resolved at Run.">
+                Pairs from
+                <select value={settings.pairSource} onChange={(e) => set("pairSource", e.target.value as SweepSettings["pairSource"])}
+                  className="bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-pair-source">
+                  <option value="cohort">Cohort</option>
+                  <option value="cointegration">Cointegrated</option>
+                </select>
+              </label>
+              {settings.pairSource === "cohort" && (
+                <label className="flex items-center gap-1 text-muted-foreground">
+                  Pair cohort
+                  <select value={settings.pairCohortDim} onChange={(e) => set("pairCohortDim", e.target.value as SweepSettings["pairCohortDim"])}
+                    className="bg-background border border-border rounded px-1 py-0.5 text-[11px]">
+                    {["subindustry", "industry", "sector"].map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </label>
+              )}
+            </>
           )}
 
           <button

@@ -51,6 +51,12 @@ export interface SweepSettings {
   families: SignalFamily[];
   enabledSignalIds: string[];
   pairCohortDim: "subindustry" | "industry" | "sector";
+  /**
+   * Where the pair list comes from: all within-cohort combinations, or the
+   * cointegration screen's survivors (/api/pairs-screen, isCointegrated ===
+   * true, ranked by ADF p-value; resolved at Run time).
+   */
+  pairSource: "cohort" | "cointegration";
   maxPairs: number;
   minYearsData: number;
 }
@@ -68,6 +74,7 @@ export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   families: ["technical", "event", "valuation", "pair"],
   enabledSignalIds: [],
   pairCohortDim: "subindustry",
+  pairSource: "cohort",
   maxPairs: 400,
   minYearsData: 2,
 };
