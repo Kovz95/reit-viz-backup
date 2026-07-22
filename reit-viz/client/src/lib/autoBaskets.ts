@@ -28,6 +28,48 @@ export function isAutoBasketId(id: string): boolean {
   return id.startsWith(AUTO_ID_PREFIX);
 }
 
+// ── Shared grouping for basket lists (BasketManager, Charts sidebar, …) ──
+// Group key = the name prefix before ":" ("Auto Sub", "Auto Ctry", …), so the
+// per-subindustry country/exchange drill-downs fold into the Subindustry group.
+
+export const AUTO_BASKET_GROUP_ORDER = [
+  "Auto Econ",
+  "Auto Sect",
+  "Auto Subsect",
+  "Auto IndGrp",
+  "Auto Ind",
+  "Auto Sub",
+  "Auto Ctry",
+  "Auto Exch",
+];
+
+export const AUTO_BASKET_GROUP_LABELS: Record<string, string> = {
+  "Auto Econ": "Economy",
+  "Auto Sect": "Sector",
+  "Auto Subsect": "Subsector",
+  "Auto IndGrp": "Industry Group",
+  "Auto Ind": "Industry",
+  "Auto Sub": "Subindustry (incl. country / exchange splits)",
+  "Auto Ctry": "Country",
+  "Auto Exch": "Exchange",
+};
+
+/** Group auto baskets by kind, in drill-down order. */
+export function groupAutoBaskets(autos: Basket[]): [string, Basket[]][] {
+  const groups = new Map<string, Basket[]>();
+  for (const b of autos) {
+    const key = b.name.split(":")[0];
+    const arr = groups.get(key);
+    if (arr) arr.push(b);
+    else groups.set(key, [b]);
+  }
+  return [...groups.entries()].sort(
+    (a, b) =>
+      (AUTO_BASKET_GROUP_ORDER.indexOf(a[0]) + 1 || 99) -
+      (AUTO_BASKET_GROUP_ORDER.indexOf(b[0]) + 1 || 99),
+  );
+}
+
 // Classification levels, in drill-down order, with the short label used in the
 // basket name ("Auto Sub: Apartment"). Short labels keep names usable in the
 // compact basket pickers while still disambiguating levels that share values.

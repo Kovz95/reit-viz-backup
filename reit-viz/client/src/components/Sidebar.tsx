@@ -33,6 +33,7 @@ import { getSeriesColor } from "@/lib/chartColors";
 import ChartsComparePanel from "./ChartsComparePanel";
 import BasketMetricInspector, { type InspectableBasket } from "./BasketMetricInspector";
 import { useBaskets } from "@/lib/useBaskets";
+import { isAutoBasketId, groupAutoBaskets, AUTO_BASKET_GROUP_LABELS } from "@/lib/autoBaskets";
 import { extractBasketId } from "@/lib/basketUtils";
 import {
   ChevronDown,
@@ -199,6 +200,13 @@ export default function Sidebar({
     () => (baskets.find((b) => b.id === inspectBasketId) as InspectableBasket | undefined) ?? null,
     [baskets, inspectBasketId]
   );
+  // My baskets vs auto-generated (grouped by kind — same grouping as the
+  // Baskets tab). Auto groups start collapsed to keep the sidebar scannable.
+  const userBaskets = useMemo(() => baskets.filter((b) => !isAutoBasketId(b.id)), [baskets]);
+  const autoBasketsList = useMemo(() => baskets.filter((b) => isAutoBasketId(b.id)), [baskets]);
+  const autoBasketGroups = useMemo(() => groupAutoBaskets(autoBasketsList), [autoBasketsList]);
+  const [autoBasketsOpen, setAutoBasketsOpen] = useState(false);
+  const [openAutoBasketGroups, setOpenAutoBasketGroups] = useState<Set<string>>(new Set());
 
   // Resizable sidebar width
   const MIN_W = 280;
@@ -1662,46 +1670,98 @@ export default function Sidebar({
           />
           {openSections.has("baskets") && (
             <div className="px-2 pb-2 space-y-2">
-              {baskets.length === 0 ? (
-                <div className="text-[10px] text-muted-foreground text-center py-2">
-                  Saved baskets appear here.
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {baskets.map((b) => (
-                    <div
-                      key={b.id}
-                      className="flex items-center justify-between gap-1.5 px-1.5 py-1 rounded border border-border/40 bg-muted/20"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-foreground truncate">{b.name}</div>
-                        <div className="text-[9px] text-muted-foreground truncate">
-                          {b.tickers.length} ticker{b.tickers.length === 1 ? "" : "s"}
-                        </div>
+              {(() => {
+                const basketRow = (b: (typeof baskets)[number]) => (
+                  <div
+                    key={b.id}
+                    className="flex items-center justify-between gap-1.5 px-1.5 py-1 rounded border border-border/40 bg-muted/20"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-foreground truncate">{b.name}</div>
+                      <div className="text-[9px] text-muted-foreground truncate">
+                        {b.tickers.length} ticker{b.tickers.length === 1 ? "" : "s"}
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 text-[10px] px-1.5 text-primary hover:text-primary"
-                        onClick={() => selectTicker(`BASKET:${b.id}`)}
-                        title="Plot this basket on the chart"
-                      >
-                        <LineChart className="w-3 h-3 mr-1" />
-                        Plot
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 text-[10px] px-1.5"
-                        onClick={() => setInspectBasketId(b.id)}
-                        title="Inspect basket metric math"
-                      >
-                        Inspect
-                      </Button>
                     </div>
-                  ))}
-                </div>
-              )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px] px-1.5 text-primary hover:text-primary"
+                      onClick={() => selectTicker(`BASKET:${b.id}`)}
+                      title="Plot this basket on the chart"
+                    >
+                      <LineChart className="w-3 h-3 mr-1" />
+                      Plot
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px] px-1.5"
+                      onClick={() => setInspectBasketId(b.id)}
+                      title="Inspect basket metric math"
+                    >
+                      Inspect
+                    </Button>
+                  </div>
+                );
+                return (
+                  <>
+                    {/* My baskets */}
+                    <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground pt-0.5">
+                      My baskets ({userBaskets.length})
+                    </div>
+                    {userBaskets.length === 0 ? (
+                      <div className="text-[10px] text-muted-foreground text-center py-1.5">
+                        Saved baskets appear here.
+                      </div>
+                    ) : (
+                      <div className="space-y-1">{userBaskets.map(basketRow)}</div>
+                    )}
+
+                    {/* Auto baskets, grouped by kind (same grouping as Baskets tab) */}
+                    {autoBasketsList.length > 0 && (
+                      <div data-testid="sidebar-auto-baskets">
+                        <button
+                          type="button"
+                          onClick={() => setAutoBasketsOpen((v) => !v)}
+                          className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground py-1"
+                          data-testid="sidebar-auto-baskets-toggle"
+                        >
+                          {autoBasketsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                          Auto baskets ({autoBasketsList.length})
+                        </button>
+                        {autoBasketsOpen && (
+                          <div className="space-y-1">
+                            {autoBasketGroups.map(([groupKey, groupList]) => {
+                              const open = openAutoBasketGroups.has(groupKey);
+                              return (
+                                <div key={groupKey}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setOpenAutoBasketGroups((prev) => {
+                                        const next = new Set(prev);
+                                        next.has(groupKey) ? next.delete(groupKey) : next.add(groupKey);
+                                        return next;
+                                      })
+                                    }
+                                    className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground py-0.5"
+                                    data-testid={`sidebar-auto-group-${groupKey.replace(/\s+/g, "-")}`}
+                                  >
+                                    {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                    {AUTO_BASKET_GROUP_LABELS[groupKey] ?? groupKey}
+                                    <span className="font-mono text-muted-foreground/70">({groupList.length})</span>
+                                  </button>
+                                  {open && <div className="space-y-1 pl-3">{groupList.map(basketRow)}</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <BasketMetricInspector
                 basket={inspectBasket}
                 open={inspectBasketId !== null}

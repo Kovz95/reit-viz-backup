@@ -20,7 +20,7 @@ import {
   GitMerge,
 } from "lucide-react";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
-import { isAutoBasketId } from "@/lib/autoBaskets";
+import { isAutoBasketId, groupAutoBaskets, AUTO_BASKET_GROUP_LABELS } from "@/lib/autoBaskets";
 import BulkAddByGroup from "./BulkAddByGroup";
 import BasketMetricInspector, {
   type InspectableBasket,
@@ -652,29 +652,8 @@ export function BasketManager({ tickers }: { tickers: TickerLike[] }) {
   const autoFiltered = useMemo(() => filtered.filter((b) => isAutoBasketId(b.id)), [filtered]);
   const [autoOpen, setAutoOpen] = useState(false);
   const [openAutoGroups, setOpenAutoGroups] = useState<Set<string>>(new Set());
-  const autoGroups = useMemo(() => {
-    const groups = new Map<string, Basket[]>();
-    for (const b of autoFiltered) {
-      const key = b.name.split(":")[0]; // "Auto Sub", "Auto Ctry", …
-      const arr = groups.get(key);
-      if (arr) arr.push(b);
-      else groups.set(key, [b]);
-    }
-    const order = ["Auto Econ", "Auto Sect", "Auto Subsect", "Auto IndGrp", "Auto Ind", "Auto Sub", "Auto Ctry", "Auto Exch"];
-    return [...groups.entries()].sort(
-      (a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99),
-    );
-  }, [autoFiltered]);
-  const AUTO_GROUP_LABELS: Record<string, string> = {
-    "Auto Econ": "Economy",
-    "Auto Sect": "Sector",
-    "Auto Subsect": "Subsector",
-    "Auto IndGrp": "Industry Group",
-    "Auto Ind": "Industry",
-    "Auto Sub": "Subindustry (incl. country / exchange splits)",
-    "Auto Ctry": "Country",
-    "Auto Exch": "Exchange",
-  };
+  const autoGroups = useMemo(() => groupAutoBaskets(autoFiltered), [autoFiltered]);
+  const AUTO_GROUP_LABELS = AUTO_BASKET_GROUP_LABELS;
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
