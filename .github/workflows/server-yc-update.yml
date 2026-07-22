@@ -34,14 +34,30 @@ jobs:
         run: |
           if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
           sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
-          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=15"
           sshpass -e scp $SSHOPTS ops/yc/update-data.cjs ops/yc/update-and-reload.sh "$VUSER@$VHOST:/opt/reit-yc-backend/"
+
+          # Kick off the ~2-min rebuild detached (a dropped SSH session must
+          # not kill it), then poll for the completion marker.
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" \
+            'cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && nohup bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" > /tmp/yc-first-run.log 2>&1 & echo kicked'
+
+          echo "════ waiting for first run to finish ════"
+          CODE=""
+          for i in $(seq 1 40); do
+            sleep 15
+            CODE=$(sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'cat /tmp/yc-first-run.done 2>/dev/null' || true)
+            if [ -n "$CODE" ]; then break; fi
+            echo "  …still running ($((i * 15))s)"
+          done
+          echo "════ first-run log ════"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'tail -n 20 /tmp/yc-first-run.log'
+          if [ "$CODE" != "0" ]; then
+            echo "::error::updater exited with '$CODE' — data.json left untouched"; exit 1
+          fi
+
           sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'bash -s' <<'REMOTE'
             set -euo pipefail
-            cd /opt/reit-yc-backend
-            chmod +x update-and-reload.sh
-            echo "════ first run (may take ~2 min: 83 FMP calls) ════"
-            node update-data.cjs
             echo "════ restart app ════"
             pm2 restart reit-yc-backend
             sleep 3
