@@ -49,6 +49,10 @@ jobs:
             systemctl list-timers 2>/dev/null | grep -iE "yc|yield|corr" || echo "(no matching timers)"
             echo "── scripts in the app dir ──"
             find /opt/reit-yc-backend -maxdepth 2 \( -name "*.sh" -o -name "*.py" -o -name "*.mjs" \) 2>/dev/null | head -10
+            echo "── yc updater: process alive? FRED reachable? ──"
+            pgrep -af "update-data" || echo "(no updater process)"
+            curl -sI --max-time 10 "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10" | head -3 || echo "(FRED unreachable)"
+            curl -s --max-time 15 "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2,DGS5,DGS10,DFII10,T10YIE" | head -2 || echo "(FRED CSV fetch failed)"
             echo "── yc updater first-run outcome ──"
             echo "done marker: $(cat /tmp/yc-first-run.done 2>/dev/null || echo '(absent)')"
             tail -n 8 /tmp/yc-first-run.log 2>/dev/null || echo "(no log)"
