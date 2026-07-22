@@ -8,6 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const { execFileSync } = require("child_process");
 
 const DIR = __dirname;
 const DATA = path.join(DIR, "data.json");
@@ -17,15 +18,26 @@ if (!FMP_KEY) { console.error("no FMP_API_KEY in .env"); process.exit(1); }
 
 function get(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { "User-Agent": "yc-updater" } }, (res) => {
+    const req = https.get(url, { headers: { "User-Agent": "yc-updater" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return resolve(get(res.headers.location));
       }
       let buf = "";
       res.on("data", (c) => (buf += c));
       res.on("end", () => (res.statusCode === 200 ? resolve(buf) : reject(new Error(res.statusCode + " " + url.slice(0, 80)))));
-    }).on("error", reject);
+    });
+    // Hard timeout — a blackholed connection must fail loudly, not hang the
+    // whole updater (FRED stalls node clients; see curlGet).
+    req.setTimeout(45000, () => req.destroy(new Error("timeout " + url.slice(0, 80))));
+    req.on("error", reject);
   });
+}
+
+/** FRED blackholes node's HTTPS client but serves curl fine — shell out. */
+function curlGet(url) {
+  return execFileSync("curl", ["-s", "--max-time", "90", "--fail", url], {
+    maxBuffer: 64 * 1024 * 1024,
+  }).toString();
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -35,7 +47,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log("rebuilding " + tickers.length + " tickers; current endDate=" + old.endDate);
 
   // FRED: one CSV, no key needed. Column order follows the id list.
-  const fredCsv = await get("https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2,DGS5,DGS10,DFII10,T10YIE");
+  console.log("fetching FRED yields…");
+  const fredCsv = curlGet("https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2,DGS5,DGS10,DFII10,T10YIE");
   const fred = new Map();
   const fredLines = fredCsv.trim().split("\n").slice(1);
   for (const line of fredLines) {

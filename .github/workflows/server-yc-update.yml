@@ -41,18 +41,20 @@ jobs:
           # session so sshd's SIGHUP on disconnect can't reach it (nohup alone
           # left node in the session's process group and it died with the ssh).
           sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" \
-            'cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && setsid bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" < /dev/null > /tmp/yc-first-run.log 2>&1 & echo kicked'
+            'pkill -f "update-data.cjs" 2>/dev/null; cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && setsid bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" < /dev/null > /tmp/yc-first-run.log 2>&1 & echo kicked'
 
           echo "════ waiting for first run to finish ════"
+          # Few, spaced polls (rapid password logins trip sshd throttling and
+          # hang), each hard-bounded by GNU timeout.
           CODE=""
-          for i in $(seq 1 40); do
-            sleep 15
-            CODE=$(sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'cat /tmp/yc-first-run.done 2>/dev/null' || true)
+          for i in $(seq 1 10); do
+            sleep 60
+            CODE=$(timeout 30 sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'cat /tmp/yc-first-run.done 2>/dev/null' || true)
             if [ -n "$CODE" ]; then break; fi
-            echo "  …still running ($((i * 15))s)"
+            echo "  …still running (${i}m)"
           done
           echo "════ first-run log ════"
-          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'tail -n 20 /tmp/yc-first-run.log'
+          timeout 30 sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'tail -n 20 /tmp/yc-first-run.log' || true
           if [ "$CODE" != "0" ]; then
             echo "::error::updater exited with '$CODE' — data.json left untouched"; exit 1
           fi
