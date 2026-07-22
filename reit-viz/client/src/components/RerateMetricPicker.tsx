@@ -47,7 +47,7 @@ export default function RerateMetricPicker({
     const all = buildRerateMetrics(pool);
     const byKey = new Map(all.map((m) => [m.key, m]));
     const grouped = groupMetricsByCategory(all.map((m) => m.key));
-    const front = ["Valuation", "Yields"];
+    const front = ["Default", "Valuation", "Yields"];
     const ordered = [
       ...front.map((c) => grouped.find((g) => g.category === c)).filter(Boolean) as typeof grouped,
       ...grouped.filter((g) => !front.includes(g.category)),

@@ -27,7 +27,9 @@ import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelec
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -517,6 +519,15 @@ export default function Ranking() {
     const est = metricCategoriesDyn.find((c) => c.category === "Estimates (FY1/FY2)")?.metrics ?? [];
     return [...new Set<string>([...REVISION_METRICS, ...est])].sort();
   }, [metricCategoriesDyn]);
+  // Level-type default pseudo-metrics (EPS/EPS FY1) are valid revision sources
+  // too — surfaced in their own "Default" section at the top of the dropdown.
+  const revisionDefaultOptions = useMemo(
+    () =>
+      (metricCategoriesDyn.find((c) => c.category === "Default")?.metrics ?? [])
+        .filter((m) => !/growth/i.test(m))
+        .sort(),
+    [metricCategoriesDyn],
+  );
   const [newTemplateName, setNewTemplateName] = useState("");
   const [showSaveInput, setShowSaveInput] = useState(false);
 
@@ -1383,7 +1394,15 @@ export default function Ranking() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="max-h-[320px]">
-              {revisionMetricOptions.map((m) => (
+              {revisionDefaultOptions.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel className="text-[10px]">Default</SelectLabel>
+                  {revisionDefaultOptions.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+              {revisionMetricOptions.filter((m) => !revisionDefaultOptions.includes(m)).map((m) => (
                 <SelectItem key={m} value={m}>{m}</SelectItem>
               ))}
             </SelectContent>

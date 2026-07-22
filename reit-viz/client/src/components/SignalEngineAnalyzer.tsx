@@ -305,6 +305,12 @@ const WORKBOOK_METRICS_BASE = [
 // Base + any Valuation/Yields metrics present in the loaded universe.
 function workbookMetricCandidates(): string[] {
   const s = new Set<string>(WORKBOOK_METRICS_BASE);
+  // Universe-tab default pseudo-metrics — getMetricSeries resolves them per
+  // ticker, and the availability probe below drops any that don't resolve.
+  s.add("EPS (Default)");
+  s.add("EPS FY1 (Default)");
+  s.add("EPS Growth (Default)");
+  s.add("EPS Growth FY1 (Default)");
   for (const t of getTickersCacheSync() || []) {
     for (const m of t.metrics || []) {
       const c = categorizeMetric(m);

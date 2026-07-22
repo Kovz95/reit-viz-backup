@@ -52,6 +52,10 @@ const VAL_METRICS_BASE = [
 ];
 
 const GROWTH_METRICS_BASE = [
+  // Universe-tab default pseudo-metrics first (resolved per ticker by
+  // getMetricSeries) — surfaced in their own "Default" optgroup below.
+  { id: "EPS Growth (Default)", label: "EPS Growth (Default)" },
+  { id: "EPS Growth FY1 (Default)", label: "EPS Growth FY1 (Default)" },
   { id: "FY1 EPS Growth", label: "FY1 EPS Growth" },
   { id: "FY2 EPS Growth", label: "FY2 EPS Growth" },
   { id: "FY1 FFO Growth", label: "FY1 FFO Growth" },
@@ -932,11 +936,20 @@ export default function ChartsPdSubplots({
             onChange={(e) => patchState({ growthMetric: e.target.value })}
             className="text-[10px] font-mono bg-background border border-border rounded px-1 py-0.5 text-foreground"
           >
-            {growthMetricOptions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
+            <optgroup label="Default">
+              {growthMetricOptions.filter((m) => /\(Default\)$/.test(m.id)).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Growth">
+              {growthMetricOptions.filter((m) => !/\(Default\)$/.test(m.id)).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </optgroup>
           </select>
         </label>
         <label className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground">

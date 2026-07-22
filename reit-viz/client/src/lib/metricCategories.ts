@@ -12,6 +12,7 @@
 // Display order of categories. Anything a rule emits that isn't here (shouldn't
 // happen) is appended after, before "Other".
 export const CATEGORY_ORDER = [
+  "Default",
   "Price",
   "Volume & Liquidity",
   "Valuation",
@@ -45,9 +46,9 @@ export const DERIVED_METRICS = [
 // Ordered match rules — FIRST match wins, so order encodes precedence
 // (e.g. "growth" before valuation; price multiples before their metric family).
 const RULES: Array<[string, (m: string) => boolean]> = [
-  // Pseudo-metrics resolved per ticker from the Universe-tab default-metric rules.
-  ["Growth", (m) => /\(Default\)$/.test(m) && /growth/i.test(m)],
-  ["Estimates (FY1/FY2)", (m) => /\(Default\)$/.test(m)],
+  // Pseudo-metrics resolved per ticker from the Universe-tab default-metric
+  // rules — surfaced in their own section at the very top of every picker.
+  ["Default", (m) => /\(Default\)$/.test(m)],
   ["Price", (m) => ["close", "open", "high", "low"].includes(m)],
   ["Volume & Liquidity", (m) => /\bvolume\b|avg daily/i.test(m)],
   ["Ratings & Sentiment", (m) => /ratings|\bbull\b|\bbear\b|short interest|^si /i.test(m)],

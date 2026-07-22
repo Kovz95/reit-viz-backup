@@ -2007,7 +2007,12 @@ export default function PremiumDiscount() {
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Growth</label>
             <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[230px]" value={growthMetric} onChange={(e) => { growthMetricOverrideRef.current = true; setGrowthMetric(e.target.value); }} data-testid="select-growth-metric">
-              {GROWTH_METRICS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              <optgroup label="Default">
+                {GROWTH_METRICS.filter((m) => /\(Default\)$/.test(m.id)).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </optgroup>
+              <optgroup label="Growth">
+                {GROWTH_METRICS.filter((m) => !/\(Default\)$/.test(m.id)).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </optgroup>
             </select>
           </div>
 
