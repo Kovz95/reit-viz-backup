@@ -17,7 +17,7 @@ import ClassificationFilters, {
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { Filter, ChevronUp, ChevronDown, X, Loader2, Search, ExternalLink } from "lucide-react";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectItem, SelectLabel } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { P as PlayIcon } from "@/lib/play";
@@ -38,6 +38,10 @@ const VALUATION_METRICS = [
 ];
 
 const GROWTH_METRICS = [
+  // Universe-tab default pseudo-metrics — fetchPeerRelative resolves them
+  // per target ticker before hitting the server.
+  { id: "EPS Growth (Default)", label: "EPS Growth (Default)" },
+  { id: "EPS Growth FY1 (Default)", label: "EPS Growth FY1 (Default)" },
   { id: "FY1 EPS Growth", label: "FY1 EPS Growth" },
   { id: "FY2 EPS Growth", label: "FY2 EPS Growth" },
   { id: "FY1 FFO Growth", label: "FY1 FFO Growth" },
@@ -463,7 +467,14 @@ export default function PremiumDiscountScreener() {
           <Select value={growthMetricSel} onValueChange={v => { growthLockedRef.current = true; setGrowthMetricSel(v); }}>
             <SelectTrigger className="h-7 w-auto min-w-[265px] text-[11px]"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {GROWTH_METRICS.map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+              <SelectGroup>
+                <SelectLabel className="text-[10px]">Default</SelectLabel>
+                {GROWTH_METRICS.filter(m => /\(Default\)$/.test(m.id)).map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+              </SelectGroup>
+              <SelectGroup>
+                <SelectLabel className="text-[10px]">Growth</SelectLabel>
+                {GROWTH_METRICS.filter(m => !/\(Default\)$/.test(m.id)).map(m => <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>)}
+              </SelectGroup>
             </SelectContent>
           </Select>
           <span className="text-muted-foreground">Peers by</span>
