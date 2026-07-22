@@ -34,13 +34,14 @@ jobs:
         run: |
           if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
           sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
-          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=20 -o ServerAliveCountMax=15"
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ServerAliveInterval=20 -o ServerAliveCountMax=15"
           sshpass -e scp $SSHOPTS ops/yc/update-data.cjs ops/yc/update-and-reload.sh "$VUSER@$VHOST:/opt/reit-yc-backend/"
 
-          # Kick off the ~2-min rebuild detached (a dropped SSH session must
-          # not kill it), then poll for the completion marker.
+          # Kick off the ~2-min rebuild fully detached: setsid gives it its own
+          # session so sshd's SIGHUP on disconnect can't reach it (nohup alone
+          # left node in the session's process group and it died with the ssh).
           sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" \
-            'cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && nohup bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" > /tmp/yc-first-run.log 2>&1 & echo kicked'
+            'cd /opt/reit-yc-backend && chmod +x update-and-reload.sh && rm -f /tmp/yc-first-run.done && setsid bash -c "node update-data.cjs; echo \$? > /tmp/yc-first-run.done" < /dev/null > /tmp/yc-first-run.log 2>&1 & echo kicked'
 
           echo "════ waiting for first run to finish ════"
           CODE=""
