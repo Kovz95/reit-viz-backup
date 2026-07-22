@@ -512,7 +512,7 @@ export default function UniversalScreener() {
               {HORIZONS.map((h) => <option key={h.label} value={h.label}>{h.label}</option>)}
             </select>
           </label>
-          <label className="flex items-center gap-1 text-muted-foreground">
+          <label className="flex items-center gap-1 text-muted-foreground" title="Qualification threshold. Singles qualify on Hit% (reached the target move within the horizon); pairs qualify on Win% (directionally-correct horizon return).">
             Hit% &gt;
             <input type="number" min={0} max={100} step={5}
               value={Math.round(settings.hitRateThreshold * 100)}

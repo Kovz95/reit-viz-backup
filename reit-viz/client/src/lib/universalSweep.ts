@@ -288,7 +288,12 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
         const row = result.rows.find((r) => r.horizon === settings.horizon);
         if (!row) continue;
         if (row.count < settings.minOccurrences) continue;
-        if (row.hitRate <= settings.hitRateThreshold) continue;
+        // Pairs qualify on winRate (directionally-correct horizon return):
+        // ratios are low-vol, so any reachable excursion target either
+        // saturates hitRate or filters everything. Singles keep hitRate
+        // (did the trade see a ≥ target% favorable move within the horizon).
+        const qualStat = sig.family === "pair" ? row.winRate : row.hitRate;
+        if (qualStat <= settings.hitRateThreshold) continue;
 
         const freqPerYear = result.signalCount / spanYears;
         const freqFloor =
