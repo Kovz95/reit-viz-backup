@@ -1,0 +1,61 @@
+name: Server cleanup (reit-viz prod disk)
+
+# The Vultr box hit 100% disk, which makes nginx truncate large proxied
+# responses (blank pages). This workflow shows the usage breakdown, prunes
+# reit-viz deploy backups to the newest 5, vacuums journald to 300M, flushes
+# pm2 logs, and prints df before/after. It does NOT touch other apps' data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type CLEANUP to confirm pruning old reit-viz backups + journal vacuum'
+        type: string
+        required: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard
+        if: ${{ inputs.confirm != 'CLEANUP' }}
+        run: |
+          echo "::error::confirm must be CLEANUP"; exit 1
+
+      - name: Clean up over SSH
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VHOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VUSER: ${{ vars.VULTR_USER || 'root' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'bash -s' <<'REMOTE'
+            set -uo pipefail
+            echo "════ df BEFORE ════"; df -h / | tail -1
+            echo; echo "════ top-level usage ════"
+            du -xh -d1 / 2>/dev/null | sort -rh | head -12
+            echo; echo "════ /opt usage ════"
+            du -xh -d1 /opt 2>/dev/null | sort -rh | head -10
+            echo; echo "════ /opt/reit-viz usage ════"
+            du -xh -d1 /opt/reit-viz 2>/dev/null | sort -rh | head -10
+            echo; echo "════ /var usage ════"
+            du -xh -d1 /var 2>/dev/null | sort -rh | head -10
+            echo; echo "════ docker disk ════"
+            docker system df 2>/dev/null || true
+            echo; echo "════ reit-viz backups (before prune) ════"
+            ls -lht /opt/reit-viz/backups/ 2>/dev/null | head -20
+            N=$(ls /opt/reit-viz/backups/*.tar.gz 2>/dev/null | wc -l)
+            echo "backup count: $N"
+            echo; echo "════ prune backups to newest 5 ════"
+            ls -t /opt/reit-viz/backups/*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -v
+            echo; echo "════ journald vacuum to 300M ════"
+            journalctl --vacuum-size=300M 2>&1 | tail -3
+            echo; echo "════ pm2 flush (truncate pm2 logs) ════"
+            du -sh /root/.pm2/logs 2>/dev/null
+            pm2 flush >/dev/null 2>&1 && echo "pm2 logs flushed"
+            echo; echo "════ nginx temp dirs ════"
+            du -sh /var/lib/nginx 2>/dev/null || du -sh /var/cache/nginx 2>/dev/null || true
+            echo; echo "════ df AFTER ════"; df -h / | tail -1
+          REMOTE

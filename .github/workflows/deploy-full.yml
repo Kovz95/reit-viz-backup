@@ -96,6 +96,10 @@ jobs:
               --exclude='./backups' dist scripts package.json package-lock.json data.db* data 2>/dev/null || \
             tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" --exclude='./backups' dist scripts package.json package-lock.json 2>/dev/null || true
             echo "Backed up to $VDIR/backups/reit-viz-$TS.tar.gz"
+            # Retention: keep only the newest 5 backups — unbounded backups
+            # filled the disk to 100% (2026-07-21), which made nginx truncate
+            # large proxied responses (blank pages).
+            ls -t "$VDIR/backups/"*.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
             # 2) Swap in the new dist (replace server bundle + client assets; data/ and data.db untouched).
             rm -rf "$VDIR/dist.new" && mkdir -p "$VDIR/dist.new"
             tar -xzf /tmp/reit-viz-full.tar.gz -C "$VDIR/dist.new"
