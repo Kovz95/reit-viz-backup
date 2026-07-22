@@ -35,6 +35,11 @@ export interface SweepSettings {
   /** Signals must have fired at least this often per year of series span. */
   freqFloorPerYear: number;
   /**
+   * Family override: valuation extremes (±1.5–2σ multiple z-scores) rarely
+   * fire quarterly per ticker, so they get their own, lower floor.
+   */
+  valuationFreqFloorPerYear: number;
+  /**
    * Target favorable excursion in PERCENT units for the UI (5 = +5%); the
    * sweep converts to the kernel's fraction convention (0.05) at the call.
    * A "hit" = the trade saw a ≥ targetPct% favorable move within the horizon.
@@ -56,6 +61,7 @@ export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   hitRateThreshold: 0.5,
   minOccurrences: 8,
   freqFloorPerYear: 4,
+  valuationFreqFloorPerYear: 2,
   targetPct: 5,
   cooldown: 10,
   firingLookbackBars: 5,
@@ -285,7 +291,11 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
         if (row.hitRate <= settings.hitRateThreshold) continue;
 
         const freqPerYear = result.signalCount / spanYears;
-        if (freqPerYear < settings.freqFloorPerYear) continue;
+        const freqFloor =
+          sig.family === "valuation"
+            ? settings.valuationFreqFloorPerYear
+            : settings.freqFloorPerYear;
+        if (freqPerYear < freqFloor) continue;
 
         // Firing state from the raw detector indices (pre-cooldown is fine for
         // "is the condition on today": the condition fired regardless).

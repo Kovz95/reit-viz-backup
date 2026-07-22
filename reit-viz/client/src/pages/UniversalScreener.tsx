@@ -537,6 +537,14 @@ export default function UniversalScreener() {
               onChange={(e) => set("freqFloorPerYear", parseFloat(e.target.value) || 0)}
               className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" />
           </label>
+          {settings.families.includes("valuation") && (
+            <label className="flex items-center gap-1 text-muted-foreground" title="Lower frequency floor for valuation signals — multiple-extreme events fire less often than technical ones">
+              Val freq ≥
+              <input type="number" min={0} step={1} value={settings.valuationFreqFloorPerYear}
+                onChange={(e) => set("valuationFreqFloorPerYear", parseFloat(e.target.value) || 0)}
+                className="w-12 bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-val-freq" />
+            </label>
+          )}
           <label className="flex items-center gap-1 text-muted-foreground" title="A setup is 'firing now' when its last signal is within this many bars of today">
             Lookback
             <input type="number" min={1} step={1} value={settings.firingLookbackBars}
