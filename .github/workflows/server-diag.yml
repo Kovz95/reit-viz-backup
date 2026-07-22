@@ -1,0 +1,50 @@
+name: Server diagnostics (reit-viz prod)
+
+# Read-only diagnostics for the Vultr box — pm2 state, memory, OOM traces,
+# nginx errors. Manual dispatch only; changes nothing on the server.
+# Used to chase the intermittent truncated-response / blank-page windows.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run diagnostics over SSH
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VHOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VUSER: ${{ vars.VULTR_USER || 'root' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" 'bash -s' <<'REMOTE'
+            set -uo pipefail
+            echo "════ uptime / load ════"; uptime
+            echo; echo "════ memory ════"; free -m
+            echo; echo "════ disk ════"; df -h / | tail -1
+            echo; echo "════ top RSS processes ════"; ps aux --sort=-rss | head -12
+            echo; echo "════ pm2 list ════"; pm2 list
+            echo; echo "════ pm2 describe reit-viz (restarts/uptime) ════"
+            pm2 describe reit-viz | grep -E "status|restarts|uptime|memory|created|script" || true
+            echo; echo "════ pm2 reit-viz error log (last 60) ════"
+            tail -n 60 /root/.pm2/logs/reit-viz-error.log 2>/dev/null || true
+            echo; echo "════ pm2 reit-viz out log (last 30) ════"
+            tail -n 30 /root/.pm2/logs/reit-viz-out.log 2>/dev/null || true
+            echo; echo "════ kernel OOM / kills (last 12h) ════"
+            journalctl -k --since "12 hours ago" 2>/dev/null | grep -iE "oom|out of memory|killed process" | tail -20 || echo "(none)"
+            echo; echo "════ nginx error log (last 40) ════"
+            tail -n 40 /var/log/nginx/error.log 2>/dev/null || true
+            echo; echo "════ nginx reit-viz site config ════"
+            cat /etc/nginx/sites-enabled/reit-viz-https 2>/dev/null || true
+            echo; echo "════ bundle self-test from the box (10x direct :3000) ════"
+            ASSET=$(ls /opt/reit-viz/dist/public/assets/index-*.js | head -1 | xargs -n1 basename)
+            echo "asset: $ASSET  real size: $(stat -c%s /opt/reit-viz/dist/public/assets/$ASSET)"
+            for i in $(seq 1 10); do
+              SZ=$(curl -s "http://127.0.0.1:3000/assets/$ASSET" -o /dev/null -w '%{size_download}')
+              SZGZ=$(curl -s --compressed "http://127.0.0.1:3000/assets/$ASSET" -o /dev/null -w '%{size_download}')
+              echo "try $i: identity=$SZ gzip-raw=$SZGZ"
+            done
+          REMOTE

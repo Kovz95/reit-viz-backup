@@ -19,6 +19,8 @@ name: Deploy reit-viz FULL (server + client) to Vultr
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.github/**'   # ops/workflow changes alone should not redeploy the app
   workflow_dispatch:
     inputs:
       confirm:
