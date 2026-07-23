@@ -116,6 +116,14 @@ jobs:
             rm -rf "$VDIR/dist.new"
             # 3) Refresh production deps (rebuilds native modules e.g. better-sqlite3).
             npm ci --omit=dev --no-audit --no-fund
+            # 3b) Share the server-resident FMP key with reit-viz (intraday
+            # provider). The key lives only on this box, in the yield-corr
+            # app's .env — read it here and let --update-env persist it into
+            # pm2's stored environment. No key, no problem: Yahoo fallback.
+            if [ -f /opt/reit-yc-backend/.env ]; then
+              FMP_API_KEY="$(grep -o 'FMP_API_KEY=[^[:space:]]*' /opt/reit-yc-backend/.env | head -1 | cut -d= -f2-)"
+              if [ -n "$FMP_API_KEY" ]; then export FMP_API_KEY; echo "FMP key found — exporting to $APP env"; fi
+            fi
             # 4) Restart. If it fails to come up, roll back dist and restart.
             if pm2 restart "$APP" --update-env; then
               sleep 3
