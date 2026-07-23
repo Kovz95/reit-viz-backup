@@ -128,11 +128,14 @@ export default function MTFSetups() {
   const [customDir, setCustomDir] = useState<MtfDirection>("long");
   const [customRow, setCustomRow] = useState<MtfSetupRow | null>(null);
   const [customErr, setCustomErr] = useState<string | null>(null);
+  /** Cumulative signed return (%) after each accepted entry, at the qualification horizon. */
+  const [customSpark, setCustomSpark] = useState<{ label: string; cum: number[] }>({ label: "", cum: [] });
 
   const evaluateCustom = () => {
     if (!bundle) return;
     setCustomErr(null);
     setCustomRow(null);
+    setCustomSpark({ label: "", cum: [] });
     const legs = customLegs
       .filter(Boolean)
       .map((k) => instances.find((i) => i.key === k))
@@ -157,6 +160,18 @@ export default function MTFSetups() {
       0.25,
     );
     const lastFiredIdx = entries[entries.length - 1];
+    const qBars = (horizons.find((h) => h.label === q.horizon) ?? horizons[0]).bars;
+    const spark: number[] = [];
+    let cum = 0;
+    for (const e of acceptedIndices) {
+      const entry = base.closes[e];
+      const exit = base.closes[e + qBars];
+      if (!(entry > 0) || !(exit > 0)) continue;
+      const ret = (exit / entry - 1) * 100;
+      cum += customDir === "long" ? ret : -ret;
+      spark.push(cum);
+    }
+    setCustomSpark({ label: q.horizon, cum: spark });
     setCustomRow({
       key: `${legs.map((l) => l.key).sort().join("+")}|${customDir}`,
       legs,
@@ -519,13 +534,15 @@ export default function MTFSetups() {
                   data-testid={`mtf-custom-leg-${i}`}
                 >
                   <option value="">{i < 2 ? `Condition ${i + 1}…` : "Condition 3 (optional)…"}</option>
-                  {(["H", "D", "W"] as Timeframe[]).map((tf) => (
-                    <optgroup key={tf} label={TF_LABEL[tf]}>
-                      {instances.filter((inst) => inst.tf === tf).map((inst) => (
-                        <option key={inst.key} value={inst.key}>{inst.def.label}</option>
-                      ))}
-                    </optgroup>
-                  ))}
+                  {(["H", "D", "W"] as Timeframe[])
+                    .filter((tf) => tf !== "H" || effectiveBase === "H")
+                    .map((tf) => (
+                      <optgroup key={tf} label={TF_LABEL[tf]}>
+                        {instances.filter((inst) => inst.tf === tf).map((inst) => (
+                          <option key={inst.key} value={inst.key}>{inst.def.label}</option>
+                        ))}
+                      </optgroup>
+                    ))}
                 </select>
               ))}
               <div className="flex items-center rounded border border-border overflow-hidden">
@@ -575,6 +592,30 @@ export default function MTFSetups() {
                     </tr>
                   </tbody>
                 </table>
+                {customSpark.cum.length >= 2 && (() => {
+                  const pts = customSpark.cum;
+                  const w = 220, h = 44, pad = 2;
+                  const lo = Math.min(0, ...pts);
+                  const hi = Math.max(0, ...pts);
+                  const span = hi - lo || 1;
+                  const x = (i: number) => pad + (i / (pts.length - 1)) * (w - 2 * pad);
+                  const y = (v: number) => pad + (1 - (v - lo) / span) * (h - 2 * pad);
+                  const poly = pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+                  const last = pts[pts.length - 1];
+                  return (
+                    <div className="flex items-center gap-2 mt-1.5" data-testid="mtf-custom-spark">
+                      <svg width={w} height={h} className="border border-border/40 rounded bg-card/40">
+                        <line x1={pad} x2={w - pad} y1={y(0)} y2={y(0)} className="stroke-border" strokeDasharray="2 2" />
+                        <polyline points={poly} fill="none" strokeWidth={1.5}
+                          className={last >= 0 ? "stroke-green-400" : "stroke-red-400"} />
+                      </svg>
+                      <span className="text-[9px] text-muted-foreground">
+                        Cumulative {customSpark.label} return, entry by entry:{" "}
+                        <span className={retColor(last)}>{fmtPct(last)}</span> over {pts.length} trades (simple sum, no compounding/overlap handling)
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div className="text-[9px] text-muted-foreground mt-1">Recent entries: {customRow.entryLabels.join(", ")}</div>
               </div>
             )}

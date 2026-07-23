@@ -231,6 +231,10 @@ export function computeConditionMatrix(
       out.set(inst.key, own);
       continue;
     }
+    // An hourly condition has no well-defined projection onto the daily axis
+    // (and the naive fallthrough below would index hourly states with weekly
+    // indices) — skip it; callers treat a missing key as "leg unavailable".
+    if (baseTf === "D" && inst.tf === "H") continue;
     const map =
       baseTf === "H"
         ? inst.tf === "D"
