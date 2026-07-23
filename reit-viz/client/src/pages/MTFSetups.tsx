@@ -359,7 +359,7 @@ export default function MTFSetups() {
                 </span>
               )}
               <span className="text-[9px] text-muted-foreground ml-auto">
-                H: last cached bar (≤20 min delay){bundle.lastWeeklyComplete ? "" : " · W: prior completed week"}
+                H: last cached bar (≤20 min delay){bundle.lastWeeklyComplete ? "" : " · W: forming week (partial; backtests use completed weeks only)"}
               </span>
             </div>
             <div className="overflow-x-auto">
