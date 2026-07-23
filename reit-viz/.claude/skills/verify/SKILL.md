@@ -21,7 +21,11 @@ npx vite --config vite.verify.config.mts    # run from reit-viz/, background it
 ```
 
 `vite.verify.config.mts` mirrors vite.config.ts (same aliases/root) plus the
-proxy + port 5210.
+proxy + port 5210. It also answers `/api/intraday/*` itself via a middleware
+importing server/intradayPrices — the baked 5001 container predates that route
+(unmatched /api on 5001 returns 200 HTML, so the client treats it as "no
+data"). Add the same middleware pattern for any other freshly-added server
+route you need during verification.
 
 ## Drive
 
