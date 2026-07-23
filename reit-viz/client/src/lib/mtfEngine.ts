@@ -24,6 +24,7 @@ export const DAILY_MTF_HORIZONS: MtfHorizon[] = [
   { label: "1W", bars: 5 },
   { label: "2W", bars: 10 },
   { label: "1M", bars: 21 },
+  { label: "2M", bars: 42 },
   { label: "3M", bars: 63 },
 ];
 
