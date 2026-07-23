@@ -18,3 +18,4 @@ reit-viz/data/adv-cache.json
 diag/
 # Screenshots emitted by the diag-*.mjs parity-audit harness (binary, throwaway)
 reit-viz/diag-shots/
+reit-viz/data/yahoo-intraday-cache/
