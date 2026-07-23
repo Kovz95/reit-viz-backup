@@ -85,12 +85,51 @@ interface DailySeriesInput {
   volumes?: number[];
 }
 
+// Any-symbol daily loader: workbook first, /api/yahoo-prices fallback so the
+// scanner accepts arbitrary Yahoo symbols (SPY, XLRE, ^TNX, …) typed into the
+// pickers. Yahoo results are promise-cached so pair combos sharing a leg
+// don't refetch it.
+const yahooDailyCache = new Map<string, Promise<DailySeriesInput | null>>();
+
+async function fetchDailyAnySymbol(ticker: string): Promise<DailySeriesInput | null> {
+  const wb = await fetchTickerOHLCV(ticker).catch(() => null);
+  if (wb && wb.dates.length) return wb;
+  const key = ticker.toUpperCase();
+  let p = yahooDailyCache.get(key);
+  if (!p) {
+    p = (async () => {
+      try {
+        const res = await fetch(`/api/yahoo-prices/${encodeURIComponent(key)}`);
+        if (!res.ok) return null;
+        const ct = res.headers.get("content-type") ?? "";
+        if (!ct.includes("json")) return null; // SPA fallback HTML
+        const d = await res.json();
+        if (!Array.isArray(d?.dates) || !d.dates.length || !Array.isArray(d?.closes)) return null;
+        return {
+          dates: d.dates,
+          opens: Array.isArray(d.opens) ? d.opens : d.closes,
+          highs: Array.isArray(d.highs) ? d.highs : d.closes,
+          lows: Array.isArray(d.lows) ? d.lows : d.closes,
+          closes: d.closes,
+          adjCloses:
+            Array.isArray(d.adjCloses) && d.adjCloses.length === d.dates.length ? d.adjCloses : d.closes,
+          volumes: Array.isArray(d.volumes) ? d.volumes : [],
+        } as DailySeriesInput;
+      } catch {
+        return null;
+      }
+    })();
+    yahooDailyCache.set(key, p);
+  }
+  return p;
+}
+
 export async function buildMtfBundle(ticker: string): Promise<MtfBundle> {
   const [daily0, hourlyBars] = await Promise.all([
-    fetchTickerOHLCV(ticker),
+    fetchDailyAnySymbol(ticker),
     fetchIntradayBars(ticker, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
   ]);
-  if (!daily0.dates.length) throw new Error(`No daily data for ${ticker}`);
+  if (!daily0 || !daily0.dates.length) throw new Error(`No daily data for ${ticker} (workbook or Yahoo)`);
   return assembleBundle(ticker.toUpperCase(), daily0, hourlyBars);
 }
 
@@ -103,14 +142,14 @@ export async function buildMtfBundle(ticker: string): Promise<MtfBundle> {
  */
 export async function buildPairMtfBundle(a: string, b: string): Promise<MtfBundle> {
   const [dA, dB, hA, hB] = await Promise.all([
-    fetchTickerOHLCV(a),
-    fetchTickerOHLCV(b),
+    fetchDailyAnySymbol(a),
+    fetchDailyAnySymbol(b),
     fetchIntradayBars(a, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
     fetchIntradayBars(b, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
   ]);
   const label = `${a.toUpperCase()}/${b.toUpperCase()}`;
-  if (!dA.dates.length) throw new Error(`No daily data for ${a}`);
-  if (!dB.dates.length) throw new Error(`No daily data for ${b}`);
+  if (!dA || !dA.dates.length) throw new Error(`No daily data for ${a}`);
+  if (!dB || !dB.dates.length) throw new Error(`No daily data for ${b}`);
 
   const adjA = dA.adjCloses.length === dA.dates.length ? dA.adjCloses : dA.closes;
   const adjB = dB.adjCloses.length === dB.dates.length ? dB.adjCloses : dB.closes;
