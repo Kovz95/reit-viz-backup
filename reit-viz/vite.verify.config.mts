@@ -7,7 +7,36 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // The baked 5001 container lacks freshly-added server routes; answer
+    // /api/intraday/* here via the same code path the real server uses.
+    {
+      name: "verify-intraday-route",
+      configureServer(server) {
+        server.middlewares.use(async (req, res, next) => {
+          const m = req.url?.match(/^\/api\/intraday\/([^/?]+)(?:\?(.*))?$/);
+          if (!m) return next();
+          try {
+            const { fetchYahooIntraday } = await import("./server/intradayPrices");
+            const params = new URLSearchParams(m[2] ?? "");
+            const days = params.get("days");
+            const data = await fetchYahooIntraday(
+              decodeURIComponent(m[1]),
+              params.get("interval") ?? "60m",
+              days ? parseInt(days) : undefined,
+            );
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(data));
+          } catch (e: any) {
+            res.statusCode = 502;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: e?.message ?? String(e) }));
+          }
+        });
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),

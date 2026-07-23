@@ -51,9 +51,11 @@ export interface MtfSettings {
   deepScan: boolean;
 }
 
+// targetPct 3: REITs rarely make a 5% favorable excursion inside a month, so
+// a 5% default returned zero setups on typical tickers (verified on AVB).
 export const DEFAULT_MTF_SETTINGS: MtfSettings = {
   baseTf: "D",
-  targetPct: 5,
+  targetPct: 3,
   cooldownBars: 10,
   minOccurrences: 8,
   hitRateThreshold: 0.55,

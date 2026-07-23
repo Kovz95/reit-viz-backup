@@ -66,12 +66,16 @@ export async function fetchYahooIntraday(
   const spec = INTRADAY_INTERVALS[interval];
   if (!spec) throw new Error(`unsupported interval "${interval}" (use ${Object.keys(INTRADAY_INTERVALS).join("/")})`);
 
-  const cached = readCache(sym, interval);
-  if (cached) return cached;
-
+  // The cache is keyed by ticker+interval only, so it must always hold the
+  // FULL range — fetch maxDays regardless of the request and slice on return
+  // (otherwise a small-`days` request would poison the cache for larger ones).
   const rangeDays = Math.min(Math.max(1, days ?? spec.maxDays), spec.maxDays);
+
+  const cached = readCache(sym, interval);
+  if (cached) return sliceToDays(cached, rangeDays);
+
   const period2 = Math.floor(Date.now() / 1000);
-  const period1 = period2 - rangeDays * 86400;
+  const period1 = period2 - spec.maxDays * 86400;
   const yahooSym = toYahooSymbol(sym);
   const url =
     `${CHART_BASE}/${encodeURIComponent(yahooSym)}` +
@@ -124,5 +128,23 @@ export async function fetchYahooIntraday(
     fetchedAt: new Date().toISOString(),
   };
   writeCache(data);
-  return data;
+  return sliceToDays(data, rangeDays);
+}
+
+/** Trim a full-range series to the trailing `days` calendar days. */
+function sliceToDays(data: IntradayPriceData, days: number): IntradayPriceData {
+  const cutoff = Math.floor(Date.now() / 1000) - days * 86400;
+  const { timestamps } = data;
+  if (!timestamps.length || timestamps[0] >= cutoff) return data;
+  let start = 0;
+  while (start < timestamps.length && timestamps[start] < cutoff) start++;
+  return {
+    ...data,
+    timestamps: timestamps.slice(start),
+    opens: data.opens.slice(start),
+    highs: data.highs.slice(start),
+    lows: data.lows.slice(start),
+    closes: data.closes.slice(start),
+    volumes: data.volumes.slice(start),
+  };
 }
