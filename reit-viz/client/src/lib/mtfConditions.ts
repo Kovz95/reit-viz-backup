@@ -13,11 +13,25 @@ import {
   computeEMA,
   computeMACD,
   computeSlowStochastic,
+  computeBollingerBands,
+  computeADX,
+  computeCCI,
+  computeWilliamsR,
+  computeAroon,
+  computeSupertrend,
+  computePSAR,
+  computeKeltner,
+  computeDonchian,
+  computeIchimoku,
   type DataPoint,
 } from "@/lib/indicators";
 import type { MtfBundle, TfSeries, Timeframe } from "@/lib/mtfData";
 
-export type ConditionFamily = "rsi" | "ma" | "macd" | "stoch" | "range" | "trend";
+export type ConditionFamily =
+  | "rsi" | "ma" | "macd" | "stoch" | "range" | "trend"
+  | "adx" | "dmi" | "cci" | "willr" | "aroon"
+  | "supertrend" | "psar" | "keltner" | "donchian"
+  | "ichimoku" | "ichimoku_tk" | "bb";
 
 export interface ConditionDef {
   id: string;
@@ -100,6 +114,102 @@ function rollingExtreme(tf: TfSeries, window: number, kind: "max" | "min"): (num
     }
     return out;
   });
+}
+
+// Multi-output indicators memoize the whole aligned result object once per
+// TfSeries (the scalar memo above only holds single arrays).
+const rawMemo = new WeakMap<TfSeries, Map<string, unknown>>();
+
+function memoRaw<T>(tf: TfSeries, key: string, build: () => T): T {
+  let m = rawMemo.get(tf);
+  if (!m) {
+    m = new Map();
+    rawMemo.set(tf, m);
+  }
+  if (!m.has(key)) m.set(key, build());
+  return m.get(key) as T;
+}
+
+function adxParts(tf: TfSeries) {
+  return memoRaw(tf, "adx14", () => {
+    const { adx, plusDI, minusDI } = computeADX(tf.bars, 14);
+    return {
+      adx: alignToKeys(tf, adx),
+      plus: alignToKeys(tf, plusDI),
+      minus: alignToKeys(tf, minusDI),
+    };
+  });
+}
+function cci20(tf: TfSeries): (number | null)[] {
+  return memo(tf, "cci20", () => alignToKeys(tf, computeCCI(tf.bars, 20)));
+}
+function willr14(tf: TfSeries): (number | null)[] {
+  return memo(tf, "willr14", () => alignToKeys(tf, computeWilliamsR(tf.bars, 14)));
+}
+function aroonParts(tf: TfSeries) {
+  return memoRaw(tf, "aroon14", () => {
+    const { up, down } = computeAroon(tf.bars, 14);
+    return { up: alignToKeys(tf, up), down: alignToKeys(tf, down) };
+  });
+}
+/** ±1 trend side per bar, plus the stop/dot line for live readouts. */
+function flipTrend(tf: TfSeries, kind: "supertrend" | "psar") {
+  return memoRaw(tf, kind, () => {
+    const pts = kind === "supertrend" ? computeSupertrend(tf.bars, 10, 3) : computePSAR(tf.bars, 0.02, 0.2);
+    return {
+      trend: alignToKeys(tf, pts.map((p) => ({ time: p.time, value: p.trend }))),
+      line: alignToKeys(tf, pts.map((p) => ({ time: p.time, value: p.value }))),
+    };
+  });
+}
+function keltnerBands(tf: TfSeries) {
+  return memoRaw(tf, "keltner", () => {
+    const { upper, lower } = computeKeltner(tf.bars, 20, 2, 10);
+    return { upper: alignToKeys(tf, upper), lower: alignToKeys(tf, lower) };
+  });
+}
+function donchianBands(tf: TfSeries) {
+  return memoRaw(tf, "donchian20", () => {
+    const { upper, lower } = computeDonchian(tf.bars, 20);
+    return { upper: alignToKeys(tf, upper), lower: alignToKeys(tf, lower) };
+  });
+}
+function bbBands(tf: TfSeries) {
+  return memoRaw(tf, "bb20", () => {
+    const { upper, lower } = computeBollingerBands(tf.points, 20, 2);
+    return { upper: alignToKeys(tf, upper), lower: alignToKeys(tf, lower) };
+  });
+}
+/**
+ * Ichimoku with the standard displacement applied on the TF's own axis: the
+ * cloud governing bar i is the span pair computed 26 bars earlier — the same
+ * shift the chart renders, so no lookahead.
+ */
+function ichi(tf: TfSeries) {
+  return memoRaw(tf, "ichimoku", () => {
+    const r = computeIchimoku(tf.bars, 9, 26, 52, 26);
+    const conv = alignToKeys(tf, r.conversion);
+    const kijun = alignToKeys(tf, r.base);
+    const a = alignToKeys(tf, r.leadA);
+    const b = alignToKeys(tf, r.leadB);
+    const n = tf.keys.length;
+    const top: (number | null)[] = new Array(n).fill(null);
+    const bot: (number | null)[] = new Array(n).fill(null);
+    for (let i = 26; i < n; i++) {
+      const va = a[i - 26];
+      const vb = b[i - 26];
+      if (va === null || vb === null) continue;
+      top[i] = Math.max(va, vb);
+      bot[i] = Math.min(va, vb);
+    }
+    return { conv, kijun, top, bot };
+  });
+}
+function highsOf(tf: TfSeries): (number | null)[] {
+  return memo(tf, "highs", () => tf.bars.map((b) => b.high));
+}
+function lowsOf(tf: TfSeries): (number | null)[] {
+  return memo(tf, "lows", () => tf.bars.map((b) => b.low));
 }
 
 const cmp = (
@@ -191,6 +301,88 @@ export const MTF_CONDITIONS: ConditionDef[] = [
   { id: "near_range_lo", label: "Within 2% of 252-bar low", family: "range", tfs: ["D", "W"],
     compute: (tf) => cmp(tf.closes as (number | null)[], rollingExtreme(tf, 252, "min").map((v) => (v == null ? null : v * 1.02)), (x, y) => x <= y),
     liveValue: (tf) => { const m = last(rollingExtreme(tf, 252, "min")); const c = last(tf.closes); return m == null ? null : `${(((c - m) / m) * 100).toFixed(1)}%`; } },
+
+  // ── Charts-registry indicators (same defaults as the Charts panel) ──
+  { id: "adx_strong", label: "ADX(14) > 25 (trending)", family: "adx", tfs: HDW,
+    compute: (tf) => cmp(adxParts(tf).adx, 25, (x, y) => x > y),
+    liveValue: (tf) => fmt(last(adxParts(tf).adx)) },
+  { id: "adx_weak", label: "ADX(14) < 20 (choppy)", family: "adx", tfs: HDW,
+    compute: (tf) => cmp(adxParts(tf).adx, 20, (x, y) => x < y),
+    liveValue: (tf) => fmt(last(adxParts(tf).adx)) },
+  { id: "dmi_bull", label: "+DI > -DI", family: "dmi", tfs: HDW,
+    compute: (tf) => cmp(adxParts(tf).plus, adxParts(tf).minus, (x, y) => x > y),
+    liveValue: (tf) => { const p = last(adxParts(tf).plus); const m = last(adxParts(tf).minus); return p == null || m == null ? null : fmt(p - m); } },
+  { id: "dmi_bear", label: "+DI < -DI", family: "dmi", tfs: HDW,
+    compute: (tf) => cmp(adxParts(tf).plus, adxParts(tf).minus, (x, y) => x < y),
+    liveValue: (tf) => { const p = last(adxParts(tf).plus); const m = last(adxParts(tf).minus); return p == null || m == null ? null : fmt(p - m); } },
+
+  { id: "cci_ob", label: "CCI(20) > 100", family: "cci", tfs: HDW,
+    compute: (tf) => cmp(cci20(tf), 100, (x, y) => x > y),
+    liveValue: (tf) => fmt(last(cci20(tf)), 0) },
+  { id: "cci_os", label: "CCI(20) < -100", family: "cci", tfs: HDW,
+    compute: (tf) => cmp(cci20(tf), -100, (x, y) => x < y),
+    liveValue: (tf) => fmt(last(cci20(tf)), 0) },
+
+  { id: "willr_ob", label: "Williams %R > -20", family: "willr", tfs: HDW,
+    compute: (tf) => cmp(willr14(tf), -20, (x, y) => x > y),
+    liveValue: (tf) => fmt(last(willr14(tf))) },
+  { id: "willr_os", label: "Williams %R < -80", family: "willr", tfs: HDW,
+    compute: (tf) => cmp(willr14(tf), -80, (x, y) => x < y),
+    liveValue: (tf) => fmt(last(willr14(tf))) },
+
+  { id: "aroon_bull", label: "Aroon Up > Down", family: "aroon", tfs: HDW,
+    compute: (tf) => cmp(aroonParts(tf).up, aroonParts(tf).down, (x, y) => x > y),
+    liveValue: (tf) => { const u = last(aroonParts(tf).up); const d = last(aroonParts(tf).down); return u == null || d == null ? null : fmt(u - d, 0); } },
+  { id: "aroon_bear", label: "Aroon Down > Up", family: "aroon", tfs: HDW,
+    compute: (tf) => cmp(aroonParts(tf).down, aroonParts(tf).up, (x, y) => x > y),
+    liveValue: (tf) => { const u = last(aroonParts(tf).up); const d = last(aroonParts(tf).down); return u == null || d == null ? null : fmt(u - d, 0); } },
+
+  { id: "st_bull", label: "Supertrend bullish", family: "supertrend", tfs: HDW,
+    compute: (tf) => cmp(flipTrend(tf, "supertrend").trend, 0, (x, y) => x > y),
+    liveValue: (tf) => { const l = last(flipTrend(tf, "supertrend").line); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+  { id: "st_bear", label: "Supertrend bearish", family: "supertrend", tfs: HDW,
+    compute: (tf) => cmp(flipTrend(tf, "supertrend").trend, 0, (x, y) => x < y),
+    liveValue: (tf) => { const l = last(flipTrend(tf, "supertrend").line); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+  { id: "psar_bull", label: "PSAR bullish (dots below)", family: "psar", tfs: HDW,
+    compute: (tf) => cmp(flipTrend(tf, "psar").trend, 0, (x, y) => x > y),
+    liveValue: (tf) => { const l = last(flipTrend(tf, "psar").line); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+  { id: "psar_bear", label: "PSAR bearish (dots above)", family: "psar", tfs: HDW,
+    compute: (tf) => cmp(flipTrend(tf, "psar").trend, 0, (x, y) => x < y),
+    liveValue: (tf) => { const l = last(flipTrend(tf, "psar").line); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+
+  { id: "kc_above", label: "Close > Keltner upper", family: "keltner", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], keltnerBands(tf).upper, (x, y) => x > y),
+    liveValue: (tf) => { const u = last(keltnerBands(tf).upper); const c = last(tf.closes); return u == null ? null : `${(((c - u) / u) * 100).toFixed(1)}%`; } },
+  { id: "kc_below", label: "Close < Keltner lower", family: "keltner", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], keltnerBands(tf).lower, (x, y) => x < y),
+    liveValue: (tf) => { const l = last(keltnerBands(tf).lower); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+
+  { id: "bb_above", label: "Close > Bollinger upper", family: "bb", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], bbBands(tf).upper, (x, y) => x > y),
+    liveValue: (tf) => { const u = last(bbBands(tf).upper); const l = last(bbBands(tf).lower); const c = last(tf.closes); return u == null || l == null || u === l ? null : `%B ${(((c - l) / (u - l)) * 100).toFixed(0)}`; } },
+  { id: "bb_below", label: "Close < Bollinger lower", family: "bb", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], bbBands(tf).lower, (x, y) => x < y),
+    liveValue: (tf) => { const u = last(bbBands(tf).upper); const l = last(bbBands(tf).lower); const c = last(tf.closes); return u == null || l == null || u === l ? null : `%B ${(((c - l) / (u - l)) * 100).toFixed(0)}`; } },
+
+  { id: "donch_hi", label: "New 20-bar high (Donchian)", family: "donchian", tfs: HDW,
+    compute: (tf) => cmp(highsOf(tf), donchianBands(tf).upper, (x, y) => x >= y),
+    liveValue: (tf) => { const u = last(donchianBands(tf).upper); const c = last(tf.closes); return u == null ? null : `${(((c - u) / u) * 100).toFixed(1)}%`; } },
+  { id: "donch_lo", label: "New 20-bar low (Donchian)", family: "donchian", tfs: HDW,
+    compute: (tf) => cmp(lowsOf(tf), donchianBands(tf).lower, (x, y) => x <= y),
+    liveValue: (tf) => { const l = last(donchianBands(tf).lower); const c = last(tf.closes); return l == null ? null : `${(((c - l) / l) * 100).toFixed(1)}%`; } },
+
+  { id: "ichi_above", label: "Close above Ichimoku cloud", family: "ichimoku", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], ichi(tf).top, (x, y) => x > y),
+    liveValue: (tf) => { const t = last(ichi(tf).top); const c = last(tf.closes); return t == null ? null : `${(((c - t) / t) * 100).toFixed(1)}%`; } },
+  { id: "ichi_below", label: "Close below Ichimoku cloud", family: "ichimoku", tfs: HDW,
+    compute: (tf) => cmp(tf.closes as (number | null)[], ichi(tf).bot, (x, y) => x < y),
+    liveValue: (tf) => { const b = last(ichi(tf).bot); const c = last(tf.closes); return b == null ? null : `${(((c - b) / b) * 100).toFixed(1)}%`; } },
+  { id: "ichi_tk_bull", label: "Tenkan > Kijun", family: "ichimoku_tk", tfs: HDW,
+    compute: (tf) => cmp(ichi(tf).conv, ichi(tf).kijun, (x, y) => x > y),
+    liveValue: (tf) => { const t = last(ichi(tf).conv); const k = last(ichi(tf).kijun); return t == null || k == null ? null : fmt(t - k, 2); } },
+  { id: "ichi_tk_bear", label: "Tenkan < Kijun", family: "ichimoku_tk", tfs: HDW,
+    compute: (tf) => cmp(ichi(tf).conv, ichi(tf).kijun, (x, y) => x < y),
+    liveValue: (tf) => { const t = last(ichi(tf).conv); const k = last(ichi(tf).kijun); return t == null || k == null ? null : fmt(t - k, 2); } },
 ];
 
 // ── Instances + projection ──────────────────────────────────────────────────
