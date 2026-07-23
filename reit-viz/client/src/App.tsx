@@ -100,6 +100,7 @@ const ROCAnalysis = lazy(() => import("@/pages/ROCAnalysis"));
 const SigmaMove = lazy(() => import("@/pages/SigmaMove"));
 const Attribution = lazy(() => import("@/pages/Attribution"));
 const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
+const MTFSetups = lazy(() => import("@/pages/MTFSetups"));
 const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
 const UniversalScreener = lazy(() => import("@/pages/UniversalScreener"));
@@ -309,6 +310,7 @@ function NavBar() {
     { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
     { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
     { path: "/similar-setups", label: "Similar Setups", icon: Filter },
+    { path: "/mtf-setups", label: "MTF Setups", icon: Layers },
     { path: "/data", label: "Data", icon: Table2 },
   ];
 
@@ -630,6 +632,7 @@ const PAGES = [
   { path: "/distributions", label: "Distributions" },
   { path: "/val-rerate", label: "Valuation Re-Rate + Residence" },
   { path: "/similar-setups", label: "Similar Setups" },
+  { path: "/mtf-setups", label: "MTF Setups" },
   { path: "/setups-screener", label: "Setups Screener" },
   { path: "/rates-forward", label: "Rates Forward" },
   { path: "/yield-correlation", label: "Yield Corr" },
@@ -754,6 +757,7 @@ function AppShell() {
               <Route path="/sigma-move" component={SigmaMove} />
               <Route path="/attribution" component={Attribution} />
               <Route path="/similar-setups" component={SimilarSetups} />
+              <Route path="/mtf-setups" component={MTFSetups} />
               <Route path="/data" component={DataExplorer} />
               <Route path="/pca" component={PCA} />
               <Route component={NotFound} />
