@@ -19,3 +19,5 @@ diag/
 # Screenshots emitted by the diag-*.mjs parity-audit harness (binary, throwaway)
 reit-viz/diag-shots/
 reit-viz/data/yahoo-intraday-cache/
+# Permanent intraday bar store (FMP/Yahoo merged history) - runtime data, not source
+reit-viz/data/intraday-store/

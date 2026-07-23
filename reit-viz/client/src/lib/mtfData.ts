@@ -58,6 +58,11 @@ export interface MtfBundle {
 }
 
 const MIN_HOURLY_BARS = 250; // below this, hourly analysis is meaningless
+// Ask the server for up to 10y of hourly bars. Yahoo alone caps at ~729d, but
+// the server's permanent intraday store accumulates history past that (and
+// serves FMP depth when an FMP_API_KEY is configured), so request the max and
+// let the server return what it has.
+const MAX_HOURLY_DAYS = 3650;
 
 function mkTf(tf: Timeframe, keys: string[], opens: number[], highs: number[], lows: number[], closes: number[]): TfSeries {
   const points: DataPoint[] = new Array(keys.length);
@@ -69,13 +74,95 @@ function mkTf(tf: Timeframe, keys: string[], opens: number[], highs: number[], l
   return { tf, keys, points, bars, closes };
 }
 
+/** Daily source arrays a bundle is assembled from (single ticker or ratio). */
+interface DailySeriesInput {
+  dates: string[];
+  opens: number[];
+  highs: number[];
+  lows: number[];
+  closes: number[];
+  adjCloses: number[];
+  volumes?: number[];
+}
+
 export async function buildMtfBundle(ticker: string): Promise<MtfBundle> {
   const [daily0, hourlyBars] = await Promise.all([
     fetchTickerOHLCV(ticker),
-    fetchIntradayBars(ticker, "60m", 729).catch(() => [] as IntradayBar[]),
+    fetchIntradayBars(ticker, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
   ]);
   if (!daily0.dates.length) throw new Error(`No daily data for ${ticker}`);
+  return assembleBundle(ticker.toUpperCase(), daily0, hourlyBars);
+}
 
+/**
+ * A/B ratio bundle for pair scanning. Closes are adjusted-close ratios;
+ * opens are open ratios; per-bar high/low are APPROXIMATIONS (the true
+ * intrabar ratio extremes are unknowable from two OHLC series) taken as the
+ * envelope of open/close/high-ratio/low-ratio — only the stochastic-style
+ * conditions read them, where a small level offset is immaterial.
+ */
+export async function buildPairMtfBundle(a: string, b: string): Promise<MtfBundle> {
+  const [dA, dB, hA, hB] = await Promise.all([
+    fetchTickerOHLCV(a),
+    fetchTickerOHLCV(b),
+    fetchIntradayBars(a, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
+    fetchIntradayBars(b, "60m", MAX_HOURLY_DAYS).catch(() => [] as IntradayBar[]),
+  ]);
+  const label = `${a.toUpperCase()}/${b.toUpperCase()}`;
+  if (!dA.dates.length) throw new Error(`No daily data for ${a}`);
+  if (!dB.dates.length) throw new Error(`No daily data for ${b}`);
+
+  const adjA = dA.adjCloses.length === dA.dates.length ? dA.adjCloses : dA.closes;
+  const adjB = dB.adjCloses.length === dB.dates.length ? dB.adjCloses : dB.closes;
+  const idxB = new Map(dB.dates.map((d, i) => [d, i]));
+
+  const daily: DailySeriesInput = { dates: [], opens: [], highs: [], lows: [], closes: [], adjCloses: [], volumes: [] };
+  for (let i = 0; i < dA.dates.length; i++) {
+    const j = idxB.get(dA.dates[i]);
+    if (j === undefined) continue;
+    const r = ratioOhlc(
+      dA.opens[i], dA.highs[i], dA.lows[i], adjA[i],
+      dB.opens[j], dB.highs[j], dB.lows[j], adjB[j],
+    );
+    if (!r) continue;
+    daily.dates.push(dA.dates[i]);
+    daily.opens.push(r.o);
+    daily.highs.push(r.h);
+    daily.lows.push(r.l);
+    daily.closes.push(r.c);
+    daily.adjCloses.push(r.c);
+    daily.volumes!.push(0);
+  }
+  if (daily.dates.length < 60) throw new Error(`Insufficient overlapping daily history for ${label}`);
+
+  const barB = new Map(hB.map((bar) => [bar.time, bar]));
+  const hourly: IntradayBar[] = [];
+  for (const bar of hA) {
+    const o = barB.get(bar.time);
+    if (!o) continue;
+    const r = ratioOhlc(bar.open, bar.high, bar.low, bar.close, o.open, o.high, o.low, o.close);
+    if (!r) continue;
+    hourly.push({ time: bar.time, open: r.o, high: r.h, low: r.l, close: r.c, volume: 0 });
+  }
+
+  return assembleBundle(label, daily, hourly);
+}
+
+/** Field-wise ratio bar; null when any input is non-positive/non-finite. */
+function ratioOhlc(
+  ao: number, ah: number, al: number, ac: number,
+  bo: number, bh: number, bl: number, bc: number,
+): { o: number; h: number; l: number; c: number } | null {
+  if (!(ao > 0) || !(ah > 0) || !(al > 0) || !(ac > 0)) return null;
+  if (!(bo > 0) || !(bh > 0) || !(bl > 0) || !(bc > 0)) return null;
+  const o = ao / bo;
+  const c = ac / bc;
+  const h = Math.max(o, c, ah / bh);
+  const l = Math.min(o, c, al / bl);
+  return { o, h, l, c };
+}
+
+function assembleBundle(label: string, daily0: DailySeriesInput, hourlyBars: IntradayBar[]): MtfBundle {
   // Daily on adjusted closes (highs/lows stay unadjusted — they only feed the
   // stochastic, where a small level offset is immaterial for OB/OS states).
   const dCloses = daily0.adjCloses.length === daily0.dates.length ? daily0.adjCloses : daily0.closes;
@@ -160,7 +247,7 @@ export async function buildMtfBundle(ticker: string): Promise<MtfBundle> {
   }
 
   return {
-    ticker: ticker.toUpperCase(),
+    ticker: label,
     hourly,
     daily,
     weekly,

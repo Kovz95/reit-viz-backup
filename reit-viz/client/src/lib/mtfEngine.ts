@@ -61,7 +61,10 @@ export const DEFAULT_MTF_SETTINGS: MtfSettings = {
   minOccurrences: 8,
   hitRateThreshold: 0.55,
   horizonLabel: "1M",
-  deepScan: false,
+  // Deep scan on by default: pairs first, then triples seeded from the
+  // qualified pairs — full C(n,3) over the expanded catalog would be ~300k
+  // combos, but seeded extension stays proportional to what qualified.
+  deepScan: true,
 };
 
 /** Base-TF-appropriate defaults for the fields that depend on bar density. */
@@ -85,6 +88,8 @@ export interface MtfHorizonRow {
 
 export interface MtfSetupRow {
   key: string;
+  /** Scanned symbol: a ticker ("AVB") or a pair ratio ("AVB/EQR"). */
+  symbol: string;
   legs: ConditionInstance[];
   direction: MtfDirection;
   rows: MtfHorizonRow[];
@@ -274,7 +279,8 @@ export async function runMtfScan(opts: {
       if (freqPerYear < 2) continue;
       const lastFiredIdx = entries[entries.length - 1];
       out.push({
-        key: `${legs.map((l) => l.key).sort().join("+")}|${direction}`,
+        key: `${bundle.ticker}|${legs.map((l) => l.key).sort().join("+")}|${direction}`,
+        symbol: bundle.ticker,
         legs,
         direction,
         rows,
@@ -320,7 +326,7 @@ export async function runMtfScan(opts: {
         if (pair.some((l) => l.key === third.key)) continue;
         if (pair.some((l) => l.def.family === third.def.family && l.tf === third.tf)) continue;
         const triple = [...pair, third];
-        const tripleKeyBase = triple.map((l) => l.key).sort().join("+");
+        const tripleKeyBase = `${bundle.ticker}|${triple.map((l) => l.key).sort().join("+")}`;
         if (seen.has(`${tripleKeyBase}|long`) && seen.has(`${tripleKeyBase}|short`)) continue;
         for (const row of evaluateCombo(triple)) {
           if (!seen.has(row.key)) {

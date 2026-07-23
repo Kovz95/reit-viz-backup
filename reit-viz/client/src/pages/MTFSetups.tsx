@@ -1,12 +1,13 @@
-// Multi-Timeframe Setups — single-ticker cross-timeframe confluence analysis.
+// Multi-Timeframe Setups — cross-timeframe confluence analysis.
 //
-// Takes a stock, auto-discovers which cross-timeframe / cross-indicator
-// condition conjunctions (e.g. "hourly RSI > 70 AND daily close < SMA200 →
-// short") were historically most predictive, lets the user test custom
-// combos, and shows the CURRENT setup: which conditions are on right now
-// across H/D/W and the resulting long/short bias. Engine in lib/mtfEngine,
-// conditions in lib/mtfConditions, data + no-lookahead alignment in
-// lib/mtfData.
+// Auto-discovers which cross-timeframe / cross-indicator condition
+// conjunctions (e.g. "hourly RSI > 70 AND daily close < SMA200 → short")
+// were historically most predictive, lets the user test custom combos, and
+// shows the CURRENT setup grid. Scan scope: a single ticker, a filtered
+// universe (classifications + country/exchange), an explicit ticker list, a
+// single A/B pair ratio, or all pair combos of a leg set. Engine in
+// lib/mtfEngine, conditions in lib/mtfConditions, data + no-lookahead
+// alignment in lib/mtfData.
 
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
@@ -15,7 +16,17 @@ import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useWorkspaceState } from "@/lib/workspaceState";
 import { formatHitRate, hitRateColorClass } from "@/lib/signalUtils";
 import { emitChartSignals } from "@/lib/chartBridge";
-import { buildMtfBundle, type MtfBundle, type Timeframe } from "@/lib/mtfData";
+import {
+  FilterDropdown,
+  applyClassFilters,
+  emptyClassFilters,
+  serializeClassFilters,
+  deserializeClassFilters,
+  type ClassFilters,
+} from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
+import { usePairComboPicker } from "@/lib/usePairComboPicker";
+import { buildMtfBundle, buildPairMtfBundle, type MtfBundle, type Timeframe } from "@/lib/mtfData";
 import {
   MTF_CONDITIONS,
   conditionInstances,
@@ -38,6 +49,31 @@ import { Play, Loader2, Layers, LineChart, ChevronDown, ChevronRight, Flame } fr
 
 const TF_LABEL: Record<Timeframe, string> = { H: "Hourly", D: "Daily", W: "Weekly" };
 
+type ScanScope = "single" | "universe" | "list" | "pair" | "combos";
+type ScanTarget = { kind: "ticker"; ticker: string } | { kind: "pair"; a: string; b: string };
+
+const SCOPE_LABEL: Record<ScanScope, string> = {
+  single: "Single",
+  universe: "Universe",
+  list: "Ticker list",
+  pair: "Pair",
+  combos: "Pair combos",
+};
+
+/** Hard cap on symbols per run — each one is a full engine pass. */
+const MAX_TARGETS = 60;
+/** In multi-symbol runs keep only each symbol's best rows (by hit rate). */
+const PER_SYMBOL_KEEP = 300;
+
+const CLASS_FIELDS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+
 function fmtPct(v: number | null | undefined, d = 1): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${v >= 0 ? "+" : ""}${v.toFixed(d)}%`;
@@ -56,6 +92,55 @@ export default function MTFSetups() {
   }, []);
 
   const [ticker, setTicker] = useState("AVB");
+
+  // ── Scan scope ─────────────────────────────────────────────────────────────
+  const [scope, setScope] = useState<ScanScope>("single");
+  const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters());
+  const geo = useGeoFilter(workbookTickers, "mtf");
+  const [listTickers, setListTickers] = useState<string[]>([]);
+  const [pairA, setPairA] = useState("");
+  const [pairB, setPairB] = useState("");
+  const combo = usePairComboPicker(workbookTickers, scope === "combos", "mtf-setups");
+
+  const classOpts = useMemo(() => {
+    const dims: Record<string, Record<string, number>> = {};
+    for (const f of CLASS_FIELDS) dims[f.key] = {};
+    for (const t of workbookTickers) {
+      for (const f of CLASS_FIELDS) {
+        const v = (t as any)[f.key];
+        if (v) dims[f.key][v] = (dims[f.key][v] || 0) + 1;
+      }
+    }
+    return dims;
+  }, [workbookTickers]);
+
+  const universeTickers = useMemo(() => {
+    if (scope !== "universe") return [];
+    const rows = applyClassFilters(workbookTickers as any[], classFilters, "", new Set<string>());
+    return geo.filterByGeo(rows).map((r: any) => String(r.ticker).toUpperCase());
+  }, [scope, workbookTickers, classFilters, geo.filterByGeo]);
+
+  const scanTargets = useMemo<ScanTarget[]>(() => {
+    switch (scope) {
+      case "single":
+        return ticker ? [{ kind: "ticker", ticker }] : [];
+      case "universe":
+        return universeTickers.slice(0, MAX_TARGETS).map((t) => ({ kind: "ticker" as const, ticker: t }));
+      case "list":
+        return listTickers.slice(0, MAX_TARGETS).map((t) => ({ kind: "ticker" as const, ticker: t }));
+      case "pair":
+        return pairA && pairB && pairA !== pairB ? [{ kind: "pair", a: pairA, b: pairB }] : [];
+      case "combos":
+        return combo.pairs.slice(0, MAX_TARGETS).map((p) => ({ kind: "pair" as const, a: p.a, b: p.b }));
+    }
+  }, [scope, ticker, universeTickers, listTickers, pairA, pairB, combo.pairs]);
+
+  const fullTargetCount =
+    scope === "universe" ? universeTickers.length
+    : scope === "list" ? listTickers.length
+    : scope === "combos" ? combo.pairs.length
+    : scanTargets.length;
+
   const [settings, setSettings] = useState<MtfSettings>({ ...DEFAULT_MTF_SETTINGS });
   const set = useCallback(<K extends keyof MtfSettings>(k: K, v: MtfSettings[K]) => {
     setSettings((prev) => ({ ...prev, [k]: v }));
@@ -64,22 +149,25 @@ export default function MTFSetups() {
     setSettings((prev) => ({ ...prev, baseTf, ...defaultsForBase(baseTf) }));
   }, []);
 
-  // ── Bundle load (per ticker) ───────────────────────────────────────────────
+  // ── Ambient bundle (single & pair scopes — feeds the grid + custom combo) ──
   const [bundle, setBundle] = useState<MtfBundle | null>(null);
   const [bundleErr, setBundleErr] = useState<string | null>(null);
   const [bundleLoading, setBundleLoading] = useState(false);
+  const ambientLabel = scope === "pair" ? (pairA && pairB ? `${pairA}/${pairB}` : "") : ticker;
   useEffect(() => {
     let active = true;
     setBundle(null);
     setBundleErr(null);
     setScan(null);
+    if (scope !== "single" && scope !== "pair") { setBundleLoading(false); return; }
+    if (scope === "pair" && (!pairA || !pairB || pairA === pairB)) { setBundleLoading(false); return; }
     setBundleLoading(true);
-    buildMtfBundle(ticker)
+    (scope === "pair" ? buildPairMtfBundle(pairA, pairB) : buildMtfBundle(ticker))
       .then((b) => { if (active) setBundle(b); })
       .catch((e) => { if (active) setBundleErr(String(e?.message ?? e)); })
       .finally(() => { if (active) setBundleLoading(false); });
     return () => { active = false; };
-  }, [ticker]);
+  }, [ticker, scope, pairA, pairB]);
 
   const effectiveBase: "H" | "D" = settings.baseTf === "H" && bundle && !bundle.hourly ? "D" : settings.baseTf;
 
@@ -87,21 +175,58 @@ export default function MTFSetups() {
   const [scan, setScan] = useState<MtfScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [progressLabel, setProgressLabel] = useState("");
+  const [scanNote, setScanNote] = useState<string | null>(null);
   const cancelRef = useRef(false);
 
   const handleRun = async () => {
-    if (!bundle) return;
+    if (scanTargets.length === 0) return;
     setScanning(true);
     cancelRef.current = false;
     setScan(null);
+    setScanNote(null);
+    const multi = scanTargets.length > 1;
+    const qualified: MtfSetupRow[] = [];
+    let combosEvaluated = 0;
+    let baseBars = 0;
+    let spanYears = 0;
+    let failures = 0;
     try {
-      const result = await runMtfScan({
-        bundle,
-        settings: { ...settings, baseTf: effectiveBase },
-        onProgress: (done, total) => setProgress({ done, total }),
-        cancelRef,
-      });
-      setScan(result);
+      for (let i = 0; i < scanTargets.length && !cancelRef.current; i++) {
+        const t = scanTargets[i];
+        const label = t.kind === "ticker" ? t.ticker : `${t.a}/${t.b}`;
+        setProgressLabel(multi ? `${label} (${i + 1}/${scanTargets.length})` : label);
+        let b: MtfBundle;
+        try {
+          b = t.kind === "ticker"
+            ? scope === "single" && bundle ? bundle : await buildMtfBundle(t.ticker)
+            : scope === "pair" && bundle ? bundle : await buildPairMtfBundle(t.a, t.b);
+        } catch {
+          failures++;
+          continue;
+        }
+        // runMtfScan itself falls back to the Daily base per bundle when a
+        // symbol has no usable hourly data.
+        const res = await runMtfScan({
+          bundle: b,
+          settings,
+          onProgress: (done, total) => setProgress({ done, total }),
+          cancelRef,
+        });
+        combosEvaluated += res.combosEvaluated;
+        baseBars = Math.max(baseBars, res.baseBars);
+        spanYears = Math.max(spanYears, res.spanYears);
+        qualified.push(
+          ...(multi
+            ? [...res.qualified].sort((x, y) => y.hitRate - x.hitRate).slice(0, PER_SYMBOL_KEEP)
+            : res.qualified),
+        );
+      }
+      setScan({ qualified, combosEvaluated, baseBars, spanYears });
+      const notes: string[] = [];
+      if (failures) notes.push(`${failures} symbol${failures > 1 ? "s" : ""} skipped (no data)`);
+      if (multi) notes.push(`kept each symbol's top ${PER_SYMBOL_KEEP} by hit rate`);
+      setScanNote(notes.length ? notes.join(" · ") : null);
     } finally {
       setScanning(false);
     }
@@ -173,7 +298,8 @@ export default function MTFSetups() {
     }
     setCustomSpark({ label: q.horizon, cum: spark });
     setCustomRow({
-      key: `${legs.map((l) => l.key).sort().join("+")}|${customDir}`,
+      key: `${bundle.ticker}|${legs.map((l) => l.key).sort().join("+")}|${customDir}`,
+      symbol: bundle.ticker,
       legs,
       direction: customDir,
       rows,
@@ -201,6 +327,7 @@ export default function MTFSetups() {
     const base = onlyActive ? rows.filter((r) => r.activeNow) : rows;
     return sortApply(base, (row, key) => {
       switch (key) {
+        case "symbol": return row.symbol;
         case "legs": return row.legs.map((l) => l.label).join(" + ");
         case "direction": return row.direction;
         case "lastFiredLabel": return row.lastFiredLabel;
@@ -208,6 +335,11 @@ export default function MTFSetups() {
       }
     });
   }, [scan, onlyActive, sortApply]);
+
+  // The expanded catalog can qualify tens of thousands of (mostly redundant)
+  // combos — rendering them all stalls the DOM. Sort first, then cap.
+  const MAX_RENDERED_ROWS = 300;
+  const shownRows = useMemo(() => visibleRows.slice(0, MAX_RENDERED_ROWS), [visibleRows]);
 
   // Net bias: active qualified setups, sign × (win−0.5) × confidence(N).
   const bias = useMemo(() => {
@@ -225,11 +357,13 @@ export default function MTFSetups() {
   }, [scan]);
 
   const openOnChart = (r: MtfSetupRow) => {
+    // Pair-ratio symbols have no single-ticker chart to hand off to.
+    if (r.symbol.includes("/")) return;
     emitChartSignals({
-      ticker,
+      ticker: r.symbol,
       label: `${r.legs.map((l) => l.label).join(" + ")} (${r.direction})`,
       signals: r.entryLabels.map((date) => ({
-        ticker,
+        ticker: r.symbol,
         date,
         direction: r.direction === "long" ? "up" : "down",
         label: "MTF setup",
@@ -239,8 +373,13 @@ export default function MTFSetups() {
 
   // ── Workspace persistence (controls only) ─────────────────────────────────
   const serialize = useCallback(
-    () => ({ ticker, settings, customLegs, customDir, onlyActive }),
-    [ticker, settings, customLegs, customDir, onlyActive],
+    () => ({
+      ticker, settings, customLegs, customDir, onlyActive,
+      scope, listTickers, pairA, pairB,
+      classFilters: serializeClassFilters(classFilters),
+      combo: combo.serialize(),
+    }),
+    [ticker, settings, customLegs, customDir, onlyActive, scope, listTickers, pairA, pairB, classFilters, combo],
   );
   const hydrate = useCallback((s: any) => {
     if (typeof s?.ticker === "string" && s.ticker) setTicker(s.ticker);
@@ -248,7 +387,13 @@ export default function MTFSetups() {
     if (Array.isArray(s?.customLegs)) setCustomLegs([...s.customLegs, "", "", ""].slice(0, 3));
     if (s?.customDir === "long" || s?.customDir === "short") setCustomDir(s.customDir);
     if (typeof s?.onlyActive === "boolean") setOnlyActive(s.onlyActive);
-  }, []);
+    if (typeof s?.scope === "string" && s.scope in SCOPE_LABEL) setScope(s.scope as ScanScope);
+    if (Array.isArray(s?.listTickers)) setListTickers(s.listTickers.filter((t: any) => typeof t === "string"));
+    if (typeof s?.pairA === "string") setPairA(s.pairA);
+    if (typeof s?.pairB === "string") setPairB(s.pairB);
+    if (s?.classFilters) setClassFilters(deserializeClassFilters(s.classFilters));
+    if (s?.combo) combo.hydrate(s.combo);
+  }, [combo.hydrate]);
   useWorkspaceState("mtf-setups", serialize, hydrate);
 
   const horizonOptions = horizonsForBase(effectiveBase);
@@ -268,9 +413,35 @@ export default function MTFSetups() {
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-[11px]">
-          <div className="min-w-[240px]">
-            <UnifiedTickerPicker tickers={workbookTickers} value={ticker} onChange={setTicker} />
+          <div className="flex items-center rounded border border-border overflow-hidden" data-testid="mtf-scope">
+            {(Object.keys(SCOPE_LABEL) as ScanScope[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setScope(s)}
+                data-testid={`mtf-scope-${s}`}
+                className={`px-2 py-0.5 text-[10px] font-mono ${scope === s ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {SCOPE_LABEL[s]}
+              </button>
+            ))}
           </div>
+          {scope === "single" && (
+            <div className="min-w-[240px]">
+              <UnifiedTickerPicker tickers={workbookTickers} value={ticker} onChange={setTicker} />
+            </div>
+          )}
+          {scope === "pair" && (
+            <>
+              <div className="min-w-[180px]" data-testid="mtf-pair-a">
+                <UnifiedTickerPicker tickers={workbookTickers} value={pairA} onChange={(t) => setPairA((t ?? "").toUpperCase())} />
+              </div>
+              <span className="text-muted-foreground">/</span>
+              <div className="min-w-[180px]" data-testid="mtf-pair-b">
+                <UnifiedTickerPicker tickers={workbookTickers} value={pairB} onChange={(t) => setPairB((t ?? "").toUpperCase())} />
+              </div>
+            </>
+          )}
           <div className="flex items-center rounded border border-border overflow-hidden" title={bundle && !bundle.hourly ? "No usable 60m data for this symbol — Daily base only" : undefined}>
             {(["D", "H"] as const).map((tf) => (
               <button
@@ -319,7 +490,7 @@ export default function MTFSetups() {
           <button
             type="button"
             onClick={scanning ? () => { cancelRef.current = true; } : handleRun}
-            disabled={!bundle}
+            disabled={scanTargets.length === 0 || ((scope === "single" || scope === "pair") && !bundle)}
             data-testid="mtf-run"
             className={`inline-flex items-center gap-1 px-3 py-1 rounded text-[11px] font-bold border ${
               scanning ? "border-destructive/50 text-destructive" : "bg-primary text-primary-foreground border-primary hover:opacity-90 disabled:opacity-40"
@@ -327,18 +498,75 @@ export default function MTFSetups() {
           >
             {scanning ? <><Loader2 className="w-3 h-3 animate-spin" /> Cancel</> : <><Play className="w-3 h-3" /> Run scan</>}
           </button>
-          {bundleLoading && <span className="text-[10px] text-muted-foreground">Loading {ticker} data…</span>}
+          {bundleLoading && <span className="text-[10px] text-muted-foreground">Loading {ambientLabel} data…</span>}
           {bundleErr && <span className="text-[11px] text-destructive">{bundleErr}</span>}
           {bundle && !bundle.hourly && (
             <span className="text-[10px] text-yellow-500">No usable hourly data — Daily base only.</span>
           )}
+          {scanTargets.length > 1 && (
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {scanTargets.length} symbols{fullTargetCount > MAX_TARGETS ? ` (of ${fullTargetCount} — first ${MAX_TARGETS} scanned)` : ""}
+            </span>
+          )}
         </div>
+        {scope === "universe" && (
+          <div className="flex items-center gap-2 flex-wrap text-[11px]" data-testid="mtf-universe-filters">
+            {CLASS_FIELDS.map((f) => (
+              <FilterDropdown
+                key={f.key}
+                label={f.label}
+                options={Object.keys(classOpts[f.key] ?? {}).sort()}
+                selected={classFilters[f.key]}
+                onChange={(sel: Set<string>) => setClassFilters((prev) => ({ ...prev, [f.key]: sel }))}
+                testId={`mtf-class-${f.key}`}
+                counts={classOpts[f.key]}
+              />
+            ))}
+            {geo.geoFilterUI}
+            <span className="text-[10px] text-muted-foreground font-mono">{universeTickers.length} tickers match</span>
+          </div>
+        )}
+        {scope === "list" && (
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px]" data-testid="mtf-list-picker">
+            {listTickers.map((t) => (
+              <span key={t} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-card border border-border font-mono text-[10px]">
+                {t}
+                <button type="button" className="text-muted-foreground hover:text-destructive"
+                  onClick={() => setListTickers((prev) => prev.filter((x) => x !== t))}>
+                  ×
+                </button>
+              </span>
+            ))}
+            <div className="min-w-[220px]">
+              <UnifiedTickerPicker
+                key={listTickers.length}
+                tickers={workbookTickers}
+                value=""
+                onChange={(t) => {
+                  const up = (t ?? "").toUpperCase();
+                  if (up) setListTickers((prev) => (prev.includes(up) ? prev : [...prev, up]));
+                }}
+              />
+            </div>
+            {listTickers.length > 0 && (
+              <button type="button" className="text-[10px] text-muted-foreground hover:text-foreground" onClick={() => setListTickers([])}>
+                clear
+              </button>
+            )}
+          </div>
+        )}
+        {scope === "combos" && (
+          <div className="flex items-center gap-2 flex-wrap text-[11px]" data-testid="mtf-combo-picker">
+            {combo.ui}
+            <span className="text-[10px] text-muted-foreground font-mono">{combo.pairs.length} pairs</span>
+          </div>
+        )}
         {scanning && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground" data-testid="mtf-progress">
             <div className="flex-1 h-1.5 bg-border rounded overflow-hidden max-w-[400px]">
               <div className="h-full bg-primary transition-all" style={{ width: progress.total > 0 ? `${(100 * progress.done) / progress.total}%` : "0%" }} />
             </div>
-            <span className="font-mono">{progress.done}/{progress.total} combos</span>
+            <span className="font-mono">{progressLabel && `${progressLabel} · `}{progress.done}/{progress.total} combos</span>
           </div>
         )}
       </div>
@@ -407,6 +635,12 @@ export default function MTFSetups() {
                 {scan.qualified.length} qualified of {scan.combosEvaluated} combos · {scan.baseBars} bars · {scan.spanYears.toFixed(1)}y
               </span>
             )}
+            {scan && visibleRows.length > MAX_RENDERED_ROWS && (
+              <span className="text-[10px] text-yellow-500/80">
+                showing top {MAX_RENDERED_ROWS} of {visibleRows.length} by current sort
+              </span>
+            )}
+            {scanNote && <span className="text-[10px] text-muted-foreground">{scanNote}</span>}
             {scan && (
               <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
                 <input type="checkbox" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} />
@@ -424,6 +658,7 @@ export default function MTFSetups() {
             <table className="w-full text-[11px] font-mono border-collapse" data-testid="mtf-results-table">
               <thead className="sticky top-0 bg-card z-10">
                 <tr className="text-muted-foreground text-[10px] border-b border-border">
+                  <th className="text-left py-1 px-2"><SortHeader label="Symbol" columnKey="symbol" sort={sort} /></th>
                   <th className="text-left py-1 px-2"><SortHeader label="Setup" columnKey="legs" sort={sort} /></th>
                   <th className="text-left py-1 pr-2"><SortHeader label="Dir" columnKey="direction" sort={sort} /></th>
                   <th className="text-right py-1 pr-2"><SortHeader label="Hit%" columnKey="hitRate" sort={sort} align="right" title="Reached the target favorable move within the horizon" /></th>
@@ -438,7 +673,7 @@ export default function MTFSetups() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((r) => {
+                {shownRows.map((r) => {
                   const expanded = expandedKey === r.key;
                   return (
                     <Fragment key={r.key}>
@@ -447,6 +682,7 @@ export default function MTFSetups() {
                         onClick={() => setExpandedKey(expanded ? null : r.key)}
                         data-testid={`mtf-row-${r.key}`}
                       >
+                        <td className="py-0.5 px-2 font-bold whitespace-nowrap">{r.symbol}</td>
                         <td className="py-0.5 px-2">
                           <span className="inline-flex items-center gap-1">
                             {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -471,15 +707,19 @@ export default function MTFSetups() {
                           )}
                         </td>
                         <td className="text-right py-0.5 pr-2" onClick={(e) => e.stopPropagation()}>
-                          <button type="button" onClick={() => openOnChart(r)} className="text-muted-foreground hover:text-primary p-0.5"
-                            title="Show recent entries on Charts (hourly entries land as day markers)">
-                            <LineChart className="w-3.5 h-3.5" />
-                          </button>
+                          {r.symbol.includes("/") ? (
+                            <span className="text-muted-foreground/40 text-[10px]" title="Chart hand-off is single-ticker only">—</span>
+                          ) : (
+                            <button type="button" onClick={() => openOnChart(r)} className="text-muted-foreground hover:text-primary p-0.5"
+                              title="Show recent entries on Charts (hourly entries land as day markers)">
+                              <LineChart className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                       {expanded && (
                         <tr className="border-b border-border/40 bg-card/40">
-                          <td colSpan={11} className="py-1.5 px-8">
+                          <td colSpan={12} className="py-1.5 px-8">
                             <table className="text-[10px] font-mono">
                               <thead>
                                 <tr className="text-muted-foreground">
@@ -624,9 +864,11 @@ export default function MTFSetups() {
 
         {/* Caveats */}
         <div className="px-3 py-2 text-[9px] text-muted-foreground border-t border-border">
-          Hourly bars: Yahoo 60m, ≤729 days of history (hourly-base backtests ≈ 2 years; daily base uses full history), raw unadjusted
-          closes (small return bias across ex-dividend dates), regular session only, up to ~20 min stale. Higher-timeframe conditions use
-          only completed daily/weekly bars — no lookahead. Some symbols (esp. non-US) have thin hourly data and fall back to Daily base.
+          Hourly bars: Yahoo 60m caps at ≤729 days, but the server stores every bar it has ever fetched, so hourly history accumulates
+          over time (and goes back years immediately when an FMP key is configured server-side). Raw unadjusted closes (small return bias
+          across ex-dividend dates), regular session only, up to ~20 min stale. Higher-timeframe conditions use only completed daily/weekly
+          bars — no lookahead. Some symbols (esp. non-US) have thin hourly data and fall back to Daily base. Pair scopes scan the A/B ratio;
+          per-bar ratio highs/lows are approximations (only stochastic-family conditions read them).
         </div>
       </div>
     </div>
