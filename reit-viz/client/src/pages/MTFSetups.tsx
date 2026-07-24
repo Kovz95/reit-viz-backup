@@ -61,7 +61,7 @@ const SCOPE_LABEL: Record<ScanScope, string> = {
 };
 
 /** Hard cap on symbols per run — each one is a full engine pass. */
-const MAX_TARGETS = 60;
+const MAX_TARGETS = 100;
 /** In multi-symbol runs keep only each symbol's best rows (by hit rate). */
 const PER_SYMBOL_KEEP = 300;
 
