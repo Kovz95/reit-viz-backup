@@ -257,6 +257,17 @@ function stretchFrac(tf: TfSeries, period: number): (number | null)[] {
   });
 }
 
+/** Signed close-to-MA distance as a fraction (close/MA − 1), null in warm-up. */
+function maDistFrac(tf: TfSeries, period: number): (number | null)[] {
+  return memo(tf, `madistfrac:${period}`, () => {
+    const ma = maOf(tf, "SMA", period);
+    return tf.closes.map((c, i) => {
+      const m = ma[i];
+      return m == null || !(m > 0) ? null : c / m - 1;
+    });
+  });
+}
+
 const pctFromMa = (tf: TfSeries, ma: (number | null)[]): string | null => {
   const m = last(ma);
   const c = last(tf.closes);
@@ -478,6 +489,19 @@ for (const t of ["SMA", "EMA"] as MaType[]) {
     { id: `death_${lc}`, label: `${t}(50) < ${t}(200) (death cross)`, family: "macross", tfs: HDW,
       compute: (tf) => cmp(maOf(tf, t, 50), maOf(tf, t, 200), (x, y) => x < y),
       liveValue: (tf) => { const a = last(maOf(tf, t, 50)); const b = last(maOf(tf, t, 200)); return a == null || b == null || !(b > 0) ? null : `${(((a - b) / b) * 100).toFixed(1)}%`; } },
+  );
+}
+// Fixed-threshold "% from MA" states: absolute signed distance vs a threshold
+// scaled to the MA's horizon. Complements the percentile stretch states below
+// (those adapt per ticker; these are the same bar for every symbol).
+for (const { p, th } of [{ p: 21, th: 3 }, { p: 50, th: 5 }, { p: 200, th: 10 }]) {
+  MTF_CONDITIONS.push(
+    { id: `pctma_hi_${p}`, label: `Close ≥ ${th}% above SMA(${p})`, family: "madist", tfs: HDW,
+      compute: (tf) => cmp(maDistFrac(tf, p), th / 100, (x, y) => x >= y),
+      liveValue: (tf) => pctFromMa(tf, maOf(tf, "SMA", p)) },
+    { id: `pctma_lo_${p}`, label: `Close ≤ ${th}% below SMA(${p})`, family: "madist", tfs: HDW,
+      compute: (tf) => cmp(maDistFrac(tf, p), -th / 100, (x, y) => x <= y),
+      liveValue: (tf) => pctFromMa(tf, maOf(tf, "SMA", p)) },
   );
 }
 // Causal "% from MA" stretch states (trailing-1y percentile of the distance).
