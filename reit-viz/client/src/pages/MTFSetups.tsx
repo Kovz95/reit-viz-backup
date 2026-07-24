@@ -290,8 +290,11 @@ export default function MTFSetups() {
   };
 
   // ── Current Setup grid ─────────────────────────────────────────────────────
+  // Collapsed by default — 120 conditions make the full grid a wall; the
+  // memo is gated on gridOpen so a collapsed grid also skips the compute.
+  const [gridOpen, setGridOpen] = useState(false);
   const liveGrid = useMemo(() => {
-    if (!bundle) return [];
+    if (!bundle || !gridOpen) return [];
     return MTF_CONDITIONS.map((def) => {
       const cells = (["H", "D", "W"] as Timeframe[]).map((tf) => {
         if (!def.tfs.includes(tf)) return null;
@@ -302,7 +305,7 @@ export default function MTFSetups() {
       });
       return { def, cells };
     });
-  }, [bundle]);
+  }, [bundle, gridOpen]);
 
   // ── Custom combo builder ───────────────────────────────────────────────────
   const instances = useMemo(() => (bundle ? conditionInstances(bundle) : []), [bundle]);
@@ -484,12 +487,12 @@ export default function MTFSetups() {
   // ── Workspace persistence (controls only) ─────────────────────────────────
   const serialize = useCallback(
     () => ({
-      ticker, settings, customLegs, customDir, onlyActive,
+      ticker, settings, customLegs, customDir, onlyActive, gridOpen,
       scope, listTickers, pairA, pairB,
       classFilters: serializeClassFilters(classFilters),
       combo: combo.serialize(),
     }),
-    [ticker, settings, customLegs, customDir, onlyActive, scope, listTickers, pairA, pairB, classFilters, combo],
+    [ticker, settings, customLegs, customDir, onlyActive, gridOpen, scope, listTickers, pairA, pairB, classFilters, combo],
   );
   const hydrate = useCallback((s: any) => {
     if (typeof s?.ticker === "string" && s.ticker) setTicker(s.ticker);
@@ -497,6 +500,7 @@ export default function MTFSetups() {
     if (Array.isArray(s?.customLegs)) setCustomLegs([...s.customLegs, "", "", ""].slice(0, 3));
     if (s?.customDir === "long" || s?.customDir === "short") setCustomDir(s.customDir);
     if (typeof s?.onlyActive === "boolean") setOnlyActive(s.onlyActive);
+    if (typeof s?.gridOpen === "boolean") setGridOpen(s.gridOpen);
     if (typeof s?.scope === "string" && s.scope in SCOPE_LABEL) setScope(s.scope as ScanScope);
     if (Array.isArray(s?.listTickers)) setListTickers(s.listTickers.filter((t: any) => typeof t === "string"));
     if (typeof s?.pairA === "string") setPairA(s.pairA);
@@ -686,7 +690,18 @@ export default function MTFSetups() {
         {bundle && (
           <div className="px-3 py-2 border-b border-border" data-testid="mtf-current-setup">
             <div className="flex items-center gap-3 flex-wrap mb-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Current setup — {bundle.ticker}</span>
+              <button
+                type="button"
+                onClick={() => setGridOpen((v) => !v)}
+                data-testid="mtf-grid-toggle"
+                className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+              >
+                {gridOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                Current setup — {bundle.ticker}
+              </button>
+              {!gridOpen && (
+                <span className="text-[10px] text-muted-foreground">{MTF_CONDITIONS.length} conditions · click to expand</span>
+              )}
               {scan && (
                 <span className="inline-flex items-center gap-1.5 text-[11px]" data-testid="mtf-bias">
                   <span className="text-muted-foreground">Bias:</span>
@@ -700,6 +715,7 @@ export default function MTFSetups() {
                 H: last cached bar (≤20 min delay){bundle.lastWeeklyComplete ? "" : " · W: forming week (partial; backtests use completed weeks only)"}
               </span>
             </div>
+            {gridOpen && (
             <div className="overflow-x-auto">
               <table className="text-[10px] font-mono border-collapse">
                 <thead>
@@ -733,6 +749,7 @@ export default function MTFSetups() {
                 </tbody>
               </table>
             </div>
+            )}
           </div>
         )}
 
