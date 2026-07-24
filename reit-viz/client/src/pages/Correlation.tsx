@@ -11,6 +11,8 @@ import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
+import type { GridLayout } from "@/components/GridLayoutPicker";
 import { useBaskets } from "@/lib/useBaskets";
 import {
   createChart,
@@ -47,6 +49,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   Check,
@@ -56,6 +59,7 @@ import {
   TrendingUp,
   BarChart3,
   Activity,
+  Layers,
   Maximize2,
   Minimize2,
   Globe,
@@ -63,7 +67,6 @@ import {
   Play,
   Pin,
   X,
-  Eye,
   Zap,
 } from "lucide-react";
 import ExportMenu from "@/components/ExportMenu";
@@ -199,15 +202,17 @@ const MULTI_WINDOW_COLORS: Record<number, string> = {
   252: "#f59e0b",
 };
 
-const CHART_KEYS = ["levels", "rolling", "rollingBeta", "scatter", "crossCorr", "acf"] as const;
+const CHART_KEYS = ["levels", "rolling", "rollingBeta", "scatter", "crossCorr", "acfA", "acfB"] as const;
 const CHART_LABELS: Record<string, string> = {
   levels: "Levels",
   rolling: "Rolling Corr",
   rollingBeta: "Rolling Beta",
   scatter: "Scatter",
   crossCorr: "Cross-Corr",
-  acf: "ACF",
+  acfA: "ACF / PACF (A)",
+  acfB: "ACF / PACF (B)",
 };
+const GRID_LAYOUTS: readonly GridLayout[] = ["1x1", "2x1", "1x2", "2x2", "3x2", "2x3", "3x3", "4x4"];
 
 // ── Helpers ──
 
@@ -689,9 +694,6 @@ function MiniChart({
   const [logScale, setLogScale] = useState(false);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
-  // Use flex-height: measure the container instead of using a fixed height
-  const effectiveHeight = isMaximized ? undefined : height;
-
   useEffect(() => {
     const el = ref.current;
     if (!el || data.length === 0) return;
@@ -804,16 +806,14 @@ function MiniChart({
 
   return (
     <div
-      className={`border border-border/30 flex flex-col ${
-        isMaximized ? "fixed inset-0 z-50 bg-background" : "min-h-0"
-      }`}
+      className="border border-border/30 flex flex-col h-full min-h-0"
       onDoubleClick={(e) => {
         e.stopPropagation();
         if (onMaximize && chartId) onMaximize(isMaximized ? null : chartId);
       }}
     >
       <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider truncate">
           {title}
         </span>
         <div className="flex-1" />
@@ -842,7 +842,7 @@ function MiniChart({
           label={`Correlation_${title}`}
         />
       </div>
-      <div ref={ref} className={isMaximized ? "flex-1 min-h-0" : ""} style={isMaximized ? undefined : { height }} />
+      <div ref={ref} className="flex-1 min-h-0" />
     </div>
   );
 }
@@ -899,30 +899,34 @@ function HeatmapMatrix({
   );
 }
 
+// Strongest lag: max |value| among significant lags (|v| > 1.96/√n), else
+// the overall max, flagged as not significant.
+function strongestAcfLag(data: { lag: number; value: number }[], nObs: number) {
+  if (data.length === 0 || nObs <= 0) return null;
+  const sig = 1.96 / Math.sqrt(nObs);
+  const pool = data.filter((d) => Math.abs(d.value) > sig);
+  const from = pool.length ? pool : data;
+  const best = from.reduce((a, b) => (Math.abs(b.value) > Math.abs(a.value) ? b : a));
+  return { ...best, isSignificant: pool.length > 0 };
+}
+
 // ── ACF Bar Chart (canvas) ──
 function ACFChart({
   data,
   nObs,
   title,
   height = 120,
+  hideTitle,
 }: {
   data: { lag: number; value: number }[];
   nObs: number;
   title: string;
   height?: number;
+  hideTitle?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Strongest lag: max |value| among significant lags (|v| > 1.96/√n), else
-  // the overall max, flagged as not significant.
-  const strongest = useMemo(() => {
-    if (data.length === 0 || nObs <= 0) return null;
-    const sig = 1.96 / Math.sqrt(nObs);
-    const pool = data.filter((d) => Math.abs(d.value) > sig);
-    const from = pool.length ? pool : data;
-    const best = from.reduce((a, b) => (Math.abs(b.value) > Math.abs(a.value) ? b : a));
-    return { ...best, isSignificant: pool.length > 0 };
-  }, [data, nObs]);
+  const strongest = useMemo(() => strongestAcfLag(data, nObs), [data, nObs]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1007,6 +1011,9 @@ function ACFChart({
     }
   }, [data, nObs, height, strongest]);
 
+  if (hideTitle) {
+    return <canvas ref={canvasRef} style={{ width: "100%", height }} className="block" />;
+  }
   return (
     <div className="border border-border/30">
       <div className="px-3 py-1 bg-card/50 flex items-center justify-between gap-2">
@@ -1266,6 +1273,7 @@ function CanvasChartWrapper({
   isMaximized,
   onMaximize,
   height,
+  headerRight,
 }: {
   title: string;
   children: (h: number) => React.ReactNode;
@@ -1273,44 +1281,40 @@ function CanvasChartWrapper({
   isMaximized: boolean;
   onMaximize: (id: string | null) => void;
   height: number;
+  headerRight?: React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [measuredHeight, setMeasuredHeight] = useState(height);
+  const [size, setSize] = useState({ w: 0, h: height });
 
   useEffect(() => {
-    if (!isMaximized || !containerRef.current) {
-      setMeasuredHeight(height);
-      return;
-    }
-    // When maximized, measure the content area
+    const el = containerRef.current;
+    if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const h = entry.contentRect.height;
-        if (h > 0) setMeasuredHeight(h);
+        const { width, height: h } = entry.contentRect;
+        if (h > 0) setSize({ w: Math.round(width), h: Math.round(h) });
       }
     });
-    ro.observe(containerRef.current);
-    // Initial measure
-    const h = containerRef.current.clientHeight;
-    if (h > 0) setMeasuredHeight(h);
+    ro.observe(el);
+    const h = el.clientHeight;
+    if (h > 0) setSize({ w: Math.round(el.clientWidth), h });
     return () => ro.disconnect();
-  }, [isMaximized, height]);
+  }, []);
 
   return (
     <div
-      className={`border border-border/30 flex flex-col ${
-        isMaximized ? "fixed inset-0 z-50 bg-background" : ""
-      }`}
+      className="border border-border/30 flex flex-col h-full min-h-0"
       onDoubleClick={(e) => {
         e.stopPropagation();
         onMaximize(isMaximized ? null : chartId);
       }}
     >
       <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider truncate">
           {title}
         </span>
         <div className="flex-1" />
+        {headerRight}
         <button
           className="text-muted-foreground/60 hover:text-muted-foreground p-0.5"
           onClick={(e) => { e.stopPropagation(); onMaximize(isMaximized ? null : chartId); }}
@@ -1319,8 +1323,9 @@ function CanvasChartWrapper({
           {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
         </button>
       </div>
-      <div ref={containerRef} className={isMaximized ? "flex-1 min-h-0" : ""}>
-        {children(isMaximized ? measuredHeight : height)}
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-hidden">
+        {/* Key on measured size so canvas children redraw on any resize */}
+        <div key={`${size.w}x${size.h}`}>{children(size.h)}</div>
       </div>
     </div>
   );
@@ -1526,6 +1531,18 @@ export default function Correlation() {
   const [visibleWindows, setVisibleWindows] = useState<Set<number>>(new Set([60, 252]));
   // Which pairwise charts are visible (user can toggle)
   const [visibleCorrCharts, setVisibleCorrCharts] = useState<Set<string>>(() => new Set(CHART_KEYS));
+  // Chart-area layout (mirrors the Charts tab): grid organization + panes shown at once
+  const [corrLayout, setCorrLayout] = useState<GridLayout>("2x2");
+  const [corrPanesVisible, setCorrPanesVisible] = useState<number | "all">(4);
+
+  const toggleCorrChart = useCallback((key: string) => {
+    setVisibleCorrCharts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // Matrix state
   const [matrixSpecs, setMatrixSpecs] = useState<string[]>([
@@ -1564,11 +1581,13 @@ export default function Correlation() {
     matrixWindow,
     visibleWindows: Array.from(visibleWindows),
     visibleCorrCharts: Array.from(visibleCorrCharts),
+    corrLayout,
+    corrPanesVisible,
     uniMode,
     uniWindow,
     uniMetric,
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, uniMode, uniWindow, uniMetric, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, uniMode, uniWindow, uniMetric, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -1588,8 +1607,16 @@ export default function Correlation() {
     if (state.matrixWindow !== undefined) setMatrixWindow(state.matrixWindow);
     if (state.visibleWindows !== undefined) setVisibleWindows(new Set(state.visibleWindows));
     if (Array.isArray(state.visibleCorrCharts)) {
-      const valid = state.visibleCorrCharts.filter((c: any) => typeof c === "string" && (CHART_KEYS as readonly string[]).includes(c));
+      // Legacy saves used a single "acf" key for both ACF panels
+      const raw = state.visibleCorrCharts.flatMap((c: any) => (c === "acf" ? ["acfA", "acfB"] : [c]));
+      const valid = raw.filter((c: any) => typeof c === "string" && (CHART_KEYS as readonly string[]).includes(c));
       setVisibleCorrCharts(new Set(valid));
+    }
+    if (typeof state.corrLayout === "string" && GRID_LAYOUTS.includes(state.corrLayout as GridLayout)) {
+      setCorrLayout(state.corrLayout as GridLayout);
+    }
+    if (state.corrPanesVisible === "all" || (typeof state.corrPanesVisible === "number" && state.corrPanesVisible >= 1)) {
+      setCorrPanesVisible(state.corrPanesVisible);
     }
     if (state.uniMode !== undefined) setUniMode(state.uniMode);
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
@@ -1830,6 +1857,24 @@ export default function Correlation() {
                   <SelectItem value="levels">Levels</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Plot selection — mirrors the Charts tab sidebar: pick what gets a pane */}
+            <div className="space-y-1.5" data-testid="corr-chart-toggles">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+                Plots
+              </div>
+              {CHART_KEYS.map(key => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                  <Checkbox
+                    checked={visibleCorrCharts.has(key)}
+                    onCheckedChange={() => toggleCorrChart(key)}
+                    className="h-3.5 w-3.5"
+                    data-testid={`toggle-corr-chart-${key}`}
+                  />
+                  <span className="text-[11px]">{CHART_LABELS[key]}</span>
+                </label>
+              ))}
             </div>
 
             <div className="space-y-1.5">
@@ -2145,7 +2190,10 @@ export default function Correlation() {
             mode={corrMode}
             visibleWindows={visibleWindows}
             visibleCharts={visibleCorrCharts}
-            setVisibleCharts={setVisibleCorrCharts}
+            layout={corrLayout}
+            onLayoutChange={setCorrLayout}
+            panesVisible={corrPanesVisible}
+            onPanesVisibleChange={setCorrPanesVisible}
           />
         ) : activeTab === "matrix" ? (
           <MatrixView
@@ -2239,7 +2287,10 @@ function PairwiseView({
   mode,
   visibleWindows,
   visibleCharts,
-  setVisibleCharts,
+  layout,
+  onLayoutChange,
+  panesVisible,
+  onPanesVisibleChange,
 }: {
   data: PairwiseResult | undefined;
   loading: boolean;
@@ -2248,10 +2299,14 @@ function PairwiseView({
   mode: string;
   visibleWindows: Set<number>;
   visibleCharts: Set<string>;
-  setVisibleCharts: React.Dispatch<React.SetStateAction<Set<string>>>;
+  layout: GridLayout;
+  onLayoutChange: (l: GridLayout) => void;
+  panesVisible: number | "all";
+  onPanesVisibleChange: (v: number | "all") => void;
 }) {
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
+  const [paneOffset, setPaneOffset] = useState(0);
 
   if (loading) {
     return (
@@ -2273,8 +2328,226 @@ function PairwiseView({
   const labelA = formatSpec(specA);
   const labelB = formatSpec(specB);
 
+  // ── Build one pane per enabled plot (Charts-tab style) ──
+  const hasPacf = (data.pacfA?.length ?? 0) > 0;
+  const usePacf = acfMode === "pacf" && hasPacf;
+  const acfKind = usePacf ? "PACF" : "ACF";
+  const acfDataA = usePacf ? data.pacfA! : data.acfA;
+  const acfDataB = usePacf ? data.pacfB! : data.acfB;
+
+  const acfHeaderRight = (acfData: { lag: number; value: number }[]) => {
+    const strongest = strongestAcfLag(acfData, s.observations);
+    return (
+      <div className="flex items-center gap-1.5" onDoubleClick={(e) => e.stopPropagation()}>
+        {strongest && (
+          <span className="text-[9px] font-mono whitespace-nowrap" data-testid="acf-strongest">
+            <span className="text-muted-foreground">strongest </span>
+            <span style={{ color: "#e879f9" }}>
+              lag {strongest.lag} ({strongest.value >= 0 ? "+" : ""}{strongest.value.toFixed(3)})
+            </span>
+            {!strongest.isSignificant && <span className="text-muted-foreground"> n.s.</span>}
+          </span>
+        )}
+        {hasPacf && (["acf", "pacf"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={(e) => { e.stopPropagation(); setAcfMode(m); }}
+            className={`px-1.5 py-0.5 rounded text-[9px] font-mono uppercase border ${
+              acfMode === m
+                ? "bg-primary/20 text-primary border-primary/40"
+                : "text-muted-foreground border-border hover:text-foreground"
+            }`}
+            data-testid={`acf-mode-${m}`}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const paneDefs: { key: string; node: React.ReactNode }[] = [];
+
+  if (visibleCharts.has("levels")) {
+    paneDefs.push({
+      key: "levels",
+      node: (
+        <MiniChart
+          data={data.levelsA}
+          color={COLORS.primary}
+          height={350}
+          title={`${labelA} vs ${labelB} (Levels)`}
+          secondData={data.levelsB}
+          secondColor={COLORS.secondary}
+          chartId="levels"
+          isMaximized={maximizedChart === "levels"}
+          onMaximize={setMaximizedChart}
+        />
+      ),
+    });
+  }
+
+  if (visibleCharts.has("rolling") && data.multiWindowRolling && visibleWindows.size > 0) {
+    const windows = Array.from(visibleWindows).sort((a, b) => a - b);
+    const [first, second, third, fourth] = windows;
+    const legendParts = windows.map(w => `${w}d`).join(" / ");
+    const ciUpper = data.rollingCI?.map(d => ({ time: d.time, value: d.upper }));
+    const ciLower = data.rollingCI?.map(d => ({ time: d.time, value: d.lower }));
+    paneDefs.push({
+      key: "rolling",
+      node: (
+        <MiniChart
+          data={data.multiWindowRolling[first] || []}
+          color={MULTI_WINDOW_COLORS[first]}
+          height={350}
+          title={`Rolling Correlation (${legendParts})`}
+          showZeroLine
+          secondData={second !== undefined ? data.multiWindowRolling[second] || [] : undefined}
+          secondColor={second !== undefined ? MULTI_WINDOW_COLORS[second] : undefined}
+          thirdData={third !== undefined ? data.multiWindowRolling[third] || [] : undefined}
+          thirdColor={third !== undefined ? MULTI_WINDOW_COLORS[third] : undefined}
+          fourthData={fourth !== undefined ? data.multiWindowRolling[fourth] || [] : undefined}
+          fourthColor={fourth !== undefined ? MULTI_WINDOW_COLORS[fourth] : undefined}
+          bandUpper={ciUpper}
+          bandLower={ciLower}
+          bandColor="rgba(100,180,255,0.3)"
+          chartId="rolling"
+          isMaximized={maximizedChart === "rolling"}
+          onMaximize={setMaximizedChart}
+        />
+      ),
+    });
+  }
+
+  if (visibleCharts.has("rollingBeta") && data.rollingBeta && data.rollingBeta.length > 0) {
+    paneDefs.push({
+      key: "rollingBeta",
+      node: (
+        <MiniChart
+          data={data.rollingBeta}
+          color="#ec4899"
+          height={280}
+          title={`Rolling Beta: ${labelA} vs ${labelB}`}
+          showZeroLine
+          chartId="rollingBeta"
+          isMaximized={maximizedChart === "rollingBeta"}
+          onMaximize={setMaximizedChart}
+        />
+      ),
+    });
+  }
+
+  if (visibleCharts.has("scatter")) {
+    paneDefs.push({
+      key: "scatter",
+      node: (
+        <CanvasChartWrapper
+          title={`Scatter: ${labelA} vs ${labelB}`}
+          chartId="scatter"
+          isMaximized={maximizedChart === "scatter"}
+          onMaximize={setMaximizedChart}
+          height={350}
+        >
+          {(h) => (
+            <ScatterCanvas
+              data={data.scatter}
+              labelX={labelB}
+              labelY={labelA}
+              beta={s.beta}
+              alpha={s.alpha}
+              height={h}
+              hideTitle
+            />
+          )}
+        </CanvasChartWrapper>
+      ),
+    });
+  }
+
+  if (visibleCharts.has("crossCorr")) {
+    paneDefs.push({
+      key: "crossCorr",
+      node: (
+        <CanvasChartWrapper
+          title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
+          chartId="crossCorr"
+          isMaximized={maximizedChart === "crossCorr"}
+          onMaximize={setMaximizedChart}
+          height={280}
+        >
+          {(h) => (
+            <CrossCorrChart
+              data={data.crossCorrelation}
+              labelA={labelA}
+              labelB={labelB}
+              height={h}
+              hideTitle
+            />
+          )}
+        </CanvasChartWrapper>
+      ),
+    });
+  }
+
+  if (visibleCharts.has("acfA")) {
+    paneDefs.push({
+      key: "acfA",
+      node: (
+        <CanvasChartWrapper
+          title={`${acfKind}: ${labelA}`}
+          chartId="acfA"
+          isMaximized={maximizedChart === "acfA"}
+          onMaximize={setMaximizedChart}
+          height={200}
+          headerRight={acfHeaderRight(acfDataA)}
+        >
+          {(h) => <ACFChart data={acfDataA} nObs={s.observations} title="" height={h} hideTitle />}
+        </CanvasChartWrapper>
+      ),
+    });
+  }
+
+  if (visibleCharts.has("acfB")) {
+    paneDefs.push({
+      key: "acfB",
+      node: (
+        <CanvasChartWrapper
+          title={`${acfKind}: ${labelB}`}
+          chartId="acfB"
+          isMaximized={maximizedChart === "acfB"}
+          onMaximize={setMaximizedChart}
+          height={200}
+          headerRight={acfHeaderRight(acfDataB)}
+        >
+          {(h) => <ACFChart data={acfDataB} nObs={s.observations} title="" height={h} hideTitle />}
+        </CanvasChartWrapper>
+      ),
+    });
+  }
+
+  // ── Charts-tab layout mechanics: visible-pane window + paging + grid ──
+  const maximizedPane = maximizedChart ? paneDefs.find(p => p.key === maximizedChart) : undefined;
+  const count = panesVisible === "all" ? paneDefs.length : Math.min(panesVisible, paneDefs.length);
+  const start = Math.min(paneOffset, Math.max(0, paneDefs.length - count));
+  const shownPanes = maximizedPane ? [maximizedPane] : paneDefs.slice(start, start + count);
+  const canPagePrev = !maximizedPane && panesVisible !== "all" && start > 0;
+  const canPageNext = !maximizedPane && panesVisible !== "all" && start + count < paneDefs.length;
+
+  const { cols } = parseGrid(layout);
+  const gridStyle: React.CSSProperties = maximizedPane
+    ? { display: "grid", gridTemplateColumns: "1fr", gridTemplateRows: "1fr", height: "100%", gap: 8 }
+    : {
+        display: "grid",
+        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gridTemplateRows: `repeat(${Math.max(1, Math.ceil(shownPanes.length / cols))}, 1fr)`,
+        height: "100%",
+        gap: 8,
+      };
+
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-3">
+    <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
+      {/* Summary stats + diagnostics + methodology (scrolls if tall so charts keep room) */}
+      <div className="flex-shrink-0 max-h-[45%] overflow-y-auto space-y-3">
       {/* Summary stats row */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-2">
         {[
@@ -2335,191 +2608,86 @@ function PairwiseView({
 
       {/* Methodology & Guidance Panel */}
       <MethodologyPanel mode={mode} />
+      </div>
 
-      {/* Chart visibility toggles */}
-      {!maximizedChart && (
-        <div className="flex items-center gap-1.5 flex-wrap" data-testid="corr-chart-toggles">
-          <span className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">
-            <Eye className="w-3 h-3" /> Charts
-          </span>
-          {CHART_KEYS.map(key => {
-            const on = visibleCharts.has(key);
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  setVisibleCharts(prev => {
-                    const next = new Set(prev);
-                    if (next.has(key)) next.delete(key);
-                    else next.add(key);
-                    return next;
-                  });
-                }}
-                className={`text-[10px] font-mono px-2 py-1 border rounded transition-colors ${on ? "border-amber-500 bg-amber-500/15 text-amber-300" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
-                data-testid={`toggle-corr-chart-${key}`}
-                title={`Show/hide ${CHART_LABELS[key]} chart`}
-              >
-                {CHART_LABELS[key]}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Chart-area toolbar — same layout controls as the Charts tab */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
+          {paneDefs.length} plot{paneDefs.length === 1 ? "" : "s"}
+        </span>
+        <div className="flex-1" />
+        {paneDefs.length > 1 && (
+          <>
+            <Select
+              value={String(panesVisible)}
+              onValueChange={(v) => { onPanesVisibleChange(v === "all" ? "all" : parseInt(v)); setPaneOffset(0); }}
+            >
+              <SelectTrigger className="h-6 text-[10px] w-auto min-w-[110px]" data-testid="corr-panes-visible">
+                <Layers className="w-3 h-3 mr-1" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: Math.min(paneDefs.length, 6) }, (_, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{i + 1} pane{i > 0 ? "s" : ""}</SelectItem>
+                ))}
+                <SelectItem value="all">All ({paneDefs.length})</SelectItem>
+              </SelectContent>
+            </Select>
 
-      {/* Charts grid — show only maximized chart if one is expanded */}
-      <div className={`grid gap-3 ${maximizedChart ? "" : "grid-cols-1 lg:grid-cols-2"}`}>
-        {/* Dual-axis level series */}
-        {visibleCharts.has("levels") && (!maximizedChart || maximizedChart === "levels") && (
-          <MiniChart
-            data={data.levelsA}
-            color={COLORS.primary}
-            height={350}
-            title={`${labelA} vs ${labelB} (Levels)`}
-            secondData={data.levelsB}
-            secondColor={COLORS.secondary}
-            chartId="levels"
-            isMaximized={maximizedChart === "levels"}
-            onMaximize={setMaximizedChart}
-          />
-        )}
-
-        {/* Rolling correlation — multi-window with user-selected windows + CI bands */}
-        {visibleCharts.has("rolling") && data.multiWindowRolling && visibleWindows.size > 0 && (!maximizedChart || maximizedChart === "rolling") && (() => {
-          const windows = Array.from(visibleWindows).sort((a, b) => a - b);
-          const [first, second, third, fourth] = windows;
-          const legendParts = windows.map(w => `${w}d`).join(" / ");
-          // Convert rollingCI to bandUpper / bandLower arrays
-          const ciUpper = data.rollingCI?.map(d => ({ time: d.time, value: d.upper }));
-          const ciLower = data.rollingCI?.map(d => ({ time: d.time, value: d.lower }));
-          return (
-            <MiniChart
-              data={data.multiWindowRolling[first] || []}
-              color={MULTI_WINDOW_COLORS[first]}
-              height={350}
-              title={`Rolling Correlation (${legendParts})`}
-              showZeroLine
-              secondData={second !== undefined ? data.multiWindowRolling[second] || [] : undefined}
-              secondColor={second !== undefined ? MULTI_WINDOW_COLORS[second] : undefined}
-              thirdData={third !== undefined ? data.multiWindowRolling[third] || [] : undefined}
-              thirdColor={third !== undefined ? MULTI_WINDOW_COLORS[third] : undefined}
-              fourthData={fourth !== undefined ? data.multiWindowRolling[fourth] || [] : undefined}
-              fourthColor={fourth !== undefined ? MULTI_WINDOW_COLORS[fourth] : undefined}
-              bandUpper={ciUpper}
-              bandLower={ciLower}
-              bandColor="rgba(100,180,255,0.3)"
-              chartId="rolling"
-              isMaximized={maximizedChart === "rolling"}
-              onMaximize={setMaximizedChart}
-            />
-          );
-        })()}
-
-        {/* Rolling beta */}
-        {visibleCharts.has("rollingBeta") && data.rollingBeta && data.rollingBeta.length > 0 && (!maximizedChart || maximizedChart === "rollingBeta") && (
-          <MiniChart
-            data={data.rollingBeta}
-            color="#ec4899"
-            height={280}
-            title={`Rolling Beta: ${labelA} vs ${labelB}`}
-            showZeroLine
-            chartId="rollingBeta"
-            isMaximized={maximizedChart === "rollingBeta"}
-            onMaximize={setMaximizedChart}
-          />
-        )}
-
-        {/* Scatter plot */}
-        {visibleCharts.has("scatter") && (!maximizedChart || maximizedChart === "scatter") && (
-          <CanvasChartWrapper
-            title={`Scatter: ${labelA} vs ${labelB}`}
-            chartId="scatter"
-            isMaximized={maximizedChart === "scatter"}
-            onMaximize={setMaximizedChart}
-            height={350}
-          >
-            {(h) => (
-              <ScatterCanvas
-                data={data.scatter}
-                labelX={labelB}
-                labelY={labelA}
-                beta={s.beta}
-                alpha={s.alpha}
-                height={h}
-                hideTitle
-              />
-            )}
-          </CanvasChartWrapper>
-        )}
-
-        {/* Cross-correlation lag chart */}
-        {visibleCharts.has("crossCorr") && (!maximizedChart || maximizedChart === "crossCorr") && (
-          <CanvasChartWrapper
-            title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
-            chartId="crossCorr"
-            isMaximized={maximizedChart === "crossCorr"}
-            onMaximize={setMaximizedChart}
-            height={280}
-          >
-            {(h) => (
-              <CrossCorrChart
-                data={data.crossCorrelation}
-                labelA={labelA}
-                labelB={labelB}
-                height={h}
-                hideTitle
-              />
-            )}
-          </CanvasChartWrapper>
-        )}
-
-        {/* ACF / PACF panels */}
-        {visibleCharts.has("acf") && !maximizedChart && (() => {
-          const hasPacf = (data.pacfA?.length ?? 0) > 0;
-          const useP = acfMode === "pacf" && hasPacf;
-          const dA = useP ? data.pacfA! : data.acfA;
-          const dB = useP ? data.pacfB! : data.acfB;
-          const kind = useP ? "PACF" : "ACF";
-          return (
-            <div className="space-y-1.5">
-              {hasPacf && (
-                <div className="flex items-center gap-1" data-testid="acf-mode-toggle">
-                  {(["acf", "pacf"] as const).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setAcfMode(m)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border ${
-                        acfMode === m
-                          ? "bg-primary/20 text-primary border-primary/40"
-                          : "text-muted-foreground border-border hover:text-foreground"
-                      }`}
-                      data-testid={`acf-mode-${m}`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                  <span className="text-[9px] text-muted-foreground ml-1.5">
-                    PACF isolates each lag's own effect (lags 1..k−1 partialled out) — use it to find WHICH lag carries the dependence
-                  </span>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                <ACFChart data={dA} nObs={s.observations} title={`${kind}: ${labelA}`} height={200} />
-                <ACFChart data={dB} nObs={s.observations} title={`${kind}: ${labelB}`} height={200} />
+            {/* Pane pagination arrows */}
+            {(canPagePrev || canPageNext) && (
+              <div className="flex gap-0.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  disabled={!canPagePrev}
+                  onClick={() => setPaneOffset(Math.max(0, start - 1))}
+                  data-testid="corr-pane-page-prev"
+                  title="Previous panes"
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                </Button>
+                <span className="text-[9px] text-muted-foreground flex items-center tabular-nums">
+                  {start + 1}–{Math.min(start + count, paneDefs.length)}/{paneDefs.length}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  disabled={!canPageNext}
+                  onClick={() => setPaneOffset(start + 1)}
+                  data-testid="corr-pane-page-next"
+                  title="Next panes"
+                >
+                  <ChevronRight className="w-3 h-3" />
+                </Button>
               </div>
-            </div>
-          );
-        })()}
-        {maximizedChart === "acfA" && (
-          <CanvasChartWrapper title={`ACF: ${labelA}`} chartId="acfA" isMaximized onMaximize={setMaximizedChart} height={200}>
-            {(h) => <ACFChart data={data.acfA} nObs={s.observations} title={`ACF: ${labelA}`} height={h} />}
-          </CanvasChartWrapper>
-        )}
-        {maximizedChart === "acfB" && (
-          <CanvasChartWrapper title={`ACF: ${labelB}`} chartId="acfB" isMaximized onMaximize={setMaximizedChart} height={200}>
-            {(h) => <ACFChart data={data.acfB} nObs={s.observations} title={`ACF: ${labelB}`} height={h} />}
-          </CanvasChartWrapper>
+            )}
+
+            <GridLayoutPicker
+              value={layout}
+              onChange={onLayoutChange}
+              testId="corr-grid-picker"
+            />
+          </>
         )}
       </div>
+
+      {/* Chart grid — fills the remaining viewport, panes sized by the layout */}
+      {paneDefs.length === 0 ? (
+        <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground text-sm border border-dashed border-border/40 rounded">
+          Enable plots in the sidebar to add charts
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0" style={gridStyle} data-testid="corr-chart-grid">
+          {shownPanes.map(p => (
+            <div key={p.key} className="min-h-0 min-w-0 overflow-hidden">
+              {p.node}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
