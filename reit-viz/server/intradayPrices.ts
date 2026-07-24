@@ -176,8 +176,11 @@ async function fmpFetchWindow(
   fromEpoch: number,
   toEpoch: number,
 ): Promise<Bar[]> {
+  // FMP shares the exchange dot-suffix convention with Yahoo for our covered
+  // listings (BKG-GB → BKG.L, …) — without the mapping FMP returns nothing for
+  // non-US names and they silently fall back to Yahoo's ~2y cap.
   const url =
-    `${FMP_BASE}/${fmpInterval}/${encodeURIComponent(symbol)}` +
+    `${FMP_BASE}/${fmpInterval}/${encodeURIComponent(toYahooSymbol(symbol))}` +
     `?from=${ymd(fromEpoch)}&to=${ymd(toEpoch)}&apikey=${fmpKey()}`;
   const resp = await fetch(url, { headers: { Accept: "application/json" } });
   if (!resp.ok) throw new Error(`FMP intraday request failed (${resp.status}) for ${symbol}`);
