@@ -41,6 +41,9 @@ export type IndicatorParam = {
   key: string;
   label: string;
   default: number;
+  /** Per-frequency default overrides (keys: "hourly" | "daily" | "weekly" |
+   *  "monthly"); falls back to `default`. Explicit user-set params always win. */
+  defaultByFrequency?: Record<string, number>;
   min: number;
   max: number;
   /** Input step; use a fraction for decimal params (e.g. PSAR 0.02). Default 1. */
@@ -94,12 +97,19 @@ export type IndicatorDef = {
   renderOverlay?: (ctx: OverlayRenderCtx, bars: OhlcBar[], p: Record<string, number>) => void;
 };
 
-/** Resolve effective params for an indicator: state overrides, else defaults. */
-export function resolveParams(def: IndicatorDef, st?: RegistryIndicatorState): Record<string, number> {
+/** Resolve effective params for an indicator: state overrides, else the
+ *  frequency-specific default (when the pane's bar frequency is known), else
+ *  the base default. */
+export function resolveParams(
+  def: IndicatorDef,
+  st?: RegistryIndicatorState,
+  frequency?: string,
+): Record<string, number> {
   const out: Record<string, number> = {};
   for (const pr of def.params) {
     const v = st?.params?.[pr.key];
-    out[pr.key] = typeof v === "number" && Number.isFinite(v) ? v : pr.default;
+    const fallback = (frequency ? pr.defaultByFrequency?.[frequency] : undefined) ?? pr.default;
+    out[pr.key] = typeof v === "number" && Number.isFinite(v) ? v : fallback;
   }
   return out;
 }
@@ -312,9 +322,10 @@ const AUTOCORR: IndicatorDef = {
       max: AUTOCORR_SOURCES.length - 1,
       options: AUTOCORR_SOURCES.map(({ value, label }) => ({ value, label })),
     },
-    // Default lag 6: universe-wide PACF analysis (2026-07-24) found the ~1-week
-    // reversal at lag 6 is the strongest daily-return autocorrelation signal.
-    { key: "lag", label: "Lag (bars)", default: 6, min: 1, max: 60 },
+    // Universe-wide PACF analysis (2026-07-24): the ~1-week reversal at lag 6
+    // is the strongest daily-return signal; on weekly/monthly bars the lag-1
+    // reversal (weekly mean AC −0.11) dominates.
+    { key: "lag", label: "Lag (bars)", default: 6, defaultByFrequency: { weekly: 1, monthly: 1 }, min: 1, max: 60 },
     { key: "window", label: "Window", default: 63, min: 20, max: 500 },
     { key: "rsiPeriod", label: "RSI Period", default: 14, min: 2, max: 100 },
   ],

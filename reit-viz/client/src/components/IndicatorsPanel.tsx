@@ -39,6 +39,9 @@ interface IndicatorsPanelProps {
    * the host composes each call off the same (stale) map. */
   onApplyToAllPanes: (indicators: ActiveIndicators) => void;
   onClose: () => void;
+  /** Chart bar frequency — threaded to registry controls so param inputs show
+   *  frequency-specific defaults. */
+  frequency?: string;
 }
 
 /** Ordered list of collapsible section titles in the indicators sidebar. */
@@ -259,9 +262,13 @@ function HeikinAshiControls({
 export function RegistryIndicatorControls({
   activeIndicators,
   onChange,
+  frequency,
 }: {
   activeIndicators: ActiveIndicators;
   onChange: (i: ActiveIndicators) => void;
+  /** Pane bar frequency — shows frequency-specific param defaults so the
+   *  inputs match what the pane actually renders. */
+  frequency?: string;
 }) {
   const reg = activeIndicators.registry ?? {};
   const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
@@ -284,7 +291,7 @@ export function RegistryIndicatorControls({
           {ALL_REGISTRY_INDICATORS.filter((d) => d.category === cat).map((def) => {
             const st = reg[def.id];
             const enabled = !!st?.enabled;
-            const p = resolveParams(def, st);
+            const p = resolveParams(def, st, frequency);
             return (
               <div key={def.id} className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -354,6 +361,7 @@ export default function IndicatorsPanel({
   onChangeIndicators,
   onApplyToAllPanes,
   onClose,
+  frequency,
 }: IndicatorsPanelProps) {
   // Per-section collapse state — empty set means every section is expanded (default).
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
@@ -1165,6 +1173,7 @@ export default function IndicatorsPanel({
             <RegistryIndicatorControls
               activeIndicators={activeIndicators}
               onChange={setActiveIndicators}
+              frequency={frequency}
             />
           )}
         </div>

@@ -333,6 +333,7 @@ function SubIndicatorChart({
   height,
   onResizeStart,
   gridColor,
+  frequency,
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
@@ -350,6 +351,9 @@ function SubIndicatorChart({
   height?: number;
   onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
   gridColor: string;
+  /** Pane bar frequency ("hourly"|"daily"|"weekly"|"monthly") — drives
+   *  frequency-specific registry param defaults. */
+  frequency?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -632,7 +636,7 @@ function SubIndicatorChart({
           ? closeData.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }))
           : [];
     if (regDef?.renderPane && regBars.length > 0) {
-      const params = resolveParams(regDef, activeIndicators.registry?.[type]);
+      const params = resolveParams(regDef, activeIndicators.registry?.[type], frequency);
       regDef.renderPane(
         {
           chart,
@@ -809,7 +813,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor]);
+  }, [closeData, ohlcBars, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor, frequency]);
 
   // Resize
   useEffect(() => {
@@ -2810,7 +2814,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           if (!def.renderOverlay) continue;
           if (!activeIndicators.registry?.[def.id]?.enabled) continue;
           try {
-            def.renderOverlay(octx, bars, resolveParams(def, activeIndicators.registry[def.id]));
+            def.renderOverlay(octx, bars, resolveParams(def, activeIndicators.registry[def.id], (chartConfig as { frequency?: string }).frequency ?? "daily"));
           } catch {
             // Never let one indicator's failure blank the whole chart.
           }
@@ -4039,6 +4043,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               height={subHeights[st]}
               onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}
               gridColor={gridColorFor(chartConfig.gridProminence)}
+              frequency={(chartConfig as { frequency?: string }).frequency ?? "daily"}
             />
           </div>
         );

@@ -2757,6 +2757,7 @@ export default function ChartArea({
               })
             }
             onClose={() => setShowIndicators(false)}
+            frequency={frequency}
           />
         )}
 
