@@ -16,6 +16,8 @@ import { useGridProminence } from "@/lib/gridPref";
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
+import { runDislocationScan, dislocationScanToCsv } from "@/lib/correlationDislocationScan";
+import type { DislocationScanResult, DislocationRow, ScanTF } from "@/lib/correlationDislocationScan";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -67,6 +69,7 @@ import {
   Loader2,
   Play,
   Pin,
+  Radar,
   SlidersHorizontal,
   X,
   Zap,
@@ -648,6 +651,304 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
               onShowAll={() => setShowAll(v => !v)}
               onPin={handlePin}
             />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Cross-timeframe dislocation scanner panel ──
+const TF_SHORT: Record<ScanTF, string> = { hourly: "1H", daily: "D", weekly: "W" };
+
+function zColor(z: number): string {
+  if (Math.abs(z) >= 2) return "#ef4444";
+  if (Math.abs(z) >= 1.5) return "#f59e0b";
+  if (Math.abs(z) >= 0.75) return "#eab308";
+  return "#94a3b8";
+}
+
+function DislocationScanPanel({
+  universeTickers,
+  baskets,
+  onPin,
+}: {
+  universeTickers: string[];
+  baskets: Basket[];
+  onPin: (a: string, b: string) => void;
+}) {
+  const [scope, setScope] = useState<"universe" | "basket">("universe");
+  const [basketId, setBasketId] = useState("");
+  const [window_, setWindow_] = useState("60");
+  const [zTh, setZTh] = useState("1.5");
+  const [anchorTh, setAnchorTh] = useState("0.75");
+  const [minBase, setMinBase] = useState("0.3");
+  const [scanning, setScanning] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; phase: string } | null>(null);
+  const [result, setResult] = useState<DislocationScanResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const scopeTickers = useMemo(() => {
+    if (scope === "basket") {
+      const b = baskets.find((x) => x.id === basketId);
+      return b ? b.tickers : [];
+    }
+    return universeTickers;
+  }, [scope, basketId, baskets, universeTickers]);
+  const pairCount = (scopeTickers.length * (scopeTickers.length - 1)) / 2;
+
+  const runScan = useCallback(async () => {
+    if (scanning) {
+      abortRef.current?.abort();
+      setScanning(false);
+      return;
+    }
+    if (scopeTickers.length < 2) return;
+    setScanning(true);
+    setError(null);
+    setResult(null);
+    setProgress(null);
+    setShowAll(false);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const res = await runDislocationScan({
+        tickers: scopeTickers,
+        window: Math.max(20, Math.min(500, parseInt(window_) || 60)),
+        zThreshold: Math.max(0.5, parseFloat(zTh) || 1.5),
+        anchorThreshold: Math.max(0.1, parseFloat(anchorTh) || 0.75),
+        minBaselineCorr: Math.max(0, Math.min(0.9, parseFloat(minBase) || 0.3)),
+        signal: controller.signal,
+        onProgress: (done, total, phase) => setProgress({ done, total, phase }),
+      });
+      setResult(res);
+    } catch (e: any) {
+      if (e?.name !== "AbortError") setError(e?.message || "Scan failed");
+    } finally {
+      setScanning(false);
+      setProgress(null);
+      abortRef.current = null;
+    }
+  }, [scanning, scopeTickers, window_, zTh, anchorTh, minBase]);
+
+  const exportCSV = useCallback(() => {
+    if (!result) return;
+    const csv = dislocationScanToCsv(result);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `correlation_dislocations.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [result]);
+
+  const sort = useTableSort<DislocationRow>("", "desc", "desc", "correlation-dislocations");
+  const sortedRows = result
+    ? sort.apply(result.rows, (r, key) => {
+        switch (key) {
+          case "pair": return `${r.a}/${r.b}`;
+          case "histCorr": return r.histCorr;
+          case "hZ": return r.tf.hourly?.z ?? -99;
+          case "dZ": return r.tf.daily?.z ?? -99;
+          case "wZ": return r.tf.weekly?.z ?? -99;
+          case "zGap": return r.zGap;
+          case "kind": return r.kind;
+          case "spreadRet": return Math.abs(r.spreadRet);
+          case "score": return r.score;
+          default: return null;
+        }
+      })
+    : [];
+  const display = showAll ? sortedRows : sortedRows.slice(0, 50);
+  const thCls = "px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap bg-card/50";
+  const tfCell = (st?: { last: number; z: number; pct: number }) => st ? (
+    <div className="whitespace-nowrap">
+      <span style={{ color: corrColor(st.last) }} className="font-bold">{st.last.toFixed(2)}</span>
+      <span className="ml-1" style={{ color: zColor(st.z) }}>
+        z{st.z >= 0 ? "+" : ""}{st.z.toFixed(1)}
+      </span>
+    </div>
+  ) : <span className="text-muted-foreground/30">—</span>;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Controls bar */}
+      <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Scope</div>
+          <div className="flex gap-1 items-center">
+            <button
+              onClick={() => setScope("universe")}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${scope === "universe" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
+              data-testid="disloc-scope-universe"
+            >
+              Universe ({universeTickers.length})
+            </button>
+            <button
+              onClick={() => setScope("basket")}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${scope === "basket" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
+              data-testid="disloc-scope-basket"
+            >
+              Basket
+            </button>
+            {scope === "basket" && (
+              <div className="w-[220px]">
+                <BasketSelect baskets={baskets} value={basketId} onChange={setBasketId} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Window (bars)</div>
+          <Input type="number" min={20} max={500} value={window_} onChange={(e) => setWindow_(e.target.value)}
+            className="h-7 w-[70px] text-[11px] font-mono px-2" data-testid="disloc-window" />
+        </div>
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Disloc |z| ≥</div>
+          <Input type="number" step="0.1" min={0.5} value={zTh} onChange={(e) => setZTh(e.target.value)}
+            className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-zth" />
+        </div>
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Anchor |z| ≤</div>
+          <Input type="number" step="0.05" min={0.1} value={anchorTh} onChange={(e) => setAnchorTh(e.target.value)}
+            className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-anchorth" />
+        </div>
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Min hist |ρ|</div>
+          <Input type="number" step="0.05" min={0} max={0.9} value={minBase} onChange={(e) => setMinBase(e.target.value)}
+            className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-minbase" />
+        </div>
+
+        <div className="flex gap-2 items-end">
+          <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={runScan}
+            disabled={!scanning && scopeTickers.length < 2} data-testid="run-disloc-scan">
+            {scanning ? (<><X className="w-3 h-3" /> Cancel</>) : (<><Play className="w-3 h-3" /> Scan Dislocations</>)}
+          </Button>
+          {result && (
+            <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1.5" onClick={exportCSV}>
+              <Download className="w-3 h-3" /> Export CSV
+            </Button>
+          )}
+        </div>
+
+        <div className="text-[10px] text-muted-foreground font-mono ml-auto">
+          {result && !scanning
+            ? `${result.rows.length} dislocations · ${result.scannedPairs.toLocaleString()} pairs · ${result.tickers} tickers · ${(result.durationMs / 1000).toFixed(1)}s`
+            : `${pairCount.toLocaleString()} pairs in scope`}
+        </div>
+      </div>
+
+      {/* Results */}
+      <div className="flex-1 overflow-auto p-3 space-y-3 min-h-0">
+        {scanning && progress && (
+          <ScanProgress
+            done={progress.done}
+            total={progress.total}
+            phase={progress.phase === "load" ? "load" : "scan"}
+          />
+        )}
+        {scanning && !progress && (
+          <div className="text-[11px] text-muted-foreground font-mono animate-pulse">Starting scan…</div>
+        )}
+        {error && (
+          <div className="border border-red-500/40 bg-red-500/10 rounded px-3 py-2 text-[11px] text-red-400">{error}</div>
+        )}
+        {!scanning && !result && !error && (
+          <div className="flex flex-col items-center justify-center h-48 gap-2 text-center text-muted-foreground">
+            <Radar className="w-8 h-8 opacity-30" />
+            <div className="text-[13px] font-semibold">Cross-Timeframe Dislocation Scan</div>
+            <div className="text-[11px] max-w-md leading-relaxed">
+              Scans every pair in scope: rolling correlation on hourly / daily / weekly bars, each timeframe's
+              current ρ z-scored against its own history. Flags pairs where one timeframe broke (|z| above the
+              threshold) while another stayed in line — historically-correlated pairs that de-correlated on the
+              hourly get a long-laggard / short-leader reconvergence framing.
+            </div>
+          </div>
+        )}
+        {result && !scanning && result.rows.length === 0 && (
+          <div className="text-[11px] text-muted-foreground font-mono">
+            No dislocations at these thresholds — loosen |z| or the min baseline correlation.
+            {result.skipped.noHourly > 0 && ` (${result.skipped.noHourly} pairs lacked an intraday leg.)`}
+          </div>
+        )}
+        {result && !scanning && result.rows.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[9px] text-muted-foreground font-mono">
+              z = current rolling ρ vs that timeframe's own history · Gap = |z(dislocated) − z(anchor)| ·
+              Spread = A−B cumulative return over the window on the dislocated timeframe
+            </div>
+            <div className="overflow-auto" data-testid="disloc-results">
+              <table className="text-[11px] font-mono w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-border/40">
+                    <th className={thCls}>#</th>
+                    <th className={thCls}><SortHeader label="Pair" columnKey="pair" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Hist ρ (D)" columnKey="histCorr" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="1H ρ · z" columnKey="hZ" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="D ρ · z" columnKey="dZ" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="W ρ · z" columnKey="wZ" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Gap" columnKey="zGap" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Type" columnKey="kind" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Spread" columnKey="spreadRet" sort={sort} /></th>
+                    <th className={thCls}>Trade idea</th>
+                    <th className={thCls}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {display.map((r, i) => (
+                    <tr key={`${r.a}-${r.b}`} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`disloc-row-${i}`}>
+                      <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
+                      <td className="px-2 py-1 font-bold whitespace-nowrap">
+                        {r.a} <span className="text-muted-foreground/50">×</span> {r.b}
+                        <span className="ml-1.5 text-[9px] text-muted-foreground/60">{TF_SHORT[r.worstTF]} vs {TF_SHORT[r.anchorTF]}</span>
+                      </td>
+                      <td className="px-2 py-1 whitespace-nowrap" style={{ color: corrColor(r.histCorr) }}>{r.histCorr.toFixed(2)}</td>
+                      <td className="px-2 py-1">{tfCell(r.tf.hourly)}</td>
+                      <td className="px-2 py-1">{tfCell(r.tf.daily)}</td>
+                      <td className="px-2 py-1">{tfCell(r.tf.weekly)}</td>
+                      <td className="px-2 py-1 font-bold" style={{ color: zColor(r.zGap) }}>{r.zGap.toFixed(1)}</td>
+                      <td className="px-2 py-1">
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                          style={r.kind === "decorrelated"
+                            ? { color: "#f59e0b", backgroundColor: "#f59e0b22" }
+                            : { color: "#38bdf8", backgroundColor: "#38bdf822" }}
+                        >
+                          {r.kind === "decorrelated" ? "DECOR" : "HYPER"}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1 whitespace-nowrap" style={{ color: r.spreadRet >= 0 ? "#22c55e" : "#ef4444" }}>
+                        {(r.spreadRet * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-2 py-1 max-w-[260px]">
+                        <span className="truncate block" title={r.suggestion}>{r.suggestion}</span>
+                      </td>
+                      <td className="px-2 py-1">
+                        <button
+                          data-testid={`disloc-pin-${i}`}
+                          className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] border border-border/40 rounded hover:bg-primary/20 hover:border-primary/50 transition-colors text-muted-foreground hover:text-primary"
+                          title="Open this pair on the Pairwise tab (with TF Divergence)"
+                          onClick={() => onPin(r.a, r.b)}
+                        >
+                          <Pin className="w-2.5 h-2.5" />Pair
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sortedRows.length > 50 && (
+                <div className="py-2 text-center">
+                  <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={() => setShowAll(v => !v)}>
+                    {showAll ? "Show top 50 only" : `Show all ${sortedRows.length} dislocations`}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1737,7 +2038,7 @@ const ROLLING_WINDOW_LABELS: Record<number, string> = {
 };
 
 export default function Correlation() {
-  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "basket" | "drivers">("pairwise");
+  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "basket" | "drivers" | "dislocations">("pairwise");
 
   // Pairwise state
   const [specA, setSpecA] = useState("SPG:close");
@@ -1838,6 +2139,20 @@ export default function Correlation() {
     setSpecA(a);
     setSpecB(b);
     setCorrWindow(String(window));
+    setActiveTab("pairwise");
+  }, []);
+
+  // Open a scanned dislocation pair on the Pairwise tab with the TF Divergence panel up.
+  const pinFromDisloc = useCallback((a: string, b: string) => {
+    setSpecA(`${a}:close`);
+    setSpecB(`${b}:close`);
+    setVisibleCorrCharts(prev => {
+      const next = new Set(prev);
+      next.add("levels");
+      next.add("rolling");
+      next.add("tfDivergence");
+      return next;
+    });
     setActiveTab("pairwise");
   }, []);
 
@@ -2152,11 +2467,40 @@ export default function Correlation() {
             >
               <Zap className="w-3 h-3 mr-0.5" /> Drivers
             </Button>
+            <Button
+              variant={activeTab === "dislocations" ? "default" : "secondary"}
+              size="sm"
+              className="h-7 text-[10px] px-1.5 w-full"
+              onClick={() => setActiveTab("dislocations")}
+              data-testid="tab-dislocations"
+            >
+              <Radar className="w-3 h-3 mr-0.5" /> Disloc
+            </Button>
           </div>
           <GridProminenceToggle className="mt-1.5" />
         </div>
 
-        {activeTab === "drivers" ? (
+        {activeTab === "dislocations" ? (
+          <div className="p-3 flex-1 overflow-y-auto space-y-3">
+            <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Dislocation Scan</div>
+            <div className="text-[11px] text-muted-foreground leading-relaxed">
+              Hunts long/short pair ideas: pairs that are normally correlated but whose rolling correlation
+              has broken from its own history on ONE timeframe while another timeframe stays in line.
+            </div>
+            <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
+              <div className="font-semibold text-foreground/70">How to read it</div>
+              <div><span className="text-amber-400 font-bold">DECOR</span> — pair de-correlated vs its norm. If historically +ρ, the classic setup is reconvergence: long the laggard leg, short the leader.</div>
+              <div><span className="text-sky-400 font-bold">HYPER</span> — correlation unusually tight vs its norm: crowding or a regime shift to watch.</div>
+              <div>Gap ranks how stretched the dislocated timeframe is vs the calm one. Pin any row to open the pair on the Pairwise tab with the TF Divergence panel.</div>
+            </div>
+            <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
+              <div className="font-semibold text-foreground/70">Notes</div>
+              <div>Windows are in bars of each timeframe (60 hourly bars ≈ 9 sessions; 60 weekly bars ≈ 14 months).</div>
+              <div>Hourly legs use ~2y of 60-min bars; pairs without intraday data fall back to daily-vs-weekly mismatches.</div>
+              <div>Scope follows the Universe tab's filters, or pick a basket.</div>
+            </div>
+          </div>
+        ) : activeTab === "drivers" ? (
           <div className="p-3 flex-1 overflow-y-auto space-y-3">
             <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Auto Driver Scan</div>
             <div className="text-[11px] text-muted-foreground leading-relaxed">
@@ -2630,7 +2974,13 @@ export default function Correlation() {
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        {activeTab === "drivers" ? (
+        {activeTab === "dislocations" ? (
+          <DislocationScanPanel
+            universeTickers={uniFilteredList.map((t: any) => t.ticker)}
+            baskets={baskets}
+            onPin={pinFromDisloc}
+          />
+        ) : activeTab === "drivers" ? (
           <DriverScanPanel tickers={tickers} onPin={pinFromDriver} />
         ) : activeTab === "pairwise" ? (
           <PairwiseView
