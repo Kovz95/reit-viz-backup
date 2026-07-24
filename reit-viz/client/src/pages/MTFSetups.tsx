@@ -65,6 +65,43 @@ const MAX_TARGETS = 100;
 /** In multi-symbol runs keep only each symbol's best rows (by hit rate). */
 const PER_SYMBOL_KEEP = 300;
 
+/** A saved custom combo: symbol (ticker or A/B pair), legs, and direction. */
+interface MtfBookmark {
+  name: string;
+  symbol: string;
+  legKeys: string[];
+  direction: MtfDirection;
+}
+
+const BOOKMARKS_KEY = "reit-viz:mtf-bookmarks";
+
+// Starter bookmarks: the strongest active setups from the 2026-07-24 full-
+// universe scan (best qualified setup per REIT by t-stat, N ≥ 30).
+const DEFAULT_BOOKMARKS: MtfBookmark[] = [
+  { name: "MAA dip-buy (t 5.8)", symbol: "MAA", direction: "long",
+    legKeys: ["dmi_bear@D", "ichi_tk_bull@W", "cross_frama_bear@D"] },
+  { name: "AVB shallow-dip (t 5.6)", symbol: "AVB", direction: "long",
+    legKeys: ["stoch_ob@W", "px_lt_hma21@W", "cross_kama_bull@D"] },
+  { name: "GLPI capitulation (t 5.1)", symbol: "GLPI", direction: "long",
+    legKeys: ["px_lt_sma50@D", "cross_frama_bear@W", "st_bear@D"] },
+  { name: "SUI deep-value (t 5.0)", symbol: "SUI", direction: "long",
+    legKeys: ["ichi_below@D", "cross_lsma_bear@W", "cross_sma_bear@D"] },
+];
+
+/** Per-browser durable bookmarks; defaults seed a browser that has none. */
+function loadBookmarks(): MtfBookmark[] {
+  try {
+    const raw = localStorage.getItem(BOOKMARKS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) {
+        return p.filter((b) => b && typeof b.symbol === "string" && Array.isArray(b.legKeys) && b.legKeys.length >= 2);
+      }
+    }
+  } catch {}
+  return [...DEFAULT_BOOKMARKS];
+}
+
 const CLASS_FIELDS = [
   { key: "economy", label: "Economy" },
   { key: "sector", label: "Sector" },
@@ -334,6 +371,46 @@ export default function MTFSetups() {
       activeNow: state[state.length - 1] === true,
       entryLabels: [...new Set(entries.slice(-20).map(entryLabelOf))],
     });
+  };
+
+  // ── Combo bookmarks (durable, per-browser; defaults seed empty browsers) ──
+  const [bookmarks, setBookmarks] = useState<MtfBookmark[]>(() => loadBookmarks());
+  const persistBookmarks = (next: MtfBookmark[]) => {
+    setBookmarks(next);
+    try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(next)); } catch {}
+  };
+  // Applying a bookmark switches symbol/scope, then auto-evaluates once the
+  // (possibly new) bundle is in.
+  const [pendingEval, setPendingEval] = useState(false);
+  useEffect(() => {
+    if (pendingEval && bundle && !bundleLoading) {
+      setPendingEval(false);
+      evaluateCustom();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEval, bundle, bundleLoading]);
+
+  const applyBookmark = (b: MtfBookmark) => {
+    if (b.symbol.includes("/")) {
+      const [a, x] = b.symbol.split("/");
+      changeScope("pair");
+      setPairA(a);
+      setPairB(x);
+    } else {
+      changeScope("single");
+      setTicker(b.symbol);
+    }
+    setCustomLegs([...b.legKeys, "", "", ""].slice(0, 3));
+    setCustomDir(b.direction);
+    setPendingEval(true);
+  };
+
+  const saveCurrentCombo = () => {
+    const legs = customLegs.filter(Boolean);
+    if (legs.length < 2 || !ambientLabel) return;
+    const name = window.prompt("Bookmark name:", `${ambientLabel} ${customDir} (${legs.map((k) => k.split("@")[0]).join("+")})`);
+    if (!name?.trim()) return;
+    persistBookmarks([...bookmarks, { name: name.trim(), symbol: ambientLabel, legKeys: legs, direction: customDir }]);
   };
 
   // ── Table ──────────────────────────────────────────────────────────────────
@@ -795,6 +872,24 @@ export default function MTFSetups() {
         {bundle && (
           <div className="px-3 py-2 border-t border-border" data-testid="mtf-custom">
             <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Test your own combo</div>
+            {bookmarks.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-1.5" data-testid="mtf-bookmarks">
+                <span className="text-[10px] text-muted-foreground">Bookmarks:</span>
+                {bookmarks.map((b, i) => (
+                  <span key={`${b.symbol}|${b.name}|${i}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-background border border-border text-[10px] font-mono">
+                    <button type="button" className="hover:text-primary" onClick={() => applyBookmark(b)}
+                      title={`${b.symbol} ${b.direction}: ${b.legKeys.join(" + ")}`}
+                      data-testid={`mtf-bookmark-${i}`}>
+                      {b.name}
+                    </button>
+                    <button type="button" className="text-muted-foreground hover:text-destructive"
+                      onClick={() => persistBookmarks(bookmarks.filter((_, j) => j !== i))} title="Delete bookmark">
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2 flex-wrap text-[11px]">
               {[0, 1, 2].map((i) => (
                 <select
@@ -827,6 +922,12 @@ export default function MTFSetups() {
               <button type="button" onClick={evaluateCustom} data-testid="mtf-custom-eval"
                 className="px-2.5 py-0.5 rounded text-[11px] font-bold border bg-primary text-primary-foreground border-primary hover:opacity-90">
                 Evaluate
+              </button>
+              <button type="button" onClick={saveCurrentCombo} data-testid="mtf-custom-save"
+                disabled={customLegs.filter(Boolean).length < 2}
+                className="px-2 py-0.5 rounded text-[11px] border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+                title="Save this combo as a bookmark">
+                ★ Save
               </button>
               {customErr && <span className="text-[11px] text-destructive">{customErr}</span>}
             </div>
