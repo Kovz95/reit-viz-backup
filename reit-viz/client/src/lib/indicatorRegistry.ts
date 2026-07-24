@@ -33,6 +33,8 @@ import {
   computeIchimoku,
   computeSlowStochastic,
   computeMADistance,
+  computeRollingAutocorr,
+  type AutocorrSource,
 } from "./indicators";
 
 export type IndicatorParam = {
@@ -82,6 +84,9 @@ export type IndicatorDef = {
   label: string;
   category: string;
   renderTarget: RenderTarget;
+  /** True when the compute only reads closes — lets panes without real OHLC
+   *  (ratio/derived series) feed synthesized o=h=l=c bars instead of skipping. */
+  worksOnCloseOnly?: boolean;
   params: IndicatorParam[];
   /** Color keys this indicator reads from chartColors — for docs/discoverability. */
   colorKeys: string[];
@@ -283,6 +288,54 @@ const AROON: IndicatorDef = {
     ctx.register(dnS);
     ctx.refLine(70, ctx.colors.aroon_ref, up[0].time, up[up.length - 1].time);
     ctx.refLine(30, ctx.colors.aroon_ref, up[0].time, up[up.length - 1].time);
+  },
+};
+
+const AUTOCORR_SOURCES: { value: number; label: string; src: AutocorrSource }[] = [
+  { value: 0, label: "Returns", src: "returns" },
+  { value: 1, label: "RSI level", src: "rsi" },
+  { value: 2, label: "RSI change", src: "rsiChange" },
+];
+
+const AUTOCORR: IndicatorDef = {
+  id: "autocorr",
+  label: "Autocorrelation",
+  category: "Statistics",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    {
+      key: "source",
+      label: "Source",
+      default: 0,
+      min: 0,
+      max: AUTOCORR_SOURCES.length - 1,
+      options: AUTOCORR_SOURCES.map(({ value, label }) => ({ value, label })),
+    },
+    { key: "lag", label: "Lag (bars)", default: 1, min: 1, max: 60 },
+    { key: "window", label: "Window", default: 63, min: 20, max: 500 },
+    { key: "rsiPeriod", label: "RSI Period", default: 14, min: 2, max: 100 },
+  ],
+  colorKeys: ["autocorr_line", "autocorr_band", "autocorr_zero"],
+  renderPane: (ctx, bars, p) => {
+    const src = AUTOCORR_SOURCES[p.source]?.src ?? "returns";
+    const data = computeRollingAutocorr(bars, src, p.lag, p.window, p.rsiPeriod);
+    if (!data.length) return;
+    const srcLabel = src === "returns" ? "ret" : src === "rsi" ? `RSI${p.rsiPeriod}` : `ΔRSI${p.rsiPeriod}`;
+    const s = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.autocorr_line,
+      lineWidth: 1,
+      title: `AC ${srcLabel} k=${p.lag} w=${p.window}${ctx.baseLabel}`,
+    });
+    s.setData(asLine(data));
+    ctx.register(s);
+    const f = data[0].time;
+    const l = data[data.length - 1].time;
+    // ±1.96/√pairs: white-noise 95% significance band for the window size.
+    const sig = 1.96 / Math.sqrt(Math.max(1, p.window - p.lag));
+    ctx.refLine(sig, ctx.colors.autocorr_band, f, l);
+    ctx.refLine(-sig, ctx.colors.autocorr_band, f, l);
+    ctx.refLine(0, ctx.colors.autocorr_zero, f, l);
   },
 };
 
@@ -544,7 +597,7 @@ const ICHIMOKU: IndicatorDef = {
 };
 
 // ── The registry ──
-export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST];
+export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, AUTOCORR];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 

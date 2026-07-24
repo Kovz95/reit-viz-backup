@@ -1065,6 +1065,60 @@ export function computeCorrelation(seriesA: DataPoint[], seriesB: DataPoint[], w
     const corr = denom === 0 ? 0 : covAB / denom;
     result.push({ time: aligned[i].time, value: Math.round(corr * 10000) / 10000 });
   }
-  
+
+  return result;
+}
+
+export type AutocorrSource = "returns" | "rsi" | "rsiChange";
+
+/** Rolling lag-k autocorrelation of a derived series, over a trailing window.
+ *  Sources: log returns of close, RSI level, or 1-bar RSI change. Each output
+ *  point is the Pearson correlation of (x[t], x[t-lag]) pairs within the
+ *  trailing `window` values ending at that bar; range [-1, 1]. */
+export function computeRollingAutocorr(
+  bars: OhlcBar[],
+  source: AutocorrSource = "returns",
+  lag = 1,
+  window = 63,
+  rsiPeriod = 14,
+): DataPoint[] {
+  let series: DataPoint[];
+  if (source === "returns") {
+    series = [];
+    for (let i = 1; i < bars.length; i++) {
+      if (bars[i].close > 0 && bars[i - 1].close > 0) {
+        series.push({ time: bars[i].time, value: Math.log(bars[i].close / bars[i - 1].close) });
+      }
+    }
+  } else {
+    const rsi = computeRSI(bars.map((b) => ({ time: b.time, value: b.close })), rsiPeriod);
+    series = source === "rsi"
+      ? rsi
+      : rsi.slice(1).map((d, i) => ({ time: d.time, value: d.value - rsi[i].value }));
+  }
+  const n = series.length;
+  const pairs = window - lag;
+  if (pairs < 5 || n < window) return [];
+
+  const result: DataPoint[] = [];
+  for (let i = window - 1; i < n; i++) {
+    let sumX = 0, sumY = 0;
+    for (let j = i - pairs + 1; j <= i; j++) {
+      sumX += series[j - lag].value;
+      sumY += series[j].value;
+    }
+    const meanX = sumX / pairs;
+    const meanY = sumY / pairs;
+    let cov = 0, varX = 0, varY = 0;
+    for (let j = i - pairs + 1; j <= i; j++) {
+      const dx = series[j - lag].value - meanX;
+      const dy = series[j].value - meanY;
+      cov += dx * dy;
+      varX += dx * dx;
+      varY += dy * dy;
+    }
+    const denom = Math.sqrt(varX * varY);
+    result.push({ time: series[i].time, value: denom === 0 ? 0 : Math.round((cov / denom) * 10000) / 10000 });
+  }
   return result;
 }

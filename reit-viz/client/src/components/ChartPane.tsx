@@ -623,7 +623,15 @@ function SubIndicatorChart({
     // compute on real OHLC, draw its series, add reference lines. No per-
     // indicator branch — the descriptor's renderPane does the work.
     const regDef = getIndicatorDef(type);
-    if (regDef?.renderPane && ohlcBars.length > 0) {
+    // Close-only indicators still work on panes without real OHLC (ratios,
+    // derived series) via synthesized o=h=l=c bars from the primary series.
+    const regBars: OhlcBar[] =
+      ohlcBars.length > 0
+        ? ohlcBars
+        : regDef?.worksOnCloseOnly
+          ? closeData.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }))
+          : [];
+    if (regDef?.renderPane && regBars.length > 0) {
       const params = resolveParams(regDef, activeIndicators.registry?.[type]);
       regDef.renderPane(
         {
@@ -648,7 +656,7 @@ function SubIndicatorChart({
             ]);
           },
         },
-        ohlcBars,
+        regBars,
         params,
       );
       chart.timeScale().fitContent();
