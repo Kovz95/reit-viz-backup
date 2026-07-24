@@ -812,13 +812,26 @@ async function computePairwiseStatic(
   };
 }
 
+export interface MatrixOpts {
+  /** Technical transform applied to EVERY series before alignment (e.g. the
+   *  correlation matrix of RSI14 across the whole scope). */
+  transform?: LegTransform | null;
+  /** Lead/lag matrix: cell[i][j] = corr(row_i(t), col_j(t − lag)). Asymmetric
+   *  when non-zero; the diagonal becomes each series' autocorrelation at lag. */
+  lagBars?: number;
+}
+
 async function computeMatrixStatic(
-  specs: string[], mode: string, windowParam: string
+  specs: string[], mode: string, windowParam: string, opts: MatrixOpts = {}
 ): Promise<MatrixResult> {
   const window = parseInt(windowParam) || 252;
+  const { transform = null, lagBars = 0 } = opts;
+  const lag = Math.round(lagBars) || 0;
+  const lagAbs = Math.abs(lag);
 
-  // Resolve all series
-  const allData = await Promise.all(specs.map(s => resolveSeriesDataStatic(s)));
+  // Resolve all series (+ optional per-series transform)
+  let allData = await Promise.all(specs.map(s => resolveSeriesDataStatic(s)));
+  if (transform) allData = allData.map((d) => applyLegTransform(d, transform));
 
   // Build common dates
   const dateSets = allData.map(d => new Set(d.map(pt => pt.time)));
@@ -828,8 +841,9 @@ async function computeMatrixStatic(
   }
   commonDates.sort();
 
-  if (commonDates.length > window) {
-    commonDates = commonDates.slice(-window);
+  // Keep enough history that the lag offset still leaves `window` overlapping bars.
+  if (commonDates.length > window + lagAbs) {
+    commonDates = commonDates.slice(-(window + lagAbs));
   }
 
   // Aligned value arrays
@@ -851,21 +865,35 @@ async function computeMatrixStatic(
     }
   }
 
-  // NxN correlation matrix
+  // Pair the arrays under the lag: row series at t, column series at t − lag.
+  const pairAtLag = (xi: number[], xj: number[]): [number[], number[]] => {
+    if (lag === 0) return [xi, xj];
+    const n = Math.min(xi.length, xj.length);
+    if (lag > 0) return [xi.slice(lag, n), xj.slice(0, n - lag)];
+    return [xi.slice(0, n - lagAbs), xj.slice(lagAbs, n)];
+  };
+
+  // NxN correlation matrix (asymmetric lead/lag matrix when lag ≠ 0)
   const matrix: number[][] = [];
   const pValues: number[][] = [];
   for (let i = 0; i < specs.length; i++) {
     const row: number[] = [];
     const pRow: number[] = [];
     for (let j = 0; j < specs.length; j++) {
-      if (i === j) {
+      if (i === j && lag === 0) {
         row.push(1);
         pRow.push(0);
       } else {
-        const corr = pearsonCorrelation(transformed[i], transformed[j]);
-        const adj = adjustedCorrelation(transformed[i], transformed[j], corr);
-        row.push(Math.round(corr * 10000) / 10000);
-        pRow.push(adj.pValue);
+        const [x, y] = pairAtLag(transformed[i], transformed[j]);
+        if (x.length < 10) {
+          row.push(0);
+          pRow.push(1);
+        } else {
+          const corr = pearsonCorrelation(x, y);
+          const adj = adjustedCorrelation(x, y, corr);
+          row.push(Math.round(corr * 10000) / 10000);
+          pRow.push(adj.pValue);
+        }
       }
     }
     matrix.push(row);
@@ -876,7 +904,7 @@ async function computeMatrixStatic(
     labels: specs,
     matrix,
     pValues,
-    observations: transformed[0]?.length || 0,
+    observations: Math.max(0, (transformed[0]?.length || 0) - lagAbs),
     dateRange: { from: commonDates[0], to: commonDates[commonDates.length - 1] },
     mode,
   };
@@ -915,14 +943,15 @@ export async function fetchPairwiseCorrelation(
 }
 
 export async function fetchMatrixCorrelation(
-  specs: string[], mode: string, window: string | number
+  specs: string[], mode: string, window: string | number, opts: MatrixOpts = {}
 ): Promise<MatrixResult> {
   specs = await Promise.all(specs.map((s) => translateDefaultSpec(s)));
   if (isStaticMode()) {
-    return computeMatrixStatic(specs, mode, String(window));
+    return computeMatrixStatic(specs, mode, String(window), opts);
   }
+  const lag = opts.lagBars ? `&lag=${opts.lagBars}` : "";
   const resp = await apiRequest("GET",
-    `/api/correlation/matrix?series=${specs.map(s => encodeURIComponent(s)).join(",")}&mode=${mode}&window=${window}`
+    `/api/correlation/matrix?series=${specs.map(s => encodeURIComponent(s)).join(",")}&mode=${mode}&window=${window}${lag}`
   );
   return resp.json();
 }
