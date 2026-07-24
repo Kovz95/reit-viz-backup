@@ -324,8 +324,9 @@ const AUTOCORR: IndicatorDef = {
     },
     // Universe-wide PACF analysis (2026-07-24): the ~1-week reversal at lag 6
     // is the strongest daily-return signal; on weekly/monthly bars the lag-1
-    // reversal (weekly mean AC −0.11) dominates.
-    { key: "lag", label: "Lag (bars)", default: 6, defaultByFrequency: { weekly: 1, monthly: 1 }, min: 1, max: 60 },
+    // reversal (weekly mean AC −0.11) dominates; on hourly bars lag 7 (one
+    // trading day of 60m bars, +0.02 momentum echo) is the strongest.
+    { key: "lag", label: "Lag (bars)", default: 6, defaultByFrequency: { hourly: 7, weekly: 1, monthly: 1 }, min: 1, max: 60 },
     { key: "window", label: "Window", default: 63, min: 20, max: 500 },
     { key: "rsiPeriod", label: "RSI Period", default: 14, min: 2, max: 100 },
   ],
