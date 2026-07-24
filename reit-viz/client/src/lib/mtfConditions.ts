@@ -25,13 +25,15 @@ import {
   computeIchimoku,
   type DataPoint,
 } from "@/lib/indicators";
+import { computeMaByType, MA_TYPES, type MaType } from "@/lib/maEngine";
 import type { MtfBundle, TfSeries, Timeframe } from "@/lib/mtfData";
 
 export type ConditionFamily =
   | "rsi" | "ma" | "macd" | "stoch" | "range" | "trend"
   | "adx" | "dmi" | "cci" | "willr" | "aroon"
   | "supertrend" | "psar" | "keltner" | "donchian"
-  | "ichimoku" | "ichimoku_tk" | "bb";
+  | "ichimoku" | "ichimoku_tk" | "bb"
+  | "macross" | "madist";
 
 export interface ConditionDef {
   id: string;
@@ -211,6 +213,55 @@ function highsOf(tf: TfSeries): (number | null)[] {
 function lowsOf(tf: TfSeries): (number | null)[] {
   return memo(tf, "lows", () => tf.bars.map((b) => b.low));
 }
+/** Any maEngine MA type/period on this TF's closes (index-aligned already). */
+function maOf(tf: TfSeries, type: MaType, period: number): (number | null)[] {
+  return memo(tf, `ma:${type}:${period}`, () =>
+    computeMaByType(tf.closes, period, type, {
+      highs: tf.bars.map((b) => b.high),
+      lows: tf.bars.map((b) => b.low),
+    }),
+  );
+}
+/**
+ * CAUSAL "% from MA" stretch state: today's close-to-MA distance ranked
+ * against the TRAILING 252-bar distribution of that distance (past bars
+ * only) — unlike the Charts madist band, which calibrates percentiles on the
+ * full history and would be lookahead in a backtest. Needs ≥100 trailing
+ * observations before emitting a state.
+ */
+function stretchFrac(tf: TfSeries, period: number): (number | null)[] {
+  return memo(tf, `stretch:${period}`, () => {
+    const ma = maOf(tf, "SMA", period);
+    const n = tf.closes.length;
+    const dist: (number | null)[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const m = ma[i];
+      dist[i] = m == null || !(m > 0) ? null : tf.closes[i] / m - 1;
+    }
+    const out: (number | null)[] = new Array(n).fill(null);
+    const WIN = 252;
+    for (let i = 0; i < n; i++) {
+      const d = dist[i];
+      if (d === null) continue;
+      let below = 0;
+      let count = 0;
+      for (let j = Math.max(0, i - WIN); j < i; j++) {
+        const v = dist[j];
+        if (v === null) continue;
+        count++;
+        if (v < d) below++;
+      }
+      if (count >= 100) out[i] = below / count;
+    }
+    return out;
+  });
+}
+
+const pctFromMa = (tf: TfSeries, ma: (number | null)[]): string | null => {
+  const m = last(ma);
+  const c = last(tf.closes);
+  return m == null || !(m > 0) ? null : `${(((c - m) / m) * 100).toFixed(1)}%`;
+};
 
 const cmp = (
   a: (number | null)[],
@@ -384,6 +435,62 @@ export const MTF_CONDITIONS: ConditionDef[] = [
     compute: (tf) => cmp(ichi(tf).conv, ichi(tf).kijun, (x, y) => x < y),
     liveValue: (tf) => { const t = last(ichi(tf).conv); const k = last(ichi(tf).kijun); return t == null || k == null ? null : fmt(t - k, 2); } },
 ];
+
+// ── Generated MA conditions (all 12 maEngine types) ─────────────────────────
+//
+// Price-vs-MA states at 21 and 50 bars per type (the TF axis supplies longer
+// effective periods for free: 50 @W ≈ 250 daily bars). Same "ma" family as
+// the hand-written SMA/EMA states, so same-TF MA-vs-MA pairs stay excluded
+// as redundant. Crosses get their own family so "fast>slow AND price>MA" is
+// a scannable pair; stretch states likewise.
+
+for (const t of MA_TYPES) {
+  for (const p of [21, 50]) {
+    // Hand-written equivalents above already cover these two.
+    if ((t === "SMA" && p === 50) || (t === "EMA" && p === 21)) continue;
+    const lc = t.toLowerCase();
+    MTF_CONDITIONS.push(
+      { id: `px_gt_${lc}${p}`, label: `Close > ${t}(${p})`, family: "ma", tfs: HDW,
+        compute: (tf) => cmp(tf.closes as (number | null)[], maOf(tf, t, p), (x, y) => x > y),
+        liveValue: (tf) => pctFromMa(tf, maOf(tf, t, p)) },
+      { id: `px_lt_${lc}${p}`, label: `Close < ${t}(${p})`, family: "ma", tfs: HDW,
+        compute: (tf) => cmp(tf.closes as (number | null)[], maOf(tf, t, p), (x, y) => x < y),
+        liveValue: (tf) => pctFromMa(tf, maOf(tf, t, p)) },
+    );
+  }
+  const lc = t.toLowerCase();
+  MTF_CONDITIONS.push(
+    { id: `cross_${lc}_bull`, label: `${t}(21) > ${t}(50)`, family: "macross", tfs: HDW,
+      compute: (tf) => cmp(maOf(tf, t, 21), maOf(tf, t, 50), (x, y) => x > y),
+      liveValue: (tf) => { const a = last(maOf(tf, t, 21)); const b = last(maOf(tf, t, 50)); return a == null || b == null || !(b > 0) ? null : `${(((a - b) / b) * 100).toFixed(1)}%`; } },
+    { id: `cross_${lc}_bear`, label: `${t}(21) < ${t}(50)`, family: "macross", tfs: HDW,
+      compute: (tf) => cmp(maOf(tf, t, 21), maOf(tf, t, 50), (x, y) => x < y),
+      liveValue: (tf) => { const a = last(maOf(tf, t, 21)); const b = last(maOf(tf, t, 50)); return a == null || b == null || !(b > 0) ? null : `${(((a - b) / b) * 100).toFixed(1)}%`; } },
+  );
+}
+// Classic golden/death cross (50/200) for the two canonical types.
+for (const t of ["SMA", "EMA"] as MaType[]) {
+  const lc = t.toLowerCase();
+  MTF_CONDITIONS.push(
+    { id: `golden_${lc}`, label: `${t}(50) > ${t}(200) (golden cross)`, family: "macross", tfs: HDW,
+      compute: (tf) => cmp(maOf(tf, t, 50), maOf(tf, t, 200), (x, y) => x > y),
+      liveValue: (tf) => { const a = last(maOf(tf, t, 50)); const b = last(maOf(tf, t, 200)); return a == null || b == null || !(b > 0) ? null : `${(((a - b) / b) * 100).toFixed(1)}%`; } },
+    { id: `death_${lc}`, label: `${t}(50) < ${t}(200) (death cross)`, family: "macross", tfs: HDW,
+      compute: (tf) => cmp(maOf(tf, t, 50), maOf(tf, t, 200), (x, y) => x < y),
+      liveValue: (tf) => { const a = last(maOf(tf, t, 50)); const b = last(maOf(tf, t, 200)); return a == null || b == null || !(b > 0) ? null : `${(((a - b) / b) * 100).toFixed(1)}%`; } },
+  );
+}
+// Causal "% from MA" stretch states (trailing-1y percentile of the distance).
+for (const p of [50, 200]) {
+  MTF_CONDITIONS.push(
+    { id: `stretch_hi_${p}`, label: `Stretched above MA(${p}) (>90th %ile, trailing 1y)`, family: "madist", tfs: HDW,
+      compute: (tf) => cmp(stretchFrac(tf, p), 0.9, (x, y) => x >= y),
+      liveValue: (tf) => pctFromMa(tf, maOf(tf, "SMA", p)) },
+    { id: `stretch_lo_${p}`, label: `Stretched below MA(${p}) (<10th %ile, trailing 1y)`, family: "madist", tfs: HDW,
+      compute: (tf) => cmp(stretchFrac(tf, p), 0.1, (x, y) => x <= y),
+      liveValue: (tf) => pctFromMa(tf, maOf(tf, "SMA", p)) },
+  );
+}
 
 // ── Instances + projection ──────────────────────────────────────────────────
 

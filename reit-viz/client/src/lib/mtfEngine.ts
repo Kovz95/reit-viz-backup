@@ -313,11 +313,20 @@ export async function runMtfScan(opts: {
     await new Promise((r) => setTimeout(r, 0));
   }
 
-  // Deep scan: seeded triples — extend each qualified pair with every
-  // compatible third leg (not full C(n,3)).
+  // Deep scan: seeded triples — extend qualified pairs with every compatible
+  // third leg (not full C(n,3)). With the expanded catalog (~360 legs) an
+  // unbounded seed set makes runtimes explode on mean-reverting series where
+  // thousands of pairs qualify, so seed only the strongest pairs.
+  const MAX_DEEP_SEEDS = 300;
   if (settings.deepScan && !cancelRef.current) {
     const legPool = instances.filter((i) => TF_RANK[i.tf] >= TF_RANK[baseTf]);
-    const seedPairs = [...new Set(qualified.map((r) => r.legs))];
+    const bestHit = new Map<ConditionInstance[], number>();
+    for (const r of qualified) {
+      bestHit.set(r.legs, Math.max(bestHit.get(r.legs) ?? 0, r.hitRate));
+    }
+    const seedPairs = [...bestHit.keys()]
+      .sort((a, b) => bestHit.get(b)! - bestHit.get(a)!)
+      .slice(0, MAX_DEEP_SEEDS);
     const seen = new Set(qualified.map((r) => r.key));
     let done = 0;
     for (const pair of seedPairs) {
