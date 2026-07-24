@@ -2773,7 +2773,7 @@ export default function Correlation() {
             <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
               <div className="font-semibold text-foreground/70">Notes</div>
               <div>Windows are in bars of each timeframe (60 hourly bars ≈ 9 sessions; 60 weekly bars ≈ 14 months).</div>
-              <div>Hourly legs use ~2y of 60-min bars; pairs without intraday data fall back to daily-vs-weekly mismatches.</div>
+              <div>Hourly legs use the server's cached intraday store (~5y deep with the FMP feed, ~2y on Yahoo fallback); pairs without intraday data fall back to daily-vs-weekly mismatches.</div>
               <div>Scope follows the Universe tab's filters, or pick a basket.</div>
             </div>
           </div>
@@ -2809,7 +2809,9 @@ export default function Correlation() {
               </div>
               {corrFreq === "hourly" && (
                 <div className="text-[9px] text-muted-foreground leading-snug">
-                  ~2y of 60-min bars. Windows are in bars. Daily series (macro, fundamentals) forward-fill with a strict 1-day lag.
+                  60-min bars from the server's intraday store — up to ~5y with the FMP feed, ~2y on the
+                  Yahoo fallback; history is cached permanently and grows over time. Windows are in bars.
+                  Daily series (macro, fundamentals) forward-fill with a strict 1-day lag.
                 </div>
               )}
               {corrFreq === "weekly" && (
