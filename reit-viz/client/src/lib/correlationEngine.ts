@@ -4,6 +4,13 @@
  */
 import { resolveSeriesDataStatic, isStaticMode, DataPoint } from "./macroStatic";
 import { apiRequest } from "./queryClient";
+import { downsampleSeries, dateOfTimestamp } from "./chartFrequency";
+import { fetchIntradayBars } from "./fetchIntradayBars";
+
+/** Bar frequency for pairwise correlation. Hourly uses Yahoo 60-min bars
+ *  (epoch-second time keys as strings); weekly downsamples daily to
+ *  last-value-per-ISO-week. */
+export type CorrFrequency = "hourly" | "daily" | "weekly";
 
 // ── Math helpers (mirroring server/routes.ts) ──
 
@@ -408,24 +415,104 @@ export interface MatrixResult {
   mode: string;
 }
 
+// ── Frequency transforms (pairwise) ──
+
+const INTRADAY_METRICS = new Set(["close", "open", "high", "low"]);
+
+/** If the spec is a plain stock price series, return its ticker/metric for
+ *  intraday resolution; null for macro, basket, or fundamental-metric specs. */
+function specIntradayInfo(spec: string): { ticker: string; metric: string } | null {
+  if (spec.startsWith("MACRO:")) return null;
+  const parts = spec.split(":");
+  const ticker = parts[0];
+  const metric = parts.slice(1).join(":") || "close";
+  if (!ticker || ticker.startsWith("BASKET")) return null;
+  return INTRADAY_METRICS.has(metric) ? { ticker, metric } : null;
+}
+
+/** Strict no-lookahead fill of a daily series onto an hourly axis: each hourly
+ *  bar takes the latest daily value dated STRICTLY BEFORE the bar's UTC date
+ *  (a daily print stamped "2026-07-21" is not knowable during 2026-07-21's
+ *  intraday bars). */
+function fillDailyOntoAxisStrict(daily: DataPoint[], axisTimes: number[]): DataPoint[] {
+  const pts = daily
+    .filter((p) => p && typeof p.time === "string" && Number.isFinite(p.value))
+    .sort((a, b) => a.time.localeCompare(b.time));
+  if (!pts.length) return [];
+  const out: DataPoint[] = [];
+  let i = 0;
+  let cur: number | null = null;
+  for (const t of axisTimes) {
+    const d = dateOfTimestamp(t);
+    while (i < pts.length && pts[i].time < d) {
+      cur = pts[i].value;
+      i++;
+    }
+    if (cur != null) out.push({ time: String(t), value: cur });
+  }
+  return out;
+}
+
+/** Re-express both resolved daily series at the requested bar frequency.
+ *  Hourly keys are epoch seconds as strings (LWC intraday time domain). */
+async function applyFrequency(
+  specA: string, specB: string, dataA: DataPoint[], dataB: DataPoint[], freq: CorrFrequency
+): Promise<{ a: DataPoint[]; b: DataPoint[] } | { error: string }> {
+  if (freq === "weekly") {
+    return { a: downsampleSeries(dataA, "weekly"), b: downsampleSeries(dataB, "weekly") };
+  }
+  if (freq !== "hourly") return { a: dataA, b: dataB };
+
+  const infoA = specIntradayInfo(specA);
+  const infoB = specIntradayInfo(specB);
+  if (!infoA && !infoB) {
+    return { error: "Hourly frequency needs at least one stock price series (close/open/high/low). Macro and fundamental series are daily — they get forward-filled against an intraday leg." };
+  }
+  const [barsA, barsB] = await Promise.all([
+    infoA ? fetchIntradayBars(infoA.ticker) : Promise.resolve(null),
+    infoB ? fetchIntradayBars(infoB.ticker) : Promise.resolve(null),
+  ]);
+  const goodA = infoA && barsA && barsA.length > 0;
+  const goodB = infoB && barsB && barsB.length > 0;
+  if (!goodA && !goodB) {
+    return { error: "No intraday bars available for either series." };
+  }
+  const lineFrom = (bars: NonNullable<typeof barsA>, metric: string): DataPoint[] =>
+    bars
+      .map((b) => ({ time: String(b.time), value: (b as any)[metric] as number }))
+      .filter((p) => Number.isFinite(p.value));
+  const axisTimes = (goodA ? barsA! : barsB!).map((b) => b.time);
+  const a = goodA ? lineFrom(barsA!, infoA!.metric) : fillDailyOntoAxisStrict(dataA, axisTimes);
+  const b = goodB ? lineFrom(barsB!, infoB!.metric) : fillDailyOntoAxisStrict(dataB, axisTimes);
+  return { a, b };
+}
+
+function emptyPairwiseResult(mode: string, error: string, observations = 0): PairwiseResult {
+  return {
+    summary: { correlation: 0, spearmanCorrelation: 0, rSquared: 0, beta: 0, alpha: 0, observations, mode, autoCorrelationA: 0, autoCorrelationB: 0, effectiveN: 0, tStat: 0, pValue: 1 },
+    rolling: [], rollingCI: [], rollingBeta: [], multiWindowRolling: {}, crossCorrelation: [], acfA: [], acfB: [], pacfA: [], pacfB: [], scatter: [], levelsA: [], levelsB: [],
+    diagnostics: { adfA: { stat: 0, pValue: 1, lags: 0, isStationary: false }, adfB: { stat: 0, pValue: 1, lags: 0, isStationary: false }, cointegration: null, fisherCI: { lower: -1, upper: 1 } },
+    error,
+  };
+}
+
 // ── Core computation (mirrors server logic exactly) ──
 
 async function computePairwiseStatic(
-  specA: string, specB: string, window: number, mode: string
+  specA: string, specB: string, window: number, mode: string, extraWindows: number[] = [], freq: CorrFrequency = "daily"
 ): Promise<PairwiseResult> {
-  const [dataA, dataB] = await Promise.all([
+  let [dataA, dataB] = await Promise.all([
     resolveSeriesDataStatic(specA),
     resolveSeriesDataStatic(specB),
   ]);
+  const fx = await applyFrequency(specA, specB, dataA, dataB, freq);
+  if ("error" in fx) return emptyPairwiseResult(mode, fx.error);
+  dataA = fx.a;
+  dataB = fx.b;
   const aligned = alignSeries(dataA, dataB);
 
   if (aligned.dates.length < 10) {
-    return {
-      summary: { correlation: 0, spearmanCorrelation: 0, rSquared: 0, beta: 0, alpha: 0, observations: aligned.dates.length, mode, autoCorrelationA: 0, autoCorrelationB: 0, effectiveN: 0, tStat: 0, pValue: 1 },
-      rolling: [], rollingCI: [], rollingBeta: [], multiWindowRolling: {}, crossCorrelation: [], acfA: [], acfB: [], pacfA: [], pacfB: [], scatter: [], levelsA: [], levelsB: [],
-      diagnostics: { adfA: { stat: 0, pValue: 1, lags: 0, isStationary: false }, adfB: { stat: 0, pValue: 1, lags: 0, isStationary: false }, cointegration: null, fisherCI: { lower: -1, upper: 1 } },
-      error: "Insufficient overlapping data",
-    };
+    return emptyPairwiseResult(mode, "Insufficient overlapping data", aligned.dates.length);
   }
 
   let transformedA: number[];
@@ -472,8 +559,11 @@ async function computePairwiseStatic(
     rolling.push({ time: transformDates[i], value: Math.round(corr * 10000) / 10000 });
   }
 
-  // Multi-window rolling
-  const windows = [30, 60, 120, 252];
+  // Multi-window rolling (standard set + any user-supplied custom windows)
+  const windows = Array.from(new Set([
+    30, 60, 120, 252,
+    ...extraWindows.filter((w) => Number.isFinite(w) && w >= 5 && w <= 2520),
+  ]));
   const multiWindowRolling: Record<number, { time: string; value: number }[]> = {};
   for (const w of windows) {
     const arr: { time: string; value: number }[] = [];
@@ -675,14 +765,15 @@ async function translateDefaultSpec(spec: string): Promise<string> {
 }
 
 export async function fetchPairwiseCorrelation(
-  specA: string, specB: string, window: number, mode: string
+  specA: string, specB: string, window: number, mode: string, extraWindows: number[] = [], freq: CorrFrequency = "daily"
 ): Promise<PairwiseResult> {
   [specA, specB] = await Promise.all([translateDefaultSpec(specA), translateDefaultSpec(specB)]);
   if (isStaticMode()) {
-    return computePairwiseStatic(specA, specB, window, mode);
+    return computePairwiseStatic(specA, specB, window, mode, extraWindows, freq);
   }
+  const extra = extraWindows.length ? `&extraWindows=${extraWindows.join(",")}` : "";
   const resp = await apiRequest("GET",
-    `/api/correlation/pairwise?a=${encodeURIComponent(specA)}&b=${encodeURIComponent(specB)}&window=${window}&mode=${mode}`
+    `/api/correlation/pairwise?a=${encodeURIComponent(specA)}&b=${encodeURIComponent(specB)}&window=${window}&mode=${mode}${extra}&freq=${freq}`
   );
   return resp.json();
 }

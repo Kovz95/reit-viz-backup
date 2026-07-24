@@ -6,23 +6,21 @@ import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
 import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlationEngine";
+import type { CorrFrequency } from "@/lib/correlationEngine";
+import ChartPane from "@/components/ChartPane";
+import type { ActiveIndicators } from "@/components/ChartPane";
+import IndicatorsPanel from "@/components/IndicatorsPanel";
+import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
+import { FilterDropdown, emptyClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
+import { useGridProminence } from "@/lib/gridPref";
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
-import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
 import { useBaskets } from "@/lib/useBaskets";
-import {
-  createChart,
-  ColorType,
-  CrosshairMode,
-  LineSeries,
-  HistogramSeries,
-  PriceScaleMode,
-} from "lightweight-charts";
-import type { IChartApi, Time, LineWidth } from "lightweight-charts";
+import type { IChartApi } from "lightweight-charts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +53,7 @@ import {
   Check,
   Search,
   Download,
+  Filter,
   Grid3X3,
   TrendingUp,
   BarChart3,
@@ -66,6 +65,7 @@ import {
   Loader2,
   Play,
   Pin,
+  SlidersHorizontal,
   X,
   Zap,
 } from "lucide-react";
@@ -132,25 +132,6 @@ interface MatrixResult {
   mode: string;
 }
 
-// ── Chart options ──
-const CHART_OPTIONS = {
-  layout: {
-    background: { type: ColorType.Solid as const, color: "transparent" },
-    textColor: "#7a8a9e",
-    fontSize: 10,
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  grid: {
-    vertLines: { color: "rgba(255,255,255,0.04)" },
-    horzLines: { color: "rgba(255,255,255,0.04)" },
-  },
-  crosshair: { mode: CrosshairMode.Normal },
-  rightPriceScale: { borderColor: "rgba(255,255,255,0.1)" },
-  timeScale: { borderColor: "rgba(255,255,255,0.1)", timeVisible: false },
-  handleScroll: true,
-  handleScale: true,
-};
-
 const STOCK_METRICS_BASE = [
   "close", "open", "high", "low",
   "EPS FY1", "EPS FY2", "EPS LTM",
@@ -202,17 +183,40 @@ const MULTI_WINDOW_COLORS: Record<number, string> = {
   252: "#f59e0b",
 };
 
-const CHART_KEYS = ["levels", "rolling", "rollingBeta", "scatter", "crossCorr", "acfA", "acfB"] as const;
+const CHART_KEYS = ["levels", "rolling", "rollingBeta", "tfDivergence", "scatter", "crossCorr", "acfA", "acfB"] as const;
 const CHART_LABELS: Record<string, string> = {
   levels: "Levels",
   rolling: "Rolling Corr",
   rollingBeta: "Rolling Beta",
+  tfDivergence: "TF Divergence",
   scatter: "Scatter",
   crossCorr: "Cross-Corr",
   acfA: "ACF / PACF (A)",
   acfB: "ACF / PACF (B)",
 };
 const GRID_LAYOUTS: readonly GridLayout[] = ["1x1", "2x1", "1x2", "2x2", "3x2", "2x3", "3x3", "4x4"];
+
+// Stable pane ids for the lightweight-charts panes (drive the indicators panel).
+const LWC_PANE_IDS: Record<string, number> = { levels: 1, rolling: 2, rollingBeta: 3 };
+
+const CUSTOM_WINDOW_COLOR = "#a855f7";
+const windowColor = (w: number) => MULTI_WINDOW_COLORS[w] ?? CUSTOM_WINDOW_COLOR;
+
+// Classification chip fields for the Charts-style ticker picker.
+const CLASS_FIELDS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+
+const CORR_FREQS: { value: CorrFrequency; label: string }[] = [
+  { value: "hourly", label: "1H" },
+  { value: "daily", label: "D" },
+  { value: "weekly", label: "W" },
+];
 
 // ── Helpers ──
 
@@ -649,200 +653,180 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
   );
 }
 
-// ── Simple LWC chart wrapper ──
-function MiniChart({
-  data,
-  color,
-  height,
-  title,
-  showZeroLine,
-  histogram,
-  secondData,
-  secondColor,
-  thirdData,
-  thirdColor,
-  fourthData,
-  fourthColor,
-  bandUpper,
-  bandLower,
-  bandColor,
-  isMaximized,
-  onMaximize,
-  chartId,
+// ── LWC pane rendered through the Charts-tab ChartPane (indicators, legend, crosshair) ──
+function CorrLwcPane({
+  paneId,
+  label,
+  series,
+  indicators,
+  intraday,
+  onMaximizeToggle,
 }: {
-  data: { time: string; value: number }[];
-  color: string;
-  height: number;
-  title: string;
-  showZeroLine?: boolean;
-  histogram?: boolean;
-  secondData?: { time: string; value: number }[];
-  secondColor?: string;
-  thirdData?: { time: string; value: number }[];
-  thirdColor?: string;
-  fourthData?: { time: string; value: number }[];
-  fourthColor?: string;
-  bandUpper?: { time: string; value: number }[];
-  bandLower?: { time: string; value: number }[];
-  bandColor?: string;
-  isMaximized?: boolean;
-  onMaximize?: (id: string | null) => void;
-  chartId?: string;
+  paneId: number;
+  label: string;
+  series: PlottedSeries[];
+  indicators: ActiveIndicators;
+  intraday: boolean;
+  onMaximizeToggle: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [logScale, setLogScale] = useState(false);
-  const gridColor = useGridColor("rgba(255,255,255,0.04)");
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || data.length === 0) return;
-    if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
-
-    const h = el.clientHeight || height;
-    const chart = createChart(el, { ...CHART_OPTIONS, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: el.clientWidth, height: h });
-    chartRef.current = chart;
-
-    if (histogram) {
-      const series = chart.addSeries(HistogramSeries, {
-        color,
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-      series.setData(data.map(d => ({
-        time: d.time as Time,
-        value: d.value,
-        color: d.value >= 0 ? COLORS.positive : COLORS.negative,
-      })));
-    } else {
-      const series = chart.addSeries(LineSeries, {
-        color,
-        lineWidth: 1.5 as LineWidth,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerRadius: 3,
-        title: title.split(" ").slice(0, 2).join(" "),
-      });
-      series.setData(data.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-
-    if (secondData && secondData.length > 0) {
-      const s2 = chart.addSeries(LineSeries, {
-        color: secondColor || COLORS.secondary,
-        lineWidth: 1.5 as LineWidth,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerRadius: 3,
-      });
-      s2.setData(secondData.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-    if (thirdData && thirdData.length > 0) {
-      const s3 = chart.addSeries(LineSeries, {
-        color: thirdColor || COLORS.positive,
-        lineWidth: 1.5 as LineWidth,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerRadius: 3,
-      });
-      s3.setData(thirdData.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-    if (fourthData && fourthData.length > 0) {
-      const s4 = chart.addSeries(LineSeries, {
-        color: fourthColor || COLORS.purple,
-        lineWidth: 1.5 as LineWidth,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerRadius: 3,
-      });
-      s4.setData(fourthData.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-
-    // Confidence interval bands (dashed, semi-transparent)
-    if (bandUpper && bandUpper.length > 0) {
-      const sBandUp = chart.addSeries(LineSeries, {
-        color: bandColor || "rgba(255,255,255,0.2)",
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      sBandUp.setData(bandUpper.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-    if (bandLower && bandLower.length > 0) {
-      const sBandLo = chart.addSeries(LineSeries, {
-        color: bandColor || "rgba(255,255,255,0.2)",
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      sBandLo.setData(bandLower.map(d => ({ time: d.time as Time, value: d.value })));
-    }
-
-    chart.timeScale().fitContent();
-
-    const ro = new ResizeObserver(() => {
-      if (chartRef.current && el) {
-        chartRef.current.applyOptions({ width: el.clientWidth, height: el.clientHeight || h });
-      }
-    });
-    ro.observe(el);
-
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
-  }, [data, secondData, thirdData, fourthData, bandUpper, bandLower, color, height, histogram, isMaximized, gridColor]);
-
-  // Log scale
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    try {
-      chart.priceScale("right").applyOptions({
-        mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-      });
-    } catch {}
-  }, [logScale]);
-
+  const [gridProminence] = useGridProminence();
+  const chartConfig = useMemo(
+    () => ({ chartType: "line" as const, showVolume: false, gridProminence }),
+    [gridProminence]
+  );
+  const handleChartReady = useCallback((_id: number, chart: IChartApi) => { chartRef.current = chart; }, []);
+  const handleChartDestroyed = useCallback(() => { chartRef.current = null; }, []);
   return (
     <div
-      className="border border-border/30 flex flex-col h-full min-h-0"
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        if (onMaximize && chartId) onMaximize(isMaximized ? null : chartId);
-      }}
+      className="relative w-full h-full min-w-0 min-h-0 overflow-hidden border border-border/30"
+      onDoubleClick={onMaximizeToggle}
+      data-testid={`corr-lwc-pane-${paneId}`}
     >
-      <div className="flex items-center gap-2 px-3 py-1 bg-card/50 flex-shrink-0">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider truncate">
-          {title}
-        </span>
-        <div className="flex-1" />
-        <button
-          className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded transition-colors ${
-            logScale
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground/60 hover:text-muted-foreground bg-transparent"
-          }`}
-          onClick={(e) => { e.stopPropagation(); setLogScale(!logScale); }}
-          title="Toggle logarithmic scale"
-        >
-          LOG
-        </button>
-        {onMaximize && chartId && (
-          <button
-            className="text-muted-foreground/60 hover:text-muted-foreground p-0.5"
-            onClick={(e) => { e.stopPropagation(); onMaximize(isMaximized ? null : chartId); }}
-            title={isMaximized ? "Restore" : "Maximize"}
-          >
-            {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-          </button>
-        )}
-        <ExportMenu
-          getChart={() => chartRef.current}
-          label={`Correlation_${title}`}
-        />
+      <ChartPane
+        paneId={paneId}
+        paneLabel={label}
+        series={series}
+        ohlcData={null}
+        activeTicker={null}
+        chartConfig={chartConfig}
+        intraday={intraday}
+        activeIndicators={indicators}
+        timeRange="all"
+        activeTool=""
+        drawColor="#f59e0b"
+        onChartReady={handleChartReady}
+        onChartDestroyed={handleChartDestroyed}
+      />
+      <div className="absolute top-1 right-2 z-10">
+        <ExportMenu getChart={() => chartRef.current} label={`Correlation_${label}`} />
       </div>
-      <div ref={ref} className="flex-1 min-h-0" />
+    </div>
+  );
+}
+
+// ── Cross-timeframe divergence panel ──
+// Scores the CURRENT rolling correlation on each timeframe against that
+// timeframe's own history (z-score + percentile), then flags mismatches —
+// e.g. hourly stretched while daily/weekly sit inside their normal range.
+interface TFEntry {
+  key: CorrFrequency;
+  label: string;
+  loading: boolean;
+  res?: PairwiseResult;
+}
+
+function tfStats(rolling: { time: string; value: number }[]) {
+  const vals = rolling.map((d) => d.value).filter((v) => Number.isFinite(v));
+  if (vals.length < 20) return null;
+  const last = vals[vals.length - 1];
+  const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) * (v - mean), 0) / vals.length) || 1e-9;
+  const z = (last - mean) / sd;
+  const pct = (vals.filter((v) => v <= last).length / vals.length) * 100;
+  return { last, mean, sd, z, pct, n: vals.length };
+}
+
+function tfStatus(z: number): { label: string; color: string } {
+  if (Math.abs(z) >= 2) return { label: "EXTREME", color: "#ef4444" };
+  if (Math.abs(z) >= 1) return { label: "STRETCHED", color: "#f59e0b" };
+  return { label: "IN LINE", color: "#22c55e" };
+}
+
+function TFDivergenceContent({ entries, window }: { entries: TFEntry[]; window: number }) {
+  const rows = entries.map((e) => {
+    if (e.loading) return { ...e, state: "loading" as const };
+    if (!e.res || e.res.error || !e.res.rolling?.length) {
+      return { ...e, state: "unavailable" as const, reason: e.res?.error || "no data" };
+    }
+    const stats = tfStats(e.res.rolling);
+    if (!stats) return { ...e, state: "unavailable" as const, reason: "history too short" };
+    return { ...e, state: "ok" as const, stats };
+  });
+
+  // Mismatch verdicts: one TF stretched/extreme while another is in line.
+  const ok = rows.filter((r): r is typeof r & { state: "ok"; stats: NonNullable<ReturnType<typeof tfStats>> } => r.state === "ok");
+  const verdicts: string[] = [];
+  for (const r of ok) {
+    for (const other of ok) {
+      if (r.key === other.key) continue;
+      if (Math.abs(r.stats.z) >= 1.5 && Math.abs(other.stats.z) < 0.75) {
+        verdicts.push(
+          `${r.label} correlation is ${r.stats.z > 0 ? "unusually HIGH" : "unusually LOW"} vs its own history (z=${r.stats.z.toFixed(2)}, ${r.stats.pct.toFixed(0)}th pct) while ${other.label} is in line (z=${other.stats.z.toFixed(2)}) — ${r.label.toLowerCase()} looks out of whack.`
+        );
+      }
+    }
+  }
+  const uniqueVerdicts = Array.from(new Set(verdicts));
+
+  return (
+    <div className="h-full overflow-auto p-2 space-y-2 text-[11px] font-mono">
+      <div className="text-[9px] text-muted-foreground uppercase tracking-wider">
+        Rolling ρ ({window} bars per timeframe) vs its own history
+      </div>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="border-b border-border/40 text-[9px] uppercase text-muted-foreground">
+            <th className="text-left py-1 pr-2">TF</th>
+            <th className="text-right py-1 px-2">Current ρ</th>
+            <th className="text-right py-1 px-2">Hist μ ± σ</th>
+            <th className="text-right py-1 px-2">Z</th>
+            <th className="text-right py-1 px-2">Pctile</th>
+            <th className="text-right py-1 pl-2">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className="border-b border-border/20" data-testid={`tf-div-row-${r.key}`}>
+              <td className="py-1.5 pr-2 font-bold">{r.label}</td>
+              {r.state === "loading" ? (
+                <td colSpan={5} className="py-1.5 px-2 text-muted-foreground animate-pulse">computing…</td>
+              ) : r.state === "unavailable" ? (
+                <td colSpan={5} className="py-1.5 px-2 text-muted-foreground/60 truncate" title={r.reason}>
+                  unavailable — {r.reason}
+                </td>
+              ) : (
+                <>
+                  <td className="text-right py-1.5 px-2 font-bold" style={{ color: corrColor(r.stats!.last) }}>
+                    {r.stats!.last.toFixed(3)}
+                  </td>
+                  <td className="text-right py-1.5 px-2 text-muted-foreground">
+                    {r.stats!.mean.toFixed(2)} ± {r.stats!.sd.toFixed(2)}
+                  </td>
+                  <td className="text-right py-1.5 px-2 font-bold" style={{ color: tfStatus(r.stats!.z).color }}>
+                    {r.stats!.z >= 0 ? "+" : ""}{r.stats!.z.toFixed(2)}
+                  </td>
+                  <td className="text-right py-1.5 px-2">{r.stats!.pct.toFixed(0)}%</td>
+                  <td className="text-right py-1.5 pl-2">
+                    <span
+                      className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                      style={{ color: tfStatus(r.stats!.z).color, backgroundColor: `${tfStatus(r.stats!.z).color}22` }}
+                    >
+                      {tfStatus(r.stats!.z).label}
+                    </span>
+                  </td>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {uniqueVerdicts.length > 0 ? (
+        <div className="border border-amber-500/30 bg-amber-500/5 rounded p-2 space-y-1" data-testid="tf-div-verdicts">
+          {uniqueVerdicts.map((v, i) => (
+            <div key={i} className="text-amber-400 leading-snug">⚠ {v}</div>
+          ))}
+        </div>
+      ) : ok.length >= 2 ? (
+        <div className="text-muted-foreground" data-testid="tf-div-verdicts">
+          ✓ All timeframes are in line with their own historical correlation patterns.
+        </div>
+      ) : null}
+      <div className="text-[9px] text-muted-foreground/60 leading-snug">
+        Each timeframe's current rolling correlation is scored against that timeframe's full history
+        (z-score and percentile). A timeframe |z| ≥ 1.5 while another sits |z| &lt; 0.75 flags a
+        cross-timeframe mismatch. Windows are in bars of each timeframe (hourly ≈ 60-min bars).
+      </div>
     </div>
   );
 }
@@ -1331,6 +1315,198 @@ function CanvasChartWrapper({
   );
 }
 
+// ── Charts-style ticker picker: classification chip carousel + searchable list ──
+function TickerClassSelect({
+  value,
+  onChange,
+  tickers,
+  testId,
+}: {
+  value: string;
+  onChange: (ticker: string) => void;
+  tickers: TickerMeta[];
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [customTicker, setCustomTicker] = useState("");
+
+  const classOptions = useMemo(() => {
+    const opts: Record<string, Set<string>> = {};
+    for (const f of CLASS_FIELDS) opts[f.key] = new Set();
+    for (const t of tickers) {
+      for (const f of CLASS_FIELDS) {
+        const v = (t as any)[f.key];
+        if (v) opts[f.key].add(v);
+      }
+    }
+    const out: Record<string, string[]> = {};
+    for (const f of CLASS_FIELDS) out[f.key] = [...opts[f.key]].sort();
+    return out;
+  }, [tickers]);
+
+  const filteredTickers = useMemo(() => {
+    let out = tickers;
+    for (const f of CLASS_FIELDS) {
+      const sel = classFilters[f.key];
+      if (sel && sel.size > 0) out = out.filter((t) => sel.has((t as any)[f.key]));
+    }
+    return out;
+  }, [tickers, classFilters]);
+
+  const anyActive = Object.values(classFilters).some((s) => s.size > 0);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="w-full h-7 justify-between px-2 text-[11px] font-mono" data-testid={testId}>
+          <span className="truncate">{value || "Select ticker"}</span>
+          <span className="flex items-center gap-1 flex-shrink-0 ml-1">
+            {anyActive && <Filter className="w-2.5 h-2.5 text-primary" />}
+            <ChevronsUpDown className="w-3 h-3 opacity-50" />
+          </span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto min-w-[340px] max-w-[560px] p-0" align="start">
+        {/* Classification chips — same carousel filters as the Charts-tab ticker selector */}
+        {(() => {
+          const shownFields = CLASS_FIELDS.filter((f) => (classOptions[f.key]?.length ?? 0) > 1);
+          if (shownFields.length === 0) return null;
+          return (
+            <div className="flex flex-wrap items-center gap-1 p-1.5 border-b border-border">
+              {shownFields.map((f) => (
+                <FilterDropdown
+                  key={f.key}
+                  label={f.label}
+                  options={classOptions[f.key] || []}
+                  selected={classFilters[f.key] || new Set()}
+                  onChange={(next) => setClassFilters({ ...classFilters, [f.key]: next })}
+                  testId={`${testId}-filter-${f.key}`}
+                />
+              ))}
+              {anyActive && (
+                <button
+                  onClick={() => setClassFilters(emptyClassFilters())}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-muted-foreground hover:text-destructive"
+                  data-testid={`${testId}-filter-clear`}
+                >
+                  <X className="w-2.5 h-2.5" />
+                  Clear
+                </button>
+              )}
+            </div>
+          );
+        })()}
+        <Command>
+          <CommandInput placeholder="Search ticker or name..." className="h-8 text-xs" />
+          <CommandList className="max-h-[300px]">
+            <CommandEmpty>No ticker found.</CommandEmpty>
+            <CommandGroup>
+              {filteredTickers.map((t) => (
+                <CommandItem
+                  key={t.ticker}
+                  value={`${t.ticker} ${t.name} ${t.subindustry ?? ""}`}
+                  onSelect={() => { onChange(t.ticker); setOpen(false); }}
+                  className="text-xs"
+                >
+                  <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${value === t.ticker ? "opacity-100" : "opacity-0"}`} />
+                  <span className="font-mono font-semibold mr-2">{t.ticker}</span>
+                  <span className="text-muted-foreground whitespace-nowrap">{t.name}</span>
+                  {t.subindustry && (
+                    <span className="ml-auto pl-3 text-[10px] text-muted-foreground/60 whitespace-nowrap">{t.subindustry}</span>
+                  )}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+        <div className="border-t border-border/30 p-1.5">
+          <Input
+            className="h-6 text-[11px] font-mono"
+            placeholder="Custom ticker (e.g. LMT) — press Enter"
+            value={customTicker}
+            onChange={(e) => setCustomTicker(e.target.value.toUpperCase().trim())}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && customTicker) {
+                onChange(customTicker);
+                setCustomTicker("");
+                setOpen(false);
+              }
+            }}
+            data-testid={`${testId}-custom`}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ── Searchable grouped metric picker (Command-based, wide, nothing truncated) ──
+function MetricSelect({
+  value,
+  onChange,
+  metricGroups,
+  testId,
+  triggerClass = "h-7",
+}: {
+  value: string;
+  onChange: (m: string) => void;
+  metricGroups: { category: string; metrics: string[] }[];
+  testId: string;
+  triggerClass?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const customMetrics = getCustomFundamentalMetrics();
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className={`w-full ${triggerClass} justify-between px-2 text-[11px] font-mono`} data-testid={testId}>
+          <span className="truncate">{value || "Select metric"}</span>
+          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto min-w-[340px] max-w-[520px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search metric..." className="h-8 text-xs" />
+          <CommandList className="max-h-[320px]">
+            <CommandEmpty>No metric found.</CommandEmpty>
+            {metricGroups.map(({ category, metrics }) => (
+              <CommandGroup key={category} heading={category}>
+                {metrics.map((m) => (
+                  <CommandItem
+                    key={m}
+                    value={`${m} ${category}`}
+                    onSelect={() => { onChange(m); setOpen(false); }}
+                    className="text-xs"
+                  >
+                    <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${value === m ? "opacity-100" : "opacity-0"}`} />
+                    <span className="whitespace-nowrap">{m}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+            {customMetrics.length > 0 && (
+              <CommandGroup heading="Uploaded Fundamental">
+                {customMetrics.map((m) => (
+                  <CommandItem
+                    key={m}
+                    value={`${m} uploaded`}
+                    onSelect={() => { onChange(m); setOpen(false); }}
+                    className="text-xs text-emerald-400"
+                  >
+                    <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${value === m ? "opacity-100" : "opacity-0"}`} />
+                    <span className="whitespace-nowrap">{m}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ── Series Picker Component ──
 function SeriesPicker({
   label,
@@ -1363,7 +1539,6 @@ function SeriesPicker({
     const parts = value.split(":");
     return parts.slice(1).join(":") || "close";
   });
-  const [tickerOpen, setTickerOpen] = useState(false);
 
   const macroByCat = useMemo(() => {
     const map: Record<string, MacroSeriesMeta[]> = {};
@@ -1389,7 +1564,7 @@ function SeriesPicker({
       if (ticker) onChange(`${ticker}:${resolvedMetric}`);
     }
     setOpen(false);
-  }, [sourceType, ticker, metric, onChange]);
+  }, [sourceType, ticker, metric, onChange, tickers]);
 
   return (
     <div className="space-y-1">
@@ -1406,7 +1581,7 @@ function SeriesPicker({
             <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[280px] p-2 space-y-2" align="start">
+        <PopoverContent className="w-[380px] p-2 space-y-2" align="start">
           {/* Source type toggle */}
           <div className="flex gap-1">
             <Button
@@ -1429,79 +1604,48 @@ function SeriesPicker({
 
           {sourceType === "stock" ? (
             <>
-              {/* Ticker picker */}
-              <Popover open={tickerOpen} onOpenChange={setTickerOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="w-full h-6 justify-between px-2 text-[11px] font-mono">
-                    {ticker || "Select ticker"}
-                    <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[240px] p-0" align="start">
-                  <Command>
-                    <CommandInput placeholder="Search ticker..." className="h-7 text-[11px]" />
-                    <CommandList className="max-h-[200px]">
-                      <CommandEmpty>No ticker found.</CommandEmpty>
-                      <CommandGroup>
-                        {tickers.map(t => (
-                          <CommandItem
-                            key={t.ticker}
-                            value={`${t.ticker} ${t.name}`}
-                            onSelect={() => { setTicker(t.ticker); setTickerOpen(false); }}
-                            className="text-[11px]"
-                          >
-                            <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${ticker === t.ticker ? "opacity-100" : "opacity-0"}`} />
-                            <span className="font-mono font-bold mr-1">{t.ticker}</span>
-                            <span className="text-muted-foreground truncate text-[10px]">{t.name.slice(0, 20)}</span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              {/* Metric picker */}
-              <Select value={metric} onValueChange={setMetric}>
-                <SelectTrigger className="h-6 text-[11px]">
-                  <SelectValue placeholder="Metric" />
-                </SelectTrigger>
-                <SelectContent className="max-h-[200px]">
-                  {metricGroups.map(({ category, metrics }) => (
-                    <div key={category}>
-                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
-                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </div>
-                  ))}
-                  {(() => { const cm = getCustomFundamentalMetrics(); return cm.length > 0 ? (
-                    <>
-                      <div className="px-2 py-1 text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Uploaded Fundamental</div>
-                      {cm.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </>
-                  ) : null; })()}
-                </SelectContent>
-              </Select>
+              {/* Ticker picker — Charts-style classification carousel + search */}
+              <TickerClassSelect
+                value={ticker}
+                onChange={setTicker}
+                tickers={tickers}
+                testId={`${testId}-ticker`}
+              />
+              {/* Metric picker — searchable, grouped, wide */}
+              <MetricSelect
+                value={metric}
+                onChange={setMetric}
+                metricGroups={metricGroups}
+                testId={`${testId}-metric`}
+              />
             </>
           ) : (
-            <div className="max-h-[200px] overflow-y-auto space-y-0.5">
-              {Object.entries(macroByCat).map(([cat, items]) => (
-                <div key={cat}>
-                  <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">{cat}</div>
-                  {items.map(s => (
-                    <button
-                      key={s.id}
-                      className={`flex items-center w-full text-left px-2 py-0.5 text-[11px] rounded ${metric === s.id ? "bg-primary/20 text-primary" : "hover:bg-accent"}`}
-                      onClick={() => setMetric(s.id)}
-                    >
-                      {s.label}
-                      <span className="text-[9px] text-muted-foreground/50 ml-auto">{s.freq}</span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
+            /* Macro series — searchable, grouped by category */
+            <Command className="border border-border/40 rounded">
+              <CommandInput placeholder="Search macro series..." className="h-8 text-xs" />
+              <CommandList className="max-h-[300px]">
+                <CommandEmpty>No series found.</CommandEmpty>
+                {Object.entries(macroByCat).map(([cat, items]) => (
+                  <CommandGroup key={cat} heading={cat}>
+                    {items.map((s) => (
+                      <CommandItem
+                        key={s.id}
+                        value={`${s.label} ${s.id} ${cat}`}
+                        onSelect={() => setMetric(s.id)}
+                        className="text-xs"
+                      >
+                        <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${metric === s.id ? "opacity-100" : "opacity-0"}`} />
+                        <span className="whitespace-nowrap">{s.label}</span>
+                        <span className="ml-auto pl-3 text-[9px] text-muted-foreground/50">{s.freq}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))}
+              </CommandList>
+            </Command>
           )}
 
-          <Button size="sm" className="w-full h-6 text-[10px]" onClick={handleApply}>Apply</Button>
+          <Button size="sm" className="w-full h-6 text-[10px]" onClick={handleApply} data-testid={`${testId}-apply`}>Apply</Button>
         </PopoverContent>
       </Popover>
     </div>
@@ -1534,6 +1678,16 @@ export default function Correlation() {
   // Chart-area layout (mirrors the Charts tab): grid organization + panes shown at once
   const [corrLayout, setCorrLayout] = useState<GridLayout>("2x2");
   const [corrPanesVisible, setCorrPanesVisible] = useState<number | "all">(4);
+  // Bar frequency for the pairwise analysis (hourly / daily / weekly)
+  const [corrFreq, setCorrFreq] = useState<CorrFrequency>("daily");
+  // Custom rolling window (bars) alongside the 30/60/120/252 presets
+  const [customWindow, setCustomWindow] = useState("90");
+  const [customWindowOn, setCustomWindowOn] = useState(false);
+  // Per-pane indicator state for the LWC panes (Charts-tab indicators panel)
+  const [indicatorsMap, setIndicatorsMap] = useState<Record<number, ActiveIndicators>>({});
+
+  const customWindowNum = parseInt(customWindow) || 0;
+  const customValid = customWindowOn && customWindowNum >= 5 && customWindowNum <= 2520;
 
   const toggleCorrChart = useCallback((key: string) => {
     setVisibleCorrCharts(prev => {
@@ -1583,11 +1737,15 @@ export default function Correlation() {
     visibleCorrCharts: Array.from(visibleCorrCharts),
     corrLayout,
     corrPanesVisible,
+    corrFreq,
+    customWindow,
+    customWindowOn,
+    corrIndicators: indicatorsMap,
     uniMode,
     uniWindow,
     uniMetric,
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, uniMode, uniWindow, uniMetric, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, indicatorsMap, uniMode, uniWindow, uniMetric, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -1617,6 +1775,14 @@ export default function Correlation() {
     }
     if (state.corrPanesVisible === "all" || (typeof state.corrPanesVisible === "number" && state.corrPanesVisible >= 1)) {
       setCorrPanesVisible(state.corrPanesVisible);
+    }
+    if (state.corrFreq === "hourly" || state.corrFreq === "daily" || state.corrFreq === "weekly") {
+      setCorrFreq(state.corrFreq);
+    }
+    if (typeof state.customWindow === "string") setCustomWindow(state.customWindow);
+    if (typeof state.customWindowOn === "boolean") setCustomWindowOn(state.customWindowOn);
+    if (state.corrIndicators && typeof state.corrIndicators === "object" && !Array.isArray(state.corrIndicators)) {
+      setIndicatorsMap(state.corrIndicators);
     }
     if (state.uniMode !== undefined) setUniMode(state.uniMode);
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
@@ -1652,12 +1818,37 @@ export default function Correlation() {
     return tickers.map(t => `${t.ticker}:${uniMetric}`);
   }, [universeTickers, isFiltered, filteredTickersList, tickers, uniMetric]);
 
-  // Pairwise query
+  // Pairwise query (frequency-aware, with optional custom rolling window)
   const { data: pairwise, isLoading: pairLoading } = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, parseInt(corrWindow) || 60, corrMode),
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, customValid ? customWindowNum : 0, corrFreq],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, parseInt(corrWindow) || 60, corrMode, customValid ? [customWindowNum] : [], corrFreq),
     enabled: activeTab === "pairwise" && !!specA && !!specB,
   });
+
+  // Cross-timeframe queries for the TF Divergence pane (hourly / daily / weekly).
+  // Key shape matches the main pairwise query so results are shared when possible.
+  const tfEnabled = activeTab === "pairwise" && visibleCorrCharts.has("tfDivergence") && !!specA && !!specB;
+  const tfWindow = parseInt(corrWindow) || 60;
+  const tfHourly = useQuery<PairwiseResult>({
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "hourly"],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "hourly"),
+    enabled: tfEnabled,
+  });
+  const tfDaily = useQuery<PairwiseResult>({
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "daily"],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "daily"),
+    enabled: tfEnabled,
+  });
+  const tfWeekly = useQuery<PairwiseResult>({
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "weekly"],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "weekly"),
+    enabled: tfEnabled,
+  });
+  const tfEntries: TFEntry[] = [
+    { key: "hourly", label: "Hourly", loading: tfHourly.isLoading, res: tfHourly.data },
+    { key: "daily", label: "Daily", loading: tfDaily.isLoading, res: tfDaily.data },
+    { key: "weekly", label: "Weekly", loading: tfWeekly.isLoading, res: tfWeekly.data },
+  ];
 
   // Matrix query
   const { data: matrixData, isLoading: matrixLoading } = useQuery<MatrixResult>({
@@ -1826,6 +2017,33 @@ export default function Correlation() {
           </div>
         ) : activeTab === "pairwise" ? (
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+            {/* Bar frequency — hourly / daily / weekly */}
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Frequency</div>
+              <div className="flex gap-0.5">
+                {CORR_FREQS.map(f => (
+                  <button
+                    key={f.value}
+                    onClick={() => setCorrFreq(f.value)}
+                    className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${corrFreq === f.value ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                    data-testid={`corr-freq-${f.value}`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              {corrFreq === "hourly" && (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  ~2y of 60-min bars. Windows are in bars. Daily series (macro, fundamentals) forward-fill with a strict 1-day lag.
+                </div>
+              )}
+              {corrFreq === "weekly" && (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  Last value per ISO week. Windows are in weeks.
+                </div>
+              )}
+            </div>
+
             <SeriesPicker
               label="Series A"
               value={specA}
@@ -1895,6 +2113,29 @@ export default function Correlation() {
                   </span>
                 </label>
               ))}
+              {/* Custom rolling window */}
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={customWindowOn}
+                  onCheckedChange={() => setCustomWindowOn(v => !v)}
+                  className="h-3.5 w-3.5"
+                  data-testid="corr-window-custom"
+                />
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: CUSTOM_WINDOW_COLOR }} />
+                <Input
+                  type="number"
+                  min={5}
+                  max={2520}
+                  value={customWindow}
+                  onChange={(e) => setCustomWindow(e.target.value)}
+                  className="h-6 w-[70px] text-[11px] font-mono px-1.5"
+                  data-testid="corr-window-custom-input"
+                />
+                <span className="text-[10px] text-muted-foreground">bars (custom)</span>
+              </div>
+              {customWindowOn && !customValid && (
+                <div className="text-[9px] text-red-400">Custom window must be 5–2520 bars</div>
+              )}
             </div>
 
             {/* Quick presets */}
@@ -2022,19 +2263,13 @@ export default function Correlation() {
 
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Metric</div>
-              <Select value={uniMetric} onValueChange={setUniMetric}>
-                <SelectTrigger className="h-6 text-[11px]" data-testid="uni-corr-metric">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-[260px]">
-                  {uniMetricGroups.map(({ category, metrics }) => (
-                    <div key={category}>
-                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
-                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </div>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MetricSelect
+                value={uniMetric}
+                onChange={setUniMetric}
+                metricGroups={uniMetricGroups}
+                testId="uni-corr-metric"
+                triggerClass="h-6"
+              />
             </div>
 
             <div className="space-y-1">
@@ -2109,19 +2344,13 @@ export default function Correlation() {
 
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Metric</div>
-              <Select value={uniMetric} onValueChange={setUniMetric}>
-                <SelectTrigger className="h-6 text-[11px]" data-testid="basket-corr-metric">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-[260px]">
-                  {uniMetricGroups.map(({ category, metrics }) => (
-                    <div key={category}>
-                      <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</div>
-                      {metrics.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </div>
-                  ))}
-                </SelectContent>
-              </Select>
+              <MetricSelect
+                value={uniMetric}
+                onChange={setUniMetric}
+                metricGroups={uniMetricGroups}
+                testId="basket-corr-metric"
+                triggerClass="h-6"
+              />
             </div>
 
             <div className="space-y-1">
@@ -2188,12 +2417,18 @@ export default function Correlation() {
             specA={specA}
             specB={specB}
             mode={corrMode}
+            freq={corrFreq}
             visibleWindows={visibleWindows}
+            customWindow={customValid ? customWindowNum : null}
             visibleCharts={visibleCorrCharts}
             layout={corrLayout}
             onLayoutChange={setCorrLayout}
             panesVisible={corrPanesVisible}
             onPanesVisibleChange={setCorrPanesVisible}
+            indicatorsMap={indicatorsMap}
+            onIndicatorsMapChange={setIndicatorsMap}
+            tfEntries={tfEntries}
+            tfWindow={tfWindow}
           />
         ) : activeTab === "matrix" ? (
           <MatrixView
@@ -2285,28 +2520,255 @@ function PairwiseView({
   specA,
   specB,
   mode,
+  freq,
   visibleWindows,
+  customWindow,
   visibleCharts,
   layout,
   onLayoutChange,
   panesVisible,
   onPanesVisibleChange,
+  indicatorsMap,
+  onIndicatorsMapChange,
+  tfEntries,
+  tfWindow,
 }: {
   data: PairwiseResult | undefined;
   loading: boolean;
   specA: string;
   specB: string;
   mode: string;
+  freq: CorrFrequency;
   visibleWindows: Set<number>;
+  customWindow: number | null;
   visibleCharts: Set<string>;
   layout: GridLayout;
   onLayoutChange: (l: GridLayout) => void;
   panesVisible: number | "all";
   onPanesVisibleChange: (v: number | "all") => void;
+  indicatorsMap: Record<number, ActiveIndicators>;
+  onIndicatorsMapChange: React.Dispatch<React.SetStateAction<Record<number, ActiveIndicators>>>;
+  tfEntries: TFEntry[];
+  tfWindow: number;
 }) {
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
   const [paneOffset, setPaneOffset] = useState(0);
+  const [showIndicators, setShowIndicators] = useState(false);
+  const [indicatorPaneId, setIndicatorPaneId] = useState<number | null>(null);
+  // Drag-resize track fractions (ChartArea parity)
+  const [colFracs, setColFracs] = useState<number[]>([1]);
+  const [rowFracs, setRowFracs] = useState<number[]>([1]);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  const isIntraday = freq === "hourly";
+  const hasError = !data || !!(data as any).error;
+
+  // {time,value} → LWC point (hourly times are epoch-second strings from the engine)
+  const toPt = useCallback(
+    (d: { time: string; value: number }) => ({ time: (isIntraday ? Number(d.time) : d.time) as any, value: d.value }),
+    [isIntraday]
+  );
+
+  // ── PlottedSeries for the ChartPane-rendered panes ──
+  const levelsSeries: PlottedSeries[] = useMemo(() => {
+    if (hasError || !data!.levelsA?.length) return [];
+    const labelA = formatSpec(specA);
+    const labelB = formatSpec(specB);
+    const out: PlottedSeries[] = [{
+      id: "corr:levelsA",
+      ticker: "CORR",
+      metric: labelA,
+      color: COLORS.primary,
+      paneIndex: LWC_PANE_IDS.levels,
+      data: data!.levelsA.map(toPt) as any,
+      visible: true,
+      label: labelA,
+    }];
+    if (data!.levelsB?.length) {
+      out.push({
+        id: "corr:levelsB",
+        ticker: "CORR",
+        metric: labelB,
+        color: COLORS.secondary,
+        paneIndex: LWC_PANE_IDS.levels,
+        data: data!.levelsB.map(toPt) as any,
+        visible: true,
+        label: labelB,
+      });
+    }
+    return out;
+  }, [data, hasError, specA, specB, toPt]);
+
+  const activeWindowsSorted = useMemo(() => {
+    const ws = [...Array.from(visibleWindows), ...(customWindow ? [customWindow] : [])];
+    return ws.filter((w, i, a) => a.indexOf(w) === i).sort((x, y) => x - y);
+  }, [visibleWindows, customWindow]);
+
+  const rollingSeries: PlottedSeries[] = useMemo(() => {
+    if (hasError || !data!.multiWindowRolling) return [];
+    const out: PlottedSeries[] = [];
+    for (const w of activeWindowsSorted) {
+      const arr = data!.multiWindowRolling[w];
+      if (!arr || arr.length === 0) continue;
+      out.push({
+        id: `corr:roll:${w}`,
+        ticker: "CORR",
+        metric: `${w}-bar ρ`,
+        color: windowColor(w),
+        paneIndex: LWC_PANE_IDS.rolling,
+        data: arr.map(toPt) as any,
+        visible: true,
+        label: `${w}-bar ρ`,
+        sharedScale: true,
+      });
+    }
+    if (out.length > 0 && data!.rollingCI?.length) {
+      out.push({
+        id: "corr:ci-upper",
+        ticker: "CORR",
+        metric: "95% CI",
+        color: "rgba(100,180,255,0.35)",
+        lineWidth: 1,
+        lineStyle: 2,
+        paneIndex: LWC_PANE_IDS.rolling,
+        data: data!.rollingCI.map((d) => toPt({ time: d.time, value: d.upper })) as any,
+        visible: true,
+        label: "95% CI+",
+        sharedScale: true,
+      });
+      out.push({
+        id: "corr:ci-lower",
+        ticker: "CORR",
+        metric: "95% CI",
+        color: "rgba(100,180,255,0.35)",
+        lineWidth: 1,
+        lineStyle: 2,
+        paneIndex: LWC_PANE_IDS.rolling,
+        data: data!.rollingCI.map((d) => toPt({ time: d.time, value: d.lower })) as any,
+        visible: true,
+        label: "95% CI−",
+        sharedScale: true,
+      });
+    }
+    return out;
+  }, [data, hasError, activeWindowsSorted, toPt]);
+
+  const betaSeries: PlottedSeries[] = useMemo(() => {
+    if (hasError || !data!.rollingBeta?.length) return [];
+    return [{
+      id: "corr:beta",
+      ticker: "CORR",
+      metric: "Rolling β",
+      color: "#ec4899",
+      paneIndex: LWC_PANE_IDS.rollingBeta,
+      data: data!.rollingBeta.map(toPt) as any,
+      visible: true,
+      label: `β: ${formatSpec(specA)} ~ ${formatSpec(specB)}`,
+    }];
+  }, [data, hasError, specA, specB, toPt]);
+
+  // ── Active pane keys, in canonical order ──
+  const paneKeysActive = useMemo(() => {
+    if (hasError) return [] as string[];
+    const keys: string[] = [];
+    if (visibleCharts.has("levels") && levelsSeries.length > 0) keys.push("levels");
+    if (visibleCharts.has("rolling") && rollingSeries.length > 0) keys.push("rolling");
+    if (visibleCharts.has("rollingBeta") && betaSeries.length > 0) keys.push("rollingBeta");
+    if (visibleCharts.has("tfDivergence")) keys.push("tfDivergence");
+    if (visibleCharts.has("scatter")) keys.push("scatter");
+    if (visibleCharts.has("crossCorr")) keys.push("crossCorr");
+    if (visibleCharts.has("acfA")) keys.push("acfA");
+    if (visibleCharts.has("acfB")) keys.push("acfB");
+    return keys;
+  }, [hasError, visibleCharts, levelsSeries.length, rollingSeries.length, betaSeries.length]);
+
+  // ── Charts-tab layout mechanics: visible window + paging + resizable grid ──
+  const maximizedKey = maximizedChart && paneKeysActive.includes(maximizedChart) ? maximizedChart : null;
+  const count = panesVisible === "all" ? paneKeysActive.length : Math.min(panesVisible, paneKeysActive.length);
+  const start = Math.min(paneOffset, Math.max(0, paneKeysActive.length - count));
+  const shownKeys = maximizedKey ? [maximizedKey] : paneKeysActive.slice(start, start + count);
+  const canPagePrev = !maximizedKey && panesVisible !== "all" && start > 0;
+  const canPageNext = !maximizedKey && panesVisible !== "all" && start + count < paneKeysActive.length;
+
+  const gridDims = useMemo(() => {
+    const { cols } = parseGrid(layout);
+    return { cols, rows: Math.max(1, Math.ceil(Math.max(1, shownKeys.length) / cols)) };
+  }, [layout, shownKeys.length]);
+
+  // Reset the drag-resize fractions to equal whenever the grid dimensions change.
+  useEffect(() => {
+    setColFracs(Array(gridDims.cols).fill(1));
+    setRowFracs(Array(gridDims.rows).fill(1));
+  }, [gridDims.cols, gridDims.rows]);
+
+  const computedGridStyle = useMemo((): React.CSSProperties => {
+    if (maximizedKey) {
+      return { display: "grid", gridTemplateColumns: "1fr", gridTemplateRows: "1fr", height: "100%" };
+    }
+    const cols = colFracs.length === gridDims.cols ? colFracs : Array(gridDims.cols).fill(1);
+    const rows = rowFracs.length === gridDims.rows ? rowFracs : Array(gridDims.rows).fill(1);
+    return {
+      display: "grid",
+      gridTemplateColumns: cols.map((f) => `${f}fr`).join(" "),
+      gridTemplateRows: rows.map((f) => `${f}fr`).join(" "),
+      height: "100%",
+    };
+  }, [colFracs, rowFracs, gridDims.cols, gridDims.rows, maximizedKey]);
+
+  // Drag a grid divider to resize adjacent rows/columns (fraction-based, ChartArea parity).
+  const startDividerDrag = useCallback((
+    e: React.MouseEvent,
+    axis: "row" | "col",
+    index: number,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = gridRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const isRow = axis === "row";
+    const startPos = isRow ? e.clientY : e.clientX;
+    const total = isRow ? rect.height : rect.width;
+    const fracs = isRow ? rowFracs : colFracs;
+    const setFracs = isRow ? setRowFracs : setColFracs;
+    const a0 = fracs[index] ?? 1;
+    const b0 = fracs[index + 1] ?? 1;
+    const sumFr = fracs.reduce((s, f) => s + f, 0);
+    const MIN = 0.12 * sumFr; // don't let a track collapse below ~12%
+
+    const onMove = (ev: MouseEvent) => {
+      const cur = isRow ? ev.clientY : ev.clientX;
+      const deltaFr = ((cur - startPos) / total) * sumFr;
+      let a = a0 + deltaFr;
+      let b = b0 - deltaFr;
+      if (a < MIN) { b -= MIN - a; a = MIN; }
+      if (b < MIN) { a -= MIN - b; b = MIN; }
+      setFracs((prev) => {
+        const next = [...prev];
+        next[index] = a;
+        next[index + 1] = b;
+        return next;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = isRow ? "row-resize" : "col-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [rowFracs, colFracs]);
+
+  // LWC panes currently active — drive the indicators panel pane selector.
+  const lwcPaneInfos: PaneInfo[] = useMemo(
+    () =>
+      paneKeysActive
+        .filter((k) => LWC_PANE_IDS[k] !== undefined)
+        .map((k) => ({ id: LWC_PANE_IDS[k], label: CHART_LABELS[k] })),
+    [paneKeysActive]
+  );
 
   if (loading) {
     return (
@@ -2328,7 +2790,7 @@ function PairwiseView({
   const labelA = formatSpec(specA);
   const labelB = formatSpec(specB);
 
-  // ── Build one pane per enabled plot (Charts-tab style) ──
+  // ── Pane renderers (keyed by CHART_KEYS, order fixed by paneKeysActive) ──
   const hasPacf = (data.pacfA?.length ?? 0) > 0;
   const usePacf = acfMode === "pacf" && hasPacf;
   const acfKind = usePacf ? "PACF" : "ACF";
@@ -2366,186 +2828,135 @@ function PairwiseView({
     );
   };
 
-  const paneDefs: { key: string; node: React.ReactNode }[] = [];
+  const toggleMax = (key: string) => setMaximizedChart(maximizedKey === key ? null : key);
 
-  if (visibleCharts.has("levels")) {
-    paneDefs.push({
-      key: "levels",
-      node: (
-        <MiniChart
-          data={data.levelsA}
-          color={COLORS.primary}
-          height={350}
-          title={`${labelA} vs ${labelB} (Levels)`}
-          secondData={data.levelsB}
-          secondColor={COLORS.secondary}
-          chartId="levels"
-          isMaximized={maximizedChart === "levels"}
-          onMaximize={setMaximizedChart}
-        />
-      ),
-    });
-  }
-
-  if (visibleCharts.has("rolling") && data.multiWindowRolling && visibleWindows.size > 0) {
-    const windows = Array.from(visibleWindows).sort((a, b) => a - b);
-    const [first, second, third, fourth] = windows;
-    const legendParts = windows.map(w => `${w}d`).join(" / ");
-    const ciUpper = data.rollingCI?.map(d => ({ time: d.time, value: d.upper }));
-    const ciLower = data.rollingCI?.map(d => ({ time: d.time, value: d.lower }));
-    paneDefs.push({
-      key: "rolling",
-      node: (
-        <MiniChart
-          data={data.multiWindowRolling[first] || []}
-          color={MULTI_WINDOW_COLORS[first]}
-          height={350}
-          title={`Rolling Correlation (${legendParts})`}
-          showZeroLine
-          secondData={second !== undefined ? data.multiWindowRolling[second] || [] : undefined}
-          secondColor={second !== undefined ? MULTI_WINDOW_COLORS[second] : undefined}
-          thirdData={third !== undefined ? data.multiWindowRolling[third] || [] : undefined}
-          thirdColor={third !== undefined ? MULTI_WINDOW_COLORS[third] : undefined}
-          fourthData={fourth !== undefined ? data.multiWindowRolling[fourth] || [] : undefined}
-          fourthColor={fourth !== undefined ? MULTI_WINDOW_COLORS[fourth] : undefined}
-          bandUpper={ciUpper}
-          bandLower={ciLower}
-          bandColor="rgba(100,180,255,0.3)"
-          chartId="rolling"
-          isMaximized={maximizedChart === "rolling"}
-          onMaximize={setMaximizedChart}
-        />
-      ),
-    });
-  }
-
-  if (visibleCharts.has("rollingBeta") && data.rollingBeta && data.rollingBeta.length > 0) {
-    paneDefs.push({
-      key: "rollingBeta",
-      node: (
-        <MiniChart
-          data={data.rollingBeta}
-          color="#ec4899"
-          height={280}
-          title={`Rolling Beta: ${labelA} vs ${labelB}`}
-          showZeroLine
-          chartId="rollingBeta"
-          isMaximized={maximizedChart === "rollingBeta"}
-          onMaximize={setMaximizedChart}
-        />
-      ),
-    });
-  }
-
-  if (visibleCharts.has("scatter")) {
-    paneDefs.push({
-      key: "scatter",
-      node: (
-        <CanvasChartWrapper
-          title={`Scatter: ${labelA} vs ${labelB}`}
-          chartId="scatter"
-          isMaximized={maximizedChart === "scatter"}
-          onMaximize={setMaximizedChart}
-          height={350}
-        >
-          {(h) => (
-            <ScatterCanvas
-              data={data.scatter}
-              labelX={labelB}
-              labelY={labelA}
-              beta={s.beta}
-              alpha={s.alpha}
-              height={h}
-              hideTitle
-            />
-          )}
-        </CanvasChartWrapper>
-      ),
-    });
-  }
-
-  if (visibleCharts.has("crossCorr")) {
-    paneDefs.push({
-      key: "crossCorr",
-      node: (
-        <CanvasChartWrapper
-          title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
-          chartId="crossCorr"
-          isMaximized={maximizedChart === "crossCorr"}
-          onMaximize={setMaximizedChart}
-          height={280}
-        >
-          {(h) => (
-            <CrossCorrChart
-              data={data.crossCorrelation}
-              labelA={labelA}
-              labelB={labelB}
-              height={h}
-              hideTitle
-            />
-          )}
-        </CanvasChartWrapper>
-      ),
-    });
-  }
-
-  if (visibleCharts.has("acfA")) {
-    paneDefs.push({
-      key: "acfA",
-      node: (
-        <CanvasChartWrapper
-          title={`${acfKind}: ${labelA}`}
-          chartId="acfA"
-          isMaximized={maximizedChart === "acfA"}
-          onMaximize={setMaximizedChart}
-          height={200}
-          headerRight={acfHeaderRight(acfDataA)}
-        >
-          {(h) => <ACFChart data={acfDataA} nObs={s.observations} title="" height={h} hideTitle />}
-        </CanvasChartWrapper>
-      ),
-    });
-  }
-
-  if (visibleCharts.has("acfB")) {
-    paneDefs.push({
-      key: "acfB",
-      node: (
-        <CanvasChartWrapper
-          title={`${acfKind}: ${labelB}`}
-          chartId="acfB"
-          isMaximized={maximizedChart === "acfB"}
-          onMaximize={setMaximizedChart}
-          height={200}
-          headerRight={acfHeaderRight(acfDataB)}
-        >
-          {(h) => <ACFChart data={acfDataB} nObs={s.observations} title="" height={h} hideTitle />}
-        </CanvasChartWrapper>
-      ),
-    });
-  }
-
-  // ── Charts-tab layout mechanics: visible-pane window + paging + grid ──
-  const maximizedPane = maximizedChart ? paneDefs.find(p => p.key === maximizedChart) : undefined;
-  const count = panesVisible === "all" ? paneDefs.length : Math.min(panesVisible, paneDefs.length);
-  const start = Math.min(paneOffset, Math.max(0, paneDefs.length - count));
-  const shownPanes = maximizedPane ? [maximizedPane] : paneDefs.slice(start, start + count);
-  const canPagePrev = !maximizedPane && panesVisible !== "all" && start > 0;
-  const canPageNext = !maximizedPane && panesVisible !== "all" && start + count < paneDefs.length;
-
-  const { cols } = parseGrid(layout);
-  const gridStyle: React.CSSProperties = maximizedPane
-    ? { display: "grid", gridTemplateColumns: "1fr", gridTemplateRows: "1fr", height: "100%", gap: 8 }
-    : {
-        display: "grid",
-        gridTemplateColumns: `repeat(${cols}, 1fr)`,
-        gridTemplateRows: `repeat(${Math.max(1, Math.ceil(shownPanes.length / cols))}, 1fr)`,
-        height: "100%",
-        gap: 8,
-      };
+  const renderPane = (key: string): React.ReactNode => {
+    switch (key) {
+      case "levels":
+        return (
+          <CorrLwcPane
+            paneId={LWC_PANE_IDS.levels}
+            label={`${labelA} vs ${labelB} (Levels)`}
+            series={levelsSeries}
+            indicators={indicatorsMap[LWC_PANE_IDS.levels] || {}}
+            intraday={isIntraday}
+            onMaximizeToggle={() => toggleMax("levels")}
+          />
+        );
+      case "rolling":
+        return (
+          <CorrLwcPane
+            paneId={LWC_PANE_IDS.rolling}
+            label={`Rolling Correlation (${activeWindowsSorted.join(" / ")} bars)`}
+            series={rollingSeries}
+            indicators={indicatorsMap[LWC_PANE_IDS.rolling] || {}}
+            intraday={isIntraday}
+            onMaximizeToggle={() => toggleMax("rolling")}
+          />
+        );
+      case "rollingBeta":
+        return (
+          <CorrLwcPane
+            paneId={LWC_PANE_IDS.rollingBeta}
+            label={`Rolling Beta: ${labelA} ~ ${labelB}`}
+            series={betaSeries}
+            indicators={indicatorsMap[LWC_PANE_IDS.rollingBeta] || {}}
+            intraday={isIntraday}
+            onMaximizeToggle={() => toggleMax("rollingBeta")}
+          />
+        );
+      case "tfDivergence":
+        return (
+          <CanvasChartWrapper
+            title="Cross-Timeframe Divergence"
+            chartId="tfDivergence"
+            isMaximized={maximizedKey === "tfDivergence"}
+            onMaximize={setMaximizedChart}
+            height={260}
+          >
+            {(h) => (
+              <div style={{ height: h }}>
+                <TFDivergenceContent entries={tfEntries} window={tfWindow} />
+              </div>
+            )}
+          </CanvasChartWrapper>
+        );
+      case "scatter":
+        return (
+          <CanvasChartWrapper
+            title={`Scatter: ${labelA} vs ${labelB}`}
+            chartId="scatter"
+            isMaximized={maximizedKey === "scatter"}
+            onMaximize={setMaximizedChart}
+            height={350}
+          >
+            {(h) => (
+              <ScatterCanvas
+                data={data.scatter}
+                labelX={labelB}
+                labelY={labelA}
+                beta={s.beta}
+                alpha={s.alpha}
+                height={h}
+                hideTitle
+              />
+            )}
+          </CanvasChartWrapper>
+        );
+      case "crossCorr":
+        return (
+          <CanvasChartWrapper
+            title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
+            chartId="crossCorr"
+            isMaximized={maximizedKey === "crossCorr"}
+            onMaximize={setMaximizedChart}
+            height={280}
+          >
+            {(h) => (
+              <CrossCorrChart
+                data={data.crossCorrelation}
+                labelA={labelA}
+                labelB={labelB}
+                height={h}
+                hideTitle
+              />
+            )}
+          </CanvasChartWrapper>
+        );
+      case "acfA":
+        return (
+          <CanvasChartWrapper
+            title={`${acfKind}: ${labelA}`}
+            chartId="acfA"
+            isMaximized={maximizedKey === "acfA"}
+            onMaximize={setMaximizedChart}
+            height={200}
+            headerRight={acfHeaderRight(acfDataA)}
+          >
+            {(h) => <ACFChart data={acfDataA} nObs={s.observations} title="" height={h} hideTitle />}
+          </CanvasChartWrapper>
+        );
+      case "acfB":
+        return (
+          <CanvasChartWrapper
+            title={`${acfKind}: ${labelB}`}
+            chartId="acfB"
+            isMaximized={maximizedKey === "acfB"}
+            onMaximize={setMaximizedChart}
+            height={200}
+            headerRight={acfHeaderRight(acfDataB)}
+          >
+            {(h) => <ACFChart data={acfDataB} nObs={s.observations} title="" height={h} hideTitle />}
+          </CanvasChartWrapper>
+        );
+      default:
+        return null;
+    }
+  };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
+    <div className="flex-1 flex overflow-hidden min-h-0" data-testid="pairwise-view">
+    <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3 min-w-0">
       {/* Summary stats + diagnostics + methodology (scrolls if tall so charts keep room) */}
       <div className="flex-shrink-0 max-h-[45%] overflow-y-auto space-y-3">
       {/* Summary stats row */}
@@ -2613,10 +3024,10 @@ function PairwiseView({
       {/* Chart-area toolbar — same layout controls as the Charts tab */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
         <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
-          {paneDefs.length} plot{paneDefs.length === 1 ? "" : "s"}
+          {paneKeysActive.length} plot{paneKeysActive.length === 1 ? "" : "s"}
         </span>
         <div className="flex-1" />
-        {paneDefs.length > 1 && (
+        {paneKeysActive.length > 1 && (
           <>
             <Select
               value={String(panesVisible)}
@@ -2627,10 +3038,10 @@ function PairwiseView({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {Array.from({ length: Math.min(paneDefs.length, 6) }, (_, i) => (
+                {Array.from({ length: Math.min(paneKeysActive.length, 6) }, (_, i) => (
                   <SelectItem key={i + 1} value={String(i + 1)}>{i + 1} pane{i > 0 ? "s" : ""}</SelectItem>
                 ))}
-                <SelectItem value="all">All ({paneDefs.length})</SelectItem>
+                <SelectItem value="all">All ({paneKeysActive.length})</SelectItem>
               </SelectContent>
             </Select>
 
@@ -2649,7 +3060,7 @@ function PairwiseView({
                   <ChevronLeft className="w-3 h-3" />
                 </Button>
                 <span className="text-[9px] text-muted-foreground flex items-center tabular-nums">
-                  {start + 1}–{Math.min(start + count, paneDefs.length)}/{paneDefs.length}
+                  {start + 1}–{Math.min(start + count, paneKeysActive.length)}/{paneKeysActive.length}
                 </span>
                 <Button
                   variant="ghost"
@@ -2672,22 +3083,104 @@ function PairwiseView({
             />
           </>
         )}
+
+        {/* Indicators panel toggle (Charts-tab parity) */}
+        {lwcPaneInfos.length > 0 && (
+          <Button
+            variant={showIndicators ? "default" : "ghost"}
+            size="sm"
+            className="h-6 px-2 text-[10px] gap-1"
+            onClick={() => setShowIndicators(v => !v)}
+            data-testid="corr-toggle-indicators"
+            title="Indicators panel"
+          >
+            <SlidersHorizontal className="w-3 h-3" />
+            Indicators
+          </Button>
+        )}
       </div>
 
-      {/* Chart grid — fills the remaining viewport, panes sized by the layout */}
-      {paneDefs.length === 0 ? (
+      {/* Chart grid — fills the remaining viewport; dividers drag-resize tracks */}
+      {paneKeysActive.length === 0 ? (
         <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground text-sm border border-dashed border-border/40 rounded">
           Enable plots in the sidebar to add charts
         </div>
       ) : (
-        <div className="flex-1 min-h-0" style={gridStyle} data-testid="corr-chart-grid">
-          {shownPanes.map(p => (
-            <div key={p.key} className="min-h-0 min-w-0 overflow-hidden">
-              {p.node}
+        <div
+          ref={gridRef}
+          className="flex-1 min-h-0 overflow-hidden relative"
+          style={computedGridStyle}
+          data-testid="corr-chart-grid"
+        >
+          {/* Draggable dividers to resize grid rows / columns */}
+          {!maximizedKey && (() => {
+            const rows = rowFracs.length === gridDims.rows ? rowFracs : Array(gridDims.rows).fill(1);
+            const cols = colFracs.length === gridDims.cols ? colFracs : Array(gridDims.cols).fill(1);
+            const rowSum = rows.reduce((s2: number, f: number) => s2 + f, 0);
+            const colSum = cols.reduce((s2: number, f: number) => s2 + f, 0);
+            const handles: React.ReactNode[] = [];
+            let acc = 0;
+            for (let i = 0; i < rows.length - 1; i++) {
+              acc += rows[i];
+              handles.push(
+                <div
+                  key={`rowdiv-${i}`}
+                  className="absolute left-0 right-0 z-30 group"
+                  style={{ top: `${(acc / rowSum) * 100}%`, height: 9, transform: "translateY(-50%)", cursor: "row-resize" }}
+                  onMouseDown={(e) => startDividerDrag(e, "row", i)}
+                  data-testid={`corr-pane-divider-row-${i}`}
+                >
+                  <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+                </div>
+              );
+            }
+            acc = 0;
+            for (let i = 0; i < cols.length - 1; i++) {
+              acc += cols[i];
+              handles.push(
+                <div
+                  key={`coldiv-${i}`}
+                  className="absolute top-0 bottom-0 z-30 group"
+                  style={{ left: `${(acc / colSum) * 100}%`, width: 9, transform: "translateX(-50%)", cursor: "col-resize" }}
+                  onMouseDown={(e) => startDividerDrag(e, "col", i)}
+                  data-testid={`corr-pane-divider-col-${i}`}
+                >
+                  <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+                </div>
+              );
+            }
+            return handles;
+          })()}
+          {shownKeys.map((key) => (
+            <div key={key} className="relative min-w-0 min-h-0 overflow-hidden" style={{ width: "100%", height: "100%" }}>
+              {renderPane(key)}
             </div>
           ))}
         </div>
       )}
+    </div>
+
+    {/* Indicators side panel — the exact Charts-tab panel, scoped to the LWC panes */}
+    {showIndicators && lwcPaneInfos.length > 0 && (
+      <IndicatorsPanel
+        panes={lwcPaneInfos}
+        indicatorsMap={indicatorsMap}
+        activePaneId={indicatorPaneId ?? lwcPaneInfos[0].id}
+        onSelectPane={(id) => setIndicatorPaneId(id)}
+        onChangeIndicators={(paneId, indicators) =>
+          onIndicatorsMapChange(prev => ({ ...prev, [paneId]: indicators }))
+        }
+        onApplyToAllPanes={(indicators) =>
+          onIndicatorsMapChange(prev => {
+            const next = { ...prev };
+            for (const p of lwcPaneInfos) next[p.id] = { ...indicators };
+            return next;
+          })
+        }
+        onClose={() => setShowIndicators(false)}
+        frequency={freq}
+      />
+    )}
     </div>
   );
 }
