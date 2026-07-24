@@ -48,6 +48,11 @@ import {
 import { Play, Loader2, Layers, LineChart, ChevronDown, ChevronRight, Flame } from "lucide-react";
 
 const TF_LABEL: Record<Timeframe, string> = { H: "Hourly", D: "Daily", W: "Weekly" };
+const TF_CHIP_CLASS: Record<Timeframe, string> = {
+  H: "border-amber-500/40 bg-amber-500/10 text-amber-400",
+  D: "border-sky-500/40 bg-sky-500/10 text-sky-400",
+  W: "border-violet-500/40 bg-violet-500/10 text-violet-400",
+};
 
 type ScanScope = "single" | "universe" | "list" | "pair" | "combos";
 type ScanTarget = { kind: "ticker"; ticker: string } | { kind: "pair"; a: string; b: string };
@@ -888,7 +893,13 @@ export default function MTFSetups() {
         {/* Custom combo builder */}
         {bundle && (
           <div className="px-3 py-2 border-t border-border" data-testid="mtf-custom">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Test your own combo</div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Test your own combo</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-border bg-background text-muted-foreground"
+                title="Entries and forward returns are evaluated on these bars. Conditions from higher timeframes are projected onto this axis.">
+                Base: {TF_LABEL[effectiveBase]} bars
+              </span>
+            </div>
             {bookmarks.length > 0 && (
               <div className="flex items-center gap-1.5 flex-wrap mb-1.5" data-testid="mtf-bookmarks">
                 <span className="text-[10px] text-muted-foreground">Bookmarks:</span>
@@ -908,26 +919,36 @@ export default function MTFSetups() {
               </div>
             )}
             <div className="flex items-center gap-2 flex-wrap text-[11px]">
-              {[0, 1, 2].map((i) => (
-                <select
-                  key={i}
-                  value={customLegs[i] ?? ""}
-                  onChange={(e) => setCustomLegs((prev) => { const next = [...prev]; next[i] = e.target.value; return next; })}
-                  className="bg-background border border-border rounded px-1 py-0.5 text-[11px] max-w-[240px]"
-                  data-testid={`mtf-custom-leg-${i}`}
-                >
-                  <option value="">{i < 2 ? `Condition ${i + 1}…` : "Condition 3 (optional)…"}</option>
-                  {(["H", "D", "W"] as Timeframe[])
-                    .filter((tf) => tf !== "H" || effectiveBase === "H")
-                    .map((tf) => (
-                      <optgroup key={tf} label={TF_LABEL[tf]}>
-                        {instances.filter((inst) => inst.tf === tf).map((inst) => (
-                          <option key={inst.key} value={inst.key}>{inst.def.label}</option>
+              {[0, 1, 2].map((i) => {
+                const selTf = instances.find((inst) => inst.key === customLegs[i])?.tf;
+                return (
+                  <div key={i} className="inline-flex items-center gap-1">
+                    {selTf && (
+                      <span className={`text-[9px] font-mono uppercase px-1 py-0.5 rounded border ${TF_CHIP_CLASS[selTf]}`}
+                        data-testid={`mtf-custom-leg-tf-${i}`}>
+                        {TF_LABEL[selTf]}
+                      </span>
+                    )}
+                    <select
+                      value={customLegs[i] ?? ""}
+                      onChange={(e) => setCustomLegs((prev) => { const next = [...prev]; next[i] = e.target.value; return next; })}
+                      className="bg-background border border-border rounded px-1 py-0.5 text-[11px] max-w-[240px]"
+                      data-testid={`mtf-custom-leg-${i}`}
+                    >
+                      <option value="">{i < 2 ? `Condition ${i + 1}…` : "Condition 3 (optional)…"}</option>
+                      {(["H", "D", "W"] as Timeframe[])
+                        .filter((tf) => tf !== "H" || effectiveBase === "H")
+                        .map((tf) => (
+                          <optgroup key={tf} label={TF_LABEL[tf]}>
+                            {instances.filter((inst) => inst.tf === tf).map((inst) => (
+                              <option key={inst.key} value={inst.key}>{TF_LABEL[inst.tf]} · {inst.def.label}</option>
+                            ))}
+                          </optgroup>
                         ))}
-                      </optgroup>
-                    ))}
-                </select>
-              ))}
+                    </select>
+                  </div>
+                );
+              })}
               <div className="flex items-center rounded border border-border overflow-hidden">
                 {(["long", "short"] as MtfDirection[]).map((d) => (
                   <button key={d} type="button" onClick={() => setCustomDir(d)}
