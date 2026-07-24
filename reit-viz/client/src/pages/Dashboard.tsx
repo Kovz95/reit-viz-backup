@@ -1228,6 +1228,27 @@ export default function Dashboard() {
   );
 
   // Load a single A/B ratio pane — the Pair Ratios → Charts click-through.
+  // Non-workbook legs (the MTF Setups pair hand-off passes arbitrary Yahoo
+  // symbols like QQQ/SPY): server Yahoo daily adjusted closes as {time,value}.
+  const yahooCloseSeries = useCallback(async (ticker: string): Promise<{ time: string; value: number }[]> => {
+    try {
+      const res = await fetch(`/api/yahoo-prices/${encodeURIComponent(ticker.toUpperCase())}`);
+      if (!res.ok) return [];
+      const ct = res.headers.get("content-type") ?? "";
+      if (!ct.includes("json")) return [];
+      const d = await res.json();
+      if (!Array.isArray(d?.dates) || !Array.isArray(d?.closes)) return [];
+      const closes = Array.isArray(d.adjCloses) && d.adjCloses.length === d.dates.length ? d.adjCloses : d.closes;
+      const out: { time: string; value: number }[] = [];
+      for (let i = 0; i < d.dates.length; i++) {
+        if (Number.isFinite(closes[i])) out.push({ time: d.dates[i], value: closes[i] });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }, []);
+
   // Same element-wise ratio math as loadRelativeValuePreset, but for one metric
   // and independent of activeTicker (the hand-off happens before one is set).
   const loadPairRatio = useCallback(
@@ -1238,10 +1259,14 @@ export default function Dashboard() {
       setActiveTicker(tickerA);
       setActiveView("");
       try {
-        const [a, b] = await Promise.all([
+        let [a, b] = await Promise.all([
           getMetricSeries(tickerA, metric).catch(() => [] as { time: string; value: number }[]),
           getMetricSeries(tickerB, metric).catch(() => [] as { time: string; value: number }[]),
         ]);
+        if (metric === "close") {
+          if (!a.length) a = await yahooCloseSeries(tickerA);
+          if (!b.length) b = await yahooCloseSeries(tickerB);
+        }
         const bMap = new Map<string, number>();
         for (const d of b) bMap.set(d.time, d.value);
         const data: { time: string; value: number }[] = [];
@@ -1275,7 +1300,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    []
+    [yahooCloseSeries]
   );
 
   // ── Server-backed Custom Charts (persistent blank canvases) ──
@@ -1623,8 +1648,15 @@ export default function Dashboard() {
   const pairStartedRef = useRef(false);
   useEffect(() => {
     const p = pendingPairRef.current;
-    if (p && !pairStartedRef.current && tickerList.length > 0 && tickerList.some((tk) => tk.ticker === p.tickerA)) {
+    // Gate only on the data layer being ready — NOT on the legs being
+    // workbook members: pair legs may be arbitrary Yahoo symbols (e.g. MTF
+    // Setups pair rows hand off QQQ/SPY), and the ratio builder has a
+    // /api/yahoo-prices fallback for those. Clearing the ref un-suppresses
+    // the default auto-load if the ratio load comes back empty.
+    if (p && !pairStartedRef.current && tickerList.length > 0) {
       pairStartedRef.current = true;
+      // NOTE: pendingPairRef stays set — it suppresses the default auto-load
+      // below, which would otherwise race the ratio load and clobber the pane.
       loadPairRatio(p.tickerA, p.tickerB, p.metric);
     }
   }, [tickerList, loadPairRatio]);

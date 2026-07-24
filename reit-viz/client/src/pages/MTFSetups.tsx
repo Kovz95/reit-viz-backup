@@ -149,6 +149,26 @@ export default function MTFSetups() {
     setSettings((prev) => ({ ...prev, baseTf, ...defaultsForBase(baseTf) }));
   }, []);
 
+  // Ratios move roughly half as much as outright prices, so the 3% default
+  // target finds ~nothing on pair scopes. Swap 3% ↔ 1.5% when crossing the
+  // pair boundary — but only between the two defaults, never over a custom
+  // value the user typed.
+  const PAIR_DEFAULT_TARGET = 1.5;
+  const changeScope = useCallback((s: ScanScope) => {
+    setScope((prev) => {
+      const wasPair = prev === "pair" || prev === "combos";
+      const isPair = s === "pair" || s === "combos";
+      if (isPair !== wasPair) {
+        setSettings((st) => {
+          if (isPair && st.targetPct === DEFAULT_MTF_SETTINGS.targetPct) return { ...st, targetPct: PAIR_DEFAULT_TARGET };
+          if (!isPair && st.targetPct === PAIR_DEFAULT_TARGET) return { ...st, targetPct: DEFAULT_MTF_SETTINGS.targetPct };
+          return st;
+        });
+      }
+      return s;
+    });
+  }, []);
+
   // ── Ambient bundle (single & pair scopes — feeds the grid + custom combo) ──
   const [bundle, setBundle] = useState<MtfBundle | null>(null);
   const [bundleErr, setBundleErr] = useState<string | null>(null);
@@ -357,18 +377,31 @@ export default function MTFSetups() {
   }, [scan]);
 
   const openOnChart = (r: MtfSetupRow) => {
-    // Pair-ratio symbols have no single-ticker chart to hand off to.
-    if (r.symbol.includes("/")) return;
-    emitChartSignals({
-      ticker: r.symbol,
+    const signalsFor = (ticker: string) => ({
+      ticker,
       label: `${r.legs.map((l) => l.label).join(" + ")} (${r.direction})`,
       signals: r.entryLabels.map((date) => ({
-        ticker: r.symbol,
+        ticker,
         date,
         direction: r.direction === "long" ? "up" : "down",
         label: "MTF setup",
       })),
     });
+    if (r.symbol.includes("/")) {
+      // Pair rows: reuse the Pair Ratios → Charts hand-off (Dashboard drains
+      // reit-viz:pair-to-charts on mount and builds the A/B RELVAL ratio
+      // pane). Entry markers piggyback on the chartBridge sessionStorage
+      // slot keyed by leg A — the RELVAL pane's anchor ticker — so ChartArea
+      // draws them as the usual vertical signal lines.
+      const [a, b] = r.symbol.split("/");
+      try {
+        sessionStorage.setItem("reit-viz:pair-to-charts", JSON.stringify({ tickerA: a, tickerB: b, metric: "close" }));
+        sessionStorage.setItem(`reit-viz:chart-signals:${a.toUpperCase()}`, JSON.stringify(signalsFor(a.toUpperCase())));
+      } catch {}
+      window.location.hash = "#/";
+      return;
+    }
+    emitChartSignals(signalsFor(r.symbol));
   };
 
   // ── Workspace persistence (controls only) ─────────────────────────────────
@@ -418,7 +451,7 @@ export default function MTFSetups() {
               <button
                 key={s}
                 type="button"
-                onClick={() => setScope(s)}
+                onClick={() => changeScope(s)}
                 data-testid={`mtf-scope-${s}`}
                 className={`px-2 py-0.5 text-[10px] font-mono ${scope === s ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
               >
@@ -707,14 +740,12 @@ export default function MTFSetups() {
                           )}
                         </td>
                         <td className="text-right py-0.5 pr-2" onClick={(e) => e.stopPropagation()}>
-                          {r.symbol.includes("/") ? (
-                            <span className="text-muted-foreground/40 text-[10px]" title="Chart hand-off is single-ticker only">—</span>
-                          ) : (
-                            <button type="button" onClick={() => openOnChart(r)} className="text-muted-foreground hover:text-primary p-0.5"
-                              title="Show recent entries on Charts (hourly entries land as day markers)">
-                              <LineChart className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          <button type="button" onClick={() => openOnChart(r)} className="text-muted-foreground hover:text-primary p-0.5"
+                            title={r.symbol.includes("/")
+                              ? "Open the A/B ratio on Charts with recent entries marked"
+                              : "Show recent entries on Charts (hourly entries land as day markers)"}>
+                            <LineChart className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                       {expanded && (

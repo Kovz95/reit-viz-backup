@@ -27,6 +27,11 @@ function UnifiedTickerPicker({
   const [inputValue, setInputValue] = useState(value || "");
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
+  // Enter only takes the highlighted row after explicit arrow navigation.
+  // Otherwise the typed text wins (exact workbook symbol first, then raw
+  // Yahoo symbol) — previously "DIA"+Enter selected AKR because "AcaDIA
+  // Realty" happened to be the first name-substring match.
+  const [navigated, setNavigated] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -77,15 +82,23 @@ function UnifiedTickerPicker({
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      setNavigated(true);
       setHighlightIndex((prev) => Math.min(prev + 1, Math.max(filteredTickers.length - 1, 0)));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
+      setNavigated(true);
       setHighlightIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      open && filteredTickers[highlightIndex]
-        ? selectTicker(filteredTickers[highlightIndex].ticker)
-        : selectTicker(inputValue);
+      const typed = inputValue.trim().toUpperCase();
+      const exact = filteredTickers.find((t) => t.ticker.toUpperCase() === typed);
+      if (open && navigated && filteredTickers[highlightIndex]) {
+        selectTicker(filteredTickers[highlightIndex].ticker);
+      } else if (exact) {
+        selectTicker(exact.ticker);
+      } else {
+        selectTicker(inputValue);
+      }
     } else if (e.key === "Escape") {
       setOpen(false);
     }
@@ -107,6 +120,7 @@ function UnifiedTickerPicker({
               setInputValue(e.target.value.toUpperCase());
               setOpen(true);
               setHighlightIndex(0);
+              setNavigated(false);
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={handleKeyDown}
