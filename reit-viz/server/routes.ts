@@ -2136,6 +2136,29 @@ export async function registerRoutes(server: Server, app: Express) {
   }
 
   /** Autocorrelation of a series at lag k */
+  /** Partial autocorrelation φ_kk for k=1..K via Durbin–Levinson, from ACF
+   *  values [r1..rK]. PACF at lag k = correlation at k with lags 1..k−1
+   *  partialled out. */
+  function pacfFromAcf(acfVals: number[]): number[] {
+    const K = acfVals.length;
+    const r = [1, ...acfVals];
+    const out: number[] = [];
+    let prevPhi: number[] = [];
+    let err = 1;
+    for (let k = 1; k <= K; k++) {
+      let num = r[k];
+      for (let j = 1; j < k; j++) num -= prevPhi[j - 1] * r[k - j];
+      const phiKK = err === 0 ? 0 : num / err;
+      const phi: number[] = [];
+      for (let j = 1; j < k; j++) phi.push(prevPhi[j - 1] - phiKK * prevPhi[k - j - 1]);
+      phi.push(phiKK);
+      err *= 1 - phiKK * phiKK;
+      prevPhi = phi;
+      out.push(phiKK);
+    }
+    return out;
+  }
+
   function autocorrelation(values: number[], lag: number): number {
     const n = values.length;
     if (n <= lag) return 0;
@@ -2245,8 +2268,8 @@ export async function registerRoutes(server: Server, app: Express) {
       // Autocorrelation-adjusted significance
       const adjusted = adjustedCorrelation(transformedA, transformedB, fullCorr);
 
-      // Autocorrelation profiles (lags 1-20)
-      const maxLag = 20;
+      // ACF + PACF profiles (up to 60 lags, bounded by sample size)
+      const maxLag = Math.max(10, Math.min(60, Math.floor(transformedA.length / 4)));
       const acfA: { lag: number; value: number }[] = [];
       const acfB: { lag: number; value: number }[] = [];
       const se = bartlettSE(transformedA.length);
@@ -2254,6 +2277,8 @@ export async function registerRoutes(server: Server, app: Express) {
         acfA.push({ lag: k, value: Math.round(autocorrelation(transformedA, k) * 10000) / 10000 });
         acfB.push({ lag: k, value: Math.round(autocorrelation(transformedB, k) * 10000) / 10000 });
       }
+      const pacfA = pacfFromAcf(acfA.map((d) => d.value)).map((v, i) => ({ lag: i + 1, value: Math.round(v * 10000) / 10000 }));
+      const pacfB = pacfFromAcf(acfB.map((d) => d.value)).map((v, i) => ({ lag: i + 1, value: Math.round(v * 10000) / 10000 }));
 
       // Rolling correlation
       const rolling: { time: string; value: number }[] = [];
@@ -2345,6 +2370,8 @@ export async function registerRoutes(server: Server, app: Express) {
         crossCorrelation: crossCorr,
         acfA,
         acfB,
+        pacfA,
+        pacfB,
         scatter,
         levelsA,
         levelsB,

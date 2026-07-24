@@ -44,6 +44,29 @@ function pearsonCorrelation(x: number[], y: number[]): number {
   return denom === 0 ? 0 : ssXY / denom;
 }
 
+/** Partial autocorrelation φ_kk for k=1..K via Durbin–Levinson, from the ACF
+ *  values [r1..rK]. PACF at lag k = correlation at k with lags 1..k−1
+ *  partialled out — the honest answer to "which lag matters on its own". */
+function pacfFromAcf(acfVals: number[]): number[] {
+  const K = acfVals.length;
+  const r = [1, ...acfVals];
+  const out: number[] = [];
+  let prevPhi: number[] = [];
+  let err = 1;
+  for (let k = 1; k <= K; k++) {
+    let num = r[k];
+    for (let j = 1; j < k; j++) num -= prevPhi[j - 1] * r[k - j];
+    const phiKK = err === 0 ? 0 : num / err;
+    const phi: number[] = [];
+    for (let j = 1; j < k; j++) phi.push(prevPhi[j - 1] - phiKK * prevPhi[k - j - 1]);
+    phi.push(phiKK);
+    err *= 1 - phiKK * phiKK;
+    prevPhi = phi;
+    out.push(phiKK);
+  }
+  return out;
+}
+
 function autocorrelation(values: number[], lag: number): number {
   const n = values.length;
   if (n <= lag) return 0;
@@ -361,6 +384,9 @@ export interface PairwiseResult {
   crossCorrelation: { lag: number; value: number }[];
   acfA: { lag: number; value: number }[];
   acfB: { lag: number; value: number }[];
+  /** Partial autocorrelation (Durbin–Levinson), same lags as acfA/acfB. */
+  pacfA: { lag: number; value: number }[];
+  pacfB: { lag: number; value: number }[];
   scatter: { x: number; y: number; date: string }[];
   levelsA: { time: string; value: number }[];
   levelsB: { time: string; value: number }[];
@@ -396,7 +422,7 @@ async function computePairwiseStatic(
   if (aligned.dates.length < 10) {
     return {
       summary: { correlation: 0, spearmanCorrelation: 0, rSquared: 0, beta: 0, alpha: 0, observations: aligned.dates.length, mode, autoCorrelationA: 0, autoCorrelationB: 0, effectiveN: 0, tStat: 0, pValue: 1 },
-      rolling: [], rollingCI: [], rollingBeta: [], multiWindowRolling: {}, crossCorrelation: [], acfA: [], acfB: [], scatter: [], levelsA: [], levelsB: [],
+      rolling: [], rollingCI: [], rollingBeta: [], multiWindowRolling: {}, crossCorrelation: [], acfA: [], acfB: [], pacfA: [], pacfB: [], scatter: [], levelsA: [], levelsB: [],
       diagnostics: { adfA: { stat: 0, pValue: 1, lags: 0, isStationary: false }, adfB: { stat: 0, pValue: 1, lags: 0, isStationary: false }, cointegration: null, fisherCI: { lower: -1, upper: 1 } },
       error: "Insufficient overlapping data",
     };
@@ -426,14 +452,16 @@ async function computePairwiseStatic(
   const adj = adjustedCorrelation(transformedA, transformedB, fullCorr);
   const fullCI = fisherCI(fullCorr, Math.min(transformedA.length, transformedB.length));
 
-  // ACF profiles (lags 1-20)
-  const maxLag = 20;
+  // ACF + PACF profiles (up to 60 lags, bounded by sample size)
+  const maxLag = Math.max(10, Math.min(60, Math.floor(transformedA.length / 4)));
   const acfA: { lag: number; value: number }[] = [];
   const acfB: { lag: number; value: number }[] = [];
   for (let k = 1; k <= maxLag; k++) {
     acfA.push({ lag: k, value: Math.round(autocorrelation(transformedA, k) * 10000) / 10000 });
     acfB.push({ lag: k, value: Math.round(autocorrelation(transformedB, k) * 10000) / 10000 });
   }
+  const pacfA = pacfFromAcf(acfA.map((d) => d.value)).map((v, i) => ({ lag: i + 1, value: Math.round(v * 10000) / 10000 }));
+  const pacfB = pacfFromAcf(acfB.map((d) => d.value)).map((v, i) => ({ lag: i + 1, value: Math.round(v * 10000) / 10000 }));
 
   // Rolling correlation
   const rolling: { time: string; value: number }[] = [];
@@ -545,6 +573,8 @@ async function computePairwiseStatic(
     crossCorrelation,
     acfA,
     acfB,
+    pacfA,
+    pacfB,
     scatter,
     levelsA,
     levelsB,

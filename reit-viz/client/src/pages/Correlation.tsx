@@ -106,6 +106,8 @@ interface PairwiseResult {
   crossCorrelation: { lag: number; value: number }[];
   acfA: { lag: number; value: number }[];
   acfB: { lag: number; value: number }[];
+  pacfA?: { lag: number; value: number }[];
+  pacfB?: { lag: number; value: number }[];
   scatter: { x: number; y: number; date: string }[];
   levelsA: { time: string; value: number }[];
   levelsB: { time: string; value: number }[];
@@ -911,6 +913,17 @@ function ACFChart({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Strongest lag: max |value| among significant lags (|v| > 1.96/√n), else
+  // the overall max, flagged as not significant.
+  const strongest = useMemo(() => {
+    if (data.length === 0 || nObs <= 0) return null;
+    const sig = 1.96 / Math.sqrt(nObs);
+    const pool = data.filter((d) => Math.abs(d.value) > sig);
+    const from = pool.length ? pool : data;
+    const best = from.reduce((a, b) => (Math.abs(b.value) > Math.abs(a.value) ? b : a));
+    return { ...best, isSignificant: pool.length > 0 };
+  }, [data, nObs]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || data.length === 0) return;
@@ -931,6 +944,12 @@ function ACFChart({
 
     ctx.clearRect(0, 0, w, h);
 
+    // Auto-scale: returns-mode ACFs live in ±0.1 — a fixed ±1 axis hides them.
+    const se = 1 / Math.sqrt(nObs);
+    const maxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 1.96 * se);
+    const yMax = Math.min(1, Math.max(0.05, maxAbs * 1.25));
+    const scaleY = (v: number) => (v / yMax) * (plotH / 2);
+
     // Draw zero line
     const yCenter = pad.top + plotH / 2;
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
@@ -941,9 +960,8 @@ function ACFChart({
     ctx.stroke();
 
     // Draw significance bands (95%)
-    const se = 1 / Math.sqrt(nObs);
-    const sigUpper = yCenter - (1.96 * se) * (plotH / 2);
-    const sigLower = yCenter + (1.96 * se) * (plotH / 2);
+    const sigUpper = yCenter - scaleY(1.96 * se);
+    const sigLower = yCenter + scaleY(1.96 * se);
     ctx.strokeStyle = "rgba(239, 68, 68, 0.3)";
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
@@ -956,13 +974,18 @@ function ACFChart({
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Draw bars
-    const barWidth = Math.max(3, plotW / data.length - 2);
+    // Draw bars (strongest lag highlighted)
+    const barWidth = Math.max(2, plotW / data.length - 2);
     data.forEach((d, i) => {
       const x = pad.left + (i / data.length) * plotW + (plotW / data.length - barWidth) / 2;
-      const barH = d.value * (plotH / 2);
+      const barH = scaleY(d.value);
       const y = d.value >= 0 ? yCenter - barH : yCenter;
-      ctx.fillStyle = Math.abs(d.value) > 1.96 * se ? "#0ea5e9" : "rgba(14, 165, 233, 0.4)";
+      ctx.fillStyle =
+        strongest && d.lag === strongest.lag
+          ? "#e879f9"
+          : Math.abs(d.value) > 1.96 * se
+            ? "#0ea5e9"
+            : "rgba(14, 165, 233, 0.4)";
       ctx.fillRect(x, y, barWidth, Math.abs(barH));
     });
 
@@ -970,24 +993,35 @@ function ACFChart({
     ctx.fillStyle = "#7a8a9e";
     ctx.font = "9px 'JetBrains Mono', monospace";
     ctx.textAlign = "right";
-    ctx.fillText("1.0", pad.left - 4, pad.top + 6);
+    const yLabel = yMax >= 1 ? "1.0" : yMax.toFixed(2);
+    ctx.fillText(yLabel, pad.left - 4, pad.top + 6);
     ctx.fillText("0", pad.left - 4, yCenter + 3);
-    ctx.fillText("-1.0", pad.left - 4, h - pad.bottom);
+    ctx.fillText(`-${yLabel}`, pad.left - 4, h - pad.bottom);
 
     // X-axis labels
     ctx.textAlign = "center";
-    for (let i = 0; i < data.length; i += 5) {
+    const xStep = data.length > 30 ? 10 : 5;
+    for (let i = 0; i < data.length; i += xStep) {
       const x = pad.left + ((i + 0.5) / data.length) * plotW;
       ctx.fillText(String(data[i].lag), x, h - 4);
     }
-  }, [data, nObs, height]);
+  }, [data, nObs, height, strongest]);
 
   return (
     <div className="border border-border/30">
-      <div className="px-3 py-1 bg-card/50">
+      <div className="px-3 py-1 bg-card/50 flex items-center justify-between gap-2">
         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           {title}
         </span>
+        {strongest && (
+          <span className="text-[10px] font-mono" data-testid="acf-strongest">
+            <span className="text-muted-foreground">strongest </span>
+            <span style={{ color: "#e879f9" }}>
+              lag {strongest.lag} ({strongest.value >= 0 ? "+" : ""}{strongest.value.toFixed(3)})
+            </span>
+            {!strongest.isSignificant && <span className="text-muted-foreground"> n.s.</span>}
+          </span>
+        )}
       </div>
       <canvas ref={canvasRef} style={{ width: "100%", height }} className="block" />
     </div>
@@ -2217,6 +2251,7 @@ function PairwiseView({
   setVisibleCharts: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
+  const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
 
   if (loading) {
     return (
@@ -2437,23 +2472,43 @@ function PairwiseView({
           </CanvasChartWrapper>
         )}
 
-        {/* ACF panels */}
-        {visibleCharts.has("acf") && !maximizedChart && (
-          <div className="grid grid-cols-2 gap-3">
-            <ACFChart
-              data={data.acfA}
-              nObs={s.observations}
-              title={`ACF: ${labelA}`}
-              height={200}
-            />
-            <ACFChart
-              data={data.acfB}
-              nObs={s.observations}
-              title={`ACF: ${labelB}`}
-              height={200}
-            />
-          </div>
-        )}
+        {/* ACF / PACF panels */}
+        {visibleCharts.has("acf") && !maximizedChart && (() => {
+          const hasPacf = (data.pacfA?.length ?? 0) > 0;
+          const useP = acfMode === "pacf" && hasPacf;
+          const dA = useP ? data.pacfA! : data.acfA;
+          const dB = useP ? data.pacfB! : data.acfB;
+          const kind = useP ? "PACF" : "ACF";
+          return (
+            <div className="space-y-1.5">
+              {hasPacf && (
+                <div className="flex items-center gap-1" data-testid="acf-mode-toggle">
+                  {(["acf", "pacf"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setAcfMode(m)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase border ${
+                        acfMode === m
+                          ? "bg-primary/20 text-primary border-primary/40"
+                          : "text-muted-foreground border-border hover:text-foreground"
+                      }`}
+                      data-testid={`acf-mode-${m}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  <span className="text-[9px] text-muted-foreground ml-1.5">
+                    PACF isolates each lag's own effect (lags 1..k−1 partialled out) — use it to find WHICH lag carries the dependence
+                  </span>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <ACFChart data={dA} nObs={s.observations} title={`${kind}: ${labelA}`} height={200} />
+                <ACFChart data={dB} nObs={s.observations} title={`${kind}: ${labelB}`} height={200} />
+              </div>
+            </div>
+          );
+        })()}
         {maximizedChart === "acfA" && (
           <CanvasChartWrapper title={`ACF: ${labelA}`} chartId="acfA" isMaximized onMaximize={setMaximizedChart} height={200}>
             {(h) => <ACFChart data={data.acfA} nObs={s.observations} title={`ACF: ${labelA}`} height={h} />}
