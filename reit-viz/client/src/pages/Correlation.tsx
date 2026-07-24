@@ -1038,7 +1038,7 @@ function CorrLwcPane({
         spacerTimes={spacerTimes ?? null}
         activeIndicators={indicators}
         timeRange={timeRange}
-        activeTool=""
+        activeTool="none"
         drawColor="#f59e0b"
         onChartReady={handleChartReady}
         onChartDestroyed={handleChartDestroyed}
@@ -3434,32 +3434,41 @@ function PairwiseView({
   // sync stays index-aligned across Levels / Rolling / Beta.
   const lwcChartsRef = useRef(new Map<number, IChartApi>());
   const syncingRef = useRef(false);
-  const syncPendingRef = useRef<{ src: number; from: number; to: number } | null>(null);
+  const syncPendingSrcRef = useRef<number | null>(null);
   const syncRafRef = useRef(0);
-  // Coalesce range broadcasts into one rAF apply and skip no-op sets — a direct
-  // apply-in-handler loop fights ChartPane's internal range reactions and can
-  // trip React's nested-update cap during zoom storms.
+  // Coalesce range broadcasts into one rAF apply and skip no-op sets. Crucially,
+  // read the source chart's LIVE range at flush time — applying a snapshot taken
+  // at event time means async echo events re-apply a stale range onto the pane
+  // the user is actively dragging, which rubber-bands the pan ("frozen" charts).
   const flushSync = useCallback(() => {
     syncRafRef.current = 0;
-    const pending = syncPendingRef.current;
-    syncPendingRef.current = null;
-    if (!pending) return;
+    const src = syncPendingSrcRef.current;
+    syncPendingSrcRef.current = null;
+    if (src == null) return;
+    const srcChart = lwcChartsRef.current.get(src);
+    if (!srcChart) return;
+    let range: { from: number; to: number } | null = null;
+    try { range = srcChart.timeScale().getVisibleLogicalRange() as { from: number; to: number } | null; } catch {}
+    if (!range) return;
     syncingRef.current = true;
     for (const [id, other] of lwcChartsRef.current) {
-      if (id === pending.src) continue;
+      if (id === src) continue;
       try {
         const cur = other.timeScale().getVisibleLogicalRange();
-        if (cur && Math.abs(cur.from - pending.from) < 0.5 && Math.abs(cur.to - pending.to) < 0.5) continue;
-        other.timeScale().setVisibleLogicalRange({ from: pending.from, to: pending.to });
+        if (cur && Math.abs(cur.from - range.from) < 0.5 && Math.abs(cur.to - range.to) < 0.5) continue;
+        other.timeScale().setVisibleLogicalRange(range);
       } catch {}
     }
     syncingRef.current = false;
   }, []);
   const handleLwcChartReady = useCallback((paneId: number, chart: IChartApi) => {
     lwcChartsRef.current.set(paneId, chart);
+    (window as any).__corrCharts = lwcChartsRef.current; // debug hook
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range || syncingRef.current) return;
-      syncPendingRef.current = { src: paneId, from: range.from, to: range.to };
+      // First writer per frame wins — an async echo from a follower pane must
+      // not steal the source role from the pane the user is interacting with.
+      if (syncPendingSrcRef.current == null) syncPendingSrcRef.current = paneId;
       if (!syncRafRef.current) syncRafRef.current = requestAnimationFrame(flushSync);
     });
   }, [flushSync]);
