@@ -955,9 +955,23 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
   // Map a pane's crosshair `values` (title → number) to labelled, colored items
   // by looking up each series' color from the pane's series map.
+  // The setState is coalesced through requestAnimationFrame: LWC fires crosshair
+  // updates synchronously during zoom/scale animations, and a direct setState in
+  // that callback can chain into React's nested-update cap ("Maximum update
+  // depth exceeded") — one readout update per frame is all the UI needs anyway.
+  const readoutRafRef = useRef(0);
+  const pendingReadoutRef = useRef<{ time: string; items: { label: string; value: number; color: string }[] } | null>(null);
+  const scheduleReadout = useCallback((next: { time: string; items: { label: string; value: number; color: string }[] } | null) => {
+    pendingReadoutRef.current = next;
+    if (readoutRafRef.current) return;
+    readoutRafRef.current = requestAnimationFrame(() => {
+      readoutRafRef.current = 0;
+      setHoverReadout(pendingReadoutRef.current);
+    });
+  }, []);
   const applyLocalReadout = useCallback((time: string | null, values: Record<string, number> | null) => {
     if (!time || !values || Object.keys(values).length === 0) {
-      setHoverReadout(null);
+      scheduleReadout(null);
       return;
     }
     const colorByTitle: Record<string, string> = {};
@@ -973,8 +987,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       value,
       color: colorByTitle[label] || "#94a3b8",
     }));
-    setHoverReadout({ time, items });
-  }, []);
+    scheduleReadout({ time, items });
+  }, [scheduleReadout]);
   const [chartReady, setChartReady] = useState(false);
   const [logScale, setLogScale] = useState(false);
   const [dataTransform, setDataTransform] = useState<DataTransform>("raw");

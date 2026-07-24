@@ -11,7 +11,7 @@ import ChartPane from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
-import { FilterDropdown, emptyClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
+import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
 import { useGridProminence } from "@/lib/gridPref";
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
@@ -20,6 +20,8 @@ import GridProminenceToggle from "@/components/GridProminenceToggle";
 import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
 import { useBaskets } from "@/lib/useBaskets";
+import type { Basket } from "@/lib/useBaskets";
+import { isAutoBasketId, groupAutoBaskets, AUTO_BASKET_GROUP_LABELS } from "@/lib/autoBaskets";
 import type { IChartApi } from "lightweight-charts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -660,14 +662,20 @@ function CorrLwcPane({
   series,
   indicators,
   intraday,
+  spacerTimes,
   onMaximizeToggle,
+  onChartReady,
+  onChartDestroyed,
 }: {
   paneId: number;
   label: string;
   series: PlottedSeries[];
   indicators: ActiveIndicators;
   intraday: boolean;
+  spacerTimes?: (string | number)[] | null;
   onMaximizeToggle: () => void;
+  onChartReady?: (paneId: number, chart: IChartApi) => void;
+  onChartDestroyed?: (paneId: number) => void;
 }) {
   const chartRef = useRef<IChartApi | null>(null);
   const [gridProminence] = useGridProminence();
@@ -675,8 +683,14 @@ function CorrLwcPane({
     () => ({ chartType: "line" as const, showVolume: false, gridProminence }),
     [gridProminence]
   );
-  const handleChartReady = useCallback((_id: number, chart: IChartApi) => { chartRef.current = chart; }, []);
-  const handleChartDestroyed = useCallback(() => { chartRef.current = null; }, []);
+  const handleChartReady = useCallback((id: number, chart: IChartApi) => {
+    chartRef.current = chart;
+    onChartReady?.(id, chart);
+  }, [onChartReady]);
+  const handleChartDestroyed = useCallback((id: number) => {
+    chartRef.current = null;
+    onChartDestroyed?.(id);
+  }, [onChartDestroyed]);
   return (
     <div
       className="relative w-full h-full min-w-0 min-h-0 overflow-hidden border border-border/30"
@@ -691,6 +705,7 @@ function CorrLwcPane({
         activeTicker={null}
         chartConfig={chartConfig}
         intraday={intraday}
+        spacerTimes={spacerTimes ?? null}
         activeIndicators={indicators}
         timeRange="all"
         activeTool=""
@@ -702,6 +717,64 @@ function CorrLwcPane({
         <ExportMenu getChart={() => chartRef.current} label={`Correlation_${label}`} />
       </div>
     </div>
+  );
+}
+
+// ── Charts-style basket picker: My Baskets + auto-basket groups, searchable ──
+function BasketSelect({
+  baskets,
+  value,
+  onChange,
+}: {
+  baskets: Basket[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const userBaskets = useMemo(() => baskets.filter((b) => !isAutoBasketId(b.id)), [baskets]);
+  const autoGroups = useMemo(() => groupAutoBaskets(baskets.filter((b) => isAutoBasketId(b.id))), [baskets]);
+  const selected = baskets.find((b) => b.id === value);
+
+  const basketItem = (b: Basket) => (
+    <CommandItem
+      key={b.id}
+      value={`${b.name} ${b.id}`}
+      onSelect={() => { onChange(b.id); setOpen(false); }}
+      className="text-xs"
+    >
+      <Check className={`w-3 h-3 mr-1.5 flex-shrink-0 ${value === b.id ? "opacity-100" : "opacity-0"}`} />
+      <span className="whitespace-nowrap">{b.name}</span>
+      <span className="ml-auto pl-3 text-[10px] text-muted-foreground/60 whitespace-nowrap">
+        {b.tickers.length} ticker{b.tickers.length === 1 ? "" : "s"}
+      </span>
+    </CommandItem>
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="w-full h-7 justify-between px-2 text-[11px] font-mono" data-testid="corr-basket-select">
+          <span className="truncate">{selected ? `${selected.name} (${selected.tickers.length})` : "Pick a basket…"}</span>
+          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto min-w-[340px] max-w-[520px] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search baskets..." className="h-8 text-xs" />
+          <CommandList className="max-h-[320px]">
+            <CommandEmpty>No basket found.</CommandEmpty>
+            <CommandGroup heading={`My Baskets (${userBaskets.length})`}>
+              {userBaskets.map(basketItem)}
+            </CommandGroup>
+            {autoGroups.map(([groupKey, groupList]) => (
+              <CommandGroup key={groupKey} heading={`${AUTO_BASKET_GROUP_LABELS[groupKey] ?? groupKey} (${groupList.length})`}>
+                {groupList.map(basketItem)}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1716,10 +1789,20 @@ export default function Correlation() {
   }, []);
 
   // Universe matrix state
-  const { universeTickers, isFiltered, filteredCount, totalCount, filteredTickersList } = useUniverse();
+  const { universeTickers, isFiltered, filteredCount, totalCount, filteredTickersList, nationOf, exchangeOf } = useUniverse();
   const [uniMode, setUniMode] = useState("returns");
   const [uniWindow, setUniWindow] = useState("252");
+  const [uniCustomWindow, setUniCustomWindow] = useState("180");
   const [uniMetric, setUniMetric] = useState("close");
+  // Local scope filters for the Universe correlation tab (classification + geo)
+  const [uniClassFilters, setUniClassFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [uniNations, setUniNations] = useState<Set<string>>(new Set());
+  const [uniExchanges, setUniExchanges] = useState<Set<string>>(new Set());
+
+  // Effective lookback (supports the "custom" option)
+  const uniWindowEff = uniWindow === "custom"
+    ? String(Math.max(20, Math.min(5000, parseInt(uniCustomWindow) || 252)))
+    : uniWindow;
   // Basket matrix tab (shares metric/mode/lookback with the universe tab)
   const { baskets } = useBaskets();
   const [corrBasketId, setCorrBasketId] = useState("");
@@ -1743,9 +1826,13 @@ export default function Correlation() {
     corrIndicators: indicatorsMap,
     uniMode,
     uniWindow,
+    uniCustomWindow,
     uniMetric,
+    uniClassFilters: serializeClassFilters(uniClassFilters),
+    uniNations: Array.from(uniNations),
+    uniExchanges: Array.from(uniExchanges),
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, indicatorsMap, uniMode, uniWindow, uniMetric, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -1786,7 +1873,11 @@ export default function Correlation() {
     }
     if (state.uniMode !== undefined) setUniMode(state.uniMode);
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
+    if (typeof state.uniCustomWindow === "string") setUniCustomWindow(state.uniCustomWindow);
     if (state.uniMetric !== undefined) setUniMetric(state.uniMetric);
+    if (state.uniClassFilters !== undefined) setUniClassFilters(deserializeClassFilters(state.uniClassFilters));
+    if (Array.isArray(state.uniNations)) setUniNations(new Set(state.uniNations));
+    if (Array.isArray(state.uniExchanges)) setUniExchanges(new Set(state.uniExchanges));
     if (state.corrBasketId !== undefined) setCorrBasketId(state.corrBasketId);
   }, []);
 
@@ -1810,13 +1901,76 @@ export default function Correlation() {
     return groupMetricsByCategory([...s]);
   }, [tickers]);
 
-  // Build specs from universe tickers
-  const universeSpecs = useMemo(() => {
-    if (isFiltered && universeTickers) {
-      return filteredTickersList.map(t => `${t.ticker}:${uniMetric}`);
+  // Base list from the global universe (respects the Universe page's filter),
+  // then narrowed further by this tab's local classification/geo chips.
+  const uniBaseList = useMemo(
+    () => ((isFiltered && universeTickers ? filteredTickersList : tickers) as any[]),
+    [universeTickers, isFiltered, filteredTickersList, tickers]
+  );
+
+  const uniClassOptions = useMemo(() => {
+    const opts: Record<string, Set<string>> = {};
+    for (const f of CLASS_FIELDS) opts[f.key] = new Set();
+    for (const t of uniBaseList) {
+      for (const f of CLASS_FIELDS) {
+        const v = t[f.key];
+        if (v) opts[f.key].add(v);
+      }
     }
-    return tickers.map(t => `${t.ticker}:${uniMetric}`);
-  }, [universeTickers, isFiltered, filteredTickersList, tickers, uniMetric]);
+    const out: Record<string, string[]> = {};
+    for (const f of CLASS_FIELDS) out[f.key] = [...opts[f.key]].sort();
+    return out;
+  }, [uniBaseList]);
+
+  const uniGeoOptions = useMemo(() => {
+    const nations = new Set<string>();
+    const exchanges = new Set<string>();
+    for (const t of uniBaseList) {
+      const n = nationOf(t.ticker);
+      if (n) nations.add(n);
+      const x = exchangeOf(t.ticker);
+      if (x) exchanges.add(x);
+    }
+    return {
+      nations: [...nations].sort((a, b) => a.localeCompare(b)),
+      exchanges: [...exchanges].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [uniBaseList, nationOf, exchangeOf]);
+
+  const uniFilteredList = useMemo(() => {
+    let out = uniBaseList;
+    for (const f of CLASS_FIELDS) {
+      const sel = uniClassFilters[f.key];
+      if (sel && sel.size > 0) out = out.filter((t) => sel.has(t[f.key]));
+    }
+    if (uniNations.size > 0) {
+      out = out.filter((t) => {
+        const n = nationOf(t.ticker);
+        return n != null && uniNations.has(n);
+      });
+    }
+    if (uniExchanges.size > 0) {
+      out = out.filter((t) => {
+        const x = exchangeOf(t.ticker);
+        return x != null && uniExchanges.has(x);
+      });
+    }
+    return out;
+  }, [uniBaseList, uniClassFilters, uniNations, uniExchanges, nationOf, exchangeOf]);
+
+  const uniLocalFiltersActive =
+    Object.values(uniClassFilters).some((s) => s.size > 0) || uniNations.size > 0 || uniExchanges.size > 0;
+
+  const clearUniLocalFilters = useCallback(() => {
+    setUniClassFilters(emptyClassFilters());
+    setUniNations(new Set());
+    setUniExchanges(new Set());
+  }, []);
+
+  const universeSpecs = useMemo(
+    () => uniFilteredList.map((t) => `${t.ticker}:${uniMetric}`),
+    [uniFilteredList, uniMetric]
+  );
 
   // Pairwise query (frequency-aware, with optional custom rolling window)
   const { data: pairwise, isLoading: pairLoading } = useQuery<PairwiseResult>({
@@ -1859,8 +2013,8 @@ export default function Correlation() {
 
   // Universe matrix query
   const { data: uniMatrixData, isLoading: uniMatrixLoading } = useQuery<MatrixResult>({
-    queryKey: ["correlation-universe-matrix", universeSpecs.join(","), uniMode, uniWindow],
-    queryFn: () => fetchMatrixCorrelation(universeSpecs, uniMode, uniWindow),
+    queryKey: ["correlation-universe-matrix", universeSpecs.join(","), uniMode, uniWindowEff],
+    queryFn: () => fetchMatrixCorrelation(universeSpecs, uniMode, uniWindowEff),
     enabled: activeTab === "universe" && universeSpecs.length >= 2,
   });
 
@@ -1871,8 +2025,8 @@ export default function Correlation() {
     [activeCorrBasket, uniMetric]
   );
   const { data: basketMatrixData, isLoading: basketMatrixLoading } = useQuery<MatrixResult>({
-    queryKey: ["correlation-basket-matrix", basketSpecs.join(","), uniMode, uniWindow],
-    queryFn: () => fetchMatrixCorrelation(basketSpecs, uniMode, uniWindow),
+    queryKey: ["correlation-basket-matrix", basketSpecs.join(","), uniMode, uniWindowEff],
+    queryFn: () => fetchMatrixCorrelation(basketSpecs, uniMode, uniWindowEff),
     enabled: activeTab === "basket" && basketSpecs.length >= 2,
   });
 
@@ -2253,11 +2407,57 @@ export default function Correlation() {
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
             <div className="border border-border/30 rounded p-2 bg-card/30">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1">Universe</div>
-              <div className="text-sm font-mono font-bold text-primary">
-                {isFiltered ? filteredCount : totalCount} tickers
+              <div className="text-sm font-mono font-bold text-primary" data-testid="uni-corr-count">
+                {uniFilteredList.length} tickers
               </div>
               <div className="text-[10px] text-muted-foreground">
-                {isFiltered ? `Filtered from ${totalCount} total` : "All tickers (no filter)"}
+                {uniLocalFiltersActive
+                  ? `Filtered here from ${uniBaseList.length}`
+                  : isFiltered
+                    ? `Universe filter: ${filteredCount} of ${totalCount}`
+                    : "All tickers (no filter)"}
+              </div>
+            </div>
+
+            {/* Scope filters — 6 classification levels + Country + Exchange */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Filters</div>
+                {uniLocalFiltersActive && (
+                  <button
+                    onClick={clearUniLocalFilters}
+                    className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-destructive"
+                    data-testid="uni-corr-filter-clear"
+                  >
+                    <X className="w-2.5 h-2.5" /> Clear
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {CLASS_FIELDS.map(f => (
+                  <FilterDropdown
+                    key={f.key}
+                    label={f.label}
+                    options={uniClassOptions[f.key] || []}
+                    selected={uniClassFilters[f.key] || new Set()}
+                    onChange={(next) => setUniClassFilters({ ...uniClassFilters, [f.key]: next })}
+                    testId={`uni-corr-filter-${f.key}`}
+                  />
+                ))}
+                <FilterDropdown
+                  label="Country"
+                  options={uniGeoOptions.nations}
+                  selected={uniNations}
+                  onChange={setUniNations}
+                  testId="uni-corr-filter-nation"
+                />
+                <FilterDropdown
+                  label="Exchange"
+                  options={uniGeoOptions.exchanges}
+                  selected={uniExchanges}
+                  onChange={setUniExchanges}
+                  testId="uni-corr-filter-exchange"
+                />
               </div>
             </div>
 
@@ -2299,8 +2499,23 @@ export default function Correlation() {
                   <SelectItem value="252">252 days (1Y)</SelectItem>
                   <SelectItem value="504">504 days (2Y)</SelectItem>
                   <SelectItem value="1260">1260 days (5Y)</SelectItem>
+                  <SelectItem value="custom">Custom…</SelectItem>
                 </SelectContent>
               </Select>
+              {uniWindow === "custom" && (
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={20}
+                    max={5000}
+                    value={uniCustomWindow}
+                    onChange={(e) => setUniCustomWindow(e.target.value)}
+                    className="h-6 w-[80px] text-[11px] font-mono px-1.5"
+                    data-testid="uni-corr-window-custom"
+                  />
+                  <span className="text-[10px] text-muted-foreground">trading days</span>
+                </div>
+              )}
             </div>
 
             {/* Ticker list preview */}
@@ -2309,9 +2524,10 @@ export default function Correlation() {
                 Tickers ({universeSpecs.length})
               </div>
               <div className="space-y-0 max-h-[300px] overflow-y-auto border border-border/20 rounded">
-                {universeSpecs.map(spec => (
-                  <div key={spec} className="px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:bg-accent/30 border-b border-border/10 last:border-b-0">
-                    {formatSpec(spec)}
+                {uniFilteredList.map((t) => (
+                  <div key={t.ticker} className="flex items-baseline gap-1.5 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:bg-accent/30 border-b border-border/10 last:border-b-0">
+                    <span className="font-bold text-foreground/80">{t.ticker}</span>
+                    <span className="truncate text-[9px] text-muted-foreground/60">{t.name}</span>
                   </div>
                 ))}
               </div>
@@ -2327,16 +2543,7 @@ export default function Correlation() {
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Basket</div>
-              <Select value={corrBasketId || undefined} onValueChange={setCorrBasketId}>
-                <SelectTrigger className="h-6 text-[11px]" data-testid="corr-basket-select">
-                  <SelectValue placeholder="Pick a basket…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {baskets.map(b => (
-                    <SelectItem key={b.id} value={b.id}>{b.name} ({b.tickers.length})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <BasketSelect baskets={baskets} value={corrBasketId} onChange={setCorrBasketId} />
               {baskets.length === 0 && (
                 <div className="text-[10px] text-muted-foreground">No baskets yet — create one on the Baskets tab.</div>
               )}
@@ -2380,8 +2587,23 @@ export default function Correlation() {
                   <SelectItem value="252">252 days (1Y)</SelectItem>
                   <SelectItem value="504">504 days (2Y)</SelectItem>
                   <SelectItem value="1260">1260 days (5Y)</SelectItem>
+                  <SelectItem value="custom">Custom…</SelectItem>
                 </SelectContent>
               </Select>
+              {uniWindow === "custom" && (
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={20}
+                    max={5000}
+                    value={uniCustomWindow}
+                    onChange={(e) => setUniCustomWindow(e.target.value)}
+                    className="h-6 w-[80px] text-[11px] font-mono px-1.5"
+                    data-testid="basket-corr-window-custom"
+                  />
+                  <span className="text-[10px] text-muted-foreground">trading days</span>
+                </div>
+              )}
             </div>
 
             {/* Member list preview */}
@@ -2568,6 +2790,49 @@ function PairwiseView({
   const toPt = useCallback(
     (d: { time: string; value: number }) => ({ time: (isIntraday ? Number(d.time) : d.time) as any, value: d.value }),
     [isIntraday]
+  );
+
+  // ── Cross-pane time-axis sync (ChartArea parity) ──
+  // Daily panes share ChartPane's global daily spacer axis; hourly panes get an
+  // explicit shared spacer built from the aligned intraday axis, so logical-range
+  // sync stays index-aligned across Levels / Rolling / Beta.
+  const lwcChartsRef = useRef(new Map<number, IChartApi>());
+  const syncingRef = useRef(false);
+  const syncPendingRef = useRef<{ src: number; from: number; to: number } | null>(null);
+  const syncRafRef = useRef(0);
+  // Coalesce range broadcasts into one rAF apply and skip no-op sets — a direct
+  // apply-in-handler loop fights ChartPane's internal range reactions and can
+  // trip React's nested-update cap during zoom storms.
+  const flushSync = useCallback(() => {
+    syncRafRef.current = 0;
+    const pending = syncPendingRef.current;
+    syncPendingRef.current = null;
+    if (!pending) return;
+    syncingRef.current = true;
+    for (const [id, other] of lwcChartsRef.current) {
+      if (id === pending.src) continue;
+      try {
+        const cur = other.timeScale().getVisibleLogicalRange();
+        if (cur && Math.abs(cur.from - pending.from) < 0.5 && Math.abs(cur.to - pending.to) < 0.5) continue;
+        other.timeScale().setVisibleLogicalRange({ from: pending.from, to: pending.to });
+      } catch {}
+    }
+    syncingRef.current = false;
+  }, []);
+  const handleLwcChartReady = useCallback((paneId: number, chart: IChartApi) => {
+    lwcChartsRef.current.set(paneId, chart);
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range || syncingRef.current) return;
+      syncPendingRef.current = { src: paneId, from: range.from, to: range.to };
+      if (!syncRafRef.current) syncRafRef.current = requestAnimationFrame(flushSync);
+    });
+  }, [flushSync]);
+  const handleLwcChartDestroyed = useCallback((paneId: number) => {
+    lwcChartsRef.current.delete(paneId);
+  }, []);
+  const hourlySpacerTimes = useMemo(
+    () => (isIntraday && data?.levelsA?.length ? data.levelsA.map((d) => Number(d.time)) : null),
+    [isIntraday, data]
   );
 
   // ── PlottedSeries for the ChartPane-rendered panes ──
@@ -2840,7 +3105,10 @@ function PairwiseView({
             series={levelsSeries}
             indicators={indicatorsMap[LWC_PANE_IDS.levels] || {}}
             intraday={isIntraday}
+            spacerTimes={hourlySpacerTimes}
             onMaximizeToggle={() => toggleMax("levels")}
+            onChartReady={handleLwcChartReady}
+            onChartDestroyed={handleLwcChartDestroyed}
           />
         );
       case "rolling":
@@ -2851,7 +3119,10 @@ function PairwiseView({
             series={rollingSeries}
             indicators={indicatorsMap[LWC_PANE_IDS.rolling] || {}}
             intraday={isIntraday}
+            spacerTimes={hourlySpacerTimes}
             onMaximizeToggle={() => toggleMax("rolling")}
+            onChartReady={handleLwcChartReady}
+            onChartDestroyed={handleLwcChartDestroyed}
           />
         );
       case "rollingBeta":
@@ -2862,7 +3133,10 @@ function PairwiseView({
             series={betaSeries}
             indicators={indicatorsMap[LWC_PANE_IDS.rollingBeta] || {}}
             intraday={isIntraday}
+            spacerTimes={hourlySpacerTimes}
             onMaximizeToggle={() => toggleMax("rollingBeta")}
+            onChartReady={handleLwcChartReady}
+            onChartDestroyed={handleLwcChartDestroyed}
           />
         );
       case "tfDivergence":
@@ -3252,6 +3526,25 @@ function UniverseMatrixView({
   loading: boolean;
   tickerCount: number;
 }) {
+  // Ticker-only labels (every spec shares the same metric on this tab).
+  const displayLabels = useMemo(
+    () => (data ? data.labels.map((l) => (l.startsWith("MACRO:") ? l.replace("MACRO:", "") : l.split(":")[0])) : []),
+    [data]
+  );
+
+  // Average pairwise correlation + per-ticker averages (most correlated vs diversifiers).
+  const avgStats = useMemo(() => {
+    if (!data || data.labels.length < 2) return null;
+    const perTicker = data.matrix.map((row, i) => {
+      let s = 0, c = 0;
+      row.forEach((v, j) => { if (i !== j && Number.isFinite(v)) { s += v; c++; } });
+      return { label: displayLabels[i], avg: c ? s / c : 0 };
+    });
+    const avgAll = perTicker.reduce((s, t) => s + t.avg, 0) / perTicker.length;
+    const sorted = [...perTicker].sort((a, b) => b.avg - a.avg);
+    return { avgAll, most: sorted.slice(0, 10), least: sorted.slice(-10).reverse() };
+  }, [data, displayLabels]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2 text-muted-foreground text-sm">
@@ -3280,6 +3573,17 @@ function UniverseMatrixView({
         <span>{data.dateRange.from} to {data.dateRange.to}</span>
         <span>·</span>
         <span>{data.mode === "returns" ? "Log Returns" : data.mode === "changes" ? "Simple Changes" : "Levels"}</span>
+        {avgStats && (
+          <>
+            <span>·</span>
+            <span data-testid="uni-avg-corr">
+              avg pairwise ρ{" "}
+              <span className="font-bold" style={{ color: corrColor(avgStats.avgAll) }}>
+                {avgStats.avgAll.toFixed(3)}
+              </span>
+            </span>
+          </>
+        )}
         <span>·</span>
         <span className="text-[9px]">
           <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />+corr
@@ -3291,14 +3595,44 @@ function UniverseMatrixView({
       {/* Heatmap */}
       <HeatmapMatrix
         matrix={data.matrix}
-        labels={data.labels}
+        labels={displayLabels}
         pValues={data.pValues}
       />
 
-      {/* Top positive and negative correlations */}
-      <div className="grid grid-cols-2 gap-3">
-        <TopCorrelations matrix={data.matrix} labels={data.labels} type="positive" />
-        <TopCorrelations matrix={data.matrix} labels={data.labels} type="negative" />
+      {/* Top pairs + per-ticker averages */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <TopCorrelations matrix={data.matrix} labels={displayLabels} type="positive" />
+        <TopCorrelations matrix={data.matrix} labels={displayLabels} type="negative" />
+        {avgStats && (
+          <>
+            <div className="border border-border/30 rounded p-2">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                Most Correlated w/ Universe (avg ρ)
+              </div>
+              <div className="space-y-0.5">
+                {avgStats.most.map((t) => (
+                  <div key={t.label} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span style={{ color: corrColor(t.avg) }} className="font-bold w-12 text-right">{t.avg.toFixed(3)}</span>
+                    <span className="text-muted-foreground truncate">{t.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border border-border/30 rounded p-2">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+                Best Diversifiers (lowest avg ρ)
+              </div>
+              <div className="space-y-0.5">
+                {avgStats.least.map((t) => (
+                  <div key={t.label} className="flex items-center gap-2 text-[11px] font-mono">
+                    <span style={{ color: corrColor(t.avg) }} className="font-bold w-12 text-right">{t.avg.toFixed(3)}</span>
+                    <span className="text-muted-foreground truncate">{t.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
