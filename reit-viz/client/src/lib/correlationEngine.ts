@@ -12,6 +12,123 @@ import { fetchIntradayBars } from "./fetchIntradayBars";
  *  last-value-per-ISO-week. */
 export type CorrFrequency = "hourly" | "daily" | "weekly";
 
+/** Optional per-leg technical-indicator transform, applied to the resolved
+ *  series (any metric, any frequency) BEFORE alignment — lets the pairwise
+ *  engine correlate e.g. RSI(14) of one stock against another's price. */
+export interface LegTransform {
+  kind: "rsi" | "sma" | "ema" | "roc" | "zscore" | "vol";
+  period: number;
+}
+
+export interface PairwiseOpts {
+  extraWindows?: number[];
+  freq?: CorrFrequency;
+  /** Shift in bars: correlate A(t) against B(t − lag). Positive lag tests
+   *  "B leads A by `lag` bars"; with specA === specB this is autocorrelation
+   *  of the series at that lag. */
+  lagBars?: number;
+  transformA?: LegTransform | null;
+  transformB?: LegTransform | null;
+}
+
+export const LEG_TRANSFORM_LABELS: Record<LegTransform["kind"], string> = {
+  rsi: "RSI",
+  sma: "SMA",
+  ema: "EMA",
+  roc: "ROC %",
+  zscore: "Z-Score",
+  vol: "Realized Vol",
+};
+
+/** Apply a technical transform to a {time,value} series (warmup bars dropped). */
+export function applyLegTransform(data: DataPoint[], t: LegTransform | null | undefined): DataPoint[] {
+  if (!t || !Number.isFinite(t.period) || t.period < 2) return data;
+  const p = Math.floor(t.period);
+  const vals = data.map((d) => d.value);
+  const out: DataPoint[] = [];
+  switch (t.kind) {
+    case "sma": {
+      let s = 0;
+      for (let i = 0; i < vals.length; i++) {
+        s += vals[i];
+        if (i >= p) s -= vals[i - p];
+        if (i >= p - 1) out.push({ time: data[i].time, value: s / p });
+      }
+      break;
+    }
+    case "ema": {
+      const k = 2 / (p + 1);
+      let e = vals[0];
+      for (let i = 1; i < vals.length; i++) {
+        e = vals[i] * k + e * (1 - k);
+        if (i >= p - 1) out.push({ time: data[i].time, value: e });
+      }
+      break;
+    }
+    case "roc": {
+      for (let i = p; i < vals.length; i++) {
+        const base = vals[i - p];
+        if (base !== 0 && Number.isFinite(base)) {
+          out.push({ time: data[i].time, value: ((vals[i] - base) / Math.abs(base)) * 100 });
+        }
+      }
+      break;
+    }
+    case "zscore": {
+      let s = 0, ss = 0;
+      for (let i = 0; i < vals.length; i++) {
+        s += vals[i];
+        ss += vals[i] * vals[i];
+        if (i >= p) { s -= vals[i - p]; ss -= vals[i - p] * vals[i - p]; }
+        if (i >= p - 1) {
+          const m = s / p;
+          const sd = Math.sqrt(Math.max(ss / p - m * m, 0));
+          out.push({ time: data[i].time, value: sd > 1e-12 ? (vals[i] - m) / sd : 0 });
+        }
+      }
+      break;
+    }
+    case "vol": {
+      // Rolling stdev of 1-bar log returns (per-bar units).
+      const rets: number[] = [];
+      for (let i = 1; i < vals.length; i++) {
+        rets.push(vals[i] > 0 && vals[i - 1] > 0 ? Math.log(vals[i] / vals[i - 1]) : 0);
+      }
+      let s = 0, ss = 0;
+      for (let i = 0; i < rets.length; i++) {
+        s += rets[i];
+        ss += rets[i] * rets[i];
+        if (i >= p) { s -= rets[i - p]; ss -= rets[i - p] * rets[i - p]; }
+        if (i >= p - 1) {
+          const m = s / p;
+          out.push({ time: data[i + 1].time, value: Math.sqrt(Math.max(ss / p - m * m, 0)) });
+        }
+      }
+      break;
+    }
+    case "rsi": {
+      // Wilder's RSI on the series values.
+      let avgGain = 0, avgLoss = 0;
+      for (let i = 1; i < vals.length; i++) {
+        const ch = vals[i] - vals[i - 1];
+        const gain = ch > 0 ? ch : 0;
+        const loss = ch < 0 ? -ch : 0;
+        if (i <= p) {
+          avgGain += gain / p;
+          avgLoss += loss / p;
+          if (i === p) out.push({ time: data[i].time, value: avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss) });
+        } else {
+          avgGain = (avgGain * (p - 1) + gain) / p;
+          avgLoss = (avgLoss * (p - 1) + loss) / p;
+          out.push({ time: data[i].time, value: avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss) });
+        }
+      }
+      break;
+    }
+  }
+  return out;
+}
+
 // ── Math helpers (mirroring server/routes.ts) ──
 
 function logReturns(values: number[]): number[] {
@@ -160,7 +277,10 @@ function spearmanCorrelation(x: number[], y: number[]): number {
 // ── Fisher-transform confidence interval for correlation ──
 
 function fisherCI(r: number, n: number, alpha = 0.05): { lower: number; upper: number } {
-  if (n < 4) return { lower: -1, upper: 1 };
+  if (n < 4 || !Number.isFinite(r)) return { lower: -1, upper: 1 };
+  // Clamp |r| below 1 — r === ±1 (e.g. a series correlated with itself) sends
+  // the transform to ±Infinity and the inverse transform to NaN (Inf/Inf).
+  r = Math.max(-0.999999, Math.min(0.999999, r));
   const z = 0.5 * Math.log((1 + r) / (1 - r)); // Fisher z-transform
   const se = 1 / Math.sqrt(n - 3);
   // z-critical for two-tailed alpha
@@ -498,40 +618,52 @@ function emptyPairwiseResult(mode: string, error: string, observations = 0): Pai
 
 // ── Core computation (mirrors server logic exactly) ──
 
+type AlignedPair = { dates: string[]; valuesA: number[]; valuesB: number[] };
+
+function modeTransformPair(al: AlignedPair, mode: string): { a: number[]; b: number[]; dates: string[] } {
+  if (mode === "returns") return { a: logReturns(al.valuesA), b: logReturns(al.valuesB), dates: al.dates.slice(1) };
+  if (mode === "changes") return { a: simpleChanges(al.valuesA), b: simpleChanges(al.valuesB), dates: al.dates.slice(1) };
+  return { a: al.valuesA, b: al.valuesB, dates: al.dates };
+}
+
 async function computePairwiseStatic(
-  specA: string, specB: string, window: number, mode: string, extraWindows: number[] = [], freq: CorrFrequency = "daily"
+  specA: string, specB: string, window: number, mode: string, opts: PairwiseOpts = {}
 ): Promise<PairwiseResult> {
+  const { extraWindows = [], freq = "daily", lagBars = 0, transformA: legTA = null, transformB: legTB = null } = opts;
   let [dataA, dataB] = await Promise.all([
     resolveSeriesDataStatic(specA),
     resolveSeriesDataStatic(specB),
   ]);
   const fx = await applyFrequency(specA, specB, dataA, dataB, freq);
   if ("error" in fx) return emptyPairwiseResult(mode, fx.error);
-  dataA = fx.a;
-  dataB = fx.b;
-  const aligned = alignSeries(dataA, dataB);
+  // Per-leg technical transforms (RSI / SMA / … of the resolved series)
+  dataA = applyLegTransform(fx.a, legTA);
+  dataB = applyLegTransform(fx.b, legTB);
+  const alignedFull = alignSeries(dataA, dataB);
 
-  if (aligned.dates.length < 10) {
-    return emptyPairwiseResult(mode, "Insufficient overlapping data", aligned.dates.length);
+  if (alignedFull.dates.length < 10) {
+    return emptyPairwiseResult(mode, "Insufficient overlapping data", alignedFull.dates.length);
   }
 
-  let transformedA: number[];
-  let transformedB: number[];
-  let transformDates: string[];
+  // Unlagged mode-transformed pair — drives the correlation-vs-lag profile.
+  const ccPair = modeTransformPair(alignedFull, mode);
 
-  if (mode === "returns") {
-    transformedA = logReturns(aligned.valuesA);
-    transformedB = logReturns(aligned.valuesB);
-    transformDates = aligned.dates.slice(1);
-  } else if (mode === "changes") {
-    transformedA = simpleChanges(aligned.valuesA);
-    transformedB = simpleChanges(aligned.valuesB);
-    transformDates = aligned.dates.slice(1);
-  } else {
-    transformedA = aligned.valuesA;
-    transformedB = aligned.valuesB;
-    transformDates = aligned.dates;
+  // Apply the lag: correlate A(t) against B(t − lag); dates follow the A axis.
+  const lag = Math.round(lagBars) || 0;
+  let aligned: AlignedPair = alignedFull;
+  if (lag !== 0) {
+    const n0 = alignedFull.dates.length;
+    const k = Math.abs(lag);
+    if (n0 - k < 10) return emptyPairwiseResult(mode, "Insufficient overlap after applying the lag");
+    aligned = lag > 0
+      ? { dates: alignedFull.dates.slice(k), valuesA: alignedFull.valuesA.slice(k), valuesB: alignedFull.valuesB.slice(0, n0 - k) }
+      : { dates: alignedFull.dates.slice(0, n0 - k), valuesA: alignedFull.valuesA.slice(0, n0 - k), valuesB: alignedFull.valuesB.slice(k) };
   }
+
+  const mt = modeTransformPair(aligned, mode);
+  const transformedA: number[] = mt.a;
+  const transformedB: number[] = mt.b;
+  const transformDates: string[] = mt.dates;
 
   // Full-sample correlation (Pearson + Spearman)
   const fullCorr = pearsonCorrelation(transformedA, transformedB);
@@ -587,21 +719,24 @@ async function computePairwiseStatic(
   const rollingBetaArr = rollingBeta(transformedB, transformedA, transformDates, window);
 
   // Cross-correlation (lags -20 to +20)
+  // Correlation-at-each-lag profile from the UNLAGGED pair (so the applied lag
+  // shows up as a marker on this curve rather than shifting it).
   const crossCorrelation: { lag: number; value: number }[] = [];
-  for (let lag = -20; lag <= 20; lag++) {
+  const maxProfileLag = Math.min(30, Math.max(10, Math.floor(ccPair.a.length / 6)));
+  for (let lg = -maxProfileLag; lg <= maxProfileLag; lg++) {
     let sliceA: number[], sliceB: number[];
-    if (lag >= 0) {
-      sliceA = transformedA.slice(lag);
-      sliceB = transformedB.slice(0, transformedB.length - lag);
+    if (lg >= 0) {
+      sliceA = ccPair.a.slice(lg);
+      sliceB = ccPair.b.slice(0, ccPair.b.length - lg);
     } else {
-      sliceA = transformedA.slice(0, transformedA.length + lag);
-      sliceB = transformedB.slice(-lag);
+      sliceA = ccPair.a.slice(0, ccPair.a.length + lg);
+      sliceB = ccPair.b.slice(-lg);
     }
-    const n = Math.min(sliceA.length, sliceB.length);
-    if (n < 10) { crossCorrelation.push({ lag, value: 0 }); continue; }
+    const nn = Math.min(sliceA.length, sliceB.length);
+    if (nn < 10) { crossCorrelation.push({ lag: lg, value: 0 }); continue; }
     crossCorrelation.push({
-      lag,
-      value: Math.round(pearsonCorrelation(sliceA.slice(0, n), sliceB.slice(0, n)) * 10000) / 10000,
+      lag: lg,
+      value: Math.round(pearsonCorrelation(sliceA.slice(0, nn), sliceB.slice(0, nn)) * 10000) / 10000,
     });
   }
 
@@ -626,9 +761,9 @@ async function computePairwiseStatic(
     scatter.push({ x: transformedB[i], y: transformedA[i], date: transformDates[i] });
   }
 
-  // Level series
-  const levelsA = aligned.dates.map((d, i) => ({ time: d, value: aligned.valuesA[i] }));
-  const levelsB = aligned.dates.map((d, i) => ({ time: d, value: aligned.valuesB[i] }));
+  // Level series — the transformed legs as the user sees them (unlagged)
+  const levelsA = alignedFull.dates.map((d, i) => ({ time: d, value: alignedFull.valuesA[i] }));
+  const levelsB = alignedFull.dates.map((d, i) => ({ time: d, value: alignedFull.valuesB[i] }));
 
   // Stationarity tests (ADF on the transformed series)
   const adfResultA = adfTest(transformedA);
@@ -765,15 +900,16 @@ async function translateDefaultSpec(spec: string): Promise<string> {
 }
 
 export async function fetchPairwiseCorrelation(
-  specA: string, specB: string, window: number, mode: string, extraWindows: number[] = [], freq: CorrFrequency = "daily"
+  specA: string, specB: string, window: number, mode: string, opts: PairwiseOpts = {}
 ): Promise<PairwiseResult> {
   [specA, specB] = await Promise.all([translateDefaultSpec(specA), translateDefaultSpec(specB)]);
   if (isStaticMode()) {
-    return computePairwiseStatic(specA, specB, window, mode, extraWindows, freq);
+    return computePairwiseStatic(specA, specB, window, mode, opts);
   }
-  const extra = extraWindows.length ? `&extraWindows=${extraWindows.join(",")}` : "";
+  const extra = opts.extraWindows?.length ? `&extraWindows=${opts.extraWindows.join(",")}` : "";
+  const lag = opts.lagBars ? `&lag=${opts.lagBars}` : "";
   const resp = await apiRequest("GET",
-    `/api/correlation/pairwise?a=${encodeURIComponent(specA)}&b=${encodeURIComponent(specB)}&window=${window}&mode=${mode}${extra}&freq=${freq}`
+    `/api/correlation/pairwise?a=${encodeURIComponent(specA)}&b=${encodeURIComponent(specB)}&window=${window}&mode=${mode}${extra}&freq=${opts.freq ?? "daily"}${lag}`
   );
   return resp.json();
 }

@@ -6,7 +6,7 @@ import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
 import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlationEngine";
-import type { CorrFrequency } from "@/lib/correlationEngine";
+import type { CorrFrequency, LegTransform } from "@/lib/correlationEngine";
 import ChartPane from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
@@ -222,6 +222,34 @@ const CORR_FREQS: { value: CorrFrequency; label: string }[] = [
   { value: "daily", label: "D" },
   { value: "weekly", label: "W" },
 ];
+
+// Short tags for per-leg indicator transforms (RSI14(SPG:close) etc.)
+const TRANSFORM_TAGS: Record<LegTransform["kind"], string> = {
+  rsi: "RSI", sma: "SMA", ema: "EMA", roc: "ROC", zscore: "Z", vol: "VOL",
+};
+const TRANSFORM_KINDS: { value: LegTransform["kind"] | "none"; label: string; defaultPeriod: number }[] = [
+  { value: "none", label: "None (raw series)", defaultPeriod: 14 },
+  { value: "rsi", label: "RSI", defaultPeriod: 14 },
+  { value: "sma", label: "SMA", defaultPeriod: 20 },
+  { value: "ema", label: "EMA", defaultPeriod: 20 },
+  { value: "roc", label: "ROC %", defaultPeriod: 20 },
+  { value: "zscore", label: "Z-Score (rolling)", defaultPeriod: 60 },
+  { value: "vol", label: "Realized Vol", defaultPeriod: 20 },
+];
+
+function legLabel(spec: string, t?: LegTransform | null): string {
+  const base = formatSpec(spec);
+  return t ? `${TRANSFORM_TAGS[t.kind]}${t.period}(${base})` : base;
+}
+
+function sanitizeTransform(raw: any): LegTransform | null {
+  if (!raw || typeof raw !== "object") return null;
+  const kinds = ["rsi", "sma", "ema", "roc", "zscore", "vol"];
+  if (!kinds.includes(raw.kind)) return null;
+  const period = parseInt(raw.period);
+  if (!Number.isFinite(period) || period < 2 || period > 500) return null;
+  return { kind: raw.kind, period };
+}
 
 // ── Helpers ──
 
@@ -1400,14 +1428,31 @@ function CrossCorrChart({
   labelB,
   height = 140,
   hideTitle,
+  selectedLag,
+  onSelectLag,
 }: {
   data: { lag: number; value: number }[];
   labelA: string;
   labelB: string;
   height?: number;
   hideTitle?: boolean;
+  /** Currently applied pairwise lag — highlighted on the profile. */
+  selectedLag?: number | null;
+  /** Click a bar to apply that lag to the whole pairwise analysis. */
+  onSelectLag?: (lag: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onSelectLag || data.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pad = { left: 35, right: 10 };
+    const plotW = rect.width - pad.left - pad.right;
+    if (plotW <= 0) return;
+    const idx = Math.max(0, Math.min(data.length - 1, Math.floor(((x - pad.left) / plotW) * data.length)));
+    onSelectLag(data[idx].lag);
+  }, [onSelectLag, data]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1453,10 +1498,19 @@ function CrossCorrChart({
       const x = pad.left + (i / data.length) * plotW + (plotW / data.length - barWidth) / 2;
       const barH = d.value * (plotH / 2);
       const y = d.value >= 0 ? yCenter - barH : yCenter;
-      ctx.fillStyle = d.lag === 0
-        ? "#f59e0b"
-        : d.value >= 0 ? "rgba(34, 197, 94, 0.6)" : "rgba(239, 68, 68, 0.6)";
+      ctx.fillStyle =
+        selectedLag != null && selectedLag !== 0 && d.lag === selectedLag
+          ? "#e879f9"
+          : d.lag === 0
+            ? "#f59e0b"
+            : d.value >= 0 ? "rgba(34, 197, 94, 0.6)" : "rgba(239, 68, 68, 0.6)";
       ctx.fillRect(x, y, barWidth, Math.abs(barH));
+      // Outline the applied-lag bar so it reads even at small sizes
+      if (selectedLag != null && selectedLag !== 0 && d.lag === selectedLag) {
+        ctx.strokeStyle = "#e879f9";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - 1, pad.top, barWidth + 2, plotH);
+      }
     });
 
     // Labels
@@ -1480,10 +1534,19 @@ function CrossCorrChart({
     ctx.fillText(`← ${labelA} leads`, pad.left + 2, h - pad.bottom + 14);
     ctx.textAlign = "right";
     ctx.fillText(`${labelB} leads →`, w - pad.right - 2, h - pad.bottom + 14);
-  }, [data, labelA, labelB, height]);
+  }, [data, labelA, labelB, height, selectedLag]);
 
   if (hideTitle) {
-    return <canvas ref={canvasRef} style={{ width: "100%", height }} className="block" />;
+    return (
+      <canvas
+        ref={canvasRef}
+        style={{ width: "100%", height, cursor: onSelectLag ? "pointer" : undefined }}
+        className="block"
+        onClick={handleClick}
+        title={onSelectLag ? "Click a bar to apply that lag to the analysis" : undefined}
+        data-testid="crosscorr-canvas"
+      />
+    );
   }
   return (
     <div className="border border-border/30">
@@ -1889,6 +1952,8 @@ function SeriesPicker({
   tickers,
   macroCatalog,
   testId,
+  transform,
+  onTransformChange,
 }: {
   label: string;
   value: string;
@@ -1896,6 +1961,9 @@ function SeriesPicker({
   tickers: TickerMeta[];
   macroCatalog: MacroSeriesMeta[];
   testId: string;
+  /** Optional per-leg technical transform (RSI/SMA/… applied to the series). */
+  transform?: LegTransform | null;
+  onTransformChange?: (t: LegTransform | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [sourceType, setSourceType] = useState<"stock" | "macro">(
@@ -1913,6 +1981,8 @@ function SeriesPicker({
     const parts = value.split(":");
     return parts.slice(1).join(":") || "close";
   });
+  const [tKind, setTKind] = useState<LegTransform["kind"] | "none">(transform?.kind ?? "none");
+  const [tPeriod, setTPeriod] = useState(String(transform?.period ?? 14));
 
   const macroByCat = useMemo(() => {
     const map: Record<string, MacroSeriesMeta[]> = {};
@@ -1937,8 +2007,12 @@ function SeriesPicker({
       const resolvedMetric = (STOCK_METRICS_SET.has(metric) || tickers.some(t => ((t as any).metrics || []).includes(metric)) || getCustomFundamentalMetrics().includes(metric)) ? metric : "close";
       if (ticker) onChange(`${ticker}:${resolvedMetric}`);
     }
+    if (onTransformChange) {
+      const p = Math.max(2, Math.min(500, parseInt(tPeriod) || 14));
+      onTransformChange(tKind === "none" ? null : { kind: tKind, period: p });
+    }
     setOpen(false);
-  }, [sourceType, ticker, metric, onChange, tickers]);
+  }, [sourceType, ticker, metric, onChange, tickers, onTransformChange, tKind, tPeriod]);
 
   return (
     <div className="space-y-1">
@@ -1951,7 +2025,7 @@ function SeriesPicker({
             className="w-full h-7 justify-between px-2 text-[11px] font-mono"
             data-testid={testId}
           >
-            <span className="truncate">{value ? formatSpec(value) : "Select series..."}</span>
+            <span className="truncate">{value ? legLabel(value, transform) : "Select series..."}</span>
             <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
           </Button>
         </PopoverTrigger>
@@ -2019,6 +2093,50 @@ function SeriesPicker({
             </Command>
           )}
 
+          {/* Per-leg technical transform — correlate RSI/SMA/… of the series */}
+          {onTransformChange && (
+            <div className="space-y-1 border-t border-border/30 pt-2">
+              <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">
+                Transform (indicator on this series)
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Select value={tKind} onValueChange={(v) => {
+                  setTKind(v as any);
+                  const def = TRANSFORM_KINDS.find((k) => k.value === v);
+                  if (def && v !== "none") setTPeriod(String(def.defaultPeriod));
+                }}>
+                  <SelectTrigger className="h-6 text-[11px] flex-1" data-testid={`${testId}-transform`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TRANSFORM_KINDS.map((k) => (
+                      <SelectItem key={k.value} value={k.value}>{k.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {tKind !== "none" && (
+                  <>
+                    <Input
+                      type="number"
+                      min={2}
+                      max={500}
+                      value={tPeriod}
+                      onChange={(e) => setTPeriod(e.target.value)}
+                      className="h-6 w-[60px] text-[11px] font-mono px-1.5"
+                      data-testid={`${testId}-transform-period`}
+                    />
+                    <span className="text-[9px] text-muted-foreground">bars</span>
+                  </>
+                )}
+              </div>
+              {tKind !== "none" && (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  Oscillator transforms (RSI, Z-Score) are usually studied in Levels or Simple Changes mode.
+                </div>
+              )}
+            </div>
+          )}
+
           <Button size="sm" className="w-full h-6 text-[10px]" onClick={handleApply} data-testid={`${testId}-apply`}>Apply</Button>
         </PopoverContent>
       </Popover>
@@ -2057,6 +2175,13 @@ export default function Correlation() {
   // Custom rolling window (bars) alongside the 30/60/120/252 presets
   const [customWindow, setCustomWindow] = useState("90");
   const [customWindowOn, setCustomWindowOn] = useState(false);
+  // Lag in bars: correlate A(t) with B(t − lag); same series + lag = autocorrelation
+  const [corrLag, setCorrLag] = useState("0");
+  // Optional per-leg technical transforms (RSI/SMA/… of the chosen series)
+  const [corrTransformA, setCorrTransformA] = useState<LegTransform | null>(null);
+  const [corrTransformB, setCorrTransformB] = useState<LegTransform | null>(null);
+  const corrLagNum = Math.max(-500, Math.min(500, Math.round(parseInt(corrLag) || 0)));
+  const legKey = JSON.stringify({ l: corrLagNum, a: corrTransformA, b: corrTransformB });
   // Per-pane indicator state for the LWC panes (Charts-tab indicators panel)
   const [indicatorsMap, setIndicatorsMap] = useState<Record<number, ActiveIndicators>>({});
 
@@ -2124,6 +2249,9 @@ export default function Correlation() {
     corrFreq,
     customWindow,
     customWindowOn,
+    corrLag,
+    corrTransformA,
+    corrTransformB,
     corrIndicators: indicatorsMap,
     uniMode,
     uniWindow,
@@ -2133,7 +2261,7 @@ export default function Correlation() {
     uniNations: Array.from(uniNations),
     uniExchanges: Array.from(uniExchanges),
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, corrLag, corrTransformA, corrTransformB, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -2183,6 +2311,9 @@ export default function Correlation() {
     }
     if (typeof state.customWindow === "string") setCustomWindow(state.customWindow);
     if (typeof state.customWindowOn === "boolean") setCustomWindowOn(state.customWindowOn);
+    if (typeof state.corrLag === "string") setCorrLag(state.corrLag);
+    if (state.corrTransformA !== undefined) setCorrTransformA(sanitizeTransform(state.corrTransformA));
+    if (state.corrTransformB !== undefined) setCorrTransformB(sanitizeTransform(state.corrTransformB));
     if (state.corrIndicators && typeof state.corrIndicators === "object" && !Array.isArray(state.corrIndicators)) {
       setIndicatorsMap(state.corrIndicators);
     }
@@ -2287,10 +2418,16 @@ export default function Correlation() {
     [uniFilteredList, uniMetric]
   );
 
-  // Pairwise query (frequency-aware, with optional custom rolling window)
+  // Pairwise query (frequency-aware, custom window, lag + per-leg transforms)
   const { data: pairwise, isLoading: pairLoading } = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, customValid ? customWindowNum : 0, corrFreq],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, parseInt(corrWindow) || 60, corrMode, customValid ? [customWindowNum] : [], corrFreq),
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, customValid ? customWindowNum : 0, corrFreq, legKey],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, parseInt(corrWindow) || 60, corrMode, {
+      extraWindows: customValid ? [customWindowNum] : [],
+      freq: corrFreq,
+      lagBars: corrLagNum,
+      transformA: corrTransformA,
+      transformB: corrTransformB,
+    }),
     enabled: activeTab === "pairwise" && !!specA && !!specB,
   });
 
@@ -2298,19 +2435,20 @@ export default function Correlation() {
   // Key shape matches the main pairwise query so results are shared when possible.
   const tfEnabled = activeTab === "pairwise" && visibleCorrCharts.has("tfDivergence") && !!specA && !!specB;
   const tfWindow = parseInt(corrWindow) || 60;
+  const tfOpts = { lagBars: corrLagNum, transformA: corrTransformA, transformB: corrTransformB };
   const tfHourly = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "hourly"],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "hourly"),
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "hourly", legKey],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "hourly" }),
     enabled: tfEnabled,
   });
   const tfDaily = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "daily"],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "daily"),
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "daily", legKey],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "daily" }),
     enabled: tfEnabled,
   });
   const tfWeekly = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "weekly"],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, [], "weekly"),
+    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "weekly", legKey],
+    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "weekly" }),
     enabled: tfEnabled,
   });
   const tfEntries: TFEntry[] = [
@@ -2549,6 +2687,8 @@ export default function Correlation() {
               tickers={tickers}
               macroCatalog={macroCatalog}
               testId="corr-series-a"
+              transform={corrTransformA}
+              onTransformChange={setCorrTransformA}
             />
             <SeriesPicker
               label="Series B"
@@ -2557,6 +2697,8 @@ export default function Correlation() {
               tickers={tickers}
               macroCatalog={macroCatalog}
               testId="corr-series-b"
+              transform={corrTransformB}
+              onTransformChange={setCorrTransformB}
             />
 
             <div className="space-y-1">
@@ -2573,6 +2715,36 @@ export default function Correlation() {
                   <SelectItem value="levels">Levels</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Lead/lag: correlate A(t) with B(t − lag) */}
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
+                Lag (bars)
+              </div>
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" className="h-6 w-6 p-0 text-[12px]"
+                  onClick={() => setCorrLag(String(corrLagNum - 1))} data-testid="corr-lag-dec">−</Button>
+                <Input
+                  type="number"
+                  min={-500}
+                  max={500}
+                  value={corrLag}
+                  onChange={(e) => setCorrLag(e.target.value)}
+                  className="h-6 w-[70px] text-[11px] font-mono px-1.5 text-center"
+                  data-testid="corr-lag-input"
+                />
+                <Button variant="outline" size="sm" className="h-6 w-6 p-0 text-[12px]"
+                  onClick={() => setCorrLag(String(corrLagNum + 1))} data-testid="corr-lag-inc">+</Button>
+                {corrLagNum !== 0 && (
+                  <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]"
+                    onClick={() => setCorrLag("0")} data-testid="corr-lag-reset">reset</Button>
+                )}
+              </div>
+              <div className="text-[9px] text-muted-foreground leading-snug">
+                A(t) vs B(t−lag): +lag ⇒ B leads A. Pick the SAME series for both legs and set a lag
+                for its autocorrelation. Click a bar on the Corr-vs-Lag plot to set this.
+              </div>
             </div>
 
             {/* Plot selection — mirrors the Charts tab sidebar: pick what gets a pane */}
@@ -3001,6 +3173,10 @@ export default function Correlation() {
             onIndicatorsMapChange={setIndicatorsMap}
             tfEntries={tfEntries}
             tfWindow={tfWindow}
+            lagBars={corrLagNum}
+            onLagChange={(l) => setCorrLag(String(l))}
+            transformA={corrTransformA}
+            transformB={corrTransformB}
           />
         ) : activeTab === "matrix" ? (
           <MatrixView
@@ -3104,6 +3280,10 @@ function PairwiseView({
   onIndicatorsMapChange,
   tfEntries,
   tfWindow,
+  lagBars,
+  onLagChange,
+  transformA,
+  transformB,
 }: {
   data: PairwiseResult | undefined;
   loading: boolean;
@@ -3122,6 +3302,10 @@ function PairwiseView({
   onIndicatorsMapChange: React.Dispatch<React.SetStateAction<Record<number, ActiveIndicators>>>;
   tfEntries: TFEntry[];
   tfWindow: number;
+  lagBars: number;
+  onLagChange: (lag: number) => void;
+  transformA: LegTransform | null;
+  transformB: LegTransform | null;
 }) {
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
@@ -3140,6 +3324,11 @@ function PairwiseView({
   const toPt = useCallback(
     (d: { time: string; value: number }) => ({ time: (isIntraday ? Number(d.time) : d.time) as any, value: d.value }),
     [isIntraday]
+  );
+  // LWC throws on non-finite values — one bad point must not crash the pane.
+  const toPts = useCallback(
+    (arr: { time: string; value: number }[]) => arr.filter((d) => Number.isFinite(d.value)).map(toPt),
+    [toPt]
   );
 
   // ── Cross-pane time-axis sync (ChartArea parity) ──
@@ -3188,15 +3377,15 @@ function PairwiseView({
   // ── PlottedSeries for the ChartPane-rendered panes ──
   const levelsSeries: PlottedSeries[] = useMemo(() => {
     if (hasError || !data!.levelsA?.length) return [];
-    const labelA = formatSpec(specA);
-    const labelB = formatSpec(specB);
+    const labelA = legLabel(specA, transformA);
+    const labelB = legLabel(specB, transformB);
     const out: PlottedSeries[] = [{
       id: "corr:levelsA",
       ticker: "CORR",
       metric: labelA,
       color: COLORS.primary,
       paneIndex: LWC_PANE_IDS.levels,
-      data: data!.levelsA.map(toPt) as any,
+      data: toPts(data!.levelsA) as any,
       visible: true,
       label: labelA,
     }];
@@ -3207,13 +3396,13 @@ function PairwiseView({
         metric: labelB,
         color: COLORS.secondary,
         paneIndex: LWC_PANE_IDS.levels,
-        data: data!.levelsB.map(toPt) as any,
+        data: toPts(data!.levelsB) as any,
         visible: true,
         label: labelB,
       });
     }
     return out;
-  }, [data, hasError, specA, specB, toPt]);
+  }, [data, hasError, specA, specB, transformA, transformB, toPt]);
 
   const activeWindowsSorted = useMemo(() => {
     const ws = [...Array.from(visibleWindows), ...(customWindow ? [customWindow] : [])];
@@ -3232,7 +3421,7 @@ function PairwiseView({
         metric: `${w}-bar ρ`,
         color: windowColor(w),
         paneIndex: LWC_PANE_IDS.rolling,
-        data: arr.map(toPt) as any,
+        data: toPts(arr) as any,
         visible: true,
         label: `${w}-bar ρ`,
         sharedScale: true,
@@ -3247,7 +3436,7 @@ function PairwiseView({
         lineWidth: 1,
         lineStyle: 2,
         paneIndex: LWC_PANE_IDS.rolling,
-        data: data!.rollingCI.map((d) => toPt({ time: d.time, value: d.upper })) as any,
+        data: toPts(data!.rollingCI.map((d) => ({ time: d.time, value: d.upper }))) as any,
         visible: true,
         label: "95% CI+",
         sharedScale: true,
@@ -3260,7 +3449,7 @@ function PairwiseView({
         lineWidth: 1,
         lineStyle: 2,
         paneIndex: LWC_PANE_IDS.rolling,
-        data: data!.rollingCI.map((d) => toPt({ time: d.time, value: d.lower })) as any,
+        data: toPts(data!.rollingCI.map((d) => ({ time: d.time, value: d.lower }))) as any,
         visible: true,
         label: "95% CI−",
         sharedScale: true,
@@ -3277,11 +3466,11 @@ function PairwiseView({
       metric: "Rolling β",
       color: "#ec4899",
       paneIndex: LWC_PANE_IDS.rollingBeta,
-      data: data!.rollingBeta.map(toPt) as any,
+      data: toPts(data!.rollingBeta) as any,
       visible: true,
-      label: `β: ${formatSpec(specA)} ~ ${formatSpec(specB)}`,
+      label: `β: ${legLabel(specA, transformA)} ~ ${legLabel(specB, transformB)}`,
     }];
-  }, [data, hasError, specA, specB, toPt]);
+  }, [data, hasError, specA, specB, transformA, transformB, toPt]);
 
   // ── Active pane keys, in canonical order ──
   const paneKeysActive = useMemo(() => {
@@ -3402,8 +3591,12 @@ function PairwiseView({
   }
 
   const s = data.summary;
-  const labelA = formatSpec(specA);
-  const labelB = formatSpec(specB);
+  const labelA = legLabel(specA, transformA);
+  const labelB = legLabel(specB, transformB);
+  const sameSeriesNoLag =
+    specA === specB &&
+    lagBars === 0 &&
+    JSON.stringify(transformA) === JSON.stringify(transformB);
 
   // ── Pane renderers (keyed by CHART_KEYS, order fixed by paneKeysActive) ──
   const hasPacf = (data.pacfA?.length ?? 0) > 0;
@@ -3530,11 +3723,16 @@ function PairwiseView({
       case "crossCorr":
         return (
           <CanvasChartWrapper
-            title={`Cross-Correlation (Lag ${data.crossCorrelation[0]?.lag} to ${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag})`}
+            title={`Corr vs Lag (${data.crossCorrelation[0]?.lag} to +${data.crossCorrelation[data.crossCorrelation.length - 1]?.lag}) — click to set lag`}
             chartId="crossCorr"
             isMaximized={maximizedKey === "crossCorr"}
             onMaximize={setMaximizedChart}
             height={280}
+            headerRight={lagBars !== 0 ? (
+              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: "#e879f9", backgroundColor: "#e879f922" }}>
+                lag {lagBars > 0 ? "+" : ""}{lagBars} applied
+              </span>
+            ) : undefined}
           >
             {(h) => (
               <CrossCorrChart
@@ -3543,6 +3741,8 @@ function PairwiseView({
                 labelB={labelB}
                 height={h}
                 hideTitle
+                selectedLag={lagBars}
+                onSelectLag={onLagChange}
               />
             )}
           </CanvasChartWrapper>
@@ -3587,6 +3787,7 @@ function PairwiseView({
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-2">
         {[
           { label: "Pearson ρ", value: s.correlation.toFixed(4), color: corrColor(s.correlation), sub: data.diagnostics?.fisherCI ? `95% CI [${data.diagnostics.fisherCI.lower.toFixed(3)}, ${data.diagnostics.fisherCI.upper.toFixed(3)}]` : undefined },
+          ...(lagBars !== 0 ? [{ label: "Lag", value: `${lagBars > 0 ? "+" : ""}${lagBars} bars`, color: "#e879f9", sub: lagBars > 0 ? "B leads A" : "A leads B" }] : []),
           { label: "Spearman ρₛ", value: (s.spearmanCorrelation ?? 0).toFixed(4), color: corrColor(s.spearmanCorrelation ?? 0) },
           { label: "R²", value: s.rSquared.toFixed(4), color: "#94a3b8" },
           { label: "Beta (β)", value: s.beta.toFixed(4), color: "#94a3b8" },
@@ -3640,6 +3841,14 @@ function PairwiseView({
           </div>
         );
       })()}
+
+      {sameSeriesNoLag && (
+        <div className="border border-sky-500/30 bg-sky-500/5 rounded p-2 text-[11px] text-sky-400" data-testid="same-series-hint">
+          Both legs are the same series with lag 0, so ρ ≡ 1 by definition. Set a lag in the sidebar (or
+          click a bar on the Corr vs Lag plot) to study this series' autocorrelation — or read the
+          ACF / PACF panes below, which show it across all lags at once.
+        </div>
+      )}
 
       {/* Methodology & Guidance Panel */}
       <MethodologyPanel mode={mode} />
