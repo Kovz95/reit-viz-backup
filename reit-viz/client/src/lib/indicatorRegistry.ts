@@ -312,7 +312,9 @@ const AUTOCORR: IndicatorDef = {
       max: AUTOCORR_SOURCES.length - 1,
       options: AUTOCORR_SOURCES.map(({ value, label }) => ({ value, label })),
     },
-    { key: "lag", label: "Lag (bars)", default: 1, min: 1, max: 60 },
+    // Default lag 6: universe-wide PACF analysis (2026-07-24) found the ~1-week
+    // reversal at lag 6 is the strongest daily-return autocorrelation signal.
+    { key: "lag", label: "Lag (bars)", default: 6, min: 1, max: 60 },
     { key: "window", label: "Window", default: 63, min: 20, max: 500 },
     { key: "rsiPeriod", label: "RSI Period", default: 14, min: 2, max: 100 },
   ],
