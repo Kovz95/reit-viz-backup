@@ -65,7 +65,6 @@ import {
   Layers,
   Maximize2,
   Minimize2,
-  Globe,
   Loader2,
   Play,
   Pin,
@@ -2256,7 +2255,7 @@ const ROLLING_WINDOW_LABELS: Record<number, string> = {
 };
 
 export default function Correlation() {
-  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "universe" | "drivers" | "dislocations">("pairwise");
+  const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "drivers" | "dislocations">("pairwise");
 
   // Pairwise state
   const [specA, setSpecA] = useState("SPG:close");
@@ -2339,13 +2338,7 @@ export default function Correlation() {
   const [matrixSpecs, setMatrixSpecs] = useState<string[]>([
     "SPG:close", "O:close", "PLD:close", "PSA:close", "MACRO:DGS10", "MACRO:VIXCLS",
   ]);
-  const [matrixMode, setMatrixMode] = useState("returns");
-  const [matrixWindow, setMatrixWindow] = useState("252");
   const [newMatrixSpec, setNewMatrixSpec] = useState("");
-  // Global transform + lead/lag for the Matrix tab (applies to every series)
-  const [matrixTransform, setMatrixTransform] = useState<LegTransform | null>(null);
-  const [matrixLag, setMatrixLag] = useState("0");
-  const matrixLagNum = Math.max(-250, Math.min(250, Math.round(parseInt(matrixLag) || 0)));
 
   const toggleWindow = useCallback((w: number) => {
     setVisibleWindows(prev => {
@@ -2362,9 +2355,9 @@ export default function Correlation() {
   const [uniWindow, setUniWindow] = useState("252");
   const [uniCustomWindow, setUniCustomWindow] = useState("180");
   const [uniMetric, setUniMetric] = useState("close");
-  // Scope: the (filtered) universe, or a basket's members — the old Basket tab
-  // now lives here as a scope choice.
-  const [uniScope, setUniScope] = useState<"universe" | "basket">("universe");
+  // Scope for the merged Matrix tab: the (filtered) universe, a basket's
+  // members, or a hand-picked custom spec list (the old Matrix tab).
+  const [uniScope, setUniScope] = useState<"universe" | "basket" | "custom">("universe");
   // Global transform + lead/lag for the Universe matrix
   const [uniTransform, setUniTransform] = useState<LegTransform | null>(null);
   const [uniLag, setUniLag] = useState("0");
@@ -2389,10 +2382,6 @@ export default function Correlation() {
     corrMode,
     corrWindow,
     matrixSpecs,
-    matrixMode,
-    matrixWindow,
-    matrixTransform,
-    matrixLag,
     visibleWindows: Array.from(visibleWindows),
     visibleCorrCharts: Array.from(visibleCorrCharts),
     corrLayout,
@@ -2416,7 +2405,7 @@ export default function Correlation() {
     uniNations: Array.from(uniNations),
     uniExchanges: Array.from(uniExchanges),
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, matrixTransform, matrixLag, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrTimeRange, corrFreq, customWindow, customWindowOn, corrLag, corrTransformA, corrTransformB, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniScope, uniTransform, uniLag, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrTimeRange, corrFreq, customWindow, customWindowOn, corrLag, corrTransformA, corrTransformB, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniScope, uniTransform, uniLag, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -2441,10 +2430,17 @@ export default function Correlation() {
 
   const restoreCorrelation = useCallback((state: any) => {
     if (state.activeTab !== undefined) {
-      // The old Basket tab merged into the Universe tab as a scope choice.
+      // Old Universe/Basket/Matrix tabs all merged into ONE Matrix tab with a
+      // scope selector; map legacy saves onto it.
       if (state.activeTab === "basket") {
-        setActiveTab("universe");
+        setActiveTab("matrix");
         setUniScope("basket");
+      } else if (state.activeTab === "universe") {
+        setActiveTab("matrix");
+        if (state.uniScope === undefined) setUniScope("universe");
+      } else if (state.activeTab === "matrix") {
+        setActiveTab("matrix");
+        if (state.uniScope === undefined) setUniScope("custom");
       } else {
         setActiveTab(state.activeTab);
       }
@@ -2454,10 +2450,6 @@ export default function Correlation() {
     if (state.corrMode !== undefined) setCorrMode(state.corrMode);
     if (state.corrWindow !== undefined) setCorrWindow(state.corrWindow);
     if (state.matrixSpecs !== undefined) setMatrixSpecs(state.matrixSpecs);
-    if (state.matrixMode !== undefined) setMatrixMode(state.matrixMode);
-    if (state.matrixWindow !== undefined) setMatrixWindow(state.matrixWindow);
-    if (state.matrixTransform !== undefined) setMatrixTransform(sanitizeTransform(state.matrixTransform));
-    if (typeof state.matrixLag === "string") setMatrixLag(state.matrixLag);
     if (state.visibleWindows !== undefined) setVisibleWindows(new Set(state.visibleWindows));
     if (Array.isArray(state.visibleCorrCharts)) {
       // Legacy saves used a single "acf" key for both ACF panels
@@ -2487,7 +2479,7 @@ export default function Correlation() {
     if (state.uniWindow !== undefined) setUniWindow(state.uniWindow);
     if (typeof state.uniCustomWindow === "string") setUniCustomWindow(state.uniCustomWindow);
     if (state.uniMetric !== undefined) setUniMetric(state.uniMetric);
-    if (state.uniScope === "universe" || state.uniScope === "basket") setUniScope(state.uniScope);
+    if (state.uniScope === "universe" || state.uniScope === "basket" || state.uniScope === "custom") setUniScope(state.uniScope);
     if (state.uniTransform !== undefined) setUniTransform(sanitizeTransform(state.uniTransform));
     if (typeof state.uniLag === "string") setUniLag(state.uniLag);
     if (state.uniClassFilters !== undefined) setUniClassFilters(deserializeClassFilters(state.uniClassFilters));
@@ -2589,11 +2581,12 @@ export default function Correlation() {
     [uniScope, baskets, corrBasketId]
   );
   const universeSpecs = useMemo(() => {
+    if (uniScope === "custom") return matrixSpecs;
     if (uniScope === "basket") {
       return (uniScopeBasket?.tickers ?? []).map((t) => `${t}:${uniMetric}`);
     }
     return uniFilteredList.map((t) => `${t.ticker}:${uniMetric}`);
-  }, [uniScope, uniScopeBasket, uniFilteredList, uniMetric]);
+  }, [uniScope, uniScopeBasket, uniFilteredList, uniMetric, matrixSpecs]);
 
   // Pairwise query (frequency-aware, custom window, lag + per-leg transforms)
   const { data: pairwise, isLoading: pairLoading } = useQuery<PairwiseResult>({
@@ -2634,20 +2627,13 @@ export default function Correlation() {
     { key: "weekly", label: "Weekly", loading: tfWeekly.isLoading, res: tfWeekly.data },
   ];
 
-  // Matrix query (global transform + lead/lag aware)
-  const matrixLegKey = JSON.stringify({ t: matrixTransform, l: matrixLagNum });
-  const { data: matrixData, isLoading: matrixLoading } = useQuery<MatrixResult>({
-    queryKey: ["correlation-matrix", matrixSpecs.join(","), matrixMode, matrixWindow, matrixLegKey],
-    queryFn: () => fetchMatrixCorrelation(matrixSpecs, matrixMode, matrixWindow, { transform: matrixTransform, lagBars: matrixLagNum }),
-    enabled: activeTab === "matrix" && matrixSpecs.length >= 2,
-  });
 
   // Universe matrix query
   const uniLegKey = JSON.stringify({ t: uniTransform, l: uniLagNum });
   const { data: uniMatrixData, isLoading: uniMatrixLoading } = useQuery<MatrixResult>({
     queryKey: ["correlation-universe-matrix", universeSpecs.join(","), uniMode, uniWindowEff, uniLegKey],
     queryFn: () => fetchMatrixCorrelation(universeSpecs, uniMode, uniWindowEff, { transform: uniTransform, lagBars: uniLagNum }),
-    enabled: activeTab === "universe" && universeSpecs.length >= 2,
+    enabled: activeTab === "matrix" && universeSpecs.length >= 2,
   });
 
   // CSV export for pairwise rolling
@@ -2663,21 +2649,6 @@ export default function Correlation() {
     a.click(); URL.revokeObjectURL(url);
   }, [pairwise, specA, specB]);
 
-  // CSV export for matrix
-  const exportMatrixCSV = useCallback(() => {
-    if (!matrixData) return;
-    const labels = matrixData.labels.map(formatSpec);
-    const header = `,${labels.join(",")}`;
-    const lines = matrixData.matrix.map((row, i) =>
-      `${labels[i]},${row.map(v => v.toFixed(4)).join(",")}`
-    );
-    const csv = [header, ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url;
-    a.download = `correlation_matrix.csv`;
-    a.click(); URL.revokeObjectURL(url);
-  }, [matrixData]);
 
   // CSV export for universe matrix
   const exportUniMatrixCSV = useCallback(() => {
@@ -2763,15 +2734,6 @@ export default function Correlation() {
               data-testid="tab-matrix"
             >
               <Grid3X3 className="w-3 h-3 mr-0.5" /> Matrix
-            </Button>
-            <Button
-              variant={activeTab === "universe" ? "default" : "secondary"}
-              size="sm"
-              className="h-7 text-[10px] px-1.5 w-full"
-              onClick={() => setActiveTab("universe")}
-              data-testid="tab-universe-corr"
-            >
-              <Globe className="w-3 h-3 mr-0.5" /> Univ
             </Button>
             <Button
               variant={activeTab === "drivers" ? "default" : "secondary"}
@@ -3013,6 +2975,43 @@ export default function Correlation() {
           </div>
         ) : activeTab === "matrix" ? (
           <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+            {/* Scope: filtered universe, a basket's members, or a custom spec list */}
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Scope</div>
+              <div className="flex gap-0.5">
+                <button
+                  onClick={() => setUniScope("universe")}
+                  className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${uniScope === "universe" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                  data-testid="uni-scope-universe"
+                >
+                  Universe
+                </button>
+                <button
+                  onClick={() => setUniScope("basket")}
+                  className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${uniScope === "basket" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                  data-testid="uni-scope-basket"
+                >
+                  Basket
+                </button>
+                <button
+                  onClick={() => setUniScope("custom")}
+                  className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${uniScope === "custom" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                  data-testid="uni-scope-custom"
+                >
+                  Custom
+                </button>
+              </div>
+              {uniScope === "basket" && (
+                <>
+                  <BasketSelect baskets={baskets} value={corrBasketId} onChange={setCorrBasketId} />
+                  {baskets.length === 0 && (
+                    <div className="text-[10px] text-muted-foreground">No baskets yet — create one on the Baskets tab.</div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {uniScope === "custom" && (<>
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
                 Matrix Series ({matrixSpecs.length})
@@ -3075,103 +3074,25 @@ export default function Correlation() {
               </div>
             </div>
 
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Mode</div>
-              <Select value={matrixMode} onValueChange={setMatrixMode}>
-                <SelectTrigger className="h-6 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="returns">Log Returns</SelectItem>
-                  <SelectItem value="changes">Simple Changes</SelectItem>
-                  <SelectItem value="levels">Levels</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Lookback</div>
-              <Select value={matrixWindow} onValueChange={setMatrixWindow}>
-                <SelectTrigger className="h-6 text-[11px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="60">60 days</SelectItem>
-                  <SelectItem value="120">120 days</SelectItem>
-                  <SelectItem value="252">252 days (1Y)</SelectItem>
-                  <SelectItem value="504">504 days (2Y)</SelectItem>
-                  <SelectItem value="1260">1260 days (5Y)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Transform (all series)</div>
-              <TransformControl value={matrixTransform} onChange={setMatrixTransform} testId="matrix-transform" />
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Lag (bars)</div>
-              <LagControl
-                value={matrixLag}
-                onChange={setMatrixLag}
-                testId="matrix-lag"
-                hint="Lead/lag matrix: cell = corr(row(t), col(t−lag)). Asymmetric; diagonal = each series' autocorrelation at the lag."
-              />
-            </div>
-
-            <Button variant="outline" size="sm" className="w-full h-7 text-xs gap-1.5"
-              onClick={exportMatrixCSV} disabled={!matrixData}>
-              <Download className="w-3 h-3" /> Export CSV
-            </Button>
-          </div>
-        ) : activeTab === "universe" ? (
-          /* Universe tab sidebar (also hosts basket scope — the old Basket tab) */
-          <div className="p-3 space-y-3 flex-1 overflow-y-auto">
-            {/* Scope: filtered universe or a basket's members */}
-            <div className="space-y-1">
-              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Scope</div>
-              <div className="flex gap-0.5">
-                <button
-                  onClick={() => setUniScope("universe")}
-                  className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${uniScope === "universe" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-                  data-testid="uni-scope-universe"
-                >
-                  Universe
-                </button>
-                <button
-                  onClick={() => setUniScope("basket")}
-                  className={`flex-1 px-2 py-1 text-[10px] font-mono rounded border transition-colors ${uniScope === "basket" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-                  data-testid="uni-scope-basket"
-                >
-                  Basket
-                </button>
-              </div>
-              {uniScope === "basket" && (
-                <>
-                  <BasketSelect baskets={baskets} value={corrBasketId} onChange={setCorrBasketId} />
-                  {baskets.length === 0 && (
-                    <div className="text-[10px] text-muted-foreground">No baskets yet — create one on the Baskets tab.</div>
-                  )}
-                </>
-              )}
-            </div>
+            </>)}
 
             <div className="border border-border/30 rounded p-2 bg-card/30">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider mb-1">
-                {uniScope === "basket" ? "Basket" : "Universe"}
+                {uniScope === "basket" ? "Basket" : uniScope === "custom" ? "Custom List" : "Universe"}
               </div>
               <div className="text-sm font-mono font-bold text-primary" data-testid="uni-corr-count">
-                {uniScope === "basket" ? (uniScopeBasket?.tickers.length ?? 0) : uniFilteredList.length} tickers
+                {universeSpecs.length} {uniScope === "custom" ? "series" : "tickers"}
               </div>
               <div className="text-[10px] text-muted-foreground">
-                {uniScope === "basket"
-                  ? (uniScopeBasket ? uniScopeBasket.name : "Pick a basket above")
-                  : uniLocalFiltersActive
-                    ? `Filtered here from ${uniBaseList.length}`
-                    : isFiltered
-                      ? `Universe filter: ${filteredCount} of ${totalCount}`
-                      : "All tickers (no filter)"}
+                {uniScope === "custom"
+                  ? "Hand-picked series — any metric, macro welcome"
+                  : uniScope === "basket"
+                    ? (uniScopeBasket ? uniScopeBasket.name : "Pick a basket above")
+                    : uniLocalFiltersActive
+                      ? `Filtered here from ${uniBaseList.length}`
+                      : isFiltered
+                        ? `Universe filter: ${filteredCount} of ${totalCount}`
+                        : "All tickers (no filter)"}
               </div>
             </div>
 
@@ -3219,6 +3140,7 @@ export default function Correlation() {
             </div>
             )}
 
+            {uniScope !== "custom" && (
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Metric</div>
               <MetricSelect
@@ -3229,6 +3151,7 @@ export default function Correlation() {
                 triggerClass="h-6"
               />
             </div>
+            )}
 
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Mode</div>
@@ -3291,7 +3214,8 @@ export default function Correlation() {
               />
             </div>
 
-            {/* Ticker list preview */}
+            {/* Ticker list preview (custom scope shows its own series list above) */}
+            {uniScope !== "custom" && (
             <div className="space-y-1">
               <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">
                 Tickers ({universeSpecs.length})
@@ -3308,6 +3232,7 @@ export default function Correlation() {
                 ))}
               </div>
             </div>
+            )}
 
             <Button variant="outline" size="sm" className="w-full h-7 text-xs gap-1.5"
               onClick={exportUniMatrixCSV} disabled={!uniMatrixData}>
@@ -3356,13 +3281,6 @@ export default function Correlation() {
             onTimeRangeChange={setCorrTimeRange}
           />
         ) : activeTab === "matrix" ? (
-          <MatrixView
-            data={matrixData}
-            loading={matrixLoading}
-            transform={matrixTransform}
-            lagBars={matrixLagNum}
-          />
-        ) : activeTab === "universe" ? (
           <UniverseMatrixView
             data={uniMatrixData}
             loading={uniMatrixLoading}
@@ -4220,77 +4138,6 @@ function PairwiseView({
   );
 }
 
-// ── Matrix View ──
-function MatrixView({
-  data,
-  loading,
-  transform,
-  lagBars,
-}: {
-  data: MatrixResult | undefined;
-  loading: boolean;
-  transform?: LegTransform | null;
-  lagBars?: number;
-}) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        Computing correlation matrix...
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        Add at least 2 series to generate a matrix
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-auto p-3 space-y-3">
-      {/* Matrix info */}
-      <div className="flex items-center gap-3 text-[11px] text-muted-foreground flex-wrap">
-        <span>{data.observations} obs</span>
-        <span>·</span>
-        <span>{data.dateRange.from} to {data.dateRange.to}</span>
-        <span>·</span>
-        <span>{data.mode} mode</span>
-        {transform && (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ color: "#34d399", backgroundColor: "#34d39922" }}>
-            {TRANSFORM_TAGS[transform.kind]}{transform.period} applied to all series
-          </span>
-        )}
-        {!!lagBars && (
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ color: "#e879f9", backgroundColor: "#e879f922" }}>
-            lead/lag {lagBars > 0 ? "+" : ""}{lagBars}: cell = corr(row(t), col(t−lag)) · diag = autocorr
-          </span>
-        )}
-        <span className="text-[9px]">
-          <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />+corr
-          <span className="inline-block w-2 h-2 rounded-full bg-red-500 mx-1 ml-2" />−corr
-          <span className="text-muted-foreground/40 ml-2">ns = not significant (p&gt;0.05)</span>
-        </span>
-      </div>
-
-      {/* Heatmap */}
-      <HeatmapMatrix
-        matrix={data.matrix}
-        labels={data.labels}
-        pValues={data.pValues}
-        lagApplied={!!lagBars}
-      />
-
-      {/* Top positive and negative correlations */}
-      <div className="grid grid-cols-2 gap-3">
-        <TopCorrelations matrix={data.matrix} labels={data.labels} type="positive" />
-        <TopCorrelations matrix={data.matrix} labels={data.labels} type="negative" />
-      </div>
-    </div>
-  );
-}
-
 // ── Universe Matrix View ──
 function UniverseMatrixView({
   data,
@@ -4305,11 +4152,18 @@ function UniverseMatrixView({
   transform?: LegTransform | null;
   lagBars?: number;
 }) {
-  // Ticker-only labels (every spec shares the same metric on this tab).
-  const displayLabels = useMemo(
-    () => (data ? data.labels.map((l) => (l.startsWith("MACRO:") ? l.replace("MACRO:", "") : l.split(":")[0])) : []),
-    [data]
-  );
+  // Shorten to ticker-only labels when every stock spec shares one metric;
+  // mixed-metric custom lists keep the full TICKER:metric form.
+  const displayLabels = useMemo(() => {
+    if (!data) return [];
+    const suffixes = new Set(
+      data.labels.filter((l) => !l.startsWith("MACRO:")).map((l) => l.split(":").slice(1).join(":"))
+    );
+    const uniform = suffixes.size <= 1;
+    return data.labels.map((l) =>
+      l.startsWith("MACRO:") ? l.replace("MACRO:", "") : uniform ? l.split(":")[0] : l
+    );
+  }, [data]);
 
   // Average pairwise correlation + per-ticker averages (most correlated vs diversifiers).
   const avgStats = useMemo(() => {
@@ -4336,7 +4190,7 @@ function UniverseMatrixView({
   if (!data) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-        {tickerCount < 2 ? "Need at least 2 tickers — apply a Universe filter or load data" : "Loading..."}
+        {tickerCount < 2 ? "Need at least 2 series in scope — pick a scope, basket, or add series" : "Loading..."}
       </div>
     );
   }
