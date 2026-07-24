@@ -992,6 +992,7 @@ function CorrLwcPane({
   indicators,
   intraday,
   spacerTimes,
+  timeRange = "all",
   onMaximizeToggle,
   onChartReady,
   onChartDestroyed,
@@ -1002,6 +1003,7 @@ function CorrLwcPane({
   indicators: ActiveIndicators;
   intraday: boolean;
   spacerTimes?: (string | number)[] | null;
+  timeRange?: string;
   onMaximizeToggle: () => void;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -1036,7 +1038,7 @@ function CorrLwcPane({
         intraday={intraday}
         spacerTimes={spacerTimes ?? null}
         activeIndicators={indicators}
-        timeRange="all"
+        timeRange={timeRange}
         activeTool=""
         drawColor="#f59e0b"
         onChartReady={handleChartReady}
@@ -2268,6 +2270,44 @@ export default function Correlation() {
   // Chart-area layout (mirrors the Charts tab): grid organization + panes shown at once
   const [corrLayout, setCorrLayout] = useState<GridLayout>("2x2");
   const [corrPanesVisible, setCorrPanesVisible] = useState<number | "all">(4);
+  // Visible time window for the LWC panes (Charts parity): data stays loaded,
+  // so anything tighter than Max leaves room to pan/scroll back through history.
+  const [corrTimeRange, setCorrTimeRange] = useState("1Y");
+
+  // ── Collapsible / drag-resizable sidebar ──
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("reit-viz:corr-sidebar-collapsed") === "1"; } catch { return false; }
+  });
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const n = parseInt(localStorage.getItem("reit-viz:corr-sidebar-width") || "250", 10);
+      return Math.max(200, Math.min(520, Number.isFinite(n) ? n : 250));
+    } catch { return 250; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:corr-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch {}
+  }, [sidebarCollapsed]);
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:corr-sidebar-width", String(sidebarWidth)); } catch {}
+  }, [sidebarWidth]);
+  const startSidebarDrag = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: PointerEvent) => {
+      setSidebarWidth(Math.max(200, Math.min(520, startW + (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [sidebarWidth]);
   // Bar frequency for the pairwise analysis (hourly / daily / weekly)
   const [corrFreq, setCorrFreq] = useState<CorrFrequency>("daily");
   // Custom rolling window (bars) alongside the 30/60/120/252 presets
@@ -2357,6 +2397,7 @@ export default function Correlation() {
     visibleCorrCharts: Array.from(visibleCorrCharts),
     corrLayout,
     corrPanesVisible,
+    corrTimeRange,
     corrFreq,
     customWindow,
     customWindowOn,
@@ -2375,7 +2416,7 @@ export default function Correlation() {
     uniNations: Array.from(uniNations),
     uniExchanges: Array.from(uniExchanges),
     corrBasketId,
-  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, matrixTransform, matrixLag, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrFreq, customWindow, customWindowOn, corrLag, corrTransformA, corrTransformB, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniScope, uniTransform, uniLag, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
+  }), [activeTab, specA, specB, corrMode, corrWindow, matrixSpecs, matrixMode, matrixWindow, matrixTransform, matrixLag, visibleWindows, visibleCorrCharts, corrLayout, corrPanesVisible, corrTimeRange, corrFreq, customWindow, customWindowOn, corrLag, corrTransformA, corrTransformB, indicatorsMap, uniMode, uniWindow, uniCustomWindow, uniMetric, uniScope, uniTransform, uniLag, uniClassFilters, uniNations, uniExchanges, corrBasketId]);
 
   const pinFromDriver = useCallback((a: string, b: string, window: number) => {
     setSpecA(a);
@@ -2433,6 +2474,7 @@ export default function Correlation() {
     if (state.corrFreq === "hourly" || state.corrFreq === "daily" || state.corrFreq === "weekly") {
       setCorrFreq(state.corrFreq);
     }
+    if (["1Y", "3Y", "5Y", "YTD", "all"].includes(state.corrTimeRange)) setCorrTimeRange(state.corrTimeRange);
     if (typeof state.customWindow === "string") setCustomWindow(state.customWindow);
     if (typeof state.customWindowOn === "boolean") setCustomWindowOn(state.customWindowOn);
     if (typeof state.corrLag === "string") setCorrLag(state.corrLag);
@@ -2665,8 +2707,42 @@ export default function Correlation() {
 
   return (
     <div className="flex h-full bg-background" data-testid="correlation-page">
-      {/* Sidebar */}
-      <div className="w-[250px] border-r border-border bg-card flex flex-col flex-shrink-0 overflow-y-auto">
+      {/* Sidebar — collapsible + drag-resizable */}
+      {sidebarCollapsed ? (
+        <div className="w-7 border-r border-border bg-card flex flex-col items-center pt-2 flex-shrink-0">
+          <button
+            onClick={() => setSidebarCollapsed(false)}
+            className="p-1 text-muted-foreground hover:text-foreground"
+            data-testid="corr-sidebar-expand"
+            title="Expand sidebar"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      ) : (
+      <div className="relative border-r border-border bg-card flex flex-col flex-shrink-0 min-h-0" style={{ width: sidebarWidth }}>
+        {/* Drag handle on the right edge (double-click resets) */}
+        <div
+          onPointerDown={startSidebarDrag}
+          onDoubleClick={() => setSidebarWidth(250)}
+          title="Drag to resize · double-click to reset"
+          className="group absolute inset-y-0 right-0 z-30 w-2 cursor-col-resize touch-none select-none"
+          data-testid="corr-sidebar-handle"
+        >
+          <span className="absolute inset-y-0 right-0 w-px bg-transparent transition-colors group-hover:bg-primary/60" />
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        {/* Collapse control */}
+        <div className="flex items-center justify-end px-1 pt-1 -mb-1.5">
+          <button
+            onClick={() => setSidebarCollapsed(true)}
+            className="p-0.5 text-muted-foreground/60 hover:text-foreground"
+            data-testid="corr-sidebar-collapse"
+            title="Collapse sidebar"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+        </div>
         {/* Tab toggle */}
         <div className="px-2 py-2 border-b border-border">
           <div className="grid grid-cols-2 gap-0.5">
@@ -3239,7 +3315,9 @@ export default function Correlation() {
             </Button>
           </div>
         ) : null}
+        </div>
       </div>
+      )}
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -3274,6 +3352,8 @@ export default function Correlation() {
             onLagChange={(l) => setCorrLag(String(l))}
             transformA={corrTransformA}
             transformB={corrTransformB}
+            timeRange={corrTimeRange}
+            onTimeRangeChange={setCorrTimeRange}
           />
         ) : activeTab === "matrix" ? (
           <MatrixView
@@ -3379,6 +3459,8 @@ function PairwiseView({
   onLagChange,
   transformA,
   transformB,
+  timeRange,
+  onTimeRangeChange,
 }: {
   data: PairwiseResult | undefined;
   loading: boolean;
@@ -3401,6 +3483,8 @@ function PairwiseView({
   onLagChange: (lag: number) => void;
   transformA: LegTransform | null;
   transformB: LegTransform | null;
+  timeRange: string;
+  onTimeRangeChange: (r: string) => void;
 }) {
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
@@ -3744,6 +3828,7 @@ function PairwiseView({
             indicators={indicatorsMap[LWC_PANE_IDS.levels] || {}}
             intraday={isIntraday}
             spacerTimes={hourlySpacerTimes}
+            timeRange={timeRange}
             onMaximizeToggle={() => toggleMax("levels")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
@@ -3758,6 +3843,7 @@ function PairwiseView({
             indicators={indicatorsMap[LWC_PANE_IDS.rolling] || {}}
             intraday={isIntraday}
             spacerTimes={hourlySpacerTimes}
+            timeRange={timeRange}
             onMaximizeToggle={() => toggleMax("rolling")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
@@ -3772,6 +3858,7 @@ function PairwiseView({
             indicators={indicatorsMap[LWC_PANE_IDS.rollingBeta] || {}}
             intraday={isIntraday}
             spacerTimes={hourlySpacerTimes}
+            timeRange={timeRange}
             onMaximizeToggle={() => toggleMax("rollingBeta")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
@@ -3954,6 +4041,26 @@ function PairwiseView({
         <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
           {paneKeysActive.length} plot{paneKeysActive.length === 1 ? "" : "s"}
         </span>
+
+        {/* Visible time window (Charts parity) — Max fits everything, tighter
+            windows leave history off-screen so the panes can pan/scroll. */}
+        <div className="flex gap-0.5 ml-2" data-testid="corr-time-range">
+          {["1Y", "3Y", "5Y", "YTD", "all"].map((r) => (
+            <button
+              key={r}
+              onClick={() => onTimeRangeChange(r)}
+              className={`px-1.5 py-0.5 text-[10px] font-mono rounded border transition-colors ${
+                timeRange === r
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              data-testid={`corr-range-${r}`}
+            >
+              {r === "all" ? "Max" : r}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1" />
         {paneKeysActive.length > 1 && (
           <>
