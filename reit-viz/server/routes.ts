@@ -2499,6 +2499,45 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // ── GET /api/earnings-calendar — FUTURE earnings dates via FMP ─────────
+  // Returns [{ symbol, date (YYYY-MM-DD), time ("bmo"/"amc"/""), epsEstimated }]
+  // for the next ~90 days. FMP_API_KEY lives only in the prod environment;
+  // without it (local dev) the route returns an empty list. Cached to disk
+  // for 12h — the calendar moves slowly and FMP calls are metered.
+  app.get("/api/earnings-calendar", async (_req, res) => {
+    const cacheFile = path.join(DATA_DIR, "earnings-calendar.json");
+    const TTL_MS = 12 * 3600 * 1000;
+    try {
+      try {
+        const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+        if (cached && Date.now() - (cached.fetchedAt ?? 0) < TTL_MS && Array.isArray(cached.rows)) {
+          return res.json(cached.rows);
+        }
+      } catch { /* no/stale cache */ }
+      const key = process.env.FMP_API_KEY?.trim() ?? "";
+      if (!key) return res.json([]);
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const from = iso(new Date());
+      const to = iso(new Date(Date.now() + 90 * 86400000));
+      const url = `https://financialmodelingprep.com/api/v3/earning_calendar?from=${from}&to=${to}&apikey=${key}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return res.json([]);
+      const raw = await resp.json();
+      const rows = (Array.isArray(raw) ? raw : [])
+        .filter((r: any) => r?.symbol && r?.date)
+        .map((r: any) => ({
+          symbol: String(r.symbol),
+          date: String(r.date).slice(0, 10),
+          time: typeof r.time === "string" ? r.time : "",
+          epsEstimated: Number.isFinite(r.epsEstimated) ? r.epsEstimated : null,
+        }));
+      try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), rows })); } catch {}
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "earnings-calendar failed" });
+    }
+  });
+
   // ── Prefs (generic KV for client template stores) ─────────────────────
   // Server-side home for named-template stores (pair templates, screener
   // saved screens, disloc presets, indicator sets, ...) so they sync across

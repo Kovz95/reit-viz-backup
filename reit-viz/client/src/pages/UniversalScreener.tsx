@@ -23,6 +23,7 @@ import { useGeoFilter } from "@/lib/useGeoFilter";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
+import { useEarningsNow, EarningsChip } from "@/lib/earningsNow";
 import { PENDING_SCREEN_KEY } from "@/components/CommandPalette";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -591,6 +592,7 @@ export default function UniversalScreener() {
   }, [visibleRows]);
   const valuation = useValuationNow(rows.length > 0, chipTickers);
   const crowding = useCrowdingNow(rows.length > 0, chipTickers);
+  const earnings = useEarningsNow(rows.length > 0);
 
   const openOnChart = (r: QualifiedSetup) => {
     if (r.mode === "single") {
@@ -1030,6 +1032,7 @@ export default function UniversalScreener() {
                               <SeasonalChip ticker={leg} status={seasonal.statusFor(leg)} />
                               <ValuationChip ticker={leg} status={valuation.statusFor(leg)} />
                               <CrowdingChip ticker={leg} status={crowding.statusFor(leg)} />
+                              <EarningsChip ticker={leg} status={earnings.statusFor(leg)} />
                             </Fragment>
                           ))}
                         </span>

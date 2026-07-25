@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
+import { useEarningsNow, EarningsChip } from "@/lib/earningsNow";
 import { PENDING_DISLOC_PRESET_KEY, PENDING_PAIR_TEMPLATE_KEY } from "@/components/CommandPalette";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
@@ -1089,11 +1090,13 @@ function DislocationScanPanel({
   }, [display, displayIdio]);
   const valuation = useValuationNow(resultCount > 0, chipTickers);
   const crowding = useCrowdingNow(resultCount > 0, chipTickers);
+  const earnings = useEarningsNow(resultCount > 0);
   const legChips = (t: string) => (
     <>
       <SeasonalChip ticker={t} status={seasonal.statusFor(t)} />
       <ValuationChip ticker={t} status={valuation.statusFor(t)} />
       <CrowdingChip ticker={t} status={crowding.statusFor(t)} />
+      <EarningsChip ticker={t} status={earnings.statusFor(t)} />
     </>
   );
 
