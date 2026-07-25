@@ -173,7 +173,16 @@ export default function GlobalUniverseExplorer() {
   const sortedRows = useMemo(() => {
     const arr = filteredRows.slice();
     const dir = sort.dir === "asc" ? 1 : -1;
-    arr.sort((a: any, b: any) => compareValues(a[sort.key], b[sort.key]) * dir);
+    // Nulls sink to the BOTTOM regardless of direction (otherwise a
+    // descending sort floats every "—" row above the real values).
+    arr.sort((a: any, b: any) => {
+      const av = a[sort.key];
+      const bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return compareValues(av, bv) * dir;
+    });
     return arr;
   }, [filteredRows, sort]);
 
