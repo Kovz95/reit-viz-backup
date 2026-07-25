@@ -252,6 +252,7 @@ function NavBar() {
     { path: "/", label: "Charts", icon: BarChart3 },
     { path: "/universe", label: "Universe", icon: Globe },
     { path: "/global-universe", label: "Global Universe", icon: Globe },
+    { path: "/earnings-calendar", label: "Earnings Cal", icon: Globe },
     { path: "/baskets", label: "Baskets", icon: Grid3X3 },
     {
       path: "__cross_section_group",
@@ -302,7 +303,6 @@ function NavBar() {
     },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
-    { path: "/earnings-calendar", label: "Earnings Cal", icon: Activity },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
     { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
