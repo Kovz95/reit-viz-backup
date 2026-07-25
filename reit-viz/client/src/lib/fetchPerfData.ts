@@ -47,10 +47,13 @@ export async function fetchPerfData(
   );
 }
 
-export async function fetchMonthlySeasonality(_tickerOrOpts?: string | any): Promise<any[]> {
+// Accepts the intra-month touch threshold (%). Legacy call sites passed a
+// string id here which was always ignored — keep tolerating (and ignoring) it.
+export async function fetchMonthlySeasonality(touchPct?: number | string): Promise<any[]> {
+  const qs = typeof touchPct === "number" && Number.isFinite(touchPct) ? `?touch=${touchPct}` : "";
   return (
     (await fetchJsonArray("/data/performance-monthly-seasonality.json")) ??
-    (await fetchJsonArray("/api/performance/monthly-seasonality")) ??
+    (await fetchJsonArray(`/api/performance/monthly-seasonality${qs}`)) ??
     []
   );
 }

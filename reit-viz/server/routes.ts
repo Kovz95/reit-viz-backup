@@ -5700,12 +5700,36 @@ export async function registerRoutes(server: Server, app: Express) {
           if (lastIdx < 0) { rows.push(row); continue; }
           row.lastClose = closeMap.get(lastIdx) ?? null;
           const tickerLastDate = lastIdx < dates.length ? dates[lastIdx] : lastDate;
+          // Sorted (idx, close) pairs once per ticker — used for the
+          // intra-period excursion scan below.
+          const sortedPts = [...closeMap.entries()].sort((a, b) => a[0] - b[0]);
+          // Intra-period excursions: highest / lowest close TOUCHED within the
+          // period, vs the period-start close ("did it hit X% at some point?"
+          // — not just where it ended).
+          const excursion = (startIdx: number, endIdx: number): { max: number; min: number } | null => {
+            const startClose = perfCloseAtForward(closeMap, startIdx);
+            if (startClose === null || startClose === 0) return null;
+            let max = -Infinity, min = Infinity;
+            for (const [idx, close] of sortedPts) {
+              if (idx <= startIdx || idx > endIdx) continue;
+              const r = ((close - startClose) / startClose) * 100;
+              if (r > max) max = r;
+              if (r < min) min = r;
+            }
+            return max === -Infinity ? null : { max, min };
+          };
           for (const [key, days] of Object.entries(periodOffsets)) {
             const startIdx = Math.max(0, perfFindDateIdx(dates, perfSubtractDays(tickerLastDate, days)));
             row[key] = perfReturn(closeMap, startIdx, lastIdx);
+            const exc = excursion(startIdx, lastIdx);
+            row[`${key}Max`] = exc ? exc.max : null;
+            row[`${key}Min`] = exc ? exc.min : null;
           }
           if (customFromIdx >= 0 && customToIdx >= 0) {
             row.custom = perfReturn(closeMap, customFromIdx, customToIdx);
+            const exc = excursion(customFromIdx, customToIdx);
+            row.customMax = exc ? exc.max : null;
+            row.customMin = exc ? exc.min : null;
           }
           const qReturns: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
           for (const qr of qRanges) {
@@ -5730,9 +5754,13 @@ export async function registerRoutes(server: Server, app: Express) {
   // Returns array of { ticker, name, Jan..Dec (avg monthly % return),
   // JanWin..DecWin (% of years the month was positive), JanRel..DecRel (avg
   // monthly return MINUS the same-month subindustry peer mean, self-excluded —
-  // the seasonal ALPHA a long/short cares about), yearsOfData }.
+  // the seasonal ALPHA a long/short cares about), JanHit..DecHit (% of years
+  // the month TOUCHED ≥ `touch`% intra-month vs the prior month-end close —
+  // answers "did it hit X% at some point?", not just where the month ended),
+  // yearsOfData }. Query: touch? (%, default 3).
   app.get("/api/performance/monthly-seasonality", (_req, res) => {
     try {
+      const touchPct = Number.isFinite(parseFloat(_req.query.touch as string)) ? parseFloat(_req.query.touch as string) : 3;
       const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const tickerDir = path.join(DATA_DIR, "tickers");
       const dates = getDates();
@@ -5749,15 +5777,17 @@ export async function registerRoutes(server: Server, app: Express) {
       const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
       const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
 
-      // Pass 1: per-ticker calendar-month returns keyed by "YYYY-MM".
-      const perTicker = new Map<string, { ymRet: Map<string, number>; years: number }>();
+      // Pass 1: per-ticker calendar-month end returns AND intra-month peak
+      // run-ups, keyed by "YYYY-MM".
+      const perTicker = new Map<string, { ymRet: Map<string, number>; ymMaxRet: Map<string, number>; years: number }>();
       for (const file of files) {
         const ticker = file.replace(".json", "");
         try {
           const raw = readJSON(path.join(tickerDir, file));
-          if (!raw.close) { perTicker.set(ticker, { ymRet: new Map(), years: 0 }); continue; }
+          if (!raw.close) { perTicker.set(ticker, { ymRet: new Map(), ymMaxRet: new Map(), years: 0 }); continue; }
           const closeMap = decodeMetricToMap(raw.close);
           const monthEnd = new Map<string, { idx: number; close: number }>();
+          const monthHigh = new Map<string, number>();
           const years = new Set<number>();
           for (const [idx, close] of closeMap.entries()) {
             if (idx >= dates.length) continue;
@@ -5765,19 +5795,24 @@ export async function registerRoutes(server: Server, app: Express) {
             const ym = d.slice(0, 7);
             const prev = monthEnd.get(ym);
             if (!prev || idx > prev.idx) monthEnd.set(ym, { idx, close });
+            const hi = monthHigh.get(ym);
+            if (hi === undefined || close > hi) monthHigh.set(ym, close);
             years.add(parseInt(d.slice(0, 4)));
           }
           const ymRet = new Map<string, number>();
+          const ymMaxRet = new Map<string, number>();
           const sortedKeys = [...monthEnd.keys()].sort();
           for (let i = 1; i < sortedKeys.length; i++) {
             const cur = monthEnd.get(sortedKeys[i])!;
             const prv = monthEnd.get(sortedKeys[i - 1])!;
             if (!prv.close) continue;
             ymRet.set(sortedKeys[i], (cur.close / prv.close - 1) * 100);
+            const hi = monthHigh.get(sortedKeys[i]);
+            if (hi !== undefined) ymMaxRet.set(sortedKeys[i], (hi / prv.close - 1) * 100);
           }
-          perTicker.set(ticker, { ymRet, years: years.size });
+          perTicker.set(ticker, { ymRet, ymMaxRet, years: years.size });
         } catch {
-          perTicker.set(ticker, { ymRet: new Map(), years: 0 });
+          perTicker.set(ticker, { ymRet: new Map(), ymMaxRet: new Map(), years: 0 });
         }
       }
 
@@ -5802,16 +5837,19 @@ export async function registerRoutes(server: Server, app: Express) {
         const ticker = file.replace(".json", "");
         const meta = metaByTicker.get(ticker);
         const row: any = { ticker, name: meta?.name || "", yearsOfData: 0 };
-        for (const mo of MONTHS) { row[mo] = null; row[`${mo}Win`] = null; row[`${mo}Rel`] = null; }
+        for (const mo of MONTHS) { row[mo] = null; row[`${mo}Win`] = null; row[`${mo}Rel`] = null; row[`${mo}Hit`] = null; }
         const rec = perTicker.get(ticker);
         if (rec) {
           row.yearsOfData = rec.years;
           const agg = meta?.subindustry ? groupAgg.get(meta.subindustry) : undefined;
           const byMonth: Record<number, number[]> = {};
           const relByMonth: Record<number, number[]> = {};
+          const maxByMonth: Record<number, number[]> = {};
           for (const [ym, ret] of rec.ymRet) {
             const mo = parseInt(ym.slice(5, 7));
             (byMonth[mo] ||= []).push(ret);
+            const mx = rec.ymMaxRet.get(ym);
+            if (mx !== undefined) (maxByMonth[mo] ||= []).push(mx);
             const cell = agg?.get(ym);
             // Peer mean excluding self; needs at least 2 OTHER members.
             if (cell && cell.n >= 3) {
@@ -5827,6 +5865,10 @@ export async function registerRoutes(server: Server, app: Express) {
             const rel = relByMonth[m];
             if (rel && rel.length) {
               row[`${MONTHS[m - 1]}Rel`] = rel.reduce((s, v) => s + v, 0) / rel.length;
+            }
+            const mx = maxByMonth[m];
+            if (mx && mx.length) {
+              row[`${MONTHS[m - 1]}Hit`] = (mx.filter((v) => v >= touchPct).length / mx.length) * 100;
             }
           }
         }

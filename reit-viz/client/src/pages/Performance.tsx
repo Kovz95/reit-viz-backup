@@ -112,9 +112,25 @@ function basketPerfRow(basket: Basket, bars: BasketBar[], customStart?: string, 
   const lastIdx = bars.length - 1;
   const lastDate = bars[lastIdx].date;
   const periodOffsets: Record<string, number> = { "1W": 7, "1M": 30, "3M": 91, "6M": 182, "12M": 365 };
+  // Intra-period excursion (highest/lowest close touched vs the period start).
+  const excursion = (fromIdx: number, toIdx: number): { max: number; min: number } | null => {
+    if (fromIdx < 0 || toIdx <= fromIdx || toIdx >= bars.length) return null;
+    const base = bars[fromIdx].close;
+    if (!(base > 0)) return null;
+    let max = -Infinity, min = Infinity;
+    for (let k = fromIdx + 1; k <= toIdx; k++) {
+      const r = (bars[k].close / base - 1) * 100;
+      if (r > max) max = r;
+      if (r < min) min = r;
+    }
+    return max === -Infinity ? null : { max, min };
+  };
   for (const [key, days] of Object.entries(periodOffsets)) {
     const fromIdx = firstBarAtOrAfter(bars, isoSubtractDays(lastDate, days));
     row[key] = barReturn(bars, fromIdx, lastIdx);
+    const exc = excursion(fromIdx, lastIdx);
+    row[`${key}Max`] = exc ? exc.max : null;
+    row[`${key}Min`] = exc ? exc.min : null;
   }
   if (customStart && customEnd) {
     const fromIdx = firstBarAtOrAfter(bars, customStart);
@@ -122,6 +138,9 @@ function basketPerfRow(basket: Basket, bars: BasketBar[], customStart?: string, 
     if (toIdx < 0) toIdx = lastIdx;
     else if (bars[toIdx].date > customEnd) toIdx--;
     row.custom = barReturn(bars, fromIdx, toIdx);
+    const exc = excursion(fromIdx, toIdx);
+    row.customMax = exc ? exc.max : null;
+    row.customMin = exc ? exc.min : null;
   }
   // Average return per calendar quarter across years
   const qReturns: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
@@ -145,11 +164,12 @@ function basketPerfRow(basket: Basket, bars: BasketBar[], customStart?: string, 
 }
 
 /** Monthly-seasonality row for a basket composite (avg return per calendar month). */
-function basketMonthlyRow(basket: Basket, bars: BasketBar[]): any {
+function basketMonthlyRow(basket: Basket, bars: BasketBar[], touchPct = 3): any {
   const row: any = { ticker: basket.name, name: `Basket · ${basket.tickers.length} members`, isBasket: true, yearsOfData: 0 };
   for (const m of MONTHLY_LABELS) row[m] = null;
   if (bars.length < 2) return row;
   const byMonth: Record<number, number[]> = {};
+  const maxByMonth: Record<number, number[]> = {};
   const years = new Set<string>();
   let i = 0;
   while (i < bars.length) {
@@ -160,6 +180,13 @@ function basketMonthlyRow(basket: Basket, bars: BasketBar[]): any {
     if (ret !== null) {
       const m = Number(ym.slice(5, 7)) - 1;
       (byMonth[m] ??= []).push(ret);
+      // Intra-month peak vs the month's first bar.
+      let hi = -Infinity;
+      for (let k = i + 1; k <= j; k++) {
+        const r = (bars[k].close / bars[i].close - 1) * 100;
+        if (r > hi) hi = r;
+      }
+      if (hi !== -Infinity) (maxByMonth[m] ??= []).push(hi);
       years.add(ym.slice(0, 4));
     }
     i = j + 1;
@@ -169,6 +196,10 @@ function basketMonthlyRow(basket: Basket, bars: BasketBar[]): any {
     if (arr?.length) {
       row[label] = arr.reduce((s, v) => s + v, 0) / arr.length;
       row[`${label}Win`] = (arr.filter((v) => v > 0).length / arr.length) * 100;
+    }
+    const mx = maxByMonth[m];
+    if (mx?.length) {
+      row[`${label}Hit`] = (mx.filter((v) => v >= touchPct).length / mx.length) * 100;
     }
   });
   row.yearsOfData = years.size;
@@ -560,8 +591,13 @@ export default function Performance() {
   const [showBaskets, setShowBaskets] = useState(false);
   const { baskets } = useBaskets();
   // Monthly view statistic: avg return / win rate (% of years positive) /
-  // return relative to the subindustry peer mean (seasonal alpha).
-  const [monthlyStat, setMonthlyStat] = useState<"avg" | "win" | "rel">("avg");
+  // return relative to the subindustry peer mean (seasonal alpha) / hit rate
+  // of touching +X% at ANY point intra-month (not just where the month ends).
+  const [monthlyStat, setMonthlyStat] = useState<"avg" | "win" | "rel" | "hit">("avg");
+  const [touchPct, setTouchPct] = useState("3");
+  // Periods view statistic: period-end return / highest / lowest point
+  // touched within the period vs its start ("did it hit X% intra-period?").
+  const [periodStat, setPeriodStat] = useState<"end" | "max" | "min">("end");
 
   // ── Workspace state ──
   const serializeState = useCallback(
@@ -579,8 +615,10 @@ export default function Performance() {
       seasonalMaxDays,
       showBaskets,
       monthlyStat,
+      periodStat,
+      touchPct,
     }),
-    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat]
+    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat, periodStat, touchPct]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -597,6 +635,8 @@ export default function Performance() {
     if (state.seasonalMaxDays !== undefined) setSeasonalMaxDays(state.seasonalMaxDays);
     if (state.showBaskets !== undefined) setShowBaskets(state.showBaskets);
     if (state.monthlyStat !== undefined) setMonthlyStat(state.monthlyStat);
+    if (state.periodStat !== undefined) setPeriodStat(state.periodStat);
+    if (state.touchPct !== undefined) setTouchPct(state.touchPct);
   }, []);
 
   useWorkspaceState("performance", serializeState, hydrateState);
@@ -606,9 +646,10 @@ export default function Performance() {
     queryKey: ["/perf-data", customStart, customEnd],
     queryFn: () => fetchPerfData(customStart || undefined, customEnd || undefined),
   });
+  const touchNum = Math.max(0.5, parseFloat(touchPct) || 3);
   const { data: monthlyData, isLoading: monthlyLoading } = useQuery<any[]>({
-    queryKey: ["/monthly-seasonality"],
-    queryFn: fetchMonthlySeasonality,
+    queryKey: ["/monthly-seasonality", touchNum],
+    queryFn: () => fetchMonthlySeasonality(touchNum),
     enabled: viewMode === "monthly",
   });
   const { data: eventData, isLoading: eventLoading } = useQuery({
@@ -628,7 +669,7 @@ export default function Performance() {
     [baskets]
   );
   const { data: basketRowData } = useQuery({
-    queryKey: ["/perf-basket-rows", basketsKey, customStart, customEnd, seasonalMinDays, seasonalMaxDays],
+    queryKey: ["/perf-basket-rows", basketsKey, customStart, customEnd, seasonalMinDays, seasonalMaxDays, touchNum],
     enabled: showBaskets && baskets.length > 0,
     queryFn: async () => {
       const perf: any[] = [];
@@ -641,7 +682,7 @@ export default function Performance() {
           if (!ohlc || !ohlc.closes.length) continue;
           const bars: BasketBar[] = ohlc.priceDates.map((d: string, i: number) => ({ date: d, close: ohlc.closes[i] }));
           perf.push(basketPerfRow(b, bars, customStart || undefined, customEnd || undefined));
-          monthly.push(basketMonthlyRow(b, bars));
+          monthly.push(basketMonthlyRow(b, bars, touchNum));
           seasonal.push(basketSeasonalRow(b, bars, seasonalMinDays, seasonalMaxDays));
         } catch { /* skip basket */ }
       }
@@ -707,7 +748,12 @@ export default function Performance() {
           bv = b[eventStat]?.[windowId] ?? null;
         } else if (viewMode === "monthly" && monthlyStat !== "avg" && (MONTHLY_LABELS as string[]).includes(sortKey)) {
           // Month columns sort by the statistic currently displayed.
-          const suffix = monthlyStat === "win" ? "Win" : "Rel";
+          const suffix = monthlyStat === "win" ? "Win" : monthlyStat === "hit" ? "Hit" : "Rel";
+          av = a[sortKey + suffix] ?? null;
+          bv = b[sortKey + suffix] ?? null;
+        } else if (viewMode === "periods" && periodStat !== "end" && (PERIOD_COLUMNS.includes(sortKey) || sortKey === "custom")) {
+          // Period columns sort by the displayed excursion statistic.
+          const suffix = periodStat === "max" ? "Max" : "Min";
           av = a[sortKey + suffix] ?? null;
           bv = b[sortKey + suffix] ?? null;
         } else {
@@ -721,7 +767,7 @@ export default function Performance() {
         return sortAsc ? av - bv : bv - av;
       }
     );
-  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, monthlyStat]);
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, monthlyStat, periodStat]);
 
   const handleSort = useCallback(
     (col: string) => {
@@ -738,9 +784,15 @@ export default function Performance() {
     let colLabels: string[];
 
     if (viewMode === "periods") {
-      colKeys = ["ticker", "name", "lastClose", ...PERIOD_COLUMNS, ...(customStart && customEnd ? ["custom"] : [])];
+      colKeys = [
+        "ticker", "name", "lastClose",
+        ...PERIOD_COLUMNS,
+        ...PERIOD_COLUMNS.map((c) => `${c}Max`),
+        ...PERIOD_COLUMNS.map((c) => `${c}Min`),
+        ...(customStart && customEnd ? ["custom", "customMax", "customMin"] : []),
+      ];
       colLabels = colKeys.map((k) =>
-        k === "lastClose" ? "Last Close" : k === "custom" ? `Custom (${customStart} to ${customEnd})` : k
+        k === "lastClose" ? "Last Close" : k.startsWith("custom") ? `${k.replace("custom", "Custom ")}(${customStart} to ${customEnd})` : k
       );
     } else if (viewMode === "seasonality") {
       colKeys = ["ticker", "name", "lastClose", ...QUARTER_COLUMNS];
@@ -751,6 +803,7 @@ export default function Performance() {
         ...MONTHLY_LABELS.map((m: string) => m),
         ...MONTHLY_LABELS.map((m: string) => `${m}Win`),
         ...MONTHLY_LABELS.map((m: string) => `${m}Rel`),
+        ...MONTHLY_LABELS.map((m: string) => `${m}Hit`),
         "yearsOfData",
       ];
       colLabels = [
@@ -758,6 +811,7 @@ export default function Performance() {
         ...MONTHLY_LABELS.map((m: string) => `${m} Avg %`),
         ...MONTHLY_LABELS.map((m: string) => `${m} Win %`),
         ...MONTHLY_LABELS.map((m: string) => `${m} vs Subind %`),
+        ...MONTHLY_LABELS.map((m: string) => `${m} Hit ≥${touchPct}% %yrs`),
         "yearsOfData",
       ];
     } else if (viewMode === "seasonal-patterns") {
@@ -812,7 +866,7 @@ export default function Performance() {
     a.download = `performance_${viewMode}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [displayRows, viewMode, customStart, customEnd, eventType]);
+  }, [displayRows, viewMode, customStart, customEnd, eventType, touchPct]);
 
   // ── Sort icon component ──
   const SortIcon = ({ col }: { col: string }) =>
@@ -897,6 +951,29 @@ export default function Performance() {
             ))}
           </div>
 
+          {/* Period statistic toggle */}
+          {viewMode === "periods" && (
+            <div className="flex items-center bg-muted rounded p-0.5">
+              {([
+                { key: "end", label: "End %", title: "Return from period start to period end" },
+                { key: "max", label: "Max %", title: "Highest point TOUCHED within the period vs its start — did it hit +X% at some point, even if it faded?" },
+                { key: "min", label: "Min %", title: "Lowest point touched within the period vs its start — worst drawdown from the period start" },
+              ] as const).map((s) => (
+                <button
+                  key={s.key}
+                  title={s.title}
+                  className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                    periodStat === s.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setPeriodStat(s.key)}
+                  data-testid={`period-stat-${s.key}`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Custom date range (periods) */}
           {viewMode === "periods" && (
             <div className="flex items-center gap-1.5">
@@ -919,24 +996,42 @@ export default function Performance() {
 
           {/* Monthly statistic toggle */}
           {viewMode === "monthly" && (
-            <div className="flex items-center bg-muted rounded p-0.5">
-              {([
-                { key: "avg", label: "Avg %", title: "Average return per calendar month" },
-                { key: "win", label: "Win %", title: "Share of years the month closed positive — consistency check on the average" },
-                { key: "rel", label: "vs Subind", title: "Average return minus the same-month subindustry peer mean — the seasonal alpha a long/short trade captures" },
-              ] as const).map((s) => (
-                <button
-                  key={s.key}
-                  title={s.title}
-                  className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
-                    monthlyStat === s.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setMonthlyStat(s.key)}
-                  data-testid={`monthly-stat-${s.key}`}
-                >
-                  {s.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-center bg-muted rounded p-0.5">
+                {([
+                  { key: "avg", label: "Avg %", title: "Average return per calendar month" },
+                  { key: "win", label: "Win %", title: "Share of years the month closed positive — consistency check on the average" },
+                  { key: "rel", label: "vs Subind", title: "Average return minus the same-month subindustry peer mean — the seasonal alpha a long/short trade captures" },
+                  { key: "hit", label: `Hit ≥%`, title: "Share of years the month TOUCHED the threshold at ANY point intra-month (vs the prior month-end close) — not just where the month ended. Set the threshold in the box." },
+                ] as const).map((s) => (
+                  <button
+                    key={s.key}
+                    title={s.title}
+                    className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      monthlyStat === s.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setMonthlyStat(s.key)}
+                    data-testid={`monthly-stat-${s.key}`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              {monthlyStat === "hit" && (
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={touchPct}
+                    onChange={(e) => setTouchPct(e.target.value)}
+                    className="h-6 w-14 text-[11px] text-center"
+                    title="Intra-month touch threshold (%)"
+                    data-testid="monthly-touch-pct"
+                  />
+                  <span className="text-[11px] text-muted-foreground">%</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1236,12 +1331,12 @@ export default function Performance() {
                       </td>
                       {PERIOD_COLUMNS.map((col) => (
                         <td key={col} className="px-2 py-1.5 text-right">
-                          <ReturnCell value={row[col]} />
+                          <ReturnCell value={periodStat === "end" ? row[col] : row[`${col}${periodStat === "max" ? "Max" : "Min"}`] ?? null} />
                         </td>
                       ))}
                       {customStart && customEnd && (
                         <td className="px-2 py-1.5 text-right">
-                          <ReturnCell value={row.custom} />
+                          <ReturnCell value={periodStat === "end" ? row.custom : row[`custom${periodStat === "max" ? "Max" : "Min"}`] ?? null} />
                         </td>
                       )}
                     </>
@@ -1262,8 +1357,8 @@ export default function Performance() {
                     <>
                       {MONTHLY_LABELS.map((col: string, mi: number) => (
                         <td key={col} className={`px-2 py-1.5 text-right ${mi === new Date().getMonth() ? "bg-primary/5" : ""}`}>
-                          {monthlyStat === "win" ? (
-                            <WinRateCell value={row[`${col}Win`] ?? null} />
+                          {monthlyStat === "win" || monthlyStat === "hit" ? (
+                            <WinRateCell value={row[`${col}${monthlyStat === "win" ? "Win" : "Hit"}`] ?? null} />
                           ) : (
                             <HeatCell value={monthlyStat === "rel" ? row[`${col}Rel`] ?? null : row[col]} />
                           )}
