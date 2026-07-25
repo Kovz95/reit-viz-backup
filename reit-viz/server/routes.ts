@@ -2507,11 +2507,30 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/earnings-calendar", async (_req, res) => {
     const cacheFile = path.join(DATA_DIR, "earnings-calendar.json");
     const TTL_MS = 12 * 3600 * 1000;
+    // Filter applied at RESPONSE time (cache may hold the raw global feed):
+    // keep only symbols whose base matches a workbook ticker (BKG-GB ↔ BKG.L).
+    const filterToUniverse = (rows: any[]): any[] => {
+      const known = new Set<string>();
+      try {
+        const metas = readJSON(path.join(DATA_DIR, "tickers.json"));
+        for (const m of metas) {
+          const tk = String(m.ticker || "").toUpperCase();
+          if (!tk) continue;
+          known.add(tk);
+          known.add(tk.split("-")[0]);
+        }
+      } catch { /* no tickers file — keep everything */ }
+      if (known.size === 0) return rows;
+      return rows.filter((r: any) => {
+        const s = String(r?.symbol ?? "").toUpperCase();
+        return known.has(s) || known.has(s.split(".")[0]);
+      });
+    };
     try {
       try {
         const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
         if (cached && Date.now() - (cached.fetchedAt ?? 0) < TTL_MS && Array.isArray(cached.rows)) {
-          return res.json(cached.rows);
+          return res.json(filterToUniverse(cached.rows));
         }
       } catch { /* no/stale cache */ }
       const key = process.env.FMP_API_KEY?.trim() ?? "";
@@ -2523,25 +2542,8 @@ export async function registerRoutes(server: Server, app: Express) {
       const resp = await fetch(url);
       if (!resp.ok) return res.json([]);
       const raw = await resp.json();
-      // FMP returns the GLOBAL calendar (~2MB). Keep only symbols whose base
-      // matches a ticker in our workbook (BKG-GB ↔ BKG.L via shared bases).
-      const known = new Set<string>();
-      try {
-        const metas = readJSON(path.join(DATA_DIR, "tickers.json"));
-        for (const m of metas) {
-          const tk = String(m.ticker || "").toUpperCase();
-          if (!tk) continue;
-          known.add(tk);
-          known.add(tk.split("-")[0]);
-        }
-      } catch { /* no tickers file — keep everything */ }
       const rows = (Array.isArray(raw) ? raw : [])
         .filter((r: any) => r?.symbol && r?.date)
-        .filter((r: any) => {
-          if (known.size === 0) return true;
-          const s = String(r.symbol).toUpperCase();
-          return known.has(s) || known.has(s.split(".")[0]);
-        })
         .map((r: any) => ({
           symbol: String(r.symbol),
           date: String(r.date).slice(0, 10),
@@ -2549,7 +2551,7 @@ export async function registerRoutes(server: Server, app: Express) {
           epsEstimated: Number.isFinite(r.epsEstimated) ? r.epsEstimated : null,
         }));
       try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), rows })); } catch {}
-      res.json(rows);
+      res.json(filterToUniverse(rows));
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "earnings-calendar failed" });
     }
