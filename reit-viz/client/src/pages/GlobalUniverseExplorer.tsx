@@ -14,6 +14,7 @@ import {
 import { Loader2, AlertCircle, EyeOff, Download, RotateCcw, Trash2, X, ChevronUp, ChevronDown } from "lucide-react";
 import { Undo2 } from "lucide-react";
 import { parseNumericFilter } from "@/lib/numericFilter";
+import { useEarningsNow } from "@/lib/earningsNow";
 
 const PAGE_SIZE = 200;
 const TEXT_COLUMNS = [
@@ -27,8 +28,9 @@ const TEXT_COLUMNS = [
   "industryGroup",
   "industry",
   "subindustry",
+  "nextEarnings",
 ];
-const NUM_COLUMNS = ["price", "marketCapMM", "salesMM", "adv", "dollarVolMM", "peFy2"];
+const NUM_COLUMNS = ["price", "marketCapMM", "salesMM", "adv", "dollarVolMM", "peFy2", "earnDays"];
 
 interface GlobalRecord {
   ticker: string;
@@ -146,14 +148,27 @@ export default function GlobalUniverseExplorer() {
     return fns;
   }, [colFilters]);
 
+  // Next earnings date (FMP forward calendar) + days-until, per row. Dates
+  // further out are FMP projections rather than company-confirmed — noted in
+  // the cell tooltip.
+  const earnings = useEarningsNow(!loading && records.length > 0);
+  const recordsWithEarnings = useMemo(
+    () =>
+      (records as any[]).map((r) => {
+        const st = earnings.statusFor(String(r.ticker ?? ""));
+        return st ? { ...r, nextEarnings: st.date, earnDays: st.days, earnTime: st.time } : { ...r, nextEarnings: null, earnDays: null, earnTime: "" };
+      }),
+    [records, earnings],
+  );
+
   const filteredRows = useMemo(() => {
     if (loading || error) return [];
-    let rows = applyClassFilters(records as any[], classFilters, search, pastedTickerSet);
+    let rows = applyClassFilters(recordsWithEarnings, classFilters, search, pastedTickerSet);
     if (activeColFilterFns.length > 0) {
       rows = rows.filter((row) => activeColFilterFns.every((fn) => fn(row as GlobalRecord)));
     }
     return rows;
-  }, [records, loading, error, classFilters, search, pastedTickerSet, activeColFilterFns]);
+  }, [recordsWithEarnings, loading, error, classFilters, search, pastedTickerSet, activeColFilterFns]);
 
   const sortedRows = useMemo(() => {
     const arr = filteredRows.slice();
@@ -202,6 +217,8 @@ export default function GlobalUniverseExplorer() {
       "adv",
       "dollarVolMM",
       "peFy2",
+      "nextEarnings",
+      "earnDays",
     ];
     const escape = (v: any) => {
       if (v == null) return "";
@@ -459,6 +476,8 @@ export default function GlobalUniverseExplorer() {
                 {ColHeader("adv", "ADV (sh)", "right")}
                 {ColHeader("dollarVolMM", "$ ADV", "right")}
                 {ColHeader("peFy2", "P/E Fy2", "right")}
+                {ColHeader("nextEarnings", "Next Earn")}
+                {ColHeader("earnDays", "Days", "right")}
                 <th className="px-2 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground border-b border-border bg-card sticky top-0 w-10">
                   {" "}
                 </th>
@@ -480,6 +499,8 @@ export default function GlobalUniverseExplorer() {
                 {ColFilterCell("adv", "num")}
                 {ColFilterCell("dollarVolMM", "num")}
                 {ColFilterCell("peFy2", "num")}
+                {ColFilterCell("nextEarnings", "text")}
+                {ColFilterCell("earnDays", "num")}
                 <th className="px-1 py-0.5 border-b border-border bg-card/80 sticky top-[26px] z-[1]">
                   {hasColFilters && (
                     <button
@@ -559,6 +580,19 @@ export default function GlobalUniverseExplorer() {
                     {row.peFy2 != null && Number.isFinite(row.peFy2)
                       ? row.peFy2.toFixed(2)
                       : "—"}
+                  </td>
+                  <td
+                    className="px-2 py-1 whitespace-nowrap text-muted-foreground"
+                    title={row.nextEarnings ? `FMP calendar${row.earnTime === "bmo" ? " · pre-market" : row.earnTime === "amc" ? " · after close" : ""} — nearer dates are effectively confirmed, further-out ones are FMP's projection` : ""}
+                  >
+                    {row.nextEarnings ?? "—"}
+                  </td>
+                  <td
+                    className={`px-2 py-1 text-right font-mono tabular-nums ${
+                      row.earnDays == null ? "text-muted-foreground" : row.earnDays <= 2 ? "text-red-400 font-bold" : row.earnDays <= 7 ? "text-amber-400" : ""
+                    }`}
+                  >
+                    {row.earnDays ?? "—"}
                   </td>
                   <td className="px-2 py-1 text-center">
                     <button
