@@ -83,6 +83,68 @@ export function computeKalmanTrend(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Kalman time-varying hedge ratio
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Random-walk regression y_t = α_t + β_t·x_t + ε: state [α, β] evolves as a
+// random walk with process noise δ·R (δ small keeps β smooth), observation
+// noise R estimated from an EWMA of squared innovations. The classic dynamic
+// pair-hedge: the spread residual y − (α + βx) replaces the fixed-β spread,
+// so a drifting relationship doesn't masquerade as a trading signal.
+
+export interface KalmanHedgeResult {
+  alpha: number[];
+  beta: number[];
+  /** y − (α + β·x) — the dynamically hedged spread. */
+  residual: number[];
+}
+
+export function computeKalmanHedge(y: number[], x: number[], delta = 1e-4): KalmanHedgeResult {
+  const n = Math.min(y.length, x.length);
+  const alpha = new Array<number>(n).fill(NaN);
+  const beta = new Array<number>(n).fill(NaN);
+  const residual = new Array<number>(n).fill(NaN);
+  if (n < 10) return { alpha, beta, residual };
+
+  // Init from a small OLS on the first 10 points.
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  const m0 = Math.min(10, n);
+  for (let i = 0; i < m0; i++) { sx += x[i]; sy += y[i]; sxx += x[i] * x[i]; sxy += x[i] * y[i]; }
+  const den0 = m0 * sxx - sx * sx;
+  let b = den0 !== 0 ? (m0 * sxy - sx * sy) / den0 : 1;
+  let a = (sy - b * sx) / m0;
+
+  let R = 1e-6; // observation noise (EWMA of squared innovations)
+  const lam = 0.99;
+  // State covariance
+  let P00 = 1, P01 = 0, P11 = 1;
+
+  for (let t = 0; t < n; t++) {
+    // Predict: random walk + process noise proportional to R.
+    const q = delta * Math.max(R, 1e-10) / (1 - delta);
+    P00 += q; P11 += q;
+    // Innovation
+    const yhat = a + b * x[t];
+    const e = y[t] - yhat;
+    // Innovation variance: H P Hᵀ + R with H = [1, x]
+    const S = P00 + 2 * x[t] * P01 + x[t] * x[t] * P11 + Math.max(R, 1e-10);
+    const K0 = (P00 + x[t] * P01) / S;
+    const K1 = (P01 + x[t] * P11) / S;
+    a += K0 * e;
+    b += K1 * e;
+    const P00n = (1 - K0) * P00 - K0 * x[t] * P01;
+    const P01n = (1 - K0) * P01 - K0 * x[t] * P11;
+    const P11n = -K1 * P01 + (1 - K1 * x[t]) * P11;
+    P00 = P00n; P01 = P01n; P11 = P11n;
+    R = lam * R + (1 - lam) * e * e;
+    alpha[t] = a;
+    beta[t] = b;
+    residual[t] = y[t] - (a + b * x[t]);
+  }
+  return { alpha, beta, residual };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // CUSUM change-points
 // ─────────────────────────────────────────────────────────────────────────
 //

@@ -74,6 +74,7 @@ const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
 const Heatmap = lazy(() => import("@/pages/Heatmap"));
 const Performance = lazy(() => import("@/pages/Performance"));
 const EarningsCalendar = lazy(() => import("@/pages/EarningsCalendar"));
+const IdeaJournal = lazy(() => import("@/pages/IdeaJournal"));
 const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
 const PairRatios = lazy(() => import("@/pages/PairRatios"));
 const Screener = lazy(() => import("@/pages/Screener"));
@@ -303,6 +304,7 @@ function NavBar() {
     },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
+    { path: "/journal", label: "Journal", icon: Star },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
     { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
@@ -599,6 +601,7 @@ const PAGES = [
   { path: "/spread", label: "Div Spread" },
   { path: "/performance", label: "Performance" },
   { path: "/earnings-calendar", label: "Earnings Calendar" },
+  { path: "/journal", label: "Idea Journal" },
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
@@ -732,6 +735,7 @@ function AppShell() {
               <Route path="/heatmap" component={Heatmap} />
               <Route path="/performance" component={Performance} />
               <Route path="/earnings-calendar" component={EarningsCalendar} />
+              <Route path="/journal" component={IdeaJournal} />
               <Route path="/short-interest" component={ShortInterest} />
               <Route path="/screeners" component={AllScreeners} />
               <Route path="/universal-screener" component={UniversalScreener} />
