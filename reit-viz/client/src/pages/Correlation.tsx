@@ -9,6 +9,7 @@ import { useEarningsNow, EarningsChip } from "@/lib/earningsNow";
 import { addJournalEntry } from "@/lib/ideaJournal";
 import { getMetricSeries } from "@/lib/dataService";
 import PairBacktestModal from "@/components/PairBacktestModal";
+import { hrpCluster } from "@/lib/hrp";
 import { PENDING_DISLOC_PRESET_KEY, PENDING_PAIR_TEMPLATE_KEY } from "@/components/CommandPalette";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
@@ -4902,6 +4903,113 @@ function PairwiseView({
 }
 
 // ── Universe Matrix View ──
+/** Hierarchical clustering + HRP weights over the currently computed matrix.
+ *  Vols come from the last ~1y of daily close log-returns per label ticker. */
+function HrpPanel({ labels, displayLabels, matrix }: { labels: string[]; displayLabels: string[]; matrix: number[][] }) {
+  const [res, setRes] = useState<{ order: number[]; clusters: number[][]; weights: number[]; vols: number[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [k, setK] = useState(5);
+
+  const compute = async () => {
+    setBusy(true);
+    setRes(null);
+    try {
+      const tickers = labels.map((l) => l.split(":")[0].toUpperCase());
+      const vols: number[] = new Array(labels.length).fill(0.02);
+      let i = 0;
+      await Promise.all(Array.from({ length: 6 }, async () => {
+        while (i < tickers.length) {
+          const idx = i++;
+          try {
+            const s = await getMetricSeries(tickers[idx], "close");
+            const vals = s.map((p) => p.value).filter((v) => Number.isFinite(v) && v > 0);
+            const rets: number[] = [];
+            for (let j = Math.max(1, vals.length - 253); j < vals.length; j++) rets.push(Math.log(vals[j] / vals[j - 1]));
+            const m = rets.reduce((a, b) => a + b, 0) / Math.max(1, rets.length);
+            const v = Math.sqrt(rets.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, rets.length - 1));
+            if (Number.isFinite(v) && v > 0) vols[idx] = v;
+          } catch { /* default vol */ }
+        }
+      }));
+      setRes({ ...hrpCluster(matrix, vols, k), vols });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportCsv = () => {
+    if (!res) return;
+    const lines = ["label,cluster,hrpWeightPct,dailyVolPct"];
+    res.clusters.forEach((cl, ci) => {
+      for (const idx of cl) lines.push([displayLabels[idx], ci + 1, (res.weights[idx] * 100).toFixed(2), (res.vols[idx] * 100).toFixed(2)].join(","));
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "hrp-weights.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="border border-border/30 rounded p-2 space-y-2" data-testid="hrp-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Clusters + HRP weights</span>
+        <span className="text-[9px] text-muted-foreground">average-linkage on d=√(½(1−ρ)); weights via recursive bisection (López de Prado)</span>
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-[10px] text-muted-foreground">clusters</span>
+          <input
+            type="number"
+            className="h-6 w-12 text-[10px] px-1 bg-background border border-border rounded"
+            value={k}
+            min={2}
+            max={Math.max(2, labels.length - 1)}
+            onChange={(e) => { const v = parseInt(e.target.value); if (v >= 2) setK(v); }}
+            data-testid="hrp-k"
+          />
+          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => void compute()} disabled={busy || labels.length < 3} data-testid="hrp-run">
+            {busy ? "Computing…" : "Compute"}
+          </Button>
+          {res && (
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={exportCsv}>CSV</Button>
+          )}
+        </div>
+      </div>
+      {res && (
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="space-y-1.5" data-testid="hrp-clusters">
+            {res.clusters.map((cl, ci) => (
+              <div key={ci} className="flex flex-wrap items-center gap-1">
+                <span className="text-[9px] font-bold text-muted-foreground w-8">C{ci + 1}</span>
+                {cl.map((idx) => (
+                  <span key={idx} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[10px] font-mono">{displayLabels[idx]}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="max-h-64 overflow-auto">
+            <table className="w-full text-[10px] font-mono">
+              <thead className="text-muted-foreground">
+                <tr><th className="text-left px-1">name</th><th className="text-right px-1">HRP wt</th><th className="text-right px-1">vol/d</th></tr>
+              </thead>
+              <tbody data-testid="hrp-weights">
+                {res.order.map((idx) => (
+                  <tr key={idx} className="border-b border-border/20">
+                    <td className="px-1">{displayLabels[idx]}</td>
+                    <td className="px-1 text-right font-bold">{(res.weights[idx] * 100).toFixed(2)}%</td>
+                    <td className="px-1 text-right text-muted-foreground">{(res.vols[idx] * 100).toFixed(2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UniverseMatrixView({
   data,
   loading,
@@ -5005,6 +5113,9 @@ function UniverseMatrixView({
         pValues={data.pValues}
         lagApplied={!!lagBars}
       />
+
+      {/* Hierarchical clusters + HRP weights on this matrix */}
+      <HrpPanel labels={data.labels} displayLabels={displayLabels} matrix={data.matrix} />
 
       {/* Top pairs + per-ticker averages */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
