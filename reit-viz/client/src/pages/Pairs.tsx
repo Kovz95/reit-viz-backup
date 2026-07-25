@@ -68,7 +68,7 @@ import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection } from "@/components/IndicatorsPanel";
-import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams } from "@/lib/indicatorRegistry";
+import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
@@ -1662,8 +1662,13 @@ function PairsSubIndicatorChart({
     if (type.startsWith("reg:")) {
       const def = getIndicatorDef(type.slice(4));
       if (def?.renderPane) {
-        const bars = lineToBars(closeData);
-        const p = resolveParams(def, activeIndicators.registry?.[def.id]);
+        const regSt = activeIndicators.registry?.[def.id];
+        let bars = lineToBars(closeData);
+        // Per-indicator compute frequency (weekly/monthly resample).
+        if (regSt?.freq === "weekly" || regSt?.freq === "monthly") {
+          bars = resampleIndicatorBars(bars, regSt.freq);
+        }
+        const p = resolveParams(def, regSt);
         def.renderPane(
           {
             chart,
@@ -2143,7 +2148,11 @@ function MiniChart({
           const overlayBars = lineToBars(data);
           for (const def of ALL_REGISTRY_INDICATORS) {
             if (def.renderTarget !== "overlay" || !regState[def.id]?.enabled || !def.renderOverlay) continue;
-            const p = resolveParams(def, regState[def.id]);
+            const st = regState[def.id];
+            const defBars = st?.freq === "weekly" || st?.freq === "monthly"
+              ? resampleIndicatorBars(overlayBars, st.freq)
+              : overlayBars;
+            const p = resolveParams(def, st);
             try {
               def.renderOverlay(
                 {
@@ -2152,7 +2161,7 @@ function MiniChart({
                   baseLabel: "",
                   register: () => {},
                 },
-                overlayBars,
+                defBars,
                 p,
               );
             } catch { /* one bad indicator must not kill the chart */ }

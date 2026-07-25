@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { ALL_REGISTRY_INDICATORS, resolveParams } from "@/lib/indicatorRegistry";
+import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
@@ -653,14 +653,19 @@ function MacroPane({
           time: d.time, open: d.value, high: d.value, low: d.value, close: d.value,
         }));
         for (const def of ALL_REGISTRY_INDICATORS) {
-          if (!regState[def.id]?.enabled) continue;
-          const p = resolveParams(def, regState[def.id]);
+          const st = regState[def.id];
+          if (!st?.enabled) continue;
+          // Per-indicator compute frequency (weekly/monthly resample).
+          const defBars = st.freq === "weekly" || st.freq === "monthly"
+            ? resampleIndicatorBars(bars, st.freq)
+            : bars;
+          const p = resolveParams(def, st);
           const register = (s: ISeriesApi<any>) => { indicatorSeriesRef.current.push(s); };
           try {
             if (def.renderTarget === "overlay" && def.renderOverlay) {
               def.renderOverlay(
                 { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register },
-                bars, p,
+                defBars, p,
               );
             } else if (def.renderPane) {
               const scaleId = `reg_${def.id}`;
@@ -692,7 +697,7 @@ function MacroPane({
                     indicatorSeriesRef.current.push(rl);
                   },
                 },
-                bars, p,
+                defBars, p,
               );
               if (anchor) {
                 (anchor as ISeriesApi<any>).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
