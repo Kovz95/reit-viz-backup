@@ -75,6 +75,7 @@ const Heatmap = lazy(() => import("@/pages/Heatmap"));
 const Performance = lazy(() => import("@/pages/Performance"));
 const EarningsCalendar = lazy(() => import("@/pages/EarningsCalendar"));
 const IdeaJournal = lazy(() => import("@/pages/IdeaJournal"));
+const RidgeRanker = lazy(() => import("@/pages/RidgeRanker"));
 const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
 const PairRatios = lazy(() => import("@/pages/PairRatios"));
 const Screener = lazy(() => import("@/pages/Screener"));
@@ -266,6 +267,7 @@ function NavBar() {
         { path: "/factor-backtest", label: "Factor Backtest", icon: TrendingUp },
         { path: "/relative-strength", label: "Relative Strength", icon: TrendingUp },
         { path: "/correlation", label: "Correlation", icon: Link2 },
+        { path: "/ranker", label: "Ridge Ranker", icon: ListOrdered },
       ],
     },
     {
@@ -602,6 +604,7 @@ const PAGES = [
   { path: "/performance", label: "Performance" },
   { path: "/earnings-calendar", label: "Earnings Calendar" },
   { path: "/journal", label: "Idea Journal" },
+  { path: "/ranker", label: "Ridge Ranker" },
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
@@ -736,6 +739,7 @@ function AppShell() {
               <Route path="/performance" component={Performance} />
               <Route path="/earnings-calendar" component={EarningsCalendar} />
               <Route path="/journal" component={IdeaJournal} />
+              <Route path="/ranker" component={RidgeRanker} />
               <Route path="/short-interest" component={ShortInterest} />
               <Route path="/screeners" component={AllScreeners} />
               <Route path="/universal-screener" component={UniversalScreener} />
