@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
+import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
@@ -1063,8 +1064,24 @@ function DislocationScanPanel({
   const displayIdio = showAll ? sortedIdio : sortedIdio.slice(0, 50);
   const resultCount = result ? (result.mode === "idio" ? result.idioRows.length : result.rows.length) : 0;
 
-  // Seasonal-window chips on result rows (lazy: only fetched once results exist).
+  // Seasonal / valuation / crowding chips on result rows (lazy: only fetched
+  // once results exist; valuation + SI only for displayed tickers).
   const seasonal = useSeasonalNow(resultCount > 0);
+  const chipTickers = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of display) { s.add(r.a); s.add(r.b); }
+    for (const r of displayIdio) s.add(r.ticker);
+    return [...s];
+  }, [display, displayIdio]);
+  const valuation = useValuationNow(resultCount > 0, chipTickers);
+  const crowding = useCrowdingNow(resultCount > 0, chipTickers);
+  const legChips = (t: string) => (
+    <>
+      <SeasonalChip ticker={t} status={seasonal.statusFor(t)} />
+      <ValuationChip ticker={t} status={valuation.statusFor(t)} />
+      <CrowdingChip ticker={t} status={crowding.statusFor(t)} />
+    </>
+  );
 
   const KIND_CHIP: Record<string, { label: string; color: string }> = {
     decorrelated: { label: "DECOR", color: "#f59e0b" },
@@ -1337,7 +1354,7 @@ function DislocationScanPanel({
                     <tr key={r.ticker + r.group} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`idio-row-${i}`}>
                       <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
                       <td className="px-2 py-1 font-bold">
-                        {r.ticker} <SeasonalChip ticker={r.ticker} status={seasonal.statusFor(r.ticker)} />
+                        {r.ticker} {legChips(r.ticker)}
                       </td>
                       <td className="px-2 py-1 max-w-[220px]"><span className="truncate block text-[10px] text-muted-foreground" title={r.group}>{r.group}</span></td>
                       <td className="px-2 py-1 text-muted-foreground">{r.peers}</td>
@@ -1403,9 +1420,9 @@ function DislocationScanPanel({
                     <tr key={`${r.a}-${r.b}`} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`disloc-row-${i}`}>
                       <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
                       <td className="px-2 py-1 font-bold whitespace-nowrap">
-                        {r.a} <SeasonalChip ticker={r.a} status={seasonal.statusFor(r.a)} />{" "}
+                        {r.a} {legChips(r.a)}{" "}
                         <span className="text-muted-foreground/50">×</span> {r.b}{" "}
-                        <SeasonalChip ticker={r.b} status={seasonal.statusFor(r.b)} />
+                        {legChips(r.b)}
                         <span className="ml-1.5 text-[9px] text-muted-foreground/60">{TF_SHORT[r.worstTF]} vs {TF_SHORT[r.anchorTF]}</span>
                       </td>
                       <td className="px-2 py-1 whitespace-nowrap" style={{ color: corrColor(r.histCorr) }}>{r.histCorr.toFixed(2)}</td>

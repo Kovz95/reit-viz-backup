@@ -22,6 +22,7 @@ import ClassificationFilters, {
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
+import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { formatHitRate, hitRateColorClass, HORIZONS } from "@/lib/signalUtils";
@@ -563,6 +564,15 @@ export default function UniversalScreener() {
 
   const firingCount = useMemo(() => rows.filter((r) => r.firingNow).length, [rows]);
 
+  // Valuation + crowding chips for displayed subjects (pair subjects split into legs).
+  const chipTickers = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of visibleRows) for (const leg of r.subject.split("/")) if (leg) s.add(leg);
+    return [...s];
+  }, [visibleRows]);
+  const valuation = useValuationNow(rows.length > 0, chipTickers);
+  const crowding = useCrowdingNow(rows.length > 0, chipTickers);
+
   const openOnChart = (r: QualifiedSetup) => {
     if (r.mode === "single") {
       emitChartSignals({
@@ -997,7 +1007,11 @@ export default function UniversalScreener() {
                           {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                           {r.subject}
                           {r.subject.split("/").map((leg) => (
-                            <SeasonalChip key={leg} ticker={leg} status={seasonal.statusFor(leg)} />
+                            <Fragment key={leg}>
+                              <SeasonalChip ticker={leg} status={seasonal.statusFor(leg)} />
+                              <ValuationChip ticker={leg} status={valuation.statusFor(leg)} />
+                              <CrowdingChip ticker={leg} status={crowding.statusFor(leg)} />
+                            </Fragment>
                           ))}
                         </span>
                       </td>
