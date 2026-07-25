@@ -20,6 +20,7 @@ import ClassificationFilters, {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { formatHitRate, hitRateColorClass, HORIZONS } from "@/lib/signalUtils";
@@ -85,7 +86,8 @@ function loadSavedScreens(): SavedScreen[] {
   }
 }
 function persistSavedScreens(list: SavedScreen[]): void {
-  try { localStorage.setItem(SAVED_SCREENS_KEY, JSON.stringify(list)); } catch {}
+  // Server-synced (shared across computers); localStorage is the boot cache.
+  saveServerPref(SAVED_SCREENS_KEY, list);
 }
 
 // signalId → optimizer drill-through route (module-level: the catalog is
@@ -283,6 +285,15 @@ export default function UniversalScreener() {
   // ── Saved screens (named full-config snapshots) ────────────────────────────
   const [savedScreens, setSavedScreens] = useState<SavedScreen[]>(() => loadSavedScreens());
   const [screenName, setScreenName] = useState("");
+
+  // Hydrate from the server so screens saved on another computer show up.
+  useEffect(() => {
+    let cancelled = false;
+    void loadServerPref<SavedScreen[]>(SAVED_SCREENS_KEY).then((srv) => {
+      if (!cancelled && Array.isArray(srv)) setSavedScreens(srv);
+    });
+    return () => { cancelled = true; };
+  }, []);
   const [screensOpen, setScreensOpen] = useState(false);
   const screensRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

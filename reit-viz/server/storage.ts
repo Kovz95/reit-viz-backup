@@ -91,6 +91,18 @@ sqlite.exec(`
   );
 `);
 
+// Generic key/value preference store — server-side home for client template
+// stores (pair templates, screener saved screens, disloc presets, indicator
+// sets, ...) so they are shared across browsers/computers instead of living
+// in per-browser localStorage. Values are opaque JSON strings.
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS prefs (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`);
+
 export interface IStorage {
   listWorkspaces(): Workspace[];
   getWorkspace(id: number): Workspace | undefined;
@@ -120,6 +132,11 @@ export interface IStorage {
   updateCustomChart(id: number, updates: any): any | undefined;
   deleteCustomChart(id: number): boolean;
 
+
+  getPref(key: string): string | undefined;
+  setPref(key: string, value: string): void;
+  deletePref(key: string): boolean;
+  listPrefs(): { key: string; updatedAt: string }[];
 
   listAnnotations(ticker?: string): any[];
   createAnnotation(annotation: any): any;
@@ -247,6 +264,29 @@ export class DatabaseStorage implements IStorage {
     try {
       return sqlite.prepare("DELETE FROM custom_charts WHERE id = ?").run(id).changes > 0;
     } catch { return false; }
+  }
+
+  // ── Prefs (generic KV) ──
+  getPref(key: string): string | undefined {
+    try {
+      const row = sqlite.prepare("SELECT value FROM prefs WHERE key = ?").get(key) as { value: string } | undefined;
+      return row?.value;
+    } catch { return undefined; }
+  }
+  setPref(key: string, value: string): void {
+    sqlite
+      .prepare("INSERT INTO prefs (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+      .run(key, value, new Date().toISOString());
+  }
+  deletePref(key: string): boolean {
+    try {
+      return sqlite.prepare("DELETE FROM prefs WHERE key = ?").run(key).changes > 0;
+    } catch { return false; }
+  }
+  listPrefs(): { key: string; updatedAt: string }[] {
+    try {
+      return (sqlite.prepare("SELECT key, updated_at AS updatedAt FROM prefs ORDER BY key").all() as any[]);
+    } catch { return []; }
   }
 
   // ── Annotations ──

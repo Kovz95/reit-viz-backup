@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
@@ -267,6 +268,8 @@ interface PairTemplate {
   indicators: Record<number, ActiveIndicators>;
 }
 
+// Templates/presets are server-synced (shared across computers); localStorage
+// is only the boot cache — see serverPrefs.ts.
 const PAIR_TEMPLATES_KEY = "reit-viz:corr-pair-templates";
 function loadPairTemplates(): PairTemplate[] {
   try {
@@ -277,7 +280,7 @@ function loadPairTemplates(): PairTemplate[] {
   }
 }
 function persistPairTemplates(list: PairTemplate[]): void {
-  try { localStorage.setItem(PAIR_TEMPLATES_KEY, JSON.stringify(list)); } catch {}
+  saveServerPref(PAIR_TEMPLATES_KEY, list);
 }
 
 function sanitizeTransform(raw: any): LegTransform | null {
@@ -772,7 +775,7 @@ function loadDislocPresets(): DislocPreset[] {
   }
 }
 function persistDislocPresets(list: DislocPreset[]): void {
-  try { localStorage.setItem(DISLOC_PRESETS_KEY, JSON.stringify(list)); } catch {}
+  saveServerPref(DISLOC_PRESETS_KEY, list);
 }
 function loadDislocLast(): Partial<DislocPreset> | null {
   try { return JSON.parse(localStorage.getItem(DISLOC_LAST_KEY) || "null"); } catch { return null; }
@@ -833,14 +836,43 @@ function DislocationScanPanel({
     nations: Array.from(fltNations),
     exchanges: Array.from(fltExchanges),
   }), [mode, scope, basketId, window_, zTh, anchorTh, minBase, clsFilters, fltNations, fltExchanges]);
-  useEffect(() => {
-    try { localStorage.setItem(DISLOC_LAST_KEY, JSON.stringify(currentConfig())); } catch {}
-  }, [currentConfig]);
-
   // ── Named presets ──
   const [presets, setPresets] = useState<DislocPreset[]>(() => loadDislocPresets());
   const [presetName, setPresetName] = useState("");
   const [presetsOpen, setPresetsOpen] = useState(false);
+
+  // Hydrate presets + last config from the server (shared across computers).
+  // Gate live persistence behind hydration so a stale localStorage snapshot
+  // can't clobber a newer server config saved from another machine.
+  const dislocHydratedRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      loadServerPref<DislocPreset[]>(DISLOC_PRESETS_KEY),
+      loadServerPref<Partial<DislocPreset>>(DISLOC_LAST_KEY),
+    ]).then(([srvPresets, srvLast]) => {
+      if (cancelled) return;
+      if (Array.isArray(srvPresets)) setPresets(srvPresets);
+      if (srvLast && typeof srvLast === "object") {
+        if (["crossTF", "breakdown", "spreadZ", "recoupling", "idio"].includes(srvLast.mode as string)) setMode(srvLast.mode as ScanMode);
+        setScope(srvLast.scope === "basket" ? "basket" : "universe");
+        if (typeof srvLast.basketId === "string") setBasketId(srvLast.basketId);
+        if (typeof srvLast.window_ === "string") setWindow_(srvLast.window_);
+        if (typeof srvLast.zTh === "string") setZTh(srvLast.zTh);
+        if (typeof srvLast.anchorTh === "string") setAnchorTh(srvLast.anchorTh);
+        if (typeof srvLast.minBase === "string") setMinBase(srvLast.minBase);
+        if (srvLast.clsFilters) setClsFilters(deserializeClassFilters(srvLast.clsFilters));
+        setFltNations(new Set(Array.isArray(srvLast.nations) ? srvLast.nations : []));
+        setFltExchanges(new Set(Array.isArray(srvLast.exchanges) ? srvLast.exchanges : []));
+      }
+      dislocHydratedRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!dislocHydratedRef.current) return;
+    saveServerPref(DISLOC_LAST_KEY, currentConfig(), 800);
+  }, [currentConfig]);
   const savePreset = useCallback(() => {
     const name = presetName.trim() || `Preset ${presets.length + 1}`;
     const p: DislocPreset = { id: `dp-${Date.now()}`, name, ...currentConfig() };
@@ -2873,6 +2905,15 @@ export default function Correlation() {
   // ── Pairwise templates (metrics/transforms/lag/layout — apply onto any tickers) ──
   const [pairTemplates, setPairTemplates] = useState<PairTemplate[]>(() => loadPairTemplates());
   const [templateName, setTemplateName] = useState("");
+
+  // Hydrate templates from the server so saves made on another computer show up.
+  useEffect(() => {
+    let cancelled = false;
+    void loadServerPref<PairTemplate[]>(PAIR_TEMPLATES_KEY).then((srv) => {
+      if (!cancelled && Array.isArray(srv)) setPairTemplates(srv);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const saveCurrentTemplate = useCallback(() => {
     const name = templateName.trim() || `Template ${pairTemplates.length + 1}`;

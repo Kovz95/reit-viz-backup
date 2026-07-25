@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { ResizableSidebar } from "@/components/ResizableSidebar";
-import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus } from "lucide-react";
+import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import DateInput from "@/components/DateInput";
@@ -26,7 +26,27 @@ import {
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS, MA_LINE_STYLES, MA_LINE_STYLE_LABELS, MA_OPACITY_STEPS, type MaLineStyle } from "@/lib/chartColors";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
+import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import PatternsPanel from "./PatternsPanel";
+
+// ── Indicator sets: named ActiveIndicators snapshots, server-synced ──────
+// Saved from whichever pane is selected; applying writes the whole set onto
+// the selected pane (or all panes when "Apply to all panes" is on). Stored in
+// the server prefs KV so the same sets are available on every computer.
+export interface IndicatorSet {
+  id: string;
+  name: string;
+  indicators: ActiveIndicators;
+}
+const INDICATOR_SETS_KEY = "reit-viz:indicator-sets";
+function loadIndicatorSets(): IndicatorSet[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(INDICATOR_SETS_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
 
 interface IndicatorsPanelProps {
   panes: PaneInfo[];
@@ -46,6 +66,7 @@ interface IndicatorsPanelProps {
 
 /** Ordered list of collapsible section titles in the indicators sidebar. */
 const INDICATOR_SECTIONS = [
+  "Indicator Sets",
   "Moving Averages",
   "Oscillators",
   "Volatility",
@@ -400,6 +421,42 @@ export default function IndicatorsPanel({
     onApplyToAllPanes(activeIndicators);
   };
 
+  // ── Indicator sets (named snapshots, server-synced) ──
+  const [indicatorSets, setIndicatorSets] = useState<IndicatorSet[]>(() => loadIndicatorSets());
+  const [setName, setSetName] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void loadServerPref<IndicatorSet[]>(INDICATOR_SETS_KEY).then((srv) => {
+      if (!cancelled && Array.isArray(srv)) setIndicatorSets(srv);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const saveIndicatorSet = () => {
+    const name = setName.trim() || `Set ${indicatorSets.length + 1}`;
+    const s: IndicatorSet = { id: `is-${Date.now()}`, name, indicators: activeIndicators };
+    const next = [...indicatorSets.filter((x) => x.name !== name), s];
+    setIndicatorSets(next);
+    saveServerPref(INDICATOR_SETS_KEY, next);
+    setSetName("");
+  };
+  const applyIndicatorSet = (s: IndicatorSet) => {
+    if (s.indicators && typeof s.indicators === "object") setActiveIndicators(s.indicators);
+  };
+  const deleteIndicatorSet = (id: string) => {
+    const next = indicatorSets.filter((x) => x.id !== id);
+    setIndicatorSets(next);
+    saveServerPref(INDICATOR_SETS_KEY, next);
+  };
+  /** Human summary of what a set contains, e.g. "SMA, RSI, Bollinger +2". */
+  const summarizeSet = (s: IndicatorSet): string => {
+    const keys = Object.keys(s.indicators || {}).filter(
+      (k) => (s.indicators as any)[k] !== undefined && (s.indicators as any)[k] !== false
+    );
+    if (keys.length === 0) return "empty (clears indicators)";
+    const shown = keys.slice(0, 3).map((k) => k.toUpperCase());
+    return shown.join(", ") + (keys.length > 3 ? ` +${keys.length - 3}` : "");
+  };
+
   // Mean/std band local state
   const meanCfg = activeIndicators.mean;
   const [meanRolling, setMeanRolling] = useState(meanCfg?.rolling ?? false);
@@ -523,6 +580,71 @@ export default function IndicatorsPanel({
       )}
 
       <div className="p-3 space-y-4">
+        {/* ───── Indicator Sets ───── */}
+        <SectionHeader
+          title="Indicator Sets"
+          collapsed={isCollapsed("Indicator Sets")}
+          onToggle={() => toggleSection("Indicator Sets")}
+        />
+        {!isCollapsed("Indicator Sets") && (
+          <div className="space-y-2">
+            <div className="flex gap-1">
+              <Input
+                placeholder="Save current as…"
+                className="h-7 text-[11px] flex-1"
+                value={setName}
+                onChange={(e) => setSetName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveIndicatorSet(); }}
+                data-testid="indicator-set-name"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-[10px] gap-1 flex-shrink-0"
+                onClick={saveIndicatorSet}
+                title="Save the selected pane's indicators as a named set (synced to the server)"
+                data-testid="indicator-set-save"
+              >
+                <Plus className="w-3 h-3" />
+                Save
+              </Button>
+            </div>
+            {indicatorSets.length === 0 ? (
+              <div className="text-[10px] text-muted-foreground">
+                No saved sets yet — configure indicators, then save them as a named set you can apply on any pane (or all panes), on any computer.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {indicatorSets.map((s) => (
+                  <div key={s.id} className="flex items-center gap-1 group">
+                    <button
+                      type="button"
+                      onClick={() => applyIndicatorSet(s)}
+                      className="flex-1 min-w-0 flex items-center gap-1.5 rounded border border-border bg-secondary/40 hover:bg-secondary px-2 py-1 text-left transition-colors"
+                      title={`Apply "${s.name}" (${summarizeSet(s)})${applyToAll && panes.length > 1 ? " to ALL panes" : ""}`}
+                      data-testid={`indicator-set-apply-${s.name}`}
+                    >
+                      <Layers className="w-3 h-3 shrink-0 text-primary" />
+                      <span className="text-[11px] font-medium truncate">{s.name}</span>
+                      <span className="text-[9px] text-muted-foreground truncate ml-auto">{summarizeSet(s)}</span>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={() => deleteIndicatorSet(s.id)}
+                      title={`Delete set "${s.name}"`}
+                      data-testid={`indicator-set-delete-${s.name}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ───── Pattern Recognition ───── */}
         {selectedPaneId !== null && <PatternsPanel paneId={selectedPaneId} />}
 

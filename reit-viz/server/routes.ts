@@ -2499,6 +2499,51 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // ── Prefs (generic KV for client template stores) ─────────────────────
+  // Server-side home for named-template stores (pair templates, screener
+  // saved screens, disloc presets, indicator sets, ...) so they sync across
+  // browsers/computers. Values are opaque JSON.
+
+  app.get("/api/prefs", (_req, res) => {
+    try {
+      res.json(storage.listPrefs());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/prefs/:key", (req, res) => {
+    try {
+      const raw = storage.getPref(req.params.key);
+      if (raw === undefined) return res.json({ key: req.params.key, value: null });
+      let value: any = null;
+      try { value = JSON.parse(raw); } catch { value = raw; }
+      res.json({ key: req.params.key, value });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST (not PUT) so proxies that only pass GET/POST still work — mirrors
+  // the workspace routes' POST fallbacks.
+  app.post("/api/prefs/:key", (req, res) => {
+    try {
+      if (!("value" in (req.body ?? {}))) return res.status(400).json({ error: "Body must be { value }" });
+      storage.setPref(req.params.key, JSON.stringify(req.body.value));
+      res.json({ ok: true, key: req.params.key });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/prefs/:key/delete", (req, res) => {
+    try {
+      res.json({ ok: storage.deletePref(req.params.key) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Workspace CRUD ────────────────────────────────────────────────────
 
   // List all workspaces (returns id, name, timestamps — not full state)

@@ -36,6 +36,46 @@ export default defineConfig({
         });
       },
     },
+    // The baked 5001 container also predates /api/prefs (generic KV backing
+    // the server-synced template stores). An in-memory map is enough for
+    // verification — it persists across page reloads within one vite session.
+    {
+      name: "verify-prefs-route",
+      configureServer(server) {
+        const prefs = new Map<string, string>();
+        server.middlewares.use((req, res, next) => {
+          const m = req.url?.match(/^\/api\/prefs\/([^/?]+)(\/delete)?(?:\?.*)?$/);
+          if (!m) return next();
+          const key = decodeURIComponent(m[1]);
+          const json = (body: unknown) => {
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(body));
+          };
+          if (req.method === "GET") {
+            const raw = prefs.get(key);
+            return json({ key, value: raw === undefined ? null : JSON.parse(raw) });
+          }
+          if (req.method === "POST" && m[2]) {
+            return json({ ok: prefs.delete(key) });
+          }
+          if (req.method === "POST") {
+            let body = "";
+            req.on("data", (c) => (body += c));
+            req.on("end", () => {
+              try {
+                prefs.set(key, JSON.stringify(JSON.parse(body).value));
+                json({ ok: true, key });
+              } catch (e: any) {
+                res.statusCode = 400;
+                json({ error: e?.message ?? String(e) });
+              }
+            });
+            return;
+          }
+          next();
+        });
+      },
+    },
   ],
   resolve: {
     alias: {
