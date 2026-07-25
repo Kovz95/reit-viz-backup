@@ -2285,6 +2285,19 @@ export default function ChartArea({
           Attribution
         </Button>
 
+        {/* Correlation picker (rolling ρ of any two ticker+metric series).
+            The panel existed but its opener was lost in the reconstruction —
+            showCorrelation was only ever set false. */}
+        <Button
+          variant={showCorrelation ? "default" : "ghost"}
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          onClick={() => { setShowCorrelation(!showCorrelation); setShowIndicators(false); setShowQuickAnalyze(false); setShowAttribution(false); }}
+          data-testid="toggle-correlation-picker"
+        >
+          Correlation
+        </Button>
+
         {/* Draw tools */}
         <Select
           value={activeTool}

@@ -129,6 +129,7 @@ export default function CorrelationPickerPanel({
               tickerList={tickerList}
               open={popA}
               onOpenChange={setPopA}
+              testId="corrpick-ticker-a"
             />
             <MetricPicker value={metricA} onChange={setMetricA} groups={metricGroups} />
           </div>
@@ -144,6 +145,7 @@ export default function CorrelationPickerPanel({
               tickerList={tickerList}
               open={popB}
               onOpenChange={setPopB}
+              testId="corrpick-ticker-b"
             />
             <MetricPicker value={metricB} onChange={setMetricB} groups={metricGroups} />
           </div>
@@ -198,6 +200,7 @@ export default function CorrelationPickerPanel({
           className="w-full h-8 text-xs"
           disabled={!canPlot || loading}
           onClick={handlePlot}
+          data-testid="corrpick-plot"
         >
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <LineChart className="w-3.5 h-3.5 mr-1" />}
           Plot Correlation
@@ -215,18 +218,19 @@ export default function CorrelationPickerPanel({
 // ── Shared sub-components ──
 
 function TickerPicker({
-  value, onChange, tickerList, open, onOpenChange,
+  value, onChange, tickerList, open, onOpenChange, testId,
 }: {
   value: string;
   onChange: (v: string) => void;
   tickerList: TickerMeta[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  testId?: string;
 }) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="h-7 px-2 text-xs min-w-[70px] justify-between font-mono">
+        <Button variant="outline" size="sm" className="h-7 px-2 text-xs min-w-[70px] justify-between font-mono" data-testid={testId}>
           {value || "Ticker"}
         </Button>
       </PopoverTrigger>
