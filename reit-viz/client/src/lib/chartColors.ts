@@ -147,4 +147,15 @@ export const INDICATOR_COLORS = {
   ichimoku_lead_a: '#43a047',
   ichimoku_lead_b: '#ef9a9a',
   ichimoku_lagging: '#43a047',
+  // Adaptive / regime overlays
+  kalman_line: '#e879f9',
+  kalman_band: 'rgba(232, 121, 249, 0.55)',
+  cusum_mean_up: '#22c55e',
+  cusum_mean_down: '#ef4444',
+  cusum_vol_up: '#f59e0b',
+  cusum_vol_down: '#38bdf8',
+  // HMM shade colors are applied at low opacity by the indicator itself.
+  hmm_bear: '#ef4444',
+  hmm_chop: '#64748b',
+  hmm_bull: '#22c55e',
 };

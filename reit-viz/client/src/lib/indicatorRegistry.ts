@@ -17,7 +17,8 @@
 // predate this registry and have richer UX. New indicators go here.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { LineSeries, LineStyle, type IChartApi, type ISeriesApi, type Time } from "lightweight-charts";
+import { LineSeries, LineStyle, HistogramSeries, createSeriesMarkers, type IChartApi, type ISeriesApi, type Time, type SeriesMarker } from "lightweight-charts";
+import { computeKalmanTrend, computeCusumChangePoints, computeHmmRegimes } from "./adaptiveModels";
 import type { OhlcBar } from "./indicators";
 import { MA_TYPES } from "./maEngine";
 import { IchimokuCloudPrimitive, type CloudPoint } from "./ichimokuCloudPrimitive";
@@ -610,9 +611,159 @@ const ICHIMOKU: IndicatorDef = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Adaptive / regime overlays (close-only — work on ratio panes too)
+// ─────────────────────────────────────────────────────────────────────────
+
+const barsToCloses = (bars: OhlcBar[]) => bars.map((b) => ({ time: b.time, value: b.close }));
+
+/** Hex "#rrggbb" → rgba() at the given opacity. */
+function hexA(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const v = parseInt(m[1], 16);
+  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
+}
+
+const KALMAN: IndicatorDef = {
+  id: "kalman",
+  label: "Kalman Trend",
+  category: "Adaptive / Regime",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: [
+    // W acts like an adaptive MA length: q_level = R/W², q_slope = R/W⁴.
+    { key: "window", label: "Window (bars)", default: 60, min: 5, max: 500 },
+    { key: "bandMult", label: "Band σ", default: 2, min: 0.5, max: 4, step: 0.5 },
+  ],
+  colorKeys: ["kalman_line", "kalman_band"],
+  renderOverlay: (ctx, bars, p) => {
+    const res = computeKalmanTrend(barsToCloses(bars), p.window, p.bandMult);
+    if (!res.trend.length) return;
+    const t = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.kalman_line,
+      lineWidth: 2,
+      title: `Kalman ${p.window}${ctx.baseLabel}`,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    t.setData(asLine(res.trend));
+    ctx.register(t);
+    for (const [data, title] of [[res.upper, "Kalman Up"], [res.lower, "Kalman Low"]] as const) {
+      const s = ctx.chart.addSeries(LineSeries, {
+        color: ctx.colors.kalman_band,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        title,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      s.setData(asLine(data));
+      ctx.register(s);
+    }
+  },
+};
+
+const CUSUM_CP: IndicatorDef = {
+  id: "cusumcp",
+  label: "Change Points (CUSUM)",
+  category: "Adaptive / Regime",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "k", label: "Drift k", default: 0.5, min: 0.1, max: 2, step: 0.1 },
+    { key: "h", label: "Threshold h", default: 5, min: 1, max: 20, step: 0.5 },
+    { key: "baseWin", label: "Baseline HL", default: 100, min: 20, max: 500 },
+  ],
+  colorKeys: ["cusum_mean_up", "cusum_mean_down", "cusum_vol_up", "cusum_vol_down"],
+  renderOverlay: (ctx, bars, p) => {
+    const cps = computeCusumChangePoints(barsToCloses(bars), p.k, p.h, p.baseWin);
+    if (!cps.length) return;
+    // Invisible carrier at the closes so markers pin to price bars.
+    const carrier = ctx.chart.addSeries(LineSeries, {
+      color: "rgba(0,0,0,0)",
+      lineVisible: false,
+      title: "",
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    carrier.setData(asLine(barsToCloses(bars)));
+    ctx.register(carrier);
+    const style: Record<string, { color: string; shape: "arrowUp" | "arrowDown" | "circle"; position: "aboveBar" | "belowBar"; text: string }> = {
+      meanUp: { color: ctx.colors.cusum_mean_up, shape: "arrowUp", position: "belowBar", text: "μ+" },
+      meanDown: { color: ctx.colors.cusum_mean_down, shape: "arrowDown", position: "aboveBar", text: "μ−" },
+      volUp: { color: ctx.colors.cusum_vol_up, shape: "circle", position: "aboveBar", text: "σ+" },
+      volDown: { color: ctx.colors.cusum_vol_down, shape: "circle", position: "belowBar", text: "σ−" },
+    };
+    const markers: SeriesMarker<Time>[] = cps.map((cp) => ({
+      time: cp.time as unknown as Time,
+      position: style[cp.kind].position,
+      color: style[cp.kind].color,
+      shape: style[cp.kind].shape,
+      text: style[cp.kind].text,
+      size: 1,
+    }));
+    createSeriesMarkers(carrier, markers);
+  },
+};
+
+const HMM_REGIME: IndicatorDef = {
+  id: "hmmregime",
+  label: "HMM Regimes",
+  category: "Adaptive / Regime",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: [
+    {
+      key: "states",
+      label: "States",
+      default: 3,
+      min: 2,
+      max: 3,
+      options: [
+        { value: 2, label: "2 (bear/bull)" },
+        { value: 3, label: "3 (bear/chop/bull)" },
+      ],
+    },
+    { key: "alpha", label: "Shade %", default: 12, min: 3, max: 40 },
+  ],
+  colorKeys: ["hmm_bear", "hmm_chop", "hmm_bull"],
+  renderOverlay: (ctx, bars, p) => {
+    const res = computeHmmRegimes(barsToCloses(bars), p.states);
+    if (!res || !res.points.length) return;
+    const a = Math.max(0.03, Math.min(0.4, p.alpha / 100));
+    const stateColor = (s: number): string => {
+      if (p.states === 2) return s === 0 ? ctx.colors.hmm_bear : ctx.colors.hmm_bull;
+      return s === 0 ? ctx.colors.hmm_bear : s === 1 ? ctx.colors.hmm_chop : ctx.colors.hmm_bull;
+    };
+    const last = res.points[res.points.length - 1];
+    // Full-height translucent columns on a dedicated 0–1 scale: bar height =
+    // posterior probability of the assigned state (uncertainty reads as
+    // shorter bars), color = regime.
+    const shade = ctx.chart.addSeries(HistogramSeries, {
+      priceScaleId: "hmm-shade",
+      base: 0,
+      title: `HMM ${res.labels[last.state]}`,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      color: hexA(stateColor(last.state), a),
+      priceFormat: { type: "custom", formatter: (v: number) => `${Math.round(v * 100)}%` },
+    });
+    shade.setData(res.points.map((pt) => ({
+      time: pt.time as unknown as Time,
+      value: pt.prob,
+      color: hexA(stateColor(pt.state), a),
+    })));
+    try { shade.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false }); } catch {}
+    ctx.register(shade);
+  },
+};
+
 // ── The registry ──
 export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, AUTOCORR];
-export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU];
+export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 
 const BY_ID = new Map(ALL_REGISTRY_INDICATORS.map((d) => [d.id, d]));

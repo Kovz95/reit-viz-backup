@@ -2821,11 +2821,18 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
       }
 
-      // ── Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku) ──
-      // These need real OHLC, so they compute on the `ohlcData` prop (the same
-      // bars the candlestick uses) rather than the close-only pane series.
-      if (Array.isArray(ohlcData) && ohlcData.length > 0) {
-        const bars = ohlcData as OhlcBar[];
+      // ── Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku, Kalman, CUSUM, HMM) ──
+      // OHLC-based overlays compute on the `ohlcData` prop (the candlestick
+      // bars). Close-only overlays (worksOnCloseOnly) also run on ratio /
+      // derived panes via synthesized o=h=l=c bars — same rule as the
+      // sub-pane indicators.
+      {
+        const realBars: OhlcBar[] = Array.isArray(ohlcData) && ohlcData.length > 0 ? (ohlcData as OhlcBar[]) : [];
+        const closeBars: OhlcBar[] = realBars.length > 0
+          ? realBars
+          : closeData
+              .filter((d) => Number.isFinite(d.value))
+              .map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
         const octx = {
           chart,
           colors: IC as unknown as Record<string, string>,
@@ -2835,6 +2842,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         for (const def of OVERLAY_INDICATORS) {
           if (!def.renderOverlay) continue;
           if (!activeIndicators.registry?.[def.id]?.enabled) continue;
+          const bars = def.worksOnCloseOnly ? closeBars : realBars;
+          if (!bars.length) continue;
           try {
             def.renderOverlay(octx, bars, resolveParams(def, activeIndicators.registry[def.id], (chartConfig as { frequency?: string }).frequency ?? "daily"));
           } catch {
