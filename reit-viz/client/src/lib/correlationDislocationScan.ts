@@ -39,6 +39,9 @@ export interface DislocationRow {
   /** The in-line anchor timeframe used for the gap. */
   anchorTF: ScanTF;
   zGap: number;
+  /** Change in the DAILY rolling ρ over the last `slopeBars` bars — negative =
+   *  the correlation is curving downwards right now. */
+  corrDelta: number | null;
   kind: "decorrelated" | "hypercorrelated";
   /** Return spread (retA − retB, cumulative log return) over the worst TF's window. */
   spreadRet: number;
@@ -69,6 +72,15 @@ export interface DislocationScanOptions {
   anchorThreshold?: number;
   /** Minimum |daily history mean ρ| for a pair to be considered "typically correlated". */
   minBaselineCorr?: number;
+  /**
+   * crossTF (default): one timeframe broken while another stays in line.
+   * breakdown: daily-only screen — historically correlated pairs whose CURRENT
+   * daily rolling ρ has collapsed well below its own history (z ≤ −threshold)
+   * and is still falling (Δρ over `slopeBars` ≤ 0). No intraday fetches.
+   */
+  mode?: "crossTF" | "breakdown";
+  /** Bars used for the recent-corr-change (Δρ) measure. Default 20. */
+  slopeBars?: number;
   signal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: "load" | "scan") => void;
 }
@@ -181,6 +193,8 @@ export async function runDislocationScan(opts: DislocationScanOptions): Promise<
     zThreshold = 1.5,
     anchorThreshold = 0.75,
     minBaselineCorr = 0.3,
+    mode = "crossTF",
+    slopeBars = 20,
     signal,
     onProgress,
   } = opts;
@@ -201,12 +215,14 @@ export async function runDislocationScan(opts: DislocationScanOptions): Promise<
       if (!daily || daily.length < window + 40) return null;
       const weekly = downsampleSeries(daily as DataPoint[], "weekly");
       let hourlyPts: { time: string; value: number }[] = [];
-      try {
-        const bars = await fetchIntradayBars(ticker);
-        hourlyPts = (bars || [])
-          .filter((b) => Number.isFinite(b.close))
-          .map((b) => ({ time: String(b.time), value: b.close }));
-      } catch { /* no intraday — hourly leg unavailable for this ticker */ }
+      if (mode !== "breakdown") {
+        try {
+          const bars = await fetchIntradayBars(ticker);
+          hourlyPts = (bars || [])
+            .filter((b) => Number.isFinite(b.close))
+            .map((b) => ({ time: String(b.time), value: b.close }));
+        } catch { /* no intraday — hourly leg unavailable for this ticker */ }
+      }
       const rets: TickerData["rets"] = {
         hourly: logReturnsKeyed(hourlyPts),
         daily: logReturnsKeyed(daily as DataPoint[]),
@@ -248,40 +264,63 @@ export async function runDislocationScan(opts: DislocationScanOptions): Promise<
       }
 
       const tfStats: Partial<Record<ScanTF, TFScanStat>> = {};
+      let dailyRolling: number[] | null = null;
       for (const tf of TFS) {
-        if (tf === "hourly" && (!A.hasHourly || !B.hasHourly)) continue;
+        if (tf === "hourly" && (mode === "breakdown" || !A.hasHourly || !B.hasHourly)) continue;
         const { x, y } = alignReturns(A.rets[tf], B.retMaps[tf]);
         if (x.length < window + 30) continue;
-        const st = statsOf(rollingCorr(x, y, window));
+        const arr = rollingCorr(x, y, window);
+        if (tf === "daily") dailyRolling = arr;
+        const st = statsOf(arr);
         if (st) tfStats[tf] = st;
       }
 
       const daily = tfStats.daily;
       if (!daily) { skipped.shortHistory++; continue; }
-      if (!tfStats.hourly && !tfStats.weekly) { skipped.noHourly++; continue; }
-      // "Typically correlated" gate — the trade framing needs a real baseline.
-      if (Math.abs(daily.mean) < minBaselineCorr) continue;
+      const corrDelta =
+        dailyRolling && dailyRolling.length > slopeBars
+          ? Math.round((dailyRolling[dailyRolling.length - 1] - dailyRolling[dailyRolling.length - 1 - slopeBars]) * 10000) / 10000
+          : null;
 
-      // Find the most dislocated TF with an in-line anchor on another TF.
       let worst: ScanTF | null = null;
       let anchor: ScanTF | null = null;
       let bestGap = 0;
-      const avail = TFS.filter((tf) => tfStats[tf]);
-      for (const tf of avail) {
-        const zi = tfStats[tf]!.z;
-        if (Math.abs(zi) < zThreshold) continue;
-        for (const other of avail) {
-          if (other === tf) continue;
-          const zo = tfStats[other]!.z;
-          if (Math.abs(zo) > anchorThreshold) continue;
-          const gap = Math.abs(zi - zo);
-          if (gap > bestGap) { bestGap = gap; worst = tf; anchor = other; }
+      let kind: DislocationRow["kind"];
+
+      if (mode === "breakdown") {
+        // "Typically correlated" = solidly POSITIVE baseline for this screen.
+        if (daily.mean < minBaselineCorr) continue;
+        // Current daily rolling ρ collapsed vs its own history…
+        if (daily.z > -zThreshold) continue;
+        // …and still curving downwards.
+        if (corrDelta != null && corrDelta > 0) continue;
+        worst = "daily";
+        anchor = "daily";
+        bestGap = Math.abs(daily.z);
+        kind = "decorrelated";
+      } else {
+        if (!tfStats.hourly && !tfStats.weekly) { skipped.noHourly++; continue; }
+        // "Typically correlated" gate — the trade framing needs a real baseline.
+        if (Math.abs(daily.mean) < minBaselineCorr) continue;
+
+        // Find the most dislocated TF with an in-line anchor on another TF.
+        const avail = TFS.filter((tf) => tfStats[tf]);
+        for (const tf of avail) {
+          const zi = tfStats[tf]!.z;
+          if (Math.abs(zi) < zThreshold) continue;
+          for (const other of avail) {
+            if (other === tf) continue;
+            const zo = tfStats[other]!.z;
+            if (Math.abs(zo) > anchorThreshold) continue;
+            const gap = Math.abs(zi - zo);
+            if (gap > bestGap) { bestGap = gap; worst = tf; anchor = other; }
+          }
         }
+        if (!worst || !anchor) continue;
+        kind = tfStats[worst]!.z < 0 ? "decorrelated" : "hypercorrelated";
       }
-      if (!worst || !anchor) continue;
 
       const worstStat = tfStats[worst]!;
-      const kind: DislocationRow["kind"] = worstStat.z < 0 ? "decorrelated" : "hypercorrelated";
 
       // Return spread over the dislocated TF's window (cumulative log return).
       const sumTail = (rets: { t: string; v: number }[], k: number) => {
@@ -315,6 +354,7 @@ export async function runDislocationScan(opts: DislocationScanOptions): Promise<
         worstTF: worst,
         anchorTF: anchor,
         zGap: bestGap,
+        corrDelta,
         kind,
         spreadRet,
         leader,
@@ -343,12 +383,13 @@ export async function runDislocationScan(opts: DislocationScanOptions): Promise<
 
 export function dislocationScanToCsv(result: DislocationScanResult): string {
   const header = [
-    "rank", "a", "b", "hist_daily_corr", "kind", "worst_tf", "anchor_tf", "z_gap",
+    "rank", "a", "b", "hist_daily_corr", "kind", "worst_tf", "anchor_tf", "z_gap", "corr_delta",
     "hourly_rho", "hourly_z", "daily_rho", "daily_z", "weekly_rho", "weekly_z",
     "spread_ret", "leader", "laggard", "suggestion", "score",
   ].join(",");
   const lines = result.rows.map((r) => [
     r.rank, r.a, r.b, r.histCorr.toFixed(4), r.kind, r.worstTF, r.anchorTF, r.zGap.toFixed(3),
+    r.corrDelta != null ? r.corrDelta.toFixed(4) : "",
     r.tf.hourly ? r.tf.hourly.last.toFixed(4) : "", r.tf.hourly ? r.tf.hourly.z.toFixed(3) : "",
     r.tf.daily ? r.tf.daily.last.toFixed(4) : "", r.tf.daily ? r.tf.daily.z.toFixed(3) : "",
     r.tf.weekly ? r.tf.weekly.last.toFixed(4) : "", r.tf.weekly ? r.tf.weekly.z.toFixed(3) : "",

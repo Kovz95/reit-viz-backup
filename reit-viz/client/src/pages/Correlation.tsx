@@ -267,6 +267,18 @@ function corrBgColor(val: number): string {
   return "transparent";
 }
 
+/** Heatmap cell style: a real diverging gradient — saturation ramps hard with
+ *  |ρ| (power curve so mid correlations already read), text flips to white on
+ *  strong cells so nothing washes out. */
+function heatCellStyle(val: number): { backgroundColor: string; color: string; fontWeight?: number } {
+  const a = Math.min(1, 0.06 + Math.pow(Math.abs(val), 1.35) * 0.92);
+  const backgroundColor = val >= 0
+    ? `rgba(22, 163, 74, ${a})`
+    : `rgba(220, 38, 38, ${a})`;
+  if (a > 0.45) return { backgroundColor, color: "#ffffff", fontWeight: 700 };
+  return { backgroundColor, color: corrColor(val) };
+}
+
 // ── Driver scan helpers ──
 function driverCorrColor(v: number): string {
   if (v >= 0.7) return "#22c55e";
@@ -706,6 +718,7 @@ function DislocationScanPanel({
 }) {
   const [scope, setScope] = useState<"universe" | "basket">("universe");
   const [basketId, setBasketId] = useState("");
+  const [mode, setMode] = useState<"crossTF" | "breakdown">("crossTF");
   const [window_, setWindow_] = useState("60");
   const [zTh, setZTh] = useState("1.5");
   const [anchorTh, setAnchorTh] = useState("0.75");
@@ -747,6 +760,7 @@ function DislocationScanPanel({
         zThreshold: Math.max(0.5, parseFloat(zTh) || 1.5),
         anchorThreshold: Math.max(0.1, parseFloat(anchorTh) || 0.75),
         minBaselineCorr: Math.max(0, Math.min(0.9, parseFloat(minBase) || 0.3)),
+        mode,
         signal: controller.signal,
         onProgress: (done, total, phase) => setProgress({ done, total, phase }),
       });
@@ -782,6 +796,7 @@ function DislocationScanPanel({
           case "dZ": return r.tf.daily?.z ?? -99;
           case "wZ": return r.tf.weekly?.z ?? -99;
           case "zGap": return r.zGap;
+          case "corrDelta": return r.corrDelta ?? 0;
           case "kind": return r.kind;
           case "spreadRet": return Math.abs(r.spreadRet);
           case "score": return r.score;
@@ -804,6 +819,28 @@ function DislocationScanPanel({
     <div className="flex flex-col h-full">
       {/* Controls bar */}
       <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
+        <div className="space-y-0.5">
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Mode</div>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setMode("crossTF")}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${mode === "crossTF" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
+              data-testid="disloc-mode-crosstf"
+              title="One timeframe broken while another stays in line (1H/D/W)"
+            >
+              Cross-TF
+            </button>
+            <button
+              onClick={() => setMode("breakdown")}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${mode === "breakdown" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
+              data-testid="disloc-mode-breakdown"
+              title="Typically-correlated pairs whose daily correlation collapsed and is still falling"
+            >
+              Breakdown
+            </button>
+          </div>
+        </div>
+
         <div className="space-y-0.5">
           <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Scope</div>
           <div className="flex gap-1 items-center">
@@ -839,11 +876,13 @@ function DislocationScanPanel({
           <Input type="number" step="0.1" min={0.5} value={zTh} onChange={(e) => setZTh(e.target.value)}
             className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-zth" />
         </div>
+        {mode === "crossTF" && (
         <div className="space-y-0.5">
           <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Anchor |z| ≤</div>
           <Input type="number" step="0.05" min={0.1} value={anchorTh} onChange={(e) => setAnchorTh(e.target.value)}
             className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-anchorth" />
         </div>
+        )}
         <div className="space-y-0.5">
           <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Min hist |ρ|</div>
           <Input type="number" step="0.05" min={0} max={0.9} value={minBase} onChange={(e) => setMinBase(e.target.value)}
@@ -919,6 +958,7 @@ function DislocationScanPanel({
                     <th className={thCls}><SortHeader label="D ρ · z" columnKey="dZ" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="W ρ · z" columnKey="wZ" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Gap" columnKey="zGap" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Δρ 20d" columnKey="corrDelta" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Type" columnKey="kind" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Spread" columnKey="spreadRet" sort={sort} /></th>
                     <th className={thCls}>Trade idea</th>
@@ -938,6 +978,9 @@ function DislocationScanPanel({
                       <td className="px-2 py-1">{tfCell(r.tf.daily)}</td>
                       <td className="px-2 py-1">{tfCell(r.tf.weekly)}</td>
                       <td className="px-2 py-1 font-bold" style={{ color: zColor(r.zGap) }}>{r.zGap.toFixed(1)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap" style={{ color: (r.corrDelta ?? 0) < -0.05 ? "#ef4444" : (r.corrDelta ?? 0) > 0.05 ? "#22c55e" : "#94a3b8" }}>
+                        {r.corrDelta != null ? `${r.corrDelta >= 0 ? "+" : ""}${r.corrDelta.toFixed(2)}` : "—"}
+                      </td>
                       <td className="px-2 py-1">
                         <span
                           className="px-1.5 py-0.5 rounded text-[9px] font-bold"
@@ -1270,18 +1313,21 @@ function HeatmapMatrix({
               </td>
               {row.map((val, j) => {
                 const trivialDiag = i === j && !lagApplied;
+                const cell = trivialDiag
+                  ? { backgroundColor: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.3)" }
+                  : heatCellStyle(val);
                 return (
                   <td
                     key={j}
                     className="p-1 border border-border/30 text-center"
-                    style={{ backgroundColor: trivialDiag ? "rgba(255,255,255,0.05)" : corrBgColor(val) }}
+                    style={{ backgroundColor: cell.backgroundColor }}
                     title={`${formatSpec(labels[i])} × ${formatSpec(labels[j])}: ${val.toFixed(4)} (p=${pValues[i][j].toFixed(4)})${i === j && lagApplied ? " — autocorrelation at the applied lag" : ""}`}
                   >
-                    <span style={{ color: trivialDiag ? "rgba(255,255,255,0.3)" : corrColor(val) }}>
+                    <span style={{ color: cell.color, fontWeight: cell.fontWeight }}>
                       {trivialDiag ? "1.00" : val.toFixed(2)}
                     </span>
                     {!trivialDiag && pValues[i][j] > 0.05 && (
-                      <span className="text-[8px] text-muted-foreground/40 block">ns</span>
+                      <span className="text-[8px] block" style={{ color: cell.fontWeight ? "rgba(255,255,255,0.65)" : "rgba(148,163,184,0.4)" }}>ns</span>
                     )}
                   </td>
                 );
@@ -2768,6 +2814,7 @@ export default function Correlation() {
               <div className="font-semibold text-foreground/70">How to read it</div>
               <div><span className="text-amber-400 font-bold">DECOR</span> — pair de-correlated vs its norm. If historically +ρ, the classic setup is reconvergence: long the laggard leg, short the leader.</div>
               <div><span className="text-sky-400 font-bold">HYPER</span> — correlation unusually tight vs its norm: crowding or a regime shift to watch.</div>
+              <div><span className="text-foreground/80 font-bold">Breakdown mode</span> — daily-only screen for typically-correlated pairs whose current rolling ρ has collapsed toward zero/negative AND is still falling (Δρ 20d ≤ 0). Fastest way to catch correlations curving downwards.</div>
               <div>Gap ranks how stretched the dislocated timeframe is vs the calm one. Pin any row to open the pair on the Pairwise tab with the TF Divergence panel.</div>
             </div>
             <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
