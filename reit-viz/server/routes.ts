@@ -5727,7 +5727,10 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ── GET /api/performance/monthly-seasonality ──
-  // Returns array of { ticker, name, Jan..Dec (avg monthly % return), yearsOfData }.
+  // Returns array of { ticker, name, Jan..Dec (avg monthly % return),
+  // JanWin..DecWin (% of years the month was positive), JanRel..DecRel (avg
+  // monthly return MINUS the same-month subindustry peer mean, self-excluded —
+  // the seasonal ALPHA a long/short cares about), yearsOfData }.
   app.get("/api/performance/monthly-seasonality", (_req, res) => {
     try {
       const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -5745,18 +5748,15 @@ export async function registerRoutes(server: Server, app: Express) {
       }
       const metaByTicker = new Map(tickersMeta.map((t: any) => [t.ticker, t]));
       const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
-      const rows: any[] = [];
 
+      // Pass 1: per-ticker calendar-month returns keyed by "YYYY-MM".
+      const perTicker = new Map<string, { ymRet: Map<string, number>; years: number }>();
       for (const file of files) {
         const ticker = file.replace(".json", "");
-        const meta = metaByTicker.get(ticker);
-        const row: any = { ticker, name: meta?.name || "", yearsOfData: 0 };
-        for (const mo of MONTHS) row[mo] = null;
         try {
           const raw = readJSON(path.join(tickerDir, file));
-          if (!raw.close) { rows.push(row); continue; }
+          if (!raw.close) { perTicker.set(ticker, { ymRet: new Map(), years: 0 }); continue; }
           const closeMap = decodeMetricToMap(raw.close);
-          // Collect month-end close per (year, month).
           const monthEnd = new Map<string, { idx: number; close: number }>();
           const years = new Set<number>();
           for (const [idx, close] of closeMap.entries()) {
@@ -5767,23 +5767,69 @@ export async function registerRoutes(server: Server, app: Express) {
             if (!prev || idx > prev.idx) monthEnd.set(ym, { idx, close });
             years.add(parseInt(d.slice(0, 4)));
           }
-          row.yearsOfData = years.size;
-          // Monthly return = (thisMonthEndClose / prevMonthEndClose - 1) * 100.
+          const ymRet = new Map<string, number>();
           const sortedKeys = [...monthEnd.keys()].sort();
-          const byMonth: Record<number, number[]> = {};
           for (let i = 1; i < sortedKeys.length; i++) {
             const cur = monthEnd.get(sortedKeys[i])!;
             const prv = monthEnd.get(sortedKeys[i - 1])!;
             if (!prv.close) continue;
-            const ret = (cur.close / prv.close - 1) * 100;
-            const mo = parseInt(sortedKeys[i].slice(5, 7)); // 1..12
+            ymRet.set(sortedKeys[i], (cur.close / prv.close - 1) * 100);
+          }
+          perTicker.set(ticker, { ymRet, years: years.size });
+        } catch {
+          perTicker.set(ticker, { ymRet: new Map(), years: 0 });
+        }
+      }
+
+      // Pass 2: subindustry composite per "YYYY-MM" (sum + count so a member's
+      // own contribution can be excluded when computing its relative return).
+      const groupAgg = new Map<string, Map<string, { sum: number; n: number }>>();
+      for (const [ticker, { ymRet }] of perTicker) {
+        const sub = metaByTicker.get(ticker)?.subindustry;
+        if (!sub) continue;
+        let agg = groupAgg.get(sub);
+        if (!agg) { agg = new Map(); groupAgg.set(sub, agg); }
+        for (const [ym, ret] of ymRet) {
+          const cell = agg.get(ym);
+          if (cell) { cell.sum += ret; cell.n += 1; }
+          else agg.set(ym, { sum: ret, n: 1 });
+        }
+      }
+
+      // Pass 3: aggregate absolute / win-rate / peer-relative stats per month.
+      const rows: any[] = [];
+      for (const file of files) {
+        const ticker = file.replace(".json", "");
+        const meta = metaByTicker.get(ticker);
+        const row: any = { ticker, name: meta?.name || "", yearsOfData: 0 };
+        for (const mo of MONTHS) { row[mo] = null; row[`${mo}Win`] = null; row[`${mo}Rel`] = null; }
+        const rec = perTicker.get(ticker);
+        if (rec) {
+          row.yearsOfData = rec.years;
+          const agg = meta?.subindustry ? groupAgg.get(meta.subindustry) : undefined;
+          const byMonth: Record<number, number[]> = {};
+          const relByMonth: Record<number, number[]> = {};
+          for (const [ym, ret] of rec.ymRet) {
+            const mo = parseInt(ym.slice(5, 7));
             (byMonth[mo] ||= []).push(ret);
+            const cell = agg?.get(ym);
+            // Peer mean excluding self; needs at least 2 OTHER members.
+            if (cell && cell.n >= 3) {
+              (relByMonth[mo] ||= []).push(ret - (cell.sum - ret) / (cell.n - 1));
+            }
           }
           for (let m = 1; m <= 12; m++) {
             const arr = byMonth[m];
-            row[MONTHS[m - 1]] = arr && arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+            if (arr && arr.length) {
+              row[MONTHS[m - 1]] = arr.reduce((s, v) => s + v, 0) / arr.length;
+              row[`${MONTHS[m - 1]}Win`] = (arr.filter((v) => v > 0).length / arr.length) * 100;
+            }
+            const rel = relByMonth[m];
+            if (rel && rel.length) {
+              row[`${MONTHS[m - 1]}Rel`] = rel.reduce((s, v) => s + v, 0) / rel.length;
+            }
           }
-        } catch { /* skip */ }
+        }
         rows.push(row);
       }
       res.json(rows);
@@ -5934,8 +5980,13 @@ export async function registerRoutes(server: Server, app: Express) {
 
       const files = fs.readdirSync(tickerDir).filter((f) => f.endsWith(".json"));
       const rows: any[] = [];
-      // Candidate windows: each calendar month start, with several durations.
-      const starts = ["01-01", "02-01", "03-01", "04-01", "05-01", "06-01", "07-01", "08-01", "09-01", "10-01", "11-01", "12-01"];
+      // Candidate windows: 1st AND 15th of each month, with several durations —
+      // mid-month starts catch patterns the month-boundary grid misses.
+      const starts = [
+        "01-01", "01-15", "02-01", "02-15", "03-01", "03-15", "04-01", "04-15",
+        "05-01", "05-15", "06-01", "06-15", "07-01", "07-15", "08-01", "08-15",
+        "09-01", "09-15", "10-01", "10-15", "11-01", "11-15", "12-01", "12-15",
+      ];
       const durations = [minDays, Math.round((minDays + maxDays) / 2), maxDays].filter((v, i, arr) => arr.indexOf(v) === i);
 
       for (const file of files) {

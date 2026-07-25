@@ -21,6 +21,7 @@ import ClassificationFilters, {
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
+import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { formatHitRate, hitRateColorClass, HORIZONS } from "@/lib/signalUtils";
@@ -539,6 +540,9 @@ export default function UniversalScreener() {
   const [signalPickerOpen, setSignalPickerOpen] = useState(false);
   const sort = useTableSort<QualifiedSetup>("hitRate", "desc", "desc", "universal-screener");
 
+  // Seasonal-window chips on result rows (lazy: only fetched once results exist).
+  const seasonal = useSeasonalNow(rows.length > 0);
+
   // Depend on sort.apply (stable per sortKey/sortDir), not the sort object —
   // useTableSort returns a fresh object literal every render, which would
   // defeat this memo and re-sort the full library on every progress tick.
@@ -992,6 +996,9 @@ export default function UniversalScreener() {
                         <span className="inline-flex items-center gap-1">
                           {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                           {r.subject}
+                          {r.subject.split("/").map((leg) => (
+                            <SeasonalChip key={leg} ticker={leg} status={seasonal.statusFor(leg)} />
+                          ))}
                         </span>
                       </td>
                       <td className="py-0.5 pr-2 text-muted-foreground">{FAMILY_LABELS[r.family]}</td>

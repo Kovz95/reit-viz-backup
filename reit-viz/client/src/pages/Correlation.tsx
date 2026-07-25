@@ -3,6 +3,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
+import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
@@ -1062,6 +1063,9 @@ function DislocationScanPanel({
   const displayIdio = showAll ? sortedIdio : sortedIdio.slice(0, 50);
   const resultCount = result ? (result.mode === "idio" ? result.idioRows.length : result.rows.length) : 0;
 
+  // Seasonal-window chips on result rows (lazy: only fetched once results exist).
+  const seasonal = useSeasonalNow(resultCount > 0);
+
   const KIND_CHIP: Record<string, { label: string; color: string }> = {
     decorrelated: { label: "DECOR", color: "#f59e0b" },
     hypercorrelated: { label: "HYPER", color: "#38bdf8" },
@@ -1332,7 +1336,9 @@ function DislocationScanPanel({
                   {displayIdio.map((r, i) => (
                     <tr key={r.ticker + r.group} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`idio-row-${i}`}>
                       <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
-                      <td className="px-2 py-1 font-bold">{r.ticker}</td>
+                      <td className="px-2 py-1 font-bold">
+                        {r.ticker} <SeasonalChip ticker={r.ticker} status={seasonal.statusFor(r.ticker)} />
+                      </td>
                       <td className="px-2 py-1 max-w-[220px]"><span className="truncate block text-[10px] text-muted-foreground" title={r.group}>{r.group}</span></td>
                       <td className="px-2 py-1 text-muted-foreground">{r.peers}</td>
                       <td className="px-2 py-1" style={{ color: corrColor(r.histAvgCorr) }}>{r.histAvgCorr.toFixed(2)}</td>
@@ -1397,7 +1403,9 @@ function DislocationScanPanel({
                     <tr key={`${r.a}-${r.b}`} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`disloc-row-${i}`}>
                       <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
                       <td className="px-2 py-1 font-bold whitespace-nowrap">
-                        {r.a} <span className="text-muted-foreground/50">×</span> {r.b}
+                        {r.a} <SeasonalChip ticker={r.a} status={seasonal.statusFor(r.a)} />{" "}
+                        <span className="text-muted-foreground/50">×</span> {r.b}{" "}
+                        <SeasonalChip ticker={r.b} status={seasonal.statusFor(r.b)} />
                         <span className="ml-1.5 text-[9px] text-muted-foreground/60">{TF_SHORT[r.worstTF]} vs {TF_SHORT[r.anchorTF]}</span>
                       </td>
                       <td className="px-2 py-1 whitespace-nowrap" style={{ color: corrColor(r.histCorr) }}>{r.histCorr.toFixed(2)}</td>
