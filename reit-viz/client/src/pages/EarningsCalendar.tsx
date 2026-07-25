@@ -43,6 +43,40 @@ export default function EarningsCalendar() {
     return () => { cancelled = true; };
   }, []);
 
+  // ── Quick find: ticker/name → jump to its print, highlight it ──
+  const [findQuery, setFindQuery] = useState("");
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const [findResult, setFindResult] = useState<string>("");
+  const findMatches = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    return (records as any[])
+      .filter((r) => String(r.ticker).toLowerCase().includes(q) || String(r.name ?? "").toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [records, findQuery]);
+  const jumpTo = (meta: any) => {
+    const tk = String(meta.ticker).toUpperCase();
+    const base = tk.split("-")[0];
+    const prints = rows
+      .filter((r) => {
+        const s = r.symbol.toUpperCase();
+        return s === tk || s.split(".")[0] === base;
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const next = prints.find((p) => p.date >= today) ?? prints[0];
+    setFindQuery("");
+    if (!next) {
+      setHighlight(null);
+      setFindResult(`${tk}: no earnings date in the next ~90 days`);
+      return;
+    }
+    const when = next.time === "bmo" ? "pre-market" : next.time === "amc" ? "after close" : "time TBD";
+    const days = Math.round((new Date(next.date + "T00:00:00Z").getTime() - new Date(today + "T00:00:00Z").getTime()) / 86400000);
+    setFindResult(`${tk}: ${next.date} (${when})${days >= 0 ? ` — in ${days}d` : ""}`);
+    setHighlight(tk);
+    setMonthAnchor(next.date.slice(0, 7));
+  };
+
   // ── Filters (same bar as everywhere else) ──
   const [classFilters, setClassFilters] = useState<ClassFilters>(() => emptyClassFilters());
   const [search, setSearch] = useState("");
@@ -57,8 +91,13 @@ export default function EarningsCalendar() {
       s.add(tk);
       s.add(tk.split("-")[0]); // match FMP bases (BKG-GB ↔ BKG.L)
     }
+    // The quick-find highlight must stay visible even if filters exclude it.
+    if (highlight) {
+      s.add(highlight);
+      s.add(highlight.split("-")[0]);
+    }
     return s;
-  }, [records, classFilters, search, manualTickers, geo.filterByGeo]);
+  }, [records, classFilters, search, manualTickers, geo.filterByGeo, highlight]);
 
   const metaByBase = useMemo(() => {
     const m = new Map<string, any>();
@@ -142,6 +181,37 @@ export default function EarningsCalendar() {
               Today
             </Button>
           </div>
+          {/* Quick find: jump to a company's print */}
+          <div className="relative">
+            <input
+              value={findQuery}
+              onChange={(e) => setFindQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && findMatches[0]) jumpTo(findMatches[0]); }}
+              placeholder="Find company…"
+              className="h-6 w-44 text-[11px] bg-background border border-border rounded px-2 focus:outline-none focus:ring-1 focus:ring-primary"
+              data-testid="earncal-find"
+            />
+            {findMatches.length > 0 && (
+              <div className="absolute z-50 mt-1 w-72 rounded-md border border-border bg-popover shadow-lg max-h-56 overflow-auto">
+                {findMatches.map((m: any) => (
+                  <button
+                    key={m.ticker}
+                    className="flex items-center gap-2 w-full px-2 py-1 text-[11px] text-left hover:bg-accent"
+                    onClick={() => jumpTo(m)}
+                    data-testid={`earncal-find-sug-${m.ticker}`}
+                  >
+                    <span className="font-mono font-bold w-16">{m.ticker}</span>
+                    <span className="truncate text-muted-foreground">{m.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {findResult && (
+            <span className="text-[11px] font-mono text-primary" data-testid="earncal-find-result">
+              {findResult}
+            </span>
+          )}
           <span className="text-[10px] text-muted-foreground ml-auto">
             {loading ? "Loading…" : `${visibleCount} prints in view · rolling ~90-day FMP calendar (near = confirmed, far = projected)`}
           </span>
@@ -187,6 +257,8 @@ export default function EarningsCalendar() {
                         <span
                           key={r.symbol}
                           className={`px-1 py-px rounded text-[9px] font-mono font-semibold leading-tight cursor-help ${
+                            highlight && tickerLabel(r).toUpperCase() === highlight ? "ring-2 ring-primary shadow-lg shadow-primary/40 " : ""
+                          }${
                             r.time === "bmo"
                               ? "bg-sky-500/15 text-sky-300 border border-sky-500/30"
                               : r.time === "amc"
