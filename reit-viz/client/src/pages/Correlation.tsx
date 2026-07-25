@@ -241,6 +241,45 @@ function legLabel(spec: string, t?: LegTransform | null): string {
   return t ? `${TRANSFORM_TAGS[t.kind]}${t.period}(${base})` : base;
 }
 
+// ── Pairwise templates: everything about the analysis EXCEPT the tickers ──
+// (metrics per leg, transforms, lag, mode, frequency, windows, plots, layout,
+// indicators). Applying keeps the current tickers and swaps the config in.
+interface PairTemplate {
+  id: string;
+  name: string;
+  metricA: string | null;   // stock metric for leg A; null when the leg was macro
+  macroA: string | null;    // full MACRO: spec (used verbatim)
+  metricB: string | null;
+  macroB: string | null;
+  transformA: LegTransform | null;
+  transformB: LegTransform | null;
+  corrMode: string;
+  corrFreq: CorrFrequency;
+  corrWindow: string;
+  corrLag: string;
+  visibleWindows: number[];
+  customWindow: string;
+  customWindowOn: boolean;
+  visibleCorrCharts: string[];
+  corrLayout: GridLayout;
+  corrPanesVisible: number | "all";
+  corrTimeRange: string;
+  indicators: Record<number, ActiveIndicators>;
+}
+
+const PAIR_TEMPLATES_KEY = "reit-viz:corr-pair-templates";
+function loadPairTemplates(): PairTemplate[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PAIR_TEMPLATES_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+function persistPairTemplates(list: PairTemplate[]): void {
+  try { localStorage.setItem(PAIR_TEMPLATES_KEY, JSON.stringify(list)); } catch {}
+}
+
 function sanitizeTransform(raw: any): LegTransform | null {
   if (!raw || typeof raw !== "object") return null;
   const kinds = ["rsi", "sma", "ema", "roc", "zscore", "vol"];
@@ -719,11 +758,15 @@ function DislocationScanPanel({
   universeMeta,
   allMeta,
   baskets,
+  nationOf,
+  exchangeOf,
   onPin,
 }: {
   universeMeta: { ticker: string; subindustry?: string }[];
   allMeta: { ticker: string; subindustry?: string }[];
   baskets: Basket[];
+  nationOf: (t: string) => string | null;
+  exchangeOf: (t: string) => string | null;
   onPin: (a: string, b: string) => void;
 }) {
   const [scope, setScope] = useState<"universe" | "basket">("universe");
@@ -740,6 +783,69 @@ function DislocationScanPanel({
   const [showAll, setShowAll] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  // ── Scope filters (same 8 dropdowns as everywhere else) ──
+  const [clsFilters, setClsFilters] = useState<ClassFilters>(() => emptyClassFilters());
+  const [fltNations, setFltNations] = useState<Set<string>>(new Set());
+  const [fltExchanges, setFltExchanges] = useState<Set<string>>(new Set());
+
+  const classOptions = useMemo(() => {
+    const opts: Record<string, Set<string>> = {};
+    for (const f of CLASS_FIELDS) opts[f.key] = new Set();
+    for (const m of universeMeta) {
+      for (const f of CLASS_FIELDS) {
+        const v = (m as any)[f.key];
+        if (v) opts[f.key].add(v);
+      }
+    }
+    const out: Record<string, string[]> = {};
+    for (const f of CLASS_FIELDS) out[f.key] = [...opts[f.key]].sort();
+    return out;
+  }, [universeMeta]);
+
+  const geoOptions = useMemo(() => {
+    const nations = new Set<string>();
+    const exchanges = new Set<string>();
+    for (const m of universeMeta) {
+      const n = nationOf(m.ticker);
+      if (n) nations.add(n);
+      const x = exchangeOf(m.ticker);
+      if (x) exchanges.add(x);
+    }
+    return {
+      nations: [...nations].sort((a, b) => a.localeCompare(b)),
+      exchanges: [...exchanges].sort((a, b) => a.localeCompare(b)),
+    };
+  }, [universeMeta, nationOf, exchangeOf]);
+
+  const filteredUniverse = useMemo(() => {
+    let out = universeMeta;
+    for (const f of CLASS_FIELDS) {
+      const sel2 = clsFilters[f.key];
+      if (sel2 && sel2.size > 0) out = out.filter((m) => sel2.has((m as any)[f.key]));
+    }
+    if (fltNations.size > 0) {
+      out = out.filter((m) => {
+        const n = nationOf(m.ticker);
+        return n != null && fltNations.has(n);
+      });
+    }
+    if (fltExchanges.size > 0) {
+      out = out.filter((m) => {
+        const x = exchangeOf(m.ticker);
+        return x != null && fltExchanges.has(x);
+      });
+    }
+    return out;
+  }, [universeMeta, clsFilters, fltNations, fltExchanges, nationOf, exchangeOf]);
+
+  const anyFilterActive =
+    Object.values(clsFilters).some((s) => s.size > 0) || fltNations.size > 0 || fltExchanges.size > 0;
+  const clearFilters = useCallback(() => {
+    setClsFilters(emptyClassFilters());
+    setFltNations(new Set());
+    setFltExchanges(new Set());
+  }, []);
+
   const scopeMeta = useMemo(() => {
     if (scope === "basket") {
       const b = baskets.find((x) => x.id === basketId);
@@ -749,8 +855,8 @@ function DislocationScanPanel({
         subindustry: allMeta.find((m) => m.ticker === t)?.subindustry,
       }));
     }
-    return universeMeta;
-  }, [scope, basketId, baskets, universeMeta, allMeta]);
+    return filteredUniverse;
+  }, [scope, basketId, baskets, filteredUniverse, allMeta]);
   const scopeTickers = useMemo(() => scopeMeta.map((m) => m.ticker), [scopeMeta]);
   const pairCount = (scopeTickers.length * (scopeTickers.length - 1)) / 2;
 
@@ -887,7 +993,7 @@ function DislocationScanPanel({
               className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${scope === "universe" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
               data-testid="disloc-scope-universe"
             >
-              Universe ({universeMeta.length})
+              Universe ({filteredUniverse.length})
             </button>
             <button
               onClick={() => setScope("basket")}
@@ -953,6 +1059,49 @@ function DislocationScanPanel({
               : `${pairCount.toLocaleString()} pairs in scope`}
         </div>
       </div>
+
+      {/* Scope filters — the same 8 dropdowns used across the app */}
+      {scope === "universe" && (
+        <div className="flex-shrink-0 border-b border-border/40 px-3 py-1.5 bg-card/20 flex flex-wrap items-center gap-1" data-testid="disloc-filters">
+          {CLASS_FIELDS.map((f) => (
+            <FilterDropdown
+              key={f.key}
+              label={f.label}
+              options={classOptions[f.key] || []}
+              selected={clsFilters[f.key] || new Set()}
+              onChange={(next) => setClsFilters({ ...clsFilters, [f.key]: next })}
+              testId={`disloc-filter-${f.key}`}
+            />
+          ))}
+          <FilterDropdown
+            label="Country"
+            options={geoOptions.nations}
+            selected={fltNations}
+            onChange={setFltNations}
+            testId="disloc-filter-nation"
+          />
+          <FilterDropdown
+            label="Exchange"
+            options={geoOptions.exchanges}
+            selected={fltExchanges}
+            onChange={setFltExchanges}
+            testId="disloc-filter-exchange"
+          />
+          <div className="h-4 w-px bg-border mx-0.5" />
+          <span className="text-[10px] text-muted-foreground font-mono whitespace-nowrap" data-testid="disloc-filter-count">
+            {filteredUniverse.length} / {universeMeta.length}
+          </span>
+          {anyFilterActive && (
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-0.5 px-1.5 text-[10px] text-muted-foreground hover:text-destructive"
+              data-testid="disloc-filter-clear"
+            >
+              <X className="w-2.5 h-2.5" /> Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Results */}
       <div className="flex-1 overflow-auto p-3 space-y-3 min-h-0">
@@ -2584,6 +2733,76 @@ export default function Correlation() {
     setActiveTab("pairwise");
   }, []);
 
+  // ── Pairwise templates (metrics/transforms/lag/layout — apply onto any tickers) ──
+  const [pairTemplates, setPairTemplates] = useState<PairTemplate[]>(() => loadPairTemplates());
+  const [templateName, setTemplateName] = useState("");
+
+  const saveCurrentTemplate = useCallback(() => {
+    const name = templateName.trim() || `Template ${pairTemplates.length + 1}`;
+    const legInfo = (spec: string) =>
+      spec.startsWith("MACRO:")
+        ? { metric: null as string | null, macro: spec }
+        : { metric: spec.split(":").slice(1).join(":") || "close", macro: null as string | null };
+    const a = legInfo(specA);
+    const b = legInfo(specB);
+    const tpl: PairTemplate = {
+      id: `tpl-${Date.now()}`,
+      name,
+      metricA: a.metric, macroA: a.macro,
+      metricB: b.metric, macroB: b.macro,
+      transformA: corrTransformA, transformB: corrTransformB,
+      corrMode, corrFreq, corrWindow, corrLag,
+      visibleWindows: Array.from(visibleWindows),
+      customWindow, customWindowOn,
+      visibleCorrCharts: Array.from(visibleCorrCharts),
+      corrLayout, corrPanesVisible, corrTimeRange,
+      indicators: indicatorsMap,
+    };
+    const next = [...pairTemplates.filter((t) => t.name !== name), tpl];
+    setPairTemplates(next);
+    persistPairTemplates(next);
+    setTemplateName("");
+  }, [templateName, pairTemplates, specA, specB, corrTransformA, corrTransformB, corrMode, corrFreq, corrWindow, corrLag, visibleWindows, customWindow, customWindowOn, visibleCorrCharts, corrLayout, corrPanesVisible, corrTimeRange, indicatorsMap]);
+
+  const applyPairTemplate = useCallback((tpl: PairTemplate) => {
+    // Legs: keep the CURRENT ticker, swap in the template's metric; macro legs
+    // are restored verbatim (there is no ticker to preserve).
+    const applyLeg = (spec: string, metric: string | null, macro: string | null): string => {
+      if (macro) return macro;
+      if (metric && !spec.startsWith("MACRO:")) return `${spec.split(":")[0]}:${metric}`;
+      return spec;
+    };
+    setSpecA(applyLeg(specA, tpl.metricA, tpl.macroA));
+    setSpecB(applyLeg(specB, tpl.metricB, tpl.macroB));
+    setCorrTransformA(sanitizeTransform(tpl.transformA));
+    setCorrTransformB(sanitizeTransform(tpl.transformB));
+    if (["returns", "changes", "levels"].includes(tpl.corrMode)) setCorrMode(tpl.corrMode);
+    if (["hourly", "daily", "weekly"].includes(tpl.corrFreq)) setCorrFreq(tpl.corrFreq);
+    if (typeof tpl.corrWindow === "string") setCorrWindow(tpl.corrWindow);
+    if (typeof tpl.corrLag === "string") setCorrLag(tpl.corrLag);
+    if (Array.isArray(tpl.visibleWindows)) setVisibleWindows(new Set(tpl.visibleWindows.filter((w) => Number.isFinite(w))));
+    if (typeof tpl.customWindow === "string") setCustomWindow(tpl.customWindow);
+    if (typeof tpl.customWindowOn === "boolean") setCustomWindowOn(tpl.customWindowOn);
+    if (Array.isArray(tpl.visibleCorrCharts)) {
+      setVisibleCorrCharts(new Set(tpl.visibleCorrCharts.filter((c) => (CHART_KEYS as readonly string[]).includes(c))));
+    }
+    if (GRID_LAYOUTS.includes(tpl.corrLayout)) setCorrLayout(tpl.corrLayout);
+    if (tpl.corrPanesVisible === "all" || (typeof tpl.corrPanesVisible === "number" && tpl.corrPanesVisible >= 1)) {
+      setCorrPanesVisible(tpl.corrPanesVisible);
+    }
+    if (["1Y", "3Y", "5Y", "YTD", "all"].includes(tpl.corrTimeRange)) setCorrTimeRange(tpl.corrTimeRange);
+    if (tpl.indicators && typeof tpl.indicators === "object") setIndicatorsMap(tpl.indicators);
+    setActiveTab("pairwise");
+  }, [specA, specB]);
+
+  const deletePairTemplate = useCallback((id: string) => {
+    setPairTemplates((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      persistPairTemplates(next);
+      return next;
+    });
+  }, []);
+
   // Open a scanned dislocation pair on the Pairwise tab with the TF Divergence panel up.
   const pinFromDisloc = useCallback((a: string, b: string) => {
     setSpecA(`${a}:close`);
@@ -3144,6 +3363,56 @@ export default function Correlation() {
               </div>
             </div>
 
+            {/* Templates — save everything except the tickers, re-apply anywhere */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase font-semibold text-muted-foreground tracking-wider">Templates</div>
+              <div className="flex items-center gap-1">
+                <Input
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="Template name…"
+                  className="h-6 text-[11px] flex-1 px-1.5"
+                  data-testid="corr-template-name"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveCurrentTemplate(); }}
+                />
+                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]"
+                  onClick={saveCurrentTemplate} data-testid="corr-template-save">
+                  Save
+                </Button>
+              </div>
+              {pairTemplates.length === 0 ? (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  Saves the metrics, transforms, lag, mode, frequency, windows, plots, layout and
+                  indicators — apply it later and only the tickers stay as they are.
+                </div>
+              ) : (
+                <div className="space-y-0.5">
+                  {pairTemplates.map((t) => (
+                    <div key={t.id} className="flex items-center gap-1 px-1 py-0.5 rounded hover:bg-accent group text-[11px]">
+                      <button
+                        className="flex-1 text-left truncate hover:text-primary font-mono"
+                        onClick={() => applyPairTemplate(t)}
+                        data-testid={`corr-template-apply-${t.name.replace(/\s+/g, "-")}`}
+                        title={`Apply: ${t.macroA ?? t.metricA ?? "?"} vs ${t.macroB ?? t.metricB ?? "?"} · ${t.corrMode}/${t.corrFreq}${parseInt(t.corrLag) ? ` · lag ${t.corrLag}` : ""}`}
+                      >
+                        {t.name}
+                      </button>
+                      <span className="text-[9px] text-muted-foreground/50 truncate max-w-[90px]">
+                        {(t.macroA ?? t.metricA ?? "?")}/{(t.macroB ?? t.metricB ?? "?")}
+                      </span>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-destructive"
+                        onClick={() => deletePairTemplate(t.id)}
+                        data-testid={`corr-template-delete-${t.name.replace(/\s+/g, "-")}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <Button variant="outline" size="sm" className="w-full h-7 text-xs gap-1.5"
               onClick={exportPairwiseCSV} disabled={!pairwise}>
               <Download className="w-3 h-3" /> Export CSV
@@ -3424,9 +3693,11 @@ export default function Correlation() {
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {activeTab === "dislocations" ? (
           <DislocationScanPanel
-            universeMeta={uniFilteredList as any}
+            universeMeta={uniBaseList as any}
             allMeta={tickers as any}
             baskets={baskets}
+            nationOf={nationOf}
+            exchangeOf={exchangeOf}
             onPin={pinFromDisloc}
           />
         ) : activeTab === "drivers" ? (
