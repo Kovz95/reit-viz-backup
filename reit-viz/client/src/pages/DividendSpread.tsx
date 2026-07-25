@@ -4,7 +4,7 @@ import { useAppContext } from "@/lib/useAppContext";
 import { makeDefaultFilters, serializeFilters, deserializeFilters } from "@/lib/classFilters";
 import { useWorkspaceState } from "@/lib/useWorkspaceState";
 import { useQuery } from "@tanstack/react-query";
-import { createChart, ColorType, LineSeries, PriceScaleMode } from "lightweight-charts";
+import { createChart, ColorType, LineSeries, PriceScaleMode, CrosshairMode } from "lightweight-charts";
 import { ChevronLeft, TrendingUp, TrendingDown, Download, ExternalLink, ArrowUpDown, Zap } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -298,6 +298,9 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
         horzLines: { color: gridColor },
       },
       crosshair: {
+        // Normal (not the Magnet default): the horizontal line follows the
+        // mouse instead of hiding whenever the cursor isn't on a data point.
+        mode: CrosshairMode.Normal,
         vertLine: { color: "rgba(255,255,255,0.15)", width: 1 },
         horzLine: { color: "rgba(255,255,255,0.15)", width: 1 },
       },

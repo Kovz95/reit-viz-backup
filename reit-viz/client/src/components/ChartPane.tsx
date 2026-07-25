@@ -773,6 +773,14 @@ function SubIndicatorChart({
         // Include series values so the parent can show them in the crosshair readout.
         chart.subscribeCrosshairMove((param: any) => {
           if (syncingRef.current) return;
+          // Only REAL pointer interaction on the sub-chart propagates upward.
+          // Programmatic mirrors (parent → sub via setCrosshairPosition) fire
+          // this callback asynchronously — after syncingRef is already false —
+          // and would re-set the parent's crosshair at price NaN, wiping the
+          // horizontal line under the user's cursor between mouse moves (the
+          // "flickering horizontal crosshair" bug). sourceEvent is only present
+          // for genuine mouse/touch moves.
+          if (!param.sourceEvent) return;
           syncingRef.current = true;
           try {
             const container = el.parentElement; // the ChartPane wrapper

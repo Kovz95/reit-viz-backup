@@ -1767,10 +1767,15 @@ function PairsSubIndicatorChart({
         }
       };
 
-      // Sub → Parent crosshair sync (bidirectional)
+      // Sub → Parent crosshair sync (bidirectional). Gate on sourceEvent:
+      // parent→sub mirrors fire this callback asynchronously (after syncingRef
+      // is cleared) and would echo a NaN-price crosshair back onto the parent,
+      // wiping its horizontal line under the cursor (visible flicker). Only a
+      // real pointer move over the sub-pane carries sourceEvent.
       if (parentSeries) {
         chart.subscribeCrosshairMove((param: any) => {
           if (syncingRef.current) return;
+          if (!param.sourceEvent) return;
           syncingRef.current = true;
           try {
             if (param.time && parentSeries) {
@@ -2684,9 +2689,14 @@ export default function Pairs() {
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
 
-    // Crosshair sync
+    // Crosshair sync. Only real pointer moves (param.sourceEvent present)
+    // propagate: programmatic setCrosshairPosition from another chart fires
+    // this callback asynchronously — after syncingRef is already false — and
+    // would echo a NaN-price crosshair back onto the hovered chart, making its
+    // horizontal line flicker as the mouse moves.
     const crosshairHandler = (param: any) => {
       if (syncingRef.current) return;
+      if (!param.sourceEvent) return;
       syncingRef.current = true;
       chartsMapRef.current.forEach((other, otherId) => {
         if (otherId !== id) {

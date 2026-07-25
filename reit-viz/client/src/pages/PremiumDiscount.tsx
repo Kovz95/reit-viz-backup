@@ -1441,8 +1441,12 @@ export default function PremiumDiscount() {
     ].filter((i) => !!i.chart && !!i.series && i.hasData);
     if (items.length === 0) return;
     let syncing = false;
+    // Only real pointer moves (param.sourceEvent) propagate — programmatic
+    // crosshair sets from another chart arrive asynchronously and would echo
+    // back, flickering the hovered chart's horizontal line.
     const makeHandler = (sourceChart: any) => (param: any) => {
       if (syncing) return;
+      if (!param?.sourceEvent) return;
       syncing = true;
       try {
         const timeStr = param?.time ? normTime(param.time) : null;

@@ -326,8 +326,12 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
         });
         isSyncingRef.current = false;
       });
+      // Only real pointer moves (param.sourceEvent) propagate — programmatic
+      // crosshair sets from the other chart arrive asynchronously and would
+      // echo back, flickering the hovered chart's horizontal line.
       chart.subscribeCrosshairMove((param: any) => {
         if (isSyncingRef.current) return;
+        if (!param.sourceEvent) return;
         isSyncingRef.current = true;
         charts.forEach((other, otherIdx) => {
           if (otherIdx !== idx) {

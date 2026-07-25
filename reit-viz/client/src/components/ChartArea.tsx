@@ -752,6 +752,12 @@ export default function ChartArea({
       // we set on other panes from echoing back and clobbering the hovered pane's
       // native crosshair (which is what makes its horizontal line vanish).
       if (hoveredPaneRef.current !== null && hoveredPaneRef.current !== paneId) return;
+      // Programmatic crosshair updates (param.sourceEvent absent) fire this
+      // callback asynchronously, after syncingRef has been cleared — so the
+      // ref alone can't stop the echo. Let them propagate ONLY when this pane
+      // is genuinely under the pointer (hovering an indicator sub-chart mirrors
+      // onto its parent programmatically and must still cascade to other panes).
+      if (!param?.sourceEvent && hoveredPaneRef.current !== paneId) return;
       syncingRef.current = true;
       chartsRef.current.forEach((otherChart, otherId) => {
         if (otherId !== paneId) {
@@ -785,6 +791,7 @@ export default function ChartArea({
 
   const handleChartReady = useCallback((paneId: number, chart: IChartApi) => {
     chartsRef.current.set(paneId, chart);
+    (window as any).__chartsPanes = chartsRef.current; // debug hook (e2e crosshair/range assertions, same as __corrCharts)
     setupSyncForChart(paneId, chart);
     // Schedule sync in case other panes are already loaded
     scheduleCoordinatedSync();
@@ -2609,6 +2616,7 @@ export default function ChartArea({
                 className="relative min-w-0 min-h-0 overflow-hidden"
                 style={{ width: '100%', height: '100%' }}
                 onMouseEnter={() => { hoveredPaneRef.current = pane.id; }}
+                onMouseMove={() => { hoveredPaneRef.current = pane.id; }}
                 onMouseLeave={() => { if (hoveredPaneRef.current === pane.id) hoveredPaneRef.current = null; }}
                 onDoubleClick={() => setMaximizedPaneId(isPaneMaximized ? null : pane.id)}
               >

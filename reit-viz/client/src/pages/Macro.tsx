@@ -1011,8 +1011,12 @@ export default function Macro() {
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
 
+    // Only real pointer moves (param.sourceEvent) propagate — programmatic
+    // crosshair sets from other charts arrive asynchronously and would echo
+    // back onto the hovered chart, flickering its horizontal line.
     const crosshairHandler = (param: any) => {
       if (syncingRef.current) return;
+      if (!param.sourceEvent) return;
       syncingRef.current = true;
       chartsMapRef.current.forEach((other, otherId) => {
         if (otherId !== id) {
