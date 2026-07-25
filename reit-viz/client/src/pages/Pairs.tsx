@@ -67,7 +67,7 @@ import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls } from "@/components/IndicatorsPanel";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection } from "@/components/IndicatorsPanel";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
@@ -872,6 +872,10 @@ function PairsIndicatorsPanel({
       )}
 
       <div className="p-3 space-y-4">
+        {/* ───── Indicator Sets (shared, server-synced) ───── */}
+        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Indicator Sets</p>
+        <IndicatorSetsSection activeIndicators={activeIndicators} onApply={setIndicators} />
+
         {/* ───── Moving Averages ───── */}
         <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Moving Averages</p>
         <MiniMaRow label="SMA" presets={[20, 50, 100, 200]} defaultLen={50}

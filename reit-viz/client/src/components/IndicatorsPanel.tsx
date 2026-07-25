@@ -48,6 +48,115 @@ function loadIndicatorSets(): IndicatorSet[] {
   }
 }
 
+/**
+ * Reusable "Indicator Sets" block — save the active indicators as a named,
+ * server-synced set and apply/delete saved sets. Rendered by EVERY indicators
+ * panel in the app (the shared IndicatorsPanel used on Charts/Correlation/
+ * Macro, and the Pairs page's own panel) so the same sets are available
+ * everywhere. The host decides what "apply" targets via onApply.
+ */
+export function IndicatorSetsSection({
+  activeIndicators,
+  onApply,
+  applyHint = "",
+}: {
+  activeIndicators: ActiveIndicators;
+  onApply: (indicators: ActiveIndicators) => void;
+  /** Appended to the apply tooltip, e.g. " to ALL panes". */
+  applyHint?: string;
+}) {
+  const [indicatorSets, setIndicatorSets] = useState<IndicatorSet[]>(() => loadIndicatorSets());
+  const [setName, setSetName] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void loadServerPref<IndicatorSet[]>(INDICATOR_SETS_KEY).then((srv) => {
+      if (!cancelled && Array.isArray(srv)) setIndicatorSets(srv);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const saveIndicatorSet = () => {
+    const name = setName.trim() || `Set ${indicatorSets.length + 1}`;
+    const s: IndicatorSet = { id: `is-${Date.now()}`, name, indicators: activeIndicators };
+    const next = [...indicatorSets.filter((x) => x.name !== name), s];
+    setIndicatorSets(next);
+    saveServerPref(INDICATOR_SETS_KEY, next);
+    setSetName("");
+  };
+  const deleteIndicatorSet = (id: string) => {
+    const next = indicatorSets.filter((x) => x.id !== id);
+    setIndicatorSets(next);
+    saveServerPref(INDICATOR_SETS_KEY, next);
+  };
+  /** Human summary of what a set contains, e.g. "SMA, RSI, BOLLINGER +2". */
+  const summarizeSet = (s: IndicatorSet): string => {
+    const keys = Object.keys(s.indicators || {}).filter(
+      (k) => (s.indicators as any)[k] !== undefined && (s.indicators as any)[k] !== false
+    );
+    if (keys.length === 0) return "empty (clears indicators)";
+    const shown = keys.slice(0, 3).map((k) => k.toUpperCase());
+    return shown.join(", ") + (keys.length > 3 ? ` +${keys.length - 3}` : "");
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1">
+        <Input
+          placeholder="Save current as…"
+          className="h-7 text-[11px] flex-1"
+          value={setName}
+          onChange={(e) => setSetName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") saveIndicatorSet(); }}
+          data-testid="indicator-set-name"
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-[10px] gap-1 flex-shrink-0"
+          onClick={saveIndicatorSet}
+          title="Save the current indicators as a named set (synced to the server)"
+          data-testid="indicator-set-save"
+        >
+          <Plus className="w-3 h-3" />
+          Save
+        </Button>
+      </div>
+      {indicatorSets.length === 0 ? (
+        <div className="text-[10px] text-muted-foreground">
+          No saved sets yet — configure indicators, then save them as a named set you can apply anywhere in the app, on any computer.
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {indicatorSets.map((s) => (
+            <div key={s.id} className="flex items-center gap-1 group">
+              <button
+                type="button"
+                onClick={() => { if (s.indicators && typeof s.indicators === "object") onApply(s.indicators); }}
+                className="flex-1 min-w-0 flex items-center gap-1.5 rounded border border-border bg-secondary/40 hover:bg-secondary px-2 py-1 text-left transition-colors"
+                title={`Apply "${s.name}" (${summarizeSet(s)})${applyHint}`}
+                data-testid={`indicator-set-apply-${s.name}`}
+              >
+                <Layers className="w-3 h-3 shrink-0 text-primary" />
+                <span className="text-[11px] font-medium truncate">{s.name}</span>
+                <span className="text-[9px] text-muted-foreground truncate ml-auto">{summarizeSet(s)}</span>
+              </button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() => deleteIndicatorSet(s.id)}
+                title={`Delete set "${s.name}"`}
+                data-testid={`indicator-set-delete-${s.name}`}
+              >
+                <X className="w-3 h-3" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface IndicatorsPanelProps {
   panes: PaneInfo[];
   indicatorsMap: Record<number, ActiveIndicators>;
@@ -421,41 +530,7 @@ export default function IndicatorsPanel({
     onApplyToAllPanes(activeIndicators);
   };
 
-  // ── Indicator sets (named snapshots, server-synced) ──
-  const [indicatorSets, setIndicatorSets] = useState<IndicatorSet[]>(() => loadIndicatorSets());
-  const [setName, setSetName] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    void loadServerPref<IndicatorSet[]>(INDICATOR_SETS_KEY).then((srv) => {
-      if (!cancelled && Array.isArray(srv)) setIndicatorSets(srv);
-    });
-    return () => { cancelled = true; };
-  }, []);
-  const saveIndicatorSet = () => {
-    const name = setName.trim() || `Set ${indicatorSets.length + 1}`;
-    const s: IndicatorSet = { id: `is-${Date.now()}`, name, indicators: activeIndicators };
-    const next = [...indicatorSets.filter((x) => x.name !== name), s];
-    setIndicatorSets(next);
-    saveServerPref(INDICATOR_SETS_KEY, next);
-    setSetName("");
-  };
-  const applyIndicatorSet = (s: IndicatorSet) => {
-    if (s.indicators && typeof s.indicators === "object") setActiveIndicators(s.indicators);
-  };
-  const deleteIndicatorSet = (id: string) => {
-    const next = indicatorSets.filter((x) => x.id !== id);
-    setIndicatorSets(next);
-    saveServerPref(INDICATOR_SETS_KEY, next);
-  };
-  /** Human summary of what a set contains, e.g. "SMA, RSI, Bollinger +2". */
-  const summarizeSet = (s: IndicatorSet): string => {
-    const keys = Object.keys(s.indicators || {}).filter(
-      (k) => (s.indicators as any)[k] !== undefined && (s.indicators as any)[k] !== false
-    );
-    if (keys.length === 0) return "empty (clears indicators)";
-    const shown = keys.slice(0, 3).map((k) => k.toUpperCase());
-    return shown.join(", ") + (keys.length > 3 ? ` +${keys.length - 3}` : "");
-  };
+  const applyHint = applyToAll && panes.length > 1 ? " to ALL panes" : "";
 
   // Mean/std band local state
   const meanCfg = activeIndicators.mean;
@@ -587,62 +662,11 @@ export default function IndicatorsPanel({
           onToggle={() => toggleSection("Indicator Sets")}
         />
         {!isCollapsed("Indicator Sets") && (
-          <div className="space-y-2">
-            <div className="flex gap-1">
-              <Input
-                placeholder="Save current as…"
-                className="h-7 text-[11px] flex-1"
-                value={setName}
-                onChange={(e) => setSetName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") saveIndicatorSet(); }}
-                data-testid="indicator-set-name"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 text-[10px] gap-1 flex-shrink-0"
-                onClick={saveIndicatorSet}
-                title="Save the selected pane's indicators as a named set (synced to the server)"
-                data-testid="indicator-set-save"
-              >
-                <Plus className="w-3 h-3" />
-                Save
-              </Button>
-            </div>
-            {indicatorSets.length === 0 ? (
-              <div className="text-[10px] text-muted-foreground">
-                No saved sets yet — configure indicators, then save them as a named set you can apply on any pane (or all panes), on any computer.
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {indicatorSets.map((s) => (
-                  <div key={s.id} className="flex items-center gap-1 group">
-                    <button
-                      type="button"
-                      onClick={() => applyIndicatorSet(s)}
-                      className="flex-1 min-w-0 flex items-center gap-1.5 rounded border border-border bg-secondary/40 hover:bg-secondary px-2 py-1 text-left transition-colors"
-                      title={`Apply "${s.name}" (${summarizeSet(s)})${applyToAll && panes.length > 1 ? " to ALL panes" : ""}`}
-                      data-testid={`indicator-set-apply-${s.name}`}
-                    >
-                      <Layers className="w-3 h-3 shrink-0 text-primary" />
-                      <span className="text-[11px] font-medium truncate">{s.name}</span>
-                      <span className="text-[9px] text-muted-foreground truncate ml-auto">{summarizeSet(s)}</span>
-                    </button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => deleteIndicatorSet(s.id)}
-                      title={`Delete set "${s.name}"`}
-                      data-testid={`indicator-set-delete-${s.name}`}
-                    >
-                      <X className="w-3 h-3" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <IndicatorSetsSection
+            activeIndicators={activeIndicators}
+            onApply={setActiveIndicators}
+            applyHint={applyHint}
+          />
         )}
 
         {/* ───── Pattern Recognition ───── */}
