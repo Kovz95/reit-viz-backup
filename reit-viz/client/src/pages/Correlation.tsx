@@ -17,7 +17,7 @@ import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
 import { runDislocationScan, dislocationScanToCsv } from "@/lib/correlationDislocationScan";
-import type { DislocationScanResult, DislocationRow, ScanTF } from "@/lib/correlationDislocationScan";
+import type { DislocationScanResult, DislocationRow, IdioRow, ScanTF, ScanMode } from "@/lib/correlationDislocationScan";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -707,18 +707,28 @@ function zColor(z: number): string {
   return "#94a3b8";
 }
 
+const SCAN_MODES: { value: ScanMode; label: string; title: string }[] = [
+  { value: "crossTF", label: "Cross-TF", title: "One timeframe broken while another stays in line (1H/D/W)" },
+  { value: "breakdown", label: "Breakdown", title: "Typically-correlated pairs whose daily correlation collapsed and is still falling" },
+  { value: "spreadZ", label: "Spread-Z", title: "Correlation intact but the price spread is stretched — gated on the spread being statistically mean-reverting" },
+  { value: "recoupling", label: "Recoupling", title: "Broken pairs whose correlation is healing (ρ z still low, Δρ turning up) — reconvergence entry timing" },
+  { value: "idio", label: "Idio", title: "Single names decoupling from their subindustry peers — LONG/SHORT candidates by relative return" },
+];
+
 function DislocationScanPanel({
-  universeTickers,
+  universeMeta,
+  allMeta,
   baskets,
   onPin,
 }: {
-  universeTickers: string[];
+  universeMeta: { ticker: string; subindustry?: string }[];
+  allMeta: { ticker: string; subindustry?: string }[];
   baskets: Basket[];
   onPin: (a: string, b: string) => void;
 }) {
   const [scope, setScope] = useState<"universe" | "basket">("universe");
   const [basketId, setBasketId] = useState("");
-  const [mode, setMode] = useState<"crossTF" | "breakdown">("crossTF");
+  const [mode, setMode] = useState<ScanMode>("crossTF");
   const [window_, setWindow_] = useState("60");
   const [zTh, setZTh] = useState("1.5");
   const [anchorTh, setAnchorTh] = useState("0.75");
@@ -730,13 +740,18 @@ function DislocationScanPanel({
   const [showAll, setShowAll] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  const scopeTickers = useMemo(() => {
+  const scopeMeta = useMemo(() => {
     if (scope === "basket") {
       const b = baskets.find((x) => x.id === basketId);
-      return b ? b.tickers : [];
+      if (!b) return [];
+      return b.tickers.map((t) => ({
+        ticker: t,
+        subindustry: allMeta.find((m) => m.ticker === t)?.subindustry,
+      }));
     }
-    return universeTickers;
-  }, [scope, basketId, baskets, universeTickers]);
+    return universeMeta;
+  }, [scope, basketId, baskets, universeMeta, allMeta]);
+  const scopeTickers = useMemo(() => scopeMeta.map((m) => m.ticker), [scopeMeta]);
   const pairCount = (scopeTickers.length * (scopeTickers.length - 1)) / 2;
 
   const runScan = useCallback(async () => {
@@ -756,6 +771,7 @@ function DislocationScanPanel({
     try {
       const res = await runDislocationScan({
         tickers: scopeTickers,
+        tickerMeta: scopeMeta,
         window: Math.max(20, Math.min(500, parseInt(window_) || 60)),
         zThreshold: Math.max(0.5, parseFloat(zTh) || 1.5),
         anchorThreshold: Math.max(0.1, parseFloat(anchorTh) || 0.75),
@@ -797,6 +813,7 @@ function DislocationScanPanel({
           case "wZ": return r.tf.weekly?.z ?? -99;
           case "zGap": return r.zGap;
           case "corrDelta": return r.corrDelta ?? 0;
+          case "spreadZ": return Math.abs(r.spreadZ ?? 0);
           case "kind": return r.kind;
           case "spreadRet": return Math.abs(r.spreadRet);
           case "score": return r.score;
@@ -805,6 +822,32 @@ function DislocationScanPanel({
       })
     : [];
   const display = showAll ? sortedRows : sortedRows.slice(0, 50);
+
+  const idioSort = useTableSort<IdioRow>("", "desc", "desc", "correlation-idio");
+  const sortedIdio = result
+    ? idioSort.apply(result.idioRows, (r, key) => {
+        switch (key) {
+          case "ticker": return r.ticker;
+          case "group": return r.group;
+          case "histAvgCorr": return r.histAvgCorr;
+          case "curAvgCorr": return r.curAvgCorr;
+          case "z": return r.z;
+          case "relRet": return r.relRet;
+          case "side": return r.side;
+          case "score": return r.score;
+          default: return null;
+        }
+      })
+    : [];
+  const displayIdio = showAll ? sortedIdio : sortedIdio.slice(0, 50);
+  const resultCount = result ? (result.mode === "idio" ? result.idioRows.length : result.rows.length) : 0;
+
+  const KIND_CHIP: Record<string, { label: string; color: string }> = {
+    decorrelated: { label: "DECOR", color: "#f59e0b" },
+    hypercorrelated: { label: "HYPER", color: "#38bdf8" },
+    stretched: { label: "STRETCH", color: "#a855f7" },
+    recoupling: { label: "RECOUPLE", color: "#22c55e" },
+  };
   const thCls = "px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap bg-card/50";
   const tfCell = (st?: { last: number; z: number; pct: number }) => st ? (
     <div className="whitespace-nowrap">
@@ -821,23 +864,18 @@ function DislocationScanPanel({
       <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
         <div className="space-y-0.5">
           <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Mode</div>
-          <div className="flex gap-1">
-            <button
-              onClick={() => setMode("crossTF")}
-              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${mode === "crossTF" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
-              data-testid="disloc-mode-crosstf"
-              title="One timeframe broken while another stays in line (1H/D/W)"
-            >
-              Cross-TF
-            </button>
-            <button
-              onClick={() => setMode("breakdown")}
-              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${mode === "breakdown" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
-              data-testid="disloc-mode-breakdown"
-              title="Typically-correlated pairs whose daily correlation collapsed and is still falling"
-            >
-              Breakdown
-            </button>
+          <div className="flex gap-1 flex-wrap">
+            {SCAN_MODES.map((m) => (
+              <button
+                key={m.value}
+                onClick={() => setMode(m.value)}
+                className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${mode === m.value ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
+                data-testid={`disloc-mode-${m.value.toLowerCase()}`}
+                title={m.title}
+              >
+                {m.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -849,7 +887,7 @@ function DislocationScanPanel({
               className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${scope === "universe" ? "bg-primary text-primary-foreground border-primary" : "border-border/40 text-muted-foreground hover:bg-accent"}`}
               data-testid="disloc-scope-universe"
             >
-              Universe ({universeTickers.length})
+              Universe ({universeMeta.length})
             </button>
             <button
               onClick={() => setScope("basket")}
@@ -872,13 +910,17 @@ function DislocationScanPanel({
             className="h-7 w-[70px] text-[11px] font-mono px-2" data-testid="disloc-window" />
         </div>
         <div className="space-y-0.5">
-          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Disloc |z| ≥</div>
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">
+            {mode === "spreadZ" ? "Spread |z| ≥" : mode === "idio" ? "Corr-drop |z| ≥" : "Disloc |z| ≥"}
+          </div>
           <Input type="number" step="0.1" min={0.5} value={zTh} onChange={(e) => setZTh(e.target.value)}
             className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-zth" />
         </div>
-        {mode === "crossTF" && (
+        {(mode === "crossTF" || mode === "spreadZ") && (
         <div className="space-y-0.5">
-          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Anchor |z| ≤</div>
+          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">
+            {mode === "spreadZ" ? "Corr |z| ≤ (intact)" : "Anchor |z| ≤"}
+          </div>
           <Input type="number" step="0.05" min={0.1} value={anchorTh} onChange={(e) => setAnchorTh(e.target.value)}
             className="h-7 w-[60px] text-[11px] font-mono px-2" data-testid="disloc-anchorth" />
         </div>
@@ -903,8 +945,12 @@ function DislocationScanPanel({
 
         <div className="text-[10px] text-muted-foreground font-mono ml-auto">
           {result && !scanning
-            ? `${result.rows.length} dislocations · ${result.scannedPairs.toLocaleString()} pairs · ${result.tickers} tickers · ${(result.durationMs / 1000).toFixed(1)}s`
-            : `${pairCount.toLocaleString()} pairs in scope`}
+            ? result.mode === "idio"
+              ? `${result.idioRows.length} candidates · ${result.tickers} tickers · ${(result.durationMs / 1000).toFixed(1)}s`
+              : `${result.rows.length} dislocations · ${result.scannedPairs.toLocaleString()} pairs · ${result.tickers} tickers · ${(result.durationMs / 1000).toFixed(1)}s`
+            : mode === "idio"
+              ? `${scopeTickers.length} tickers in scope (grouped by subindustry, min 4 peers)`
+              : `${pairCount.toLocaleString()} pairs in scope`}
         </div>
       </div>
 
@@ -935,13 +981,73 @@ function DislocationScanPanel({
             </div>
           </div>
         )}
-        {result && !scanning && result.rows.length === 0 && (
+        {result && !scanning && resultCount === 0 && (
           <div className="text-[11px] text-muted-foreground font-mono">
-            No dislocations at these thresholds — loosen |z| or the min baseline correlation.
+            {result.mode === "idio"
+              ? "No decoupling names at these thresholds — loosen |z| / min baseline, or the scope lacks subindustries with ≥4 members."
+              : "No hits at these thresholds — loosen |z| or the min baseline correlation."}
             {result.skipped.noHourly > 0 && ` (${result.skipped.noHourly} pairs lacked an intraday leg.)`}
           </div>
         )}
-        {result && !scanning && result.rows.length > 0 && (
+        {result && !scanning && result.mode === "idio" && result.idioRows.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-[9px] text-muted-foreground font-mono">
+              z = current avg peer-correlation vs its own history · Rel ret = window return vs subindustry average ·
+              collapsed corr + underperformance ⇒ SHORT candidate, + outperformance ⇒ LONG candidate
+            </div>
+            <div className="overflow-auto" data-testid="disloc-idio-results">
+              <table className="text-[11px] font-mono w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-border/40">
+                    <th className={thCls}>#</th>
+                    <th className={thCls}><SortHeader label="Ticker" columnKey="ticker" sort={idioSort} /></th>
+                    <th className={thCls}><SortHeader label="Subindustry" columnKey="group" sort={idioSort} /></th>
+                    <th className={thCls}>Peers</th>
+                    <th className={thCls}><SortHeader label="Hist ρ̄" columnKey="histAvgCorr" sort={idioSort} /></th>
+                    <th className={thCls}><SortHeader label="Now ρ̄" columnKey="curAvgCorr" sort={idioSort} /></th>
+                    <th className={thCls}><SortHeader label="z" columnKey="z" sort={idioSort} /></th>
+                    <th className={thCls}><SortHeader label="Rel ret" columnKey="relRet" sort={idioSort} /></th>
+                    <th className={thCls}><SortHeader label="Side" columnKey="side" sort={idioSort} /></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayIdio.map((r, i) => (
+                    <tr key={r.ticker + r.group} className="border-b border-border/20 hover:bg-accent/20 transition-colors" data-testid={`idio-row-${i}`}>
+                      <td className="px-2 py-1 text-muted-foreground/60">{r.rank}</td>
+                      <td className="px-2 py-1 font-bold">{r.ticker}</td>
+                      <td className="px-2 py-1 max-w-[220px]"><span className="truncate block text-[10px] text-muted-foreground" title={r.group}>{r.group}</span></td>
+                      <td className="px-2 py-1 text-muted-foreground">{r.peers}</td>
+                      <td className="px-2 py-1" style={{ color: corrColor(r.histAvgCorr) }}>{r.histAvgCorr.toFixed(2)}</td>
+                      <td className="px-2 py-1" style={{ color: corrColor(r.curAvgCorr) }}>{r.curAvgCorr.toFixed(2)}</td>
+                      <td className="px-2 py-1 font-bold" style={{ color: zColor(r.z) }}>{r.z >= 0 ? "+" : ""}{r.z.toFixed(1)}</td>
+                      <td className="px-2 py-1" style={{ color: r.relRet >= 0 ? "#22c55e" : "#ef4444" }}>
+                        {(r.relRet * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-2 py-1">
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                          style={r.side === "SHORT candidate"
+                            ? { color: "#ef4444", backgroundColor: "#ef444422" }
+                            : { color: "#22c55e", backgroundColor: "#22c55e22" }}
+                        >
+                          {r.side}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sortedIdio.length > 50 && (
+                <div className="py-2 text-center">
+                  <button className="text-[10px] text-muted-foreground hover:text-foreground underline" onClick={() => setShowAll(v => !v)}>
+                    {showAll ? "Show top 50 only" : `Show all ${sortedIdio.length} candidates`}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {result && !scanning && result.mode !== "idio" && result.rows.length > 0 && (
           <div className="space-y-2">
             <div className="text-[9px] text-muted-foreground font-mono">
               z = current rolling ρ vs that timeframe's own history · Gap = |z(dislocated) − z(anchor)| ·
@@ -959,6 +1065,9 @@ function DislocationScanPanel({
                     <th className={thCls}><SortHeader label="W ρ · z" columnKey="wZ" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Gap" columnKey="zGap" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Δρ 20d" columnKey="corrDelta" sort={sort} /></th>
+                    <th className={thCls}><SortHeader label="Spread z" columnKey="spreadZ" sort={sort} /></th>
+                    <th className={thCls} title="Spread mean-reverting? (Dickey-Fuller) · half-life">MR·HL</th>
+                    <th className={thCls} title="Each leg's window return z-scored vs its own history — who moved?">Leg z A·B</th>
                     <th className={thCls}><SortHeader label="Type" columnKey="kind" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Spread" columnKey="spreadRet" sort={sort} /></th>
                     <th className={thCls}>Trade idea</th>
@@ -981,14 +1090,29 @@ function DislocationScanPanel({
                       <td className="px-2 py-1 whitespace-nowrap" style={{ color: (r.corrDelta ?? 0) < -0.05 ? "#ef4444" : (r.corrDelta ?? 0) > 0.05 ? "#22c55e" : "#94a3b8" }}>
                         {r.corrDelta != null ? `${r.corrDelta >= 0 ? "+" : ""}${r.corrDelta.toFixed(2)}` : "—"}
                       </td>
+                      <td className="px-2 py-1 whitespace-nowrap" style={{ color: Math.abs(r.spreadZ ?? 0) >= 2 ? "#a855f7" : "#94a3b8" }}>
+                        {r.spreadZ != null ? `${r.spreadZ >= 0 ? "+" : ""}${r.spreadZ.toFixed(1)}σ` : "—"}
+                      </td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        {r.spreadMR ? (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold" style={{ color: "#22c55e", backgroundColor: "#22c55e22" }}>
+                            ✓ {r.spreadHalfLife}d
+                          </span>
+                        ) : (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-bold" style={{ color: "#94a3b8", backgroundColor: "#94a3b822" }}>✗</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 whitespace-nowrap text-[10px] text-muted-foreground">
+                        {r.legZA != null ? `${r.legZA >= 0 ? "+" : ""}${r.legZA.toFixed(1)}` : "—"}
+                        {" · "}
+                        {r.legZB != null ? `${r.legZB >= 0 ? "+" : ""}${r.legZB.toFixed(1)}` : "—"}
+                      </td>
                       <td className="px-2 py-1">
                         <span
                           className="px-1.5 py-0.5 rounded text-[9px] font-bold"
-                          style={r.kind === "decorrelated"
-                            ? { color: "#f59e0b", backgroundColor: "#f59e0b22" }
-                            : { color: "#38bdf8", backgroundColor: "#38bdf822" }}
+                          style={{ color: KIND_CHIP[r.kind].color, backgroundColor: `${KIND_CHIP[r.kind].color}22` }}
                         >
-                          {r.kind === "decorrelated" ? "DECOR" : "HYPER"}
+                          {KIND_CHIP[r.kind].label}
                         </span>
                       </td>
                       <td className="px-2 py-1 whitespace-nowrap" style={{ color: r.spreadRet >= 0 ? "#22c55e" : "#ef4444" }}>
@@ -2812,9 +2936,12 @@ export default function Correlation() {
             </div>
             <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
               <div className="font-semibold text-foreground/70">How to read it</div>
-              <div><span className="text-amber-400 font-bold">DECOR</span> — pair de-correlated vs its norm. If historically +ρ, the classic setup is reconvergence: long the laggard leg, short the leader.</div>
+              <div><span className="text-amber-400 font-bold">DECOR</span> — pair de-correlated vs its norm (Cross-TF / Breakdown). Reconvergence framing only when the spread is statistically mean-reverting (MR ✓); otherwise the row points at the leg that moved abnormally.</div>
               <div><span className="text-sky-400 font-bold">HYPER</span> — correlation unusually tight vs its norm: crowding or a regime shift to watch.</div>
-              <div><span className="text-foreground/80 font-bold">Breakdown mode</span> — daily-only screen for typically-correlated pairs whose current rolling ρ has collapsed toward zero/negative AND is still falling (Δρ 20d ≤ 0). Fastest way to catch correlations curving downwards.</div>
+              <div><span className="text-purple-400 font-bold">STRETCH</span> (Spread-Z) — the earned reconvergence trade: correlation intact, spread at a multi-sigma extreme, Dickey-Fuller confirms mean reversion. LONG cheap leg / SHORT rich leg.</div>
+              <div><span className="text-green-400 font-bold">RECOUPLE</span> — broken pair whose correlation is healing (Δρ turning up): reconvergence entry timing.</div>
+              <div><span className="text-foreground/80 font-bold">Idio</span> — single names decoupling from subindustry peers; collapsed peer-ρ + underperformance = SHORT candidate, + outperformance = LONG candidate.</div>
+              <div className="text-muted-foreground/80">Evidence columns on every pair row: Spread z, MR ✓/✗ + half-life, and each leg's move z ("who moved").</div>
               <div>Gap ranks how stretched the dislocated timeframe is vs the calm one. Pin any row to open the pair on the Pairwise tab with the TF Divergence panel.</div>
             </div>
             <div className="border border-border/20 rounded p-2 bg-card/20 text-[10px] text-muted-foreground space-y-1">
@@ -3297,7 +3424,8 @@ export default function Correlation() {
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {activeTab === "dislocations" ? (
           <DislocationScanPanel
-            universeTickers={uniFilteredList.map((t: any) => t.ticker)}
+            universeMeta={uniFilteredList as any}
+            allMeta={tickers as any}
             baskets={baskets}
             onPin={pinFromDisloc}
           />
