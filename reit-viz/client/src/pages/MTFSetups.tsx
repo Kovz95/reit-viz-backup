@@ -46,6 +46,7 @@ import {
   type MtfScanResult,
 } from "@/lib/mtfEngine";
 import { Play, Loader2, Layers, LineChart, ChevronDown, ChevronRight, Flame } from "lucide-react";
+import { PagePresets } from "@/components/PagePresets";
 
 const TF_LABEL: Record<Timeframe, string> = { H: "Hourly", D: "Daily", W: "Weekly" };
 const TF_CHIP_CLASS: Record<Timeframe, string> = {
@@ -527,6 +528,12 @@ export default function MTFSetups() {
           <span className="inline-flex items-center gap-1 text-sm font-bold">
             <Layers className="w-4 h-4 text-primary" /> Multi-Timeframe Setups
           </span>
+          <PagePresets
+            storageKey="reit-viz:mtf-setups:presets"
+            capture={serialize}
+            apply={hydrate}
+            testIdPrefix="mtf-presets"
+          />
           <span className="text-[10px] text-muted-foreground">
             Cross-timeframe confluence: which hourly/daily/weekly condition combos predicted moves, and what's on right now.
           </span>

@@ -22,6 +22,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectGroup, SelectI
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { P as PlayIcon } from "@/lib/play";
+import { PagePresets } from "@/components/PagePresets";
 
 const VALUATION_METRICS = [
   { id: "P/FFO FY2", label: "P/FFO FY2" },
@@ -423,6 +424,29 @@ export default function PremiumDiscountScreener() {
             <Filter className="w-3.5 h-3.5 text-amber-400" />
             P/D Screener
           </div>
+          <PagePresets
+            storageKey="reit-viz:pd-screener:presets"
+            capture={() => ({
+              universeMode, selectedBasket, classKey, classValue, peerDimension,
+              valuationMetricSel, growthMetricSel, sigmaFactor, verdictFilter,
+              classFilters: serializeClassFilters(classFilters),
+              manualTickers: [...manualTickers],
+            })}
+            apply={(cfg) => {
+              if (cfg?.universeMode === "workbook" || cfg?.universeMode === "basket" || cfg?.universeMode === "classification") setUniverseMode(cfg.universeMode);
+              if (typeof cfg?.selectedBasket === "string") setSelectedBasket(cfg.selectedBasket);
+              if (typeof cfg?.classKey === "string") setClassKey(cfg.classKey);
+              if (typeof cfg?.classValue === "string") setClassValue(cfg.classValue);
+              if (typeof cfg?.peerDimension === "string") setPeerDimension(cfg.peerDimension);
+              if (typeof cfg?.valuationMetricSel === "string") { valLockedRef.current = true; setValuationMetricSel(cfg.valuationMetricSel); }
+              if (typeof cfg?.growthMetricSel === "string") { growthLockedRef.current = true; setGrowthMetricSel(cfg.growthMetricSel); }
+              if (typeof cfg?.sigmaFactor === "number") setSigmaFactor(cfg.sigmaFactor);
+              if (typeof cfg?.verdictFilter === "string") setVerdictFilter(cfg.verdictFilter);
+              if (cfg?.classFilters) setClassFilters(deserializeClassFilters(cfg.classFilters));
+              if (Array.isArray(cfg?.manualTickers)) setManualTickers(new Set(cfg.manualTickers));
+            }}
+            testIdPrefix="pdscreener-presets"
+          />
           <div className="h-5 w-px bg-border" />
           <span className="text-muted-foreground">Universe</span>
           <Select value={universeMode} onValueChange={v => setUniverseMode(v as any)}>

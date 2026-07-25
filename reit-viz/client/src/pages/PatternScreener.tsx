@@ -35,6 +35,7 @@ import { computeBasketSeries } from "@/lib/fetchWorkbookData";
 import { fetchWorkbookSeriesForTicker } from "@/lib/fetchWorkbookSeriesForTicker";
 import { detectPatterns, getDefaultPatternOptions } from "@/lib/computeAutoTrendlines";
 import { detectChannels, getDefaultChannelOptions } from "@/lib/computeAutoTrendlines";
+import { PagePresets } from "@/components/PagePresets";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -635,6 +636,12 @@ export default function PatternScreener() {
           <AlertTriangle className="w-5 h-5 text-amber-400" />
           <h1 className="text-lg font-semibold">Pattern Screener</h1>
           <Badge variant="outline" className="text-[10px]">Patterns + Channels</Badge>
+          <PagePresets
+            storageKey="reit-viz:pattern-screener:presets"
+            capture={() => config}
+            apply={(cfg) => setConfig((prev) => ({ ...prev, ...cfg }))}
+            testIdPrefix="pattern-presets"
+          />
         </div>
         <div className="flex items-center gap-2">
           <Tabs value={displayMode} onValueChange={setDisplayMode}>

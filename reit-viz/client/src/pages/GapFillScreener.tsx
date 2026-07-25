@@ -19,6 +19,7 @@ import { useUniverse } from "@/lib/universeContext";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { PagePresets } from "@/components/PagePresets";
 import ClassificationFilters, {
   emptyClassFilters,
   applyClassFilters,
@@ -318,13 +319,21 @@ export default function GapFillScreener() {
     <div className="h-full overflow-y-auto" data-testid="gap-fill-page">
       <div className="p-3 text-xs font-mono space-y-3">
         {/* Title */}
-        <div>
+        <div className="flex items-start justify-between gap-2">
+          <div>
           <h1 className="text-base font-bold">Gap Fill Screener</h1>
           <p className="text-[10px] text-muted-foreground">
             Scans daily OHLC for full price gaps (bar's low above the prior high, or high below the prior low) that
             are still open, and shows the % move from the current price needed to fill each one. Gap-ups above price
             need a decline to fill (negative %); gap-downs below price need a rally (positive %).
           </p>
+          </div>
+          <PagePresets
+            storageKey="reit-viz:gap-fill:presets"
+            capture={() => { const { rows, skipped: sk, ...cfg } = serializeState() as any; return cfg; }}
+            apply={hydrateState}
+            testIdPrefix="gapfill-presets"
+          />
         </div>
 
         {/* Classification + Country/Exchange filters */}

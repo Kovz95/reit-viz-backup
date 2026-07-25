@@ -1,8 +1,9 @@
 // Reconstructed from recovered-bundle/index-CsG73Aq_.js (fn jHe + FT helper) on 2026-06-17
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
-import { Search, FileText, CornerDownLeft, TrendingUp } from "lucide-react";
+import { Search, FileText, CornerDownLeft, TrendingUp, Bookmark, Radar, Layers } from "lucide-react";
 import { getTickers, type TickerMeta } from "@/lib/dataService";
+import { loadServerPref } from "@/lib/serverPrefs";
 
 export interface CommandPalettePage {
   path: string;
@@ -15,9 +16,26 @@ interface CommandPaletteProps {
   pages: CommandPalettePage[];
 }
 
+// Saved-entity stores surfaced as palette actions. Keys mirror the owning
+// pages (UniversalScreener / Correlation); the palette only needs names.
+const SCREENS_KEY = "reit-viz:universal-screener:saved-screens";
+const DISLOC_PRESETS_KEY = "reit-viz:disloc-scan-presets";
+const PAIR_TEMPLATES_KEY = "reit-viz:corr-pair-templates";
+// sessionStorage hand-offs the target pages consume once on load.
+export const PENDING_SCREEN_KEY = "reit-viz:pending-screen";
+export const PENDING_DISLOC_PRESET_KEY = "reit-viz:pending-disloc-preset";
+export const PENDING_PAIR_TEMPLATE_KEY = "reit-viz:pending-pair-template";
+
 type PageResult = { kind: "page"; path: string; label: string };
 type TickerResult = { kind: "ticker"; ticker: string; name: string; sector: string };
-type ResultItem = PageResult | TickerResult;
+type SavedResult = { kind: "screen" | "dislocPreset" | "pairTemplate"; name: string };
+type ResultItem = PageResult | TickerResult | SavedResult;
+
+const SAVED_META: Record<SavedResult["kind"], { prefix: string; path: string; pendingKey: string }> = {
+  screen: { prefix: "Screen", path: "/universal-screener", pendingKey: PENDING_SCREEN_KEY },
+  dislocPreset: { prefix: "Disloc preset", path: "/correlation", pendingKey: PENDING_DISLOC_PRESET_KEY },
+  pairTemplate: { prefix: "Pair template", path: "/correlation", pendingKey: PENDING_PAIR_TEMPLATE_KEY },
+};
 
 /**
  * Fuzzy scorer (bundle FT). Lower score = better match.
@@ -48,9 +66,10 @@ export function FT(query: string, target: string): number | null {
 }
 
 export default function CommandPalette({ open, onClose, pages }: CommandPaletteProps) {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [query, setQuery] = useState("");
   const [tickers, setTickers] = useState<TickerMeta[]>([]);
+  const [saved, setSaved] = useState<SavedResult[]>([]);
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -60,6 +79,18 @@ export default function CommandPalette({ open, onClose, pages }: CommandPaletteP
       getTickers()
         .then(setTickers)
         .catch(() => {});
+      // Saved entities from the server prefs KV (session-cached upstream).
+      void Promise.all([
+        loadServerPref<{ name: string }[]>(SCREENS_KEY),
+        loadServerPref<{ name: string }[]>(DISLOC_PRESETS_KEY),
+        loadServerPref<{ name: string }[]>(PAIR_TEMPLATES_KEY),
+      ]).then(([screens, presets, templates]) => {
+        const out: SavedResult[] = [];
+        for (const s of screens ?? []) if (s?.name) out.push({ kind: "screen", name: s.name });
+        for (const p of presets ?? []) if (p?.name) out.push({ kind: "dislocPreset", name: p.name });
+        for (const t of templates ?? []) if (t?.name) out.push({ kind: "pairTemplate", name: t.name });
+        setSaved(out);
+      });
     }
   }, [open]);
 
@@ -103,9 +134,14 @@ export default function CommandPalette({ open, onClose, pages }: CommandPaletteP
         });
       }
     }
+    for (const item of saved) {
+      const label = `${SAVED_META[item.kind].prefix}: ${item.name}`;
+      const score = FT(query, label) ?? FT(query, item.name);
+      if (score !== null) scored.push({ item, score: score - 25 });
+    }
     scored.sort((a, b) => a.score - b.score);
     return scored.slice(0, 50).map((s) => s.item);
-  }, [query, pages, tickers]);
+  }, [query, pages, tickers, saved]);
 
   useEffect(() => {
     if (selected >= results.length) {
@@ -123,11 +159,26 @@ export default function CommandPalette({ open, onClose, pages }: CommandPaletteP
   function activate(item: ResultItem) {
     if (item.kind === "page") {
       setLocation(item.path);
+    } else if (item.kind === "ticker") {
+      // Charts hand-off: if the Dashboard is mounted it consumes the
+      // goto-symbol event immediately; otherwise the pending-symbol key is
+      // read once on mount. (The old "commandpalette:ticker" event had no
+      // listener anywhere — picking a ticker never loaded it.)
+      if (location === "/") {
+        window.dispatchEvent(new CustomEvent("reit-viz:goto-symbol", { detail: { symbol: item.ticker } }));
+      } else {
+        try { localStorage.setItem("reit-viz.dashboard.pending-symbol", item.ticker); } catch {}
+        setLocation("/");
+      }
     } else {
-      window.dispatchEvent(
-        new CustomEvent("commandpalette:ticker", { detail: { ticker: item.ticker } })
-      );
-      setLocation("/");
+      const meta = SAVED_META[item.kind];
+      try { sessionStorage.setItem(meta.pendingKey, item.name); } catch {}
+      if (location === meta.path) {
+        // Already on the page — let it consume the pending key via an event.
+        window.dispatchEvent(new CustomEvent("reit-viz:pending-saved-action"));
+      } else {
+        setLocation(meta.path);
+      }
     }
     onClose();
   }
@@ -184,39 +235,63 @@ export default function CommandPalette({ open, onClose, pages }: CommandPaletteP
           ) : (
             results.map((item, idx) => {
               const isSel = idx === selected;
-              return item.kind === "page" ? (
+              if (item.kind === "screen" || item.kind === "dislocPreset" || item.kind === "pairTemplate") {
+                const Icon = item.kind === "screen" ? Bookmark : item.kind === "dislocPreset" ? Radar : Layers;
+                return (
+                  <button
+                    key={`s-${item.kind}-${item.name}`}
+                    data-idx={idx}
+                    onMouseEnter={() => setSelected(idx)}
+                    onClick={() => activate(item)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
+                      isSel ? "bg-amber-500/15 text-amber-200" : "text-foreground hover:bg-accent"
+                    }`}
+                    data-testid={`cmd-saved-${item.kind}-${item.name}`}
+                  >
+                    <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="flex-1 truncate">{item.name}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{SAVED_META[item.kind].prefix}</span>
+                    {isSel && <CornerDownLeft className="w-3.5 h-3.5 text-amber-400" />}
+                  </button>
+                );
+              }
+              if (item.kind === "page") {
+                return (
+                  <button
+                    key={`p-${item.path}`}
+                    data-idx={idx}
+                    onMouseEnter={() => setSelected(idx)}
+                    onClick={() => activate(item)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
+                      isSel ? "bg-amber-500/15 text-amber-200" : "text-foreground hover:bg-accent"
+                    }`}
+                    data-testid={`cmd-page-${item.path}`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="flex-1">{item.label}</span>
+                    <span className="text-[10px] text-muted-foreground font-mono">{item.path}</span>
+                    {isSel && <CornerDownLeft className="w-3.5 h-3.5 text-amber-400" />}
+                  </button>
+                );
+              }
+              const tk = item as TickerResult;
+              return (
                 <button
-                  key={`p-${item.path}`}
+                  key={`t-${tk.ticker}`}
                   data-idx={idx}
                   onMouseEnter={() => setSelected(idx)}
-                  onClick={() => activate(item)}
+                  onClick={() => activate(tk)}
                   className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
                     isSel ? "bg-amber-500/15 text-amber-200" : "text-foreground hover:bg-accent"
                   }`}
-                  data-testid={`cmd-page-${item.path}`}
-                >
-                  <FileText className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="flex-1">{item.label}</span>
-                  <span className="text-[10px] text-muted-foreground font-mono">{item.path}</span>
-                  {isSel && <CornerDownLeft className="w-3.5 h-3.5 text-amber-400" />}
-                </button>
-              ) : (
-                <button
-                  key={`t-${item.ticker}`}
-                  data-idx={idx}
-                  onMouseEnter={() => setSelected(idx)}
-                  onClick={() => activate(item)}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors ${
-                    isSel ? "bg-amber-500/15 text-amber-200" : "text-foreground hover:bg-accent"
-                  }`}
-                  data-testid={`cmd-ticker-${item.ticker}`}
+                  data-testid={`cmd-ticker-${tk.ticker}`}
                 >
                   <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="font-mono font-semibold w-16">{item.ticker}</span>
-                  <span className="flex-1 truncate text-muted-foreground">{item.name}</span>
-                  {item.sector && (
+                  <span className="font-mono font-semibold w-16">{tk.ticker}</span>
+                  <span className="flex-1 truncate text-muted-foreground">{tk.name}</span>
+                  {tk.sector && (
                     <span className="text-[10px] text-muted-foreground/70 truncate max-w-[120px]">
-                      {item.sector}
+                      {tk.sector}
                     </span>
                   )}
                   {isSel && <CornerDownLeft className="w-3.5 h-3.5 text-amber-400" />}

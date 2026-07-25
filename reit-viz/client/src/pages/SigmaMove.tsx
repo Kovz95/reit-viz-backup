@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/SigmaMove-BeLjHH1_.js on 2026-06-11
 import React from "react";
+import { PagePresets } from "@/components/PagePresets";
 import { useAppContext } from "@/lib/appContext";
 import { useAppStatus } from "@/lib/appStatus";
 import fetchMetricSeriesBatch from "@/lib/fetchMetricSeriesBatch";
@@ -1703,6 +1704,24 @@ export default function SigmaMove() {
       <div className="border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3 flex-wrap">
           {/* Title */}
+          <PagePresets
+            storageKey="reit-viz:sigma-move:presets"
+            capture={() => ({
+              lookbackDays, horizonN, mode, freq, periodWindow, distLookback, showDistributions,
+              classFilters: serializeClassFilters(classFilters),
+            })}
+            apply={(cfg) => {
+              if (typeof cfg?.lookbackDays === "number") setLookbackDays(cfg.lookbackDays);
+              if (typeof cfg?.horizonN === "number") setHorizonN(cfg.horizonN);
+              if (cfg?.mode === "live" || cfg?.mode === "earnings" || cfg?.mode === "period") setMode(cfg.mode);
+              if (cfg?.freq === "daily" || cfg?.freq === "weekly" || cfg?.freq === "monthly") setFreq(cfg.freq);
+              if (typeof cfg?.periodWindow === "number") setPeriodWindow(cfg.periodWindow);
+              if (typeof cfg?.distLookback === "number") setDistLookback(cfg.distLookback);
+              if (typeof cfg?.showDistributions === "boolean") setShowDistributions(cfg.showDistributions);
+              if (cfg?.classFilters) setClassFilters(deserializeClassFilters(cfg.classFilters));
+            }}
+            testIdPrefix="sigma-presets"
+          />
           <div className="flex flex-col">
             <h1 className="text-sm font-bold uppercase tracking-wider">Sigma Snapshot</h1>
             <span className="text-[10px] text-muted-foreground">

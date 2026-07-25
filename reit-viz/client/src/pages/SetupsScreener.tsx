@@ -28,6 +28,7 @@ import {
 } from "@/lib/similarSetupsAlgorithms";
 import { Play as PlayIcon } from "@/lib/icons";
 import { Sparkles, Zap, Loader2, X, AlertCircle, SortAsc, SortDesc } from "lucide-react";
+import { PagePresets } from "@/components/PagePresets";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -659,6 +660,26 @@ export default function SetupsScreener() {
         <h1 className="text-sm font-mono font-semibold text-foreground">
           Setups Screener · <span className="text-amber-300">{universeLabelText}</span>
         </h1>
+        <PagePresets
+          storageKey="reit-viz:setups-screener:presets"
+          capture={() => ({
+            universeMode, algo, selectedHorizon,
+            enabledFeatures: [...enabledFeatures],
+            consensusPresets: [...consensusPresets],
+            classFilters: serializeClassFilters(classFilters),
+            manualTickers: [...manualTickers],
+          })}
+          apply={(cfg) => {
+            if (typeof cfg?.universeMode === "string") setUniverseMode(cfg.universeMode as UniverseMode);
+            if (typeof cfg?.algo === "string") setAlgo(cfg.algo as AlgoKey);
+            if (typeof cfg?.selectedHorizon === "string") setSelectedHorizon(cfg.selectedHorizon as Horizon);
+            if (Array.isArray(cfg?.enabledFeatures)) setEnabledFeatures(new Set(cfg.enabledFeatures));
+            if (Array.isArray(cfg?.consensusPresets)) setConsensusPresets(new Set(cfg.consensusPresets));
+            if (cfg?.classFilters) setClassFilters(deserializeClassFilters(cfg.classFilters));
+            if (Array.isArray(cfg?.manualTickers)) setManualTickers(new Set(cfg.manualTickers));
+          }}
+          testIdPrefix="setups-presets"
+        />
         {isRunning && (
           <span className="text-[10px] font-mono text-muted-foreground flex items-center gap-1">
             <Loader2 className="w-3 h-3 animate-spin" />{progress.done}/{progress.total}

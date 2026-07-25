@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
+import { PENDING_DISLOC_PRESET_KEY, PENDING_PAIR_TEMPLATE_KEY } from "@/components/CommandPalette";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { fetchMacroCatalog } from "@/lib/macroStatic";
@@ -903,6 +904,19 @@ function DislocationScanPanel({
       return next;
     });
   }, []);
+
+  // Consume a command-palette hand-off: apply the named preset once the list
+  // (server hydration included) contains it.
+  useEffect(() => {
+    let name: string | null = null;
+    try { name = sessionStorage.getItem(PENDING_DISLOC_PRESET_KEY); } catch {}
+    if (!name) return;
+    const p = presets.find((x) => x.name === name);
+    if (p) {
+      try { sessionStorage.removeItem(PENDING_DISLOC_PRESET_KEY); } catch {}
+      applyPreset(p);
+    }
+  }, [presets, applyPreset]);
 
   const classOptions = useMemo(() => {
     const opts: Record<string, Set<string>> = {};
@@ -3005,6 +3019,39 @@ export default function Correlation() {
       return next;
     });
   }, []);
+
+  // ── Command-palette hand-offs ──
+  // A pending disloc preset lands on the Disloc tab (the panel applies it once
+  // its presets hydrate); re-assert after the late workspace restore, which can
+  // flip the active tab back a few seconds after load.
+  useEffect(() => {
+    const check = () => {
+      try {
+        if (sessionStorage.getItem(PENDING_DISLOC_PRESET_KEY)) setActiveTab("dislocations");
+      } catch {}
+    };
+    check();
+    const t = setTimeout(check, 8000);
+    window.addEventListener("reit-viz:pending-saved-action", check);
+    return () => { clearTimeout(t); window.removeEventListener("reit-viz:pending-saved-action", check); };
+  }, []);
+  // A pending pair template applies once templates hydrate (applyPairTemplate
+  // itself switches to the Pairwise tab and keeps the current tickers).
+  useEffect(() => {
+    const tryApply = () => {
+      let name: string | null = null;
+      try { name = sessionStorage.getItem(PENDING_PAIR_TEMPLATE_KEY); } catch {}
+      if (!name) return;
+      const tpl = pairTemplates.find((x) => x.name === name);
+      if (tpl) {
+        try { sessionStorage.removeItem(PENDING_PAIR_TEMPLATE_KEY); } catch {}
+        applyPairTemplate(tpl);
+      }
+    };
+    tryApply();
+    window.addEventListener("reit-viz:pending-saved-action", tryApply);
+    return () => window.removeEventListener("reit-viz:pending-saved-action", tryApply);
+  }, [pairTemplates, applyPairTemplate]);
 
   // Open a scanned dislocation pair on the Pairwise tab with the TF Divergence panel up.
   const pinFromDisloc = useCallback((a: string, b: string) => {

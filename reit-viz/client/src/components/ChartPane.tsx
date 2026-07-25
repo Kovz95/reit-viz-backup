@@ -3811,9 +3811,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   useEffect(() => {
     if (!chartRef.current || !containerRef.current) return;
     const resize = () => {
-      const { width, height } = containerRef.current!.getBoundingClientRect();
+      // The deferred timeouts below can fire after unmount (fast page
+      // navigation) — both refs may already be null.
+      if (!containerRef.current || !chartRef.current) return;
+      const { width, height } = containerRef.current.getBoundingClientRect();
       if (width > 0 && height > 0) {
-        chartRef.current!.applyOptions({ width, height });
+        chartRef.current.applyOptions({ width, height });
       }
     };
     const t1 = setTimeout(resize, 0);

@@ -4,6 +4,7 @@
 
 import { useState, useCallback, useContext, createContext, useEffect } from "react";
 import type { ReactNode } from "react";
+import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 
 // All optimizer kinds present in production — must include the recently-deployed additions.
 export type OptimizerKind =
@@ -126,7 +127,32 @@ function saveKind(kind: string, presets: Preset[]): void {
   } catch {
     // ignore
   }
+  // Server-sync: mirror the whole per-kind store to the prefs KV so optimizer
+  // presets follow the user across computers (per-kind localStorage = cache).
+  try { saveServerPref(SERVER_KEY, loadStore()); } catch { /* offline */ }
 }
+
+const SERVER_KEY = "reit-viz:optimizer-presets";
+let serverHydrateStarted = false;
+async function hydrateFromServer(): Promise<void> {
+  if (typeof window === "undefined" || serverHydrateStarted) return;
+  serverHydrateStarted = true;
+  const srv = await loadServerPref<Record<string, Preset[]>>(SERVER_KEY);
+  if (srv && typeof srv === "object" && !Array.isArray(srv)) {
+    let any = false;
+    for (const k of STORE_KEYS) {
+      if (Array.isArray(srv[k])) {
+        try { window.localStorage.setItem(storageKey(k), JSON.stringify(srv[k])); any = true; } catch {}
+      }
+    }
+    if (any) window.dispatchEvent(new CustomEvent("reit-viz:optimizer-presets:changed", { detail: { kind: "*" } }));
+  } else {
+    // Server empty: seed it from whatever this browser already holds.
+    const local = loadStore();
+    if (STORE_KEYS.some((k) => (local[k] ?? []).length > 0)) saveServerPref(SERVER_KEY, local);
+  }
+}
+if (typeof window !== "undefined") void hydrateFromServer();
 
 // ── Context ────────────────────────────────────────────────────────────────
 

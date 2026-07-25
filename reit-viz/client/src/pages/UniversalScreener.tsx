@@ -23,6 +23,7 @@ import { useGeoFilter } from "@/lib/useGeoFilter";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
+import { PENDING_SCREEN_KEY } from "@/components/CommandPalette";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { formatHitRate, hitRateColorClass, HORIZONS } from "@/lib/signalUtils";
@@ -348,6 +349,24 @@ export default function UniversalScreener() {
       return next;
     });
   }, []);
+
+  // Consume a command-palette hand-off: apply the named screen once the saved
+  // list (server hydration included) contains it. Key survives until matched.
+  useEffect(() => {
+    const tryApply = () => {
+      let name: string | null = null;
+      try { name = sessionStorage.getItem(PENDING_SCREEN_KEY); } catch {}
+      if (!name) return;
+      const s = savedScreens.find((x) => x.name === name);
+      if (s) {
+        try { sessionStorage.removeItem(PENDING_SCREEN_KEY); } catch {}
+        applyScreen(s);
+      }
+    };
+    tryApply();
+    window.addEventListener("reit-viz:pending-saved-action", tryApply);
+    return () => window.removeEventListener("reit-viz:pending-saved-action", tryApply);
+  }, [savedScreens, applyScreen]);
 
   // ── Run state ──────────────────────────────────────────────────────────────
   const [isRunning, setIsRunning] = useState(false);
