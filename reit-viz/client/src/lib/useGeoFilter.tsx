@@ -30,6 +30,9 @@ export interface GeoFilterResult {
   /** True while the geo map is still loading. */
   loading: boolean;
   state: { nations: Set<string>; exchanges: Set<string> };
+  /** Programmatic restore (e.g. applying a saved screen). */
+  setNations: (n: Set<string>) => void;
+  setExchanges: (e: Set<string>) => void;
 }
 
 /**
@@ -109,5 +112,5 @@ export function useGeoFilter(
     </>
   );
 
-  return { filterByGeo, matchesGeo, geoFilterUI, hasActiveGeo, reset, loading, state: { nations, exchanges } };
+  return { filterByGeo, matchesGeo, geoFilterUI, hasActiveGeo, reset, loading, state: { nations, exchanges }, setNations, setExchanges };
 }

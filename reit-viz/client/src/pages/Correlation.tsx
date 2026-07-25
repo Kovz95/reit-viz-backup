@@ -746,6 +746,38 @@ function zColor(z: number): string {
   return "#94a3b8";
 }
 
+// ── Disloc scan presets: named snapshots of the scanner configuration ──
+interface DislocPreset {
+  id: string;
+  name: string;
+  mode: ScanMode;
+  scope: "universe" | "basket";
+  basketId: string;
+  window_: string;
+  zTh: string;
+  anchorTh: string;
+  minBase: string;
+  clsFilters: Record<string, string[]>;
+  nations: string[];
+  exchanges: string[];
+}
+const DISLOC_PRESETS_KEY = "reit-viz:disloc-scan-presets";
+const DISLOC_LAST_KEY = "reit-viz:disloc-last-config";
+function loadDislocPresets(): DislocPreset[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DISLOC_PRESETS_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+function persistDislocPresets(list: DislocPreset[]): void {
+  try { localStorage.setItem(DISLOC_PRESETS_KEY, JSON.stringify(list)); } catch {}
+}
+function loadDislocLast(): Partial<DislocPreset> | null {
+  try { return JSON.parse(localStorage.getItem(DISLOC_LAST_KEY) || "null"); } catch { return null; }
+}
+
 const SCAN_MODES: { value: ScanMode; label: string; title: string }[] = [
   { value: "crossTF", label: "Cross-TF", title: "One timeframe broken while another stays in line (1H/D/W)" },
   { value: "breakdown", label: "Breakdown", title: "Typically-correlated pairs whose daily correlation collapsed and is still falling" },
@@ -769,13 +801,17 @@ function DislocationScanPanel({
   exchangeOf: (t: string) => string | null;
   onPin: (a: string, b: string) => void;
 }) {
-  const [scope, setScope] = useState<"universe" | "basket">("universe");
-  const [basketId, setBasketId] = useState("");
-  const [mode, setMode] = useState<ScanMode>("crossTF");
-  const [window_, setWindow_] = useState("60");
-  const [zTh, setZTh] = useState("1.5");
-  const [anchorTh, setAnchorTh] = useState("0.75");
-  const [minBase, setMinBase] = useState("0.3");
+  // Restore the last-used configuration — scan setups shouldn't evaporate on navigation.
+  const last = useMemo(() => loadDislocLast(), []);
+  const [scope, setScope] = useState<"universe" | "basket">(last?.scope === "basket" ? "basket" : "universe");
+  const [basketId, setBasketId] = useState(typeof last?.basketId === "string" ? last.basketId : "");
+  const [mode, setMode] = useState<ScanMode>(
+    ["crossTF", "breakdown", "spreadZ", "recoupling", "idio"].includes(last?.mode as string) ? (last!.mode as ScanMode) : "crossTF"
+  );
+  const [window_, setWindow_] = useState(typeof last?.window_ === "string" ? last.window_ : "60");
+  const [zTh, setZTh] = useState(typeof last?.zTh === "string" ? last.zTh : "1.5");
+  const [anchorTh, setAnchorTh] = useState(typeof last?.anchorTh === "string" ? last.anchorTh : "0.75");
+  const [minBase, setMinBase] = useState(typeof last?.minBase === "string" ? last.minBase : "0.3");
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; phase: string } | null>(null);
   const [result, setResult] = useState<DislocationScanResult | null>(null);
@@ -784,9 +820,55 @@ function DislocationScanPanel({
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Scope filters (same 8 dropdowns as everywhere else) ──
-  const [clsFilters, setClsFilters] = useState<ClassFilters>(() => emptyClassFilters());
-  const [fltNations, setFltNations] = useState<Set<string>>(new Set());
-  const [fltExchanges, setFltExchanges] = useState<Set<string>>(new Set());
+  const [clsFilters, setClsFilters] = useState<ClassFilters>(() =>
+    last?.clsFilters ? deserializeClassFilters(last.clsFilters) : emptyClassFilters()
+  );
+  const [fltNations, setFltNations] = useState<Set<string>>(new Set(Array.isArray(last?.nations) ? last!.nations : []));
+  const [fltExchanges, setFltExchanges] = useState<Set<string>>(new Set(Array.isArray(last?.exchanges) ? last!.exchanges : []));
+
+  // Persist the live configuration (and feed the named presets)
+  const currentConfig = useCallback((): Omit<DislocPreset, "id" | "name"> => ({
+    mode, scope, basketId, window_, zTh, anchorTh, minBase,
+    clsFilters: serializeClassFilters(clsFilters),
+    nations: Array.from(fltNations),
+    exchanges: Array.from(fltExchanges),
+  }), [mode, scope, basketId, window_, zTh, anchorTh, minBase, clsFilters, fltNations, fltExchanges]);
+  useEffect(() => {
+    try { localStorage.setItem(DISLOC_LAST_KEY, JSON.stringify(currentConfig())); } catch {}
+  }, [currentConfig]);
+
+  // ── Named presets ──
+  const [presets, setPresets] = useState<DislocPreset[]>(() => loadDislocPresets());
+  const [presetName, setPresetName] = useState("");
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const savePreset = useCallback(() => {
+    const name = presetName.trim() || `Preset ${presets.length + 1}`;
+    const p: DislocPreset = { id: `dp-${Date.now()}`, name, ...currentConfig() };
+    const next = [...presets.filter((x) => x.name !== name), p];
+    setPresets(next);
+    persistDislocPresets(next);
+    setPresetName("");
+  }, [presetName, presets, currentConfig]);
+  const applyPreset = useCallback((p: DislocPreset) => {
+    if (["crossTF", "breakdown", "spreadZ", "recoupling", "idio"].includes(p.mode)) setMode(p.mode);
+    setScope(p.scope === "basket" ? "basket" : "universe");
+    if (typeof p.basketId === "string") setBasketId(p.basketId);
+    if (typeof p.window_ === "string") setWindow_(p.window_);
+    if (typeof p.zTh === "string") setZTh(p.zTh);
+    if (typeof p.anchorTh === "string") setAnchorTh(p.anchorTh);
+    if (typeof p.minBase === "string") setMinBase(p.minBase);
+    setClsFilters(deserializeClassFilters(p.clsFilters));
+    setFltNations(new Set(Array.isArray(p.nations) ? p.nations : []));
+    setFltExchanges(new Set(Array.isArray(p.exchanges) ? p.exchanges : []));
+    setPresetsOpen(false);
+  }, []);
+  const deletePreset = useCallback((id: string) => {
+    setPresets((prev) => {
+      const next = prev.filter((x) => x.id !== id);
+      persistDislocPresets(next);
+      return next;
+    });
+  }, []);
 
   const classOptions = useMemo(() => {
     const opts: Record<string, Set<string>> = {};
@@ -1038,6 +1120,61 @@ function DislocationScanPanel({
         </div>
 
         <div className="flex gap-2 items-end">
+          {/* Named scan presets */}
+          <Popover open={presetsOpen} onOpenChange={setPresetsOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" data-testid="disloc-presets"
+                title="Save / apply named scan configurations (mode, thresholds, scope filters)">
+                <Pin className="w-3 h-3" />
+                Presets{presets.length ? ` (${presets.length})` : ""}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-2 space-y-1.5" align="start">
+              <div className="flex items-center gap-1">
+                <Input
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") savePreset(); }}
+                  placeholder="Preset name…"
+                  className="h-6 text-[11px] flex-1 px-1.5"
+                  data-testid="disloc-preset-name"
+                />
+                <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={savePreset} data-testid="disloc-preset-save">
+                  Save
+                </Button>
+              </div>
+              {presets.length === 0 ? (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  Saves the mode, thresholds, window and scope filters. The panel also remembers
+                  its last configuration automatically.
+                </div>
+              ) : (
+                <div className="space-y-0.5 max-h-56 overflow-y-auto">
+                  {presets.map((p) => (
+                    <div key={p.id} className="flex items-center gap-1 px-1 py-0.5 rounded hover:bg-accent group text-[11px]">
+                      <button
+                        className="flex-1 text-left truncate hover:text-primary font-mono"
+                        onClick={() => applyPreset(p)}
+                        data-testid={`disloc-preset-apply-${p.name.replace(/\s+/g, "-")}`}
+                        title={`${p.mode} · z≥${p.zTh} · window ${p.window_}`}
+                      >
+                        {p.name}
+                      </button>
+                      <span className="text-[9px] text-muted-foreground/50">{SCAN_MODES.find((m) => m.value === p.mode)?.label ?? p.mode}</span>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-destructive"
+                        onClick={() => deletePreset(p.id)}
+                        data-testid={`disloc-preset-delete-${p.name.replace(/\s+/g, "-")}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+
           <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={runScan}
             disabled={!scanning && scopeTickers.length < 2} data-testid="run-disloc-scan">
             {scanning ? (<><X className="w-3 h-3" /> Cancel</>) : (<><Play className="w-3 h-3" /> Scan Dislocations</>)}

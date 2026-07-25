@@ -43,7 +43,7 @@ import {
   type SweepLibrary,
 } from "@/lib/universalScreenerCache";
 import { emitChartSignals } from "@/lib/chartBridge";
-import { Play, Loader2, Flame, LineChart, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { Play, Loader2, Flame, LineChart, ExternalLink, ChevronDown, ChevronRight, Bookmark } from "lucide-react";
 
 type UniverseMode = "all" | "classification" | "basket" | "global";
 
@@ -55,6 +55,38 @@ interface TickerRow {
 const CLASSIFICATION_DIMS = ["sector", "industry", "subindustry", "subsector", "supersector"];
 const SETTINGS_KEY = "reit-viz:universal-screener:settings";
 const CLASS_FILTERS_KEY = "reit-viz:universal-screener:class-filters";
+const SAVED_SCREENS_KEY = "reit-viz:universal-screener:saved-screens";
+
+// A named snapshot of the WHOLE screen configuration: universe scope, every
+// filter, and all sweep settings — apply restores everything in one click.
+interface SavedScreen {
+  id: string;
+  name: string;
+  settings: SweepSettings;
+  universeMode: UniverseMode;
+  classifyDim: string;
+  classifyVal: string;
+  basketId: string;
+  globalDim: string;
+  globalDimVal: string;
+  classFilters: Record<string, string[]>;
+  classSearch: string;
+  manualTickers: string[];
+  geoNations: string[];
+  geoExchanges: string[];
+}
+
+function loadSavedScreens(): SavedScreen[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SAVED_SCREENS_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+function persistSavedScreens(list: SavedScreen[]): void {
+  try { localStorage.setItem(SAVED_SCREENS_KEY, JSON.stringify(list)); } catch {}
+}
 
 // signalId → optimizer drill-through route (module-level: the catalog is
 // static, and the actions cell renders per row per frame).
@@ -247,6 +279,62 @@ export default function UniversalScreener() {
       .slice(0, settings.maxPairs)
       .map((r) => [r.tickerA, r.tickerB] as [string, string]);
   }, [universeTickers, settings.maxPairs]);
+
+  // ── Saved screens (named full-config snapshots) ────────────────────────────
+  const [savedScreens, setSavedScreens] = useState<SavedScreen[]>(() => loadSavedScreens());
+  const [screenName, setScreenName] = useState("");
+  const [screensOpen, setScreensOpen] = useState(false);
+  const screensRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (screensRef.current && !screensRef.current.contains(e.target as Node)) setScreensOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  const saveScreen = useCallback(() => {
+    const name = screenName.trim() || `Screen ${savedScreens.length + 1}`;
+    const snap: SavedScreen = {
+      id: `scr-${Date.now()}`,
+      name,
+      settings,
+      universeMode, classifyDim, classifyVal, basketId, globalDim, globalDimVal,
+      classFilters: serializeClassFilters(classFilters),
+      classSearch,
+      manualTickers: Array.from(manualTickers),
+      geoNations: Array.from(geo.state.nations),
+      geoExchanges: Array.from(geo.state.exchanges),
+    };
+    const next = [...savedScreens.filter((s) => s.name !== name), snap];
+    setSavedScreens(next);
+    persistSavedScreens(next);
+    setScreenName("");
+  }, [screenName, savedScreens, settings, universeMode, classifyDim, classifyVal, basketId, globalDim, globalDimVal, classFilters, classSearch, manualTickers, geo.state.nations, geo.state.exchanges]);
+
+  const applyScreen = useCallback((s: SavedScreen) => {
+    setSettings({ ...DEFAULT_SWEEP_SETTINGS, ...s.settings });
+    setUniverseMode(s.universeMode);
+    setClassifyDim(s.classifyDim);
+    setClassifyVal(s.classifyVal);
+    setBasketId(s.basketId);
+    setGlobalDim(s.globalDim);
+    setGlobalDimVal(s.globalDimVal);
+    setClassFilters(deserializeClassFilters(s.classFilters));
+    setClassSearch(s.classSearch ?? "");
+    setManualTickers(new Set(Array.isArray(s.manualTickers) ? s.manualTickers : []));
+    geo.setNations(new Set(Array.isArray(s.geoNations) ? s.geoNations : []));
+    geo.setExchanges(new Set(Array.isArray(s.geoExchanges) ? s.geoExchanges : []));
+    setScreensOpen(false);
+  }, [geo]);
+
+  const deleteScreen = useCallback((id: string) => {
+    setSavedScreens((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      persistSavedScreens(next);
+      return next;
+    });
+  }, []);
 
   // ── Run state ──────────────────────────────────────────────────────────────
   const [isRunning, setIsRunning] = useState(false);
@@ -717,6 +805,72 @@ export default function UniversalScreener() {
               )}
             </>
           )}
+
+          {/* Saved screens — one-click full-config recall */}
+          <div className="relative" ref={screensRef}>
+            <button
+              type="button"
+              onClick={() => setScreensOpen((v) => !v)}
+              data-testid="uhs-screens"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border border-border text-muted-foreground hover:text-foreground"
+              title="Save / apply named screen configurations"
+            >
+              <Bookmark className="w-3 h-3" />
+              Screens{savedScreens.length ? ` (${savedScreens.length})` : ""}
+            </button>
+            {screensOpen && (
+              <div className="absolute right-0 z-50 mt-1 w-72 rounded-md border border-border bg-popover shadow-lg p-2 space-y-1.5" data-testid="uhs-screens-panel">
+                <div className="flex items-center gap-1">
+                  <input
+                    value={screenName}
+                    onChange={(e) => setScreenName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") saveScreen(); }}
+                    placeholder="Screen name…"
+                    className="flex-1 h-6 px-1.5 text-[11px] bg-background border border-border rounded focus:outline-none focus:ring-1 focus:ring-primary"
+                    data-testid="uhs-screen-name"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveScreen}
+                    className="h-6 px-2 text-[10px] rounded border border-border hover:bg-accent"
+                    data-testid="uhs-screen-save"
+                  >
+                    Save
+                  </button>
+                </div>
+                {savedScreens.length === 0 ? (
+                  <div className="text-[9px] text-muted-foreground leading-snug">
+                    Saves the whole configuration — universe scope, every filter, signal families,
+                    thresholds, horizon. Apply restores it all in one click.
+                  </div>
+                ) : (
+                  <div className="space-y-0.5 max-h-56 overflow-y-auto">
+                    {savedScreens.map((s) => (
+                      <div key={s.id} className="flex items-center gap-1 px-1 py-0.5 rounded hover:bg-accent group text-[11px]">
+                        <button
+                          type="button"
+                          className="flex-1 text-left truncate hover:text-primary font-mono"
+                          onClick={() => applyScreen(s)}
+                          data-testid={`uhs-screen-apply-${s.name.replace(/\s+/g, "-")}`}
+                          title={`${s.universeMode} · ${s.settings?.mode ?? ""} · ${(s.settings?.families ?? []).join("/")}`}
+                        >
+                          {s.name}
+                        </button>
+                        <button
+                          type="button"
+                          className="opacity-0 group-hover:opacity-100 p-0.5 text-destructive"
+                          onClick={() => deleteScreen(s.id)}
+                          data-testid={`uhs-screen-delete-${s.name.replace(/\s+/g, "-")}`}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
