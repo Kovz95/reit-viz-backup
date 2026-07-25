@@ -3,6 +3,34 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
+import type { ActiveIndicators } from "@/components/ChartPane";
+import { getIndicatorDef } from "@/lib/indicatorRegistry";
+
+/** Compact badge labels for a pane's enabled indicators (Current Layout list). */
+function indicatorBadgeLabels(ind?: ActiveIndicators): string[] {
+  if (!ind) return [];
+  const out: string[] = [];
+  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"]) {
+    const v = (ind as any)[k];
+    if (num(v)) out.push(`${k.toUpperCase()} ${v}`);
+  }
+  if (num(ind.rsi)) out.push(`RSI ${ind.rsi}`);
+  if ((ind as any).macd) out.push("MACD");
+  if (ind.bollinger) out.push(`BB ${ind.bollinger.period}`);
+  if (num((ind as any).atr)) out.push(`ATR ${(ind as any).atr}`);
+  if (num((ind as any).roc)) out.push(`ROC ${(ind as any).roc}`);
+  if (ind.stochastic) out.push(`Stoch ${ind.stochastic.kPeriod}`);
+  if ((ind as any).heikinAshi) out.push("HA");
+  if (ind.mean) out.push(ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean");
+  if ((ind as any).vwap) out.push("VWAP");
+  if (ind.fractalLines) out.push("Fractals");
+  for (const [id, st] of Object.entries(ind.registry ?? {})) {
+    if (!st?.enabled) continue;
+    out.push(getIndicatorDef(id)?.label ?? id);
+  }
+  return out;
+}
 import { getMetricSeries, computeFormula } from "@/lib/dataService";
 import { fetchCloseSeries } from "@/lib/fetchCloseSeries";
 import {
@@ -104,6 +132,8 @@ interface MacroSeriesMeta {
 interface SidebarProps {
   tickers: TickerMeta[];
   plottedSeries: PlottedSeries[];
+  /** Per-pane indicator state — shown as badges under each pane in Current Layout. */
+  indicatorsMap?: Record<number, ActiveIndicators>;
   panes: PaneInfo[];
   activeTicker: string | null;
   onSetActiveTicker: (t: string | null) => void;
@@ -163,6 +193,7 @@ function groupByClassification(tickers: TickerMeta[], field: ClassificationKey) 
 export default function Sidebar({
   tickers,
   plottedSeries,
+  indicatorsMap,
   panes,
   activeTicker,
   onSetActiveTicker,
@@ -1488,6 +1519,19 @@ export default function Sidebar({
                           <X className="w-3 h-3" />
                         </Button>
                       </div>
+                      {/* Active indicators on this pane */}
+                      {(() => {
+                        const badges = indicatorBadgeLabels(indicatorsMap?.[pane.id]);
+                        return badges.length > 0 ? (
+                          <div className="flex flex-wrap gap-0.5 pl-4 pb-0.5" data-testid={`layout-indicators-${pane.id}`}>
+                            {badges.map((b) => (
+                              <span key={b} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
+                                {b}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
                       {(seriesByPane[pane.id] || []).map((s) => (
                         <div
                           key={s.id}

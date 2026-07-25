@@ -439,6 +439,21 @@ export function RegistryIndicatorControls({
                 </div>
                 {enabled && def.params.length > 0 && (
                   <div className="flex flex-wrap gap-x-2 gap-y-1 items-center pl-0.5">
+                    {/* Per-indicator compute frequency (weekly/monthly resample) */}
+                    <div className="flex items-center gap-1">
+                      <span className="text-[9px] text-muted-foreground/70">Freq</span>
+                      <select
+                        className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                        value={st?.freq ?? "chart"}
+                        onChange={(e) => update(def.id, { freq: e.target.value as RegistryIndicatorState["freq"] })}
+                        title="Compute this indicator on the chart's bars, or on weekly/monthly resampled bars (e.g. weekly RSI on a daily chart)"
+                        data-testid={`freq-${def.id}`}
+                      >
+                        <option value="chart">Chart</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </div>
                     {def.params.map((pr) => (
                       <div key={pr.key} className="flex items-center gap-1">
                         <span className="text-[9px] text-muted-foreground/70">{pr.label}</span>
@@ -855,6 +870,17 @@ export default function IndicatorsPanel({
                 }}
                 data-testid="custom-rsi"
               />
+              <select
+                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                value={activeIndicators.rsiFreq ?? "chart"}
+                onChange={(e) => setActiveIndicators({ ...activeIndicators, rsiFreq: e.target.value as any })}
+                title="Compute RSI on the chart's bars, or on weekly/monthly resampled closes (weekly RSI on a daily chart)"
+                data-testid="freq-rsi"
+              >
+                <option value="chart">Chart</option>
+                <option value="weekly">W</option>
+                <option value="monthly">M</option>
+              </select>
             </div>
           </div>
 

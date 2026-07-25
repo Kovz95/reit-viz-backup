@@ -37,6 +37,7 @@ import {
   OVERLAY_INDICATORS,
   getIndicatorDef,
   resolveParams,
+  resampleIndicatorBars,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
@@ -109,6 +110,9 @@ export interface ActiveIndicators {
   /** Hover lookback-window lines (dashed vline N bars behind the crosshair
    *  per period indicator). Default ON; set false to hide. */
   showLookbackWindow?: boolean;
+  /** RSI compute frequency — weekly/monthly resample the closes first
+   *  (weekly RSI on a daily chart). Default the chart's own bars. */
+  rsiFreq?: "chart" | "weekly" | "monthly";
   sma?: number;
   ema?: number;
   hma?: number;
@@ -426,12 +430,22 @@ function SubIndicatorChart({
     }
 
     if (type === "rsi" && typeof activeIndicators.rsi === "number") {
-      const rsiData = computeRSI(closeData, activeIndicators.rsi);
+      // Optional weekly/monthly compute frequency: resample closes first so a
+      // daily chart can show a weekly RSI (points on period-end dates).
+      const rsiFreq = activeIndicators.rsiFreq;
+      const rsiInput =
+        rsiFreq === "weekly" || rsiFreq === "monthly"
+          ? resampleIndicatorBars(
+              closeData.map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
+              rsiFreq,
+            ).map((b) => ({ time: b.time as unknown as Time, value: b.close }))
+          : closeData;
+      const rsiData = computeRSI(rsiInput as typeof closeData, activeIndicators.rsi);
       if (rsiData.length > 0) {
         const rsiLine = chart.addSeries(LineSeries, {
           color: IC.rsi_line,
           lineWidth: 1,
-          title: `RSI ${activeIndicators.rsi}${baseLabel}`,
+          title: `RSI ${activeIndicators.rsi}${rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : ""}${baseLabel}`,
         });
         rsiLine.setData(rsiData);
         subSeriesList.push(rsiLine);
@@ -633,13 +647,18 @@ function SubIndicatorChart({
     const regDef = getIndicatorDef(type);
     // Close-only indicators still work on panes without real OHLC (ratios,
     // derived series) via synthesized o=h=l=c bars from the primary series.
-    const regBars: OhlcBar[] =
+    let regBars: OhlcBar[] =
       ohlcBars.length > 0
         ? ohlcBars
         : regDef?.worksOnCloseOnly
           ? closeData.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }))
           : [];
     if (regDef?.renderPane && regBars.length > 0) {
+      // Per-indicator compute frequency: resample to weekly/monthly bars first.
+      const regFreq = activeIndicators.registry?.[type]?.freq;
+      if (regFreq === "weekly" || regFreq === "monthly") {
+        regBars = resampleIndicatorBars(regBars, regFreq);
+      }
       const params = resolveParams(regDef, activeIndicators.registry?.[type], frequency);
       regDef.renderPane(
         {
@@ -2854,11 +2873,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         };
         for (const def of OVERLAY_INDICATORS) {
           if (!def.renderOverlay) continue;
-          if (!activeIndicators.registry?.[def.id]?.enabled) continue;
-          const bars = def.worksOnCloseOnly ? closeBars : realBars;
+          const regSt = activeIndicators.registry?.[def.id];
+          if (!regSt?.enabled) continue;
+          let bars = def.worksOnCloseOnly ? closeBars : realBars;
           if (!bars.length) continue;
+          // Per-indicator compute frequency (weekly/monthly resample).
+          if (regSt.freq === "weekly" || regSt.freq === "monthly") {
+            bars = resampleIndicatorBars(bars, regSt.freq);
+          }
           try {
-            def.renderOverlay(octx, bars, resolveParams(def, activeIndicators.registry[def.id], (chartConfig as { frequency?: string }).frequency ?? "daily"));
+            def.renderOverlay(octx, bars, resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily"));
           } catch {
             // Never let one indicator's failure blank the whole chart.
           }

@@ -60,7 +60,42 @@ export type RenderTarget = "pane" | "overlay";
 export type RegistryIndicatorState = {
   enabled?: boolean;
   params?: Record<string, number>;
+  /** Compute frequency: bars are resampled to weekly/monthly before the
+   *  indicator runs (results plot on period-end dates of the chart axis).
+   *  Default "chart" = the pane's own bar frequency. */
+  freq?: "chart" | "weekly" | "monthly";
 };
+
+/** Resample bars to weekly/monthly periods. Each output bar carries the
+ *  period's LAST trading date as its time (so points land on existing chart
+ *  dates, using only data available by that date — no lookahead). */
+export function resampleIndicatorBars(bars: OhlcBar[], freq: "weekly" | "monthly"): OhlcBar[] {
+  const keyOf = (t: string): string => {
+    if (freq === "monthly") return t.slice(0, 7);
+    const d = new Date(t + "T00:00:00Z");
+    const day = (d.getUTCDay() + 6) % 7; // Mon=0
+    d.setUTCDate(d.getUTCDate() - day);
+    return d.toISOString().slice(0, 10); // Monday of the ISO week
+  };
+  const out: OhlcBar[] = [];
+  let cur: OhlcBar | null = null;
+  let key = "";
+  for (const b of bars) {
+    const k = keyOf(b.time);
+    if (k !== key) {
+      if (cur) out.push(cur);
+      cur = { ...b };
+      key = k;
+    } else if (cur) {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.time = b.time;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 type Colors = Record<string, string>;
 

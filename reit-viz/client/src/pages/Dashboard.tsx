@@ -1850,6 +1850,7 @@ export default function Dashboard() {
           tickers={tickers}
           plottedSeries={plottedSeries}
           panes={panes}
+          indicatorsMap={indicatorsMap}
           activeTicker={activeTicker}
           onSetActiveTicker={handleSetActiveTicker}
           onAddSeriesWithMode={addSeriesWithMode}
