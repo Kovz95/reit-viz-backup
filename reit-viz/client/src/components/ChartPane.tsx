@@ -51,6 +51,7 @@ import { Info, Maximize2, Minimize2, Trash2, Rows3 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
+import { LookbackWindowPrimitive, type LookbackEntry } from "@/lib/lookbackWindowPrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
 import { d as detectSRLevels, D as DEFAULT_SR_CFG } from "@/components/SupportResistance";
 import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
@@ -105,6 +106,9 @@ export interface IndicatorOverlay {
 }
 
 export interface ActiveIndicators {
+  /** Hover lookback-window lines (dashed vline N bars behind the crosshair
+   *  per period indicator). Default ON; set false to hide. */
+  showLookbackWindow?: boolean;
   sma?: number;
   ema?: number;
   hma?: number;
@@ -920,6 +924,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const seriesMapRef = useRef<Map<string, ISeriesApi<any>>>(new Map());
   const { colors: IC, widths: IC_W, styles: IC_S, opacities: IC_O, gradients: IC_G } = useIndicatorColors();
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
+  // Hover lookback-window primitive. The main series persists across
+  // indicator re-renders, so the primitive must be explicitly detached from
+  // its anchor before each re-render (unlike overlay-series primitives that
+  // die with their series).
+  const lookbackPrimRef = useRef<LookbackWindowPrimitive | null>(null);
+  const lookbackAnchorRef = useRef<ISeriesApi<any> | null>(null);
   // Geometry of the fractal indicator lines (resistance/support), kept alongside
   // indicatorSeriesRef so right-click can hit-test them — they're indicator
   // overlays, not drawings, so pickDrawingAt/the eraser can't see them.
@@ -1411,6 +1421,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       onChartReady?.(paneId, chart);
 
       chart.subscribeCrosshairMove((param: any) => {
+        lookbackPrimRef.current?.setHover(
+          param.time && param.logical != null ? Number(param.logical) : null,
+        );
         if (!param.time || !param.seriesData) {
           onCrosshairMoveRef.current?.(null);
           applyLocalReadout(null, null);
@@ -2849,6 +2862,49 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           } catch {
             // Never let one indicator's failure blank the whole chart.
           }
+        }
+      }
+
+      // ── Hover lookback-window lines (dashed vline N bars behind the
+      // crosshair per period indicator, so the compute window is visible) ──
+      if (lookbackPrimRef.current && lookbackAnchorRef.current) {
+        try {
+          (lookbackAnchorRef.current as unknown as { detachPrimitive: (p: unknown) => void }).detachPrimitive(lookbackPrimRef.current);
+        } catch {}
+      }
+      lookbackPrimRef.current = null;
+      lookbackAnchorRef.current = null;
+      if (activeIndicators.showLookbackWindow !== false) {
+        const lbEntries: LookbackEntry[] = [];
+        const pushLb = (bars: unknown, color: string, label: string) => {
+          if (typeof bars === "number" && Number.isFinite(bars) && bars > 1) {
+            lbEntries.push({ bars: Math.round(bars), color, label });
+          }
+        };
+        for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
+          pushLb((activeIndicators as any)[k], (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
+        }
+        pushLb(typeof activeIndicators.rsi === "number" ? activeIndicators.rsi : undefined, (IC as any).rsi ?? "#a855f7", "RSI");
+        pushLb(activeIndicators.bollinger?.period, (IC as any).bollinger_basis ?? "#f59e0b", "BB");
+        pushLb(typeof activeIndicators.atr === "number" ? activeIndicators.atr : undefined, (IC as any).atr ?? "#f59e0b", "ATR");
+        pushLb(typeof activeIndicators.roc === "number" ? activeIndicators.roc : undefined, (IC as any).roc ?? "#38bdf8", "ROC");
+        pushLb(activeIndicators.stochastic?.kPeriod, (IC as any).stoch_k ?? "#22c55e", "Stoch");
+        if (activeIndicators.mean?.rolling) pushLb(activeIndicators.mean.period, (IC as any).mean ?? "#94a3b8", "Mean");
+        for (const [regId, st] of Object.entries(activeIndicators.registry ?? {})) {
+          if (!st?.enabled) continue;
+          const def = getIndicatorDef(regId);
+          if (!def) continue;
+          const p = resolveParams(def, st, (chartConfig as { frequency?: string }).frequency ?? "daily");
+          const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
+          if (barsKey) pushLb(p[barsKey], (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
+        }
+        const lbAnchor = seriesMapRef.current.values().next().value;
+        if (lbEntries.length > 0 && lbAnchor) {
+          const prim = new LookbackWindowPrimitive();
+          (lbAnchor as unknown as { attachPrimitive: (p: unknown) => void }).attachPrimitive(prim);
+          prim.setEntries(lbEntries);
+          lookbackPrimRef.current = prim;
+          lookbackAnchorRef.current = lbAnchor;
         }
       }
 

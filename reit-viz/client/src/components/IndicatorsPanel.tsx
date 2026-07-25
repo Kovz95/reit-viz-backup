@@ -655,6 +655,20 @@ export default function IndicatorsPanel({
       )}
 
       <div className="p-3 space-y-4">
+        {/* Hover lookback-window lines */}
+        <label
+          className="flex items-center gap-2 cursor-pointer select-none"
+          title="While hovering, draw a dashed line N bars behind the crosshair for every period indicator (RSI 14 shows the 14-bar window feeding the value under the cursor)"
+        >
+          <Switch
+            checked={activeIndicators.showLookbackWindow !== false}
+            onCheckedChange={(on) => setActiveIndicators({ ...activeIndicators, showLookbackWindow: on ? undefined : false })}
+            className="scale-90"
+            data-testid="toggle-lookback-window"
+          />
+          <span className="text-[10px] text-muted-foreground">Lookback window lines on hover</span>
+        </label>
+
         {/* ───── Indicator Sets ───── */}
         <SectionHeader
           title="Indicator Sets"
