@@ -110,13 +110,25 @@ function chartBarsPerIndicatorBar(chartFreq: string | undefined, indFreq: string
   return 1;
 }
 
-/** A moving-average-style overlay drawn on top of an active sub-chart indicator. */
+/** An indicator computed ON another indicator, drawn on top of that
+ *  indicator's sub-chart (e.g. EMA of RSI, Bollinger on RSI, StochRSI,
+ *  MACD of RSI). `source` is the sub-chart type id (built-in or registry);
+ *  `type` is one of the 12 maEngine MA types (lowercase), "bollinger",
+ *  "meanband", "stochastic", or "macd". */
 export interface IndicatorOverlay {
   id: string;
   source: string;
   type: string;
+  /** MA/Bollinger/mean period; Stoch %K period; MACD fast period. */
   period: number;
+  /** Bollinger / mean-band σ multiplier. */
   mult?: number;
+  /** Stochastic %D smoothing. */
+  d?: number;
+  /** MACD slow period. */
+  slow?: number;
+  /** MACD signal period. */
+  signal?: number;
 }
 
 export interface ActiveIndicators {
@@ -729,6 +741,76 @@ function SubIndicatorChart({
         params,
       );
       chart.timeScale().fitContent();
+    }
+
+    // ── Indicator-on-indicator overlays (EMA of RSI, Bollinger on RSI,
+    // StochRSI, MACD of RSI, …). Source values come straight from the first
+    // plotted series, so this works identically for built-in AND registry
+    // sub-charts. MACD gets its own hidden bottom-band scale — its values
+    // live near 0, not on the source's scale.
+    const paneOverlays = (activeIndicators.indicatorOverlays ?? []).filter((o) => o.source === type);
+    if (paneOverlays.length > 0 && firstSubSeries) {
+      let srcData: { time: Time; value: number }[] = [];
+      try {
+        srcData = ((firstSubSeries as ISeriesApi<any>).data() as any[])
+          .map((d) => ({ time: d.time, value: typeof d.value === "number" ? d.value : d.close }))
+          .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+      } catch {}
+      if (srcData.length > 5) {
+        const OVERLAY_PALETTE = ["#38bdf8", "#f472b6", "#facc15", "#4ade80", "#c084fc", "#fb923c"];
+        const srcLabel = type === "rsi" ? "RSI" : type === "roc" ? "ROC" : type === "atr" ? "ATR"
+          : type === "stochastic" ? "Stoch" : type === "obv" ? "OBV" : type === "macd" ? "MACD"
+          : type === "ha" ? "HA" : (getIndicatorDef(type)?.label?.split(" ")[0] ?? type);
+        paneOverlays.forEach((o, oi) => {
+          const color = OVERLAY_PALETTE[oi % OVERLAY_PALETTE.length];
+          const addLine = (data: { time: any; value: number }[], title: string, opts: Record<string, unknown> = {}) => {
+            if (!data?.length) return null;
+            const s = chart.addSeries(LineSeries, {
+              color, lineWidth: 1, title,
+              priceLineVisible: false, lastValueVisible: false,
+              ...opts,
+            });
+            s.setData(data);
+            subSeriesList.push(s);
+            return s;
+          };
+          try {
+            if (o.type === "bollinger") {
+              const bb = computeBollingerBands(srcData as any, o.period, o.mult ?? 2);
+              addLine(bb.basis, `BB${o.period} on ${srcLabel}`);
+              addLine(bb.upper, "", { lineStyle: LineStyle.Dotted });
+              addLine(bb.lower, "", { lineStyle: LineStyle.Dotted });
+            } else if (o.type === "meanband") {
+              const rb = computeRollingMeanBands(srcData as any, o.period);
+              addLine(rb.mean, `Mean${o.period} on ${srcLabel}`, { lineStyle: LineStyle.LargeDashed });
+              const maxMult = o.mult ?? 2;
+              for (const b of rb.bands) {
+                if (Math.abs(b.mult) <= maxMult) addLine(b.data, "", { lineStyle: LineStyle.Dotted });
+              }
+            } else if (o.type === "stochastic") {
+              const so = computeStochastic(srcData as any, o.period, o.d ?? 3);
+              addLine(so.k, `Stoch${o.period} on ${srcLabel}`);
+              addLine(so.d, "", { lineStyle: LineStyle.Dotted });
+            } else if (o.type === "macd") {
+              const mc = computeMACD(srcData as any, o.period, o.slow ?? 26, o.signal ?? 9);
+              const scaleId = `ovl-macd-${o.id}`;
+              const m1 = addLine(mc.macdLine, `MACD on ${srcLabel}`, { priceScaleId: scaleId });
+              addLine(mc.signalLine, "", { priceScaleId: scaleId, lineStyle: LineStyle.Dotted });
+              try {
+                m1?.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0.02 }, visible: false });
+              } catch {}
+            } else {
+              // One of the 12 maEngine moving averages (lowercase type id).
+              const vals = srcData.map((d) => d.value);
+              const ma = computeMaByType(vals, o.period, o.type.toUpperCase() as MaType);
+              const data = srcData
+                .map((d, i) => ({ time: d.time, value: ma[i] as number }))
+                .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+              addLine(data, `${o.type.toUpperCase()}${o.period} on ${srcLabel}`);
+            }
+          } catch {}
+        });
+      }
     }
 
     // Hover lookback-window lines on this sub-chart (see lookbackEntries prop).

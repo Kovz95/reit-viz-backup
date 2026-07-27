@@ -23,6 +23,8 @@ import { loadMaInput, type FindBestMaInput } from "@/lib/findBestMA";
 import { getTickers } from "@/lib/dataService";
 import {
   ALL_REGISTRY_INDICATORS,
+  PANE_INDICATORS,
+  getIndicatorDef,
   resolveParams,
   resampleIndicatorBars,
   autocorrSourceFromParam,
@@ -1700,10 +1702,24 @@ const INDICATOR_OVERLAY_LABELS: Record<string, string> = {
 };
 
 const OVERLAY_TYPES: { value: string; label: string }[] = [
+  // All 12 maEngine moving averages…
   { value: "sma", label: "SMA" },
   { value: "ema", label: "EMA" },
+  { value: "wma", label: "WMA" },
   { value: "hma", label: "HMA" },
-  { value: "bollinger", label: "Bollinger" },
+  { value: "dema", label: "DEMA" },
+  { value: "tema", label: "TEMA" },
+  { value: "kama", label: "KAMA" },
+  { value: "frama", label: "FRAMA" },
+  { value: "t3", label: "T3" },
+  { value: "alma", label: "ALMA" },
+  { value: "lsma", label: "LSMA" },
+  { value: "slsma", label: "SLSMA" },
+  // …plus indicator-on-indicator combos.
+  { value: "bollinger", label: "Bollinger Bands" },
+  { value: "meanband", label: "Rolling Mean ± σ" },
+  { value: "stochastic", label: "Stochastic (StochRSI-style)" },
+  { value: "macd", label: "MACD (own bottom scale)" },
 ];
 
 function IndicatorOverlays({
@@ -1726,13 +1742,21 @@ function IndicatorOverlays({
   if (activeIndicators.roc !== undefined) availableSources.push("roc");
   if (activeIndicators.stochastic) availableSources.push("stochastic");
   if (activeIndicators.obv) availableSources.push("obv");
-  if (activeIndicators.ad) availableSources.push("ad");
-  if (activeIndicators.cmf !== undefined) availableSources.push("cmf");
+  // Registry sub-pane indicators (ADX, CCI, Autocorrelation, …) are sources too.
+  for (const def of PANE_INDICATORS) {
+    if (activeIndicators.registry?.[def.id]?.enabled) availableSources.push(def.id);
+  }
+
+  const sourceLabel = (s: string) =>
+    INDICATOR_OVERLAY_LABELS[s] ?? getIndicatorDef(s)?.label ?? s;
 
   const [source, setSource] = useState(availableSources[0] || "");
   const [type, setType] = useState("sma");
   const [period, setPeriod] = useState(14);
   const [bbMult, setBbMult] = useState(2);
+  const [dSmooth, setDSmooth] = useState(3);
+  const [macdSlow, setMacdSlow] = useState(26);
+  const [macdSignal, setMacdSignal] = useState(9);
 
   const addOverlay = () => {
     if (!source) return;
@@ -1741,7 +1765,9 @@ function IndicatorOverlays({
       source,
       type,
       period,
-      ...(type === "bollinger" ? { mult: bbMult } : {}),
+      ...(type === "bollinger" || type === "meanband" ? { mult: bbMult } : {}),
+      ...(type === "stochastic" ? { d: dSmooth } : {}),
+      ...(type === "macd" ? { slow: macdSlow, signal: macdSignal } : {}),
     };
     onChangeIndicators({ ...activeIndicators, indicatorOverlays: [...overlays, overlay] });
   };
@@ -1770,9 +1796,11 @@ function IndicatorOverlays({
                   key={o.id}
                   className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
                 >
-                  {o.type.toUpperCase()}({o.period})
-                  {o.type === "bollinger" && o.mult !== undefined ? ` ${o.mult}σ` : ""} on{" "}
-                  {INDICATOR_OVERLAY_LABELS[o.source] || o.source}
+                  {o.type.toUpperCase()}({o.period}
+                  {o.type === "macd" ? `,${o.slow ?? 26},${o.signal ?? 9}` : ""}
+                  {o.type === "stochastic" ? `,${o.d ?? 3}` : ""})
+                  {(o.type === "bollinger" || o.type === "meanband") && o.mult !== undefined ? ` ${o.mult}σ` : ""} on{" "}
+                  {sourceLabel(o.source)}
                   <button
                     onClick={() => removeOverlay(o.id)}
                     title="Remove overlay"
@@ -1793,7 +1821,7 @@ function IndicatorOverlays({
                 <SelectContent>
                   {availableSources.map((s) => (
                     <SelectItem key={s} value={s} className="text-[10px]">
-                      {INDICATOR_OVERLAY_LABELS[s] || s}
+                      {sourceLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1834,7 +1862,7 @@ function IndicatorOverlays({
                   data-testid="overlay-custom-period"
                 />
               </div>
-              {type === "bollinger" && (
+              {(type === "bollinger" || type === "meanband") && (
                 <div className="flex items-center gap-1">
                   {[1, 1.5, 2, 2.5].map((g) => (
                     <Button
@@ -1849,6 +1877,41 @@ function IndicatorOverlays({
                   ))}
                 </div>
               )}
+              {type === "stochastic" && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-muted-foreground">%D smooth</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={dSmooth}
+                    onChange={(e) => { const v = parseInt(e.target.value, 10); if (v >= 1) setDSmooth(v); }}
+                    className="h-5 w-12 text-[9px] px-1"
+                    data-testid="overlay-stoch-d"
+                  />
+                </div>
+              )}
+              {type === "macd" && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-muted-foreground">Slow</span>
+                  <Input
+                    type="number"
+                    min={2}
+                    value={macdSlow}
+                    onChange={(e) => { const v = parseInt(e.target.value, 10); if (v > 1) setMacdSlow(v); }}
+                    className="h-5 w-12 text-[9px] px-1"
+                    data-testid="overlay-macd-slow"
+                  />
+                  <span className="text-[9px] text-muted-foreground">Signal</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={macdSignal}
+                    onChange={(e) => { const v = parseInt(e.target.value, 10); if (v >= 1) setMacdSignal(v); }}
+                    className="h-5 w-12 text-[9px] px-1"
+                    data-testid="overlay-macd-signal"
+                  />
+                </div>
+              )}
               <Button
                 variant="outline"
                 className="h-6 w-full text-[10px] gap-1"
@@ -1856,8 +1919,7 @@ function IndicatorOverlays({
                 data-testid="add-overlay-btn"
               >
                 <Plus className="w-3 h-3" />
-                Add {type.toUpperCase()}({period}) on{" "}
-                {source ? INDICATOR_OVERLAY_LABELS[source] || source : "..."}
+                Add {type.toUpperCase()}({period}) on {source ? sourceLabel(source) : "..."}
               </Button>
             </div>
           ) : (
