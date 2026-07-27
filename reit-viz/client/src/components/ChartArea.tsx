@@ -1252,6 +1252,31 @@ export default function ChartArea({
     });
   }, [setIndicatorsMap]);
 
+  // ✕ on a sub-indicator chart: turn that indicator off for that pane only.
+  // Built-in sub-chart types map to their own ActiveIndicators field; anything
+  // else is a registry indicator id.
+  const handleCloseSubIndicator = useCallback((paneId: number, type: string) => {
+    setIndicatorsMap((prev) => {
+      const cur = prev[paneId];
+      if (!cur) return prev;
+      const next = { ...cur };
+      switch (type) {
+        case "rsi": delete next.rsi; delete next.rsiFreq; break;
+        case "macd": delete next.macd; break;
+        case "ha": delete next.heikinAshi; break;
+        case "atr": delete next.atr; break;
+        case "roc": delete next.roc; break;
+        case "stochastic": delete next.stochastic; break;
+        case "obv": delete next.obv; break;
+        default:
+          if (next.registry?.[type]?.enabled) {
+            next.registry = { ...next.registry, [type]: { ...next.registry[type], enabled: false } };
+          }
+      }
+      return { ...prev, [paneId]: next };
+    });
+  }, [setIndicatorsMap]);
+
   // Right-click "delete on all panes" for fractals: always drop them everywhere,
   // regardless of the current single/all-panes toggle.
   const handleDeleteFractalAll = useCallback(() => {
@@ -2660,6 +2685,7 @@ export default function ChartArea({
                   onFractalAnchorPick={(date) => handleFractalAnchorPick(pane.id, date)}
                   onDeleteFractal={() => handleDeleteFractal(pane.id)}
                   onDeleteFractalAll={handleDeleteFractalAll}
+                  onCloseSubIndicator={(type) => handleCloseSubIndicator(pane.id, type)}
                   isActive={false}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}

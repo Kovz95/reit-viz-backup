@@ -48,7 +48,7 @@ import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info, Maximize2, Minimize2, Trash2, Rows3 } from "lucide-react";
+import { Info, Maximize2, Minimize2, Trash2, Rows3, X } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
@@ -247,6 +247,9 @@ interface ChartPaneProps {
   onDeleteFractal?: () => void;
   /** Right-click "delete on all panes" for fractal lines — turns them off everywhere. */
   onDeleteFractalAll?: () => void;
+  /** ✕ on a sub-indicator chart (RSI, ROC, registry, …) — turns that indicator
+   *  off for this pane. Omitting it hides the close buttons. */
+  onCloseSubIndicator?: (type: string) => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -339,6 +342,7 @@ function SubIndicatorChart({
   baseLabel,
   isMaximized = false,
   onToggleMaximize,
+  onClose,
   height,
   onResizeStart,
   gridColor,
@@ -363,6 +367,8 @@ function SubIndicatorChart({
   baseLabel: string;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
+  /** Remove this indicator from the pane (the ✕ button in the header). */
+  onClose?: () => void;
   height?: number;
   onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
   gridColor: string;
@@ -902,16 +908,28 @@ function SubIndicatorChart({
           {label}
         </span>
       </div>
-      {onToggleMaximize && (
-        <button
-          className="absolute right-1.5 top-0.5 z-10 text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
-          onClick={(e) => { e.stopPropagation(); onToggleMaximize(); }}
-          title={isMaximized ? "Restore" : "Expand full pane"}
-          data-testid={`sub-indicator-${type}-maximize`}
-        >
-          {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-        </button>
-      )}
+      <div className="absolute right-1.5 top-0.5 z-10 flex items-center gap-0.5">
+        {onToggleMaximize && (
+          <button
+            className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onToggleMaximize(); }}
+            title={isMaximized ? "Restore" : "Expand full pane"}
+            data-testid={`sub-indicator-${type}-maximize`}
+          >
+            {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+          </button>
+        )}
+        {onClose && (
+          <button
+            className="text-muted-foreground/50 hover:text-destructive bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            title={`Remove ${label} from this pane`}
+            data-testid={`sub-indicator-${type}-close`}
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
       <div ref={containerRef} className="w-full h-full" />
     </div>
   );
@@ -940,6 +958,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onFractalAnchorPick,
   onDeleteFractal,
   onDeleteFractalAll,
+  onCloseSubIndicator,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -4176,6 +4195,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               baseLabel={subBaseLabel}
               isMaximized={isMax}
               onToggleMaximize={() => setMaxSub((cur) => (cur === st ? null : st))}
+              onClose={onCloseSubIndicator ? () => {
+                setMaxSub((cur) => (cur === st ? null : cur));
+                onCloseSubIndicator(st);
+              } : undefined}
               height={subHeights[st]}
               onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}
               gridColor={gridColorFor(chartConfig.gridProminence)}
