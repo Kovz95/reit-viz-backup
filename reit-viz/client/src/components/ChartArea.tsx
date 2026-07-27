@@ -2648,7 +2648,7 @@ export default function ChartArea({
                   spacerTimes={freqView ? freqView.spacerTimes : null}
                   activeIndicators={indicatorsMap[pane.id] || {}}
                   timeRange={timeRange}
-                  activeTool={isIntraday ? "" : activeTool}
+                  activeTool={isIntraday ? "none" : activeTool}
                   drawColor={drawColor}
                   measureShade={measureShade}
                   measureMagnet={measureMagnet}

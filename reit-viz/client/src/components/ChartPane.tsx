@@ -399,7 +399,15 @@ function SubIndicatorChart({
         horzLine: { color: "rgba(125, 211, 252, 0.9)", width: 1, style: LineStyle.LargeDashed, labelBackgroundColor: "#0ea5e9" },
       },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.06)", minimumWidth: 70 },
-      timeScale: { borderColor: "rgba(255,255,255,0.06)", visible: false, rightOffset: 5, barSpacing: 3, minBarSpacing: 1 },
+      timeScale: {
+        borderColor: "rgba(255,255,255,0.06)",
+        visible: false,
+        rightOffset: 5,
+        barSpacing: 3,
+        // Match the parent pane: hourly axes need sub-pixel bar spacing or the
+        // logical-range sync clamps this sub-chart short of the parent's window.
+        minBarSpacing: frequency === "hourly" ? 0.05 : 1,
+      },
       handleScroll: { mouseWheel: false, pressedMouseMove: true },
       handleScale: { mouseWheel: true, pinch: true },
     });
@@ -3370,12 +3378,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return () => window.removeEventListener("reit-viz-seeds-restored", handleSeedsRestored);
   }, []);
 
-  // Hour marks on the time axis in intraday mode
+  // Hour marks on the time axis in intraday mode. Hourly axes carry years of
+  // bars (~7/day), far more than one bar per pixel — the default minBarSpacing
+  // of 1 would cap the visible window at ~chart-width bars, silently clamping
+  // 5Y/Max to the last few months.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
     try {
-      chart.applyOptions({ timeScale: { timeVisible: intraday, secondsVisible: false } });
+      chart.applyOptions({
+        timeScale: { timeVisible: intraday, secondsVisible: false, minBarSpacing: intraday ? 0.05 : 1 },
+      });
     } catch {}
   }, [intraday, chartReady]);
 
