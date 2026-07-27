@@ -2657,6 +2657,14 @@ export default function ChartArea({
                 onMouseMove={() => { hoveredPaneRef.current = pane.id; }}
                 onMouseLeave={() => { if (hoveredPaneRef.current === pane.id) hoveredPaneRef.current = null; }}
                 onDoubleClick={() => setMaximizedPaneId(isPaneMaximized ? null : pane.id)}
+                // While the Indicators panel is open, clicking a pane retargets
+                // its "Apply to pane" selector — no dropdown hunting. MUST be
+                // click, not mousedown: React flushes the state update between
+                // the capture phase and the target's native listeners, and a
+                // re-render that recreates a sub-chart mid-mousedown makes LWC's
+                // own mousedown handler throw on the disposed pane ("Value is
+                // null"). By click time LWC is done with the gesture.
+                onClick={() => { if (showIndicators && indicatorPaneId !== pane.id) setIndicatorPaneId(pane.id); }}
               >
                 <ChartPane
                   ref={(handle) => {
@@ -2686,7 +2694,7 @@ export default function ChartArea({
                   onDeleteFractal={() => handleDeleteFractal(pane.id)}
                   onDeleteFractalAll={handleDeleteFractalAll}
                   onCloseSubIndicator={(type) => handleCloseSubIndicator(pane.id, type)}
-                  isActive={false}
+                  isActive={showIndicators && pane.id === (indicatorPaneId ?? (panes.length > 0 ? panes[0].id : null))}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}
                   onSeriesMapUpdate={handleSeriesMapUpdate}
