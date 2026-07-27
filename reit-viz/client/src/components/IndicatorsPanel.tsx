@@ -741,12 +741,25 @@ export default function IndicatorsPanel({
     });
   };
 
-  const updateMean = (on: boolean, rolling?: boolean, period?: number) => {
+  const updateMean = (
+    on: boolean,
+    rolling?: boolean,
+    period?: number,
+    bandOpacity?: number,
+    shade?: boolean,
+  ) => {
     const r = rolling ?? meanRolling;
     const p = period ?? meanPeriod;
     setActiveIndicators({
       ...activeIndicators,
-      mean: on ? { rolling: r, period: p } : undefined,
+      mean: on
+        ? {
+            rolling: r,
+            period: p,
+            bandOpacity: bandOpacity ?? meanCfg?.bandOpacity,
+            shade: shade ?? meanCfg?.shade,
+          }
+        : undefined,
     });
   };
 
@@ -1620,6 +1633,34 @@ export default function IndicatorsPanel({
                 data-testid="custom-mean-period"
               />
             </div>
+
+            {/* Band opacity + rolling shade */}
+            <div className="flex gap-1 items-center">
+              <span className="text-[9px] text-muted-foreground w-14">Band opacity</span>
+              {[0.4, 0.6, 0.8, 1].map((op) => (
+                <Button
+                  key={op}
+                  variant={(meanCfg?.bandOpacity ?? 0.8) === op ? "default" : "secondary"}
+                  size="sm"
+                  className="h-6 px-1.5 text-[10px] flex-1"
+                  onClick={() => { if (meanCfg) updateMean(true, undefined, undefined, op); }}
+                  data-testid={`mean-band-opacity-${op * 100}`}
+                >
+                  {op * 100}%
+                </Button>
+              ))}
+            </div>
+            {meanRolling && (
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="Fill the ±1σ/±2σ areas so the envelope reads at a glance">
+                <Switch
+                  checked={meanCfg?.shade !== false}
+                  onCheckedChange={(on) => { if (meanCfg) updateMean(true, undefined, undefined, undefined, on); }}
+                  className="scale-90"
+                  data-testid="mean-band-shade"
+                />
+                <span className="text-[10px] text-muted-foreground">Shade band area</span>
+              </label>
+            )}
           </div>
           </>)}
         </div>

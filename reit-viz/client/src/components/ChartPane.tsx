@@ -142,7 +142,9 @@ export interface ActiveIndicators {
   slsma?: number;
   rsi?: number;       // period
   macd?: boolean;
-  mean?: { rolling: boolean; period: number };
+  /** Mean ± σ bands. bandOpacity drives band-line alpha (default 0.8);
+   *  shade (rolling only, default on) fills the ±1σ/±2σ areas. */
+  mean?: { rolling: boolean; period: number; bandOpacity?: number; shade?: boolean };
   heikinAshi?: boolean | HASmoothConfig; // true = no smoothing, object = smoothing config
   haSignals?: boolean;
   bollinger?: { period: number; mult: number };
@@ -3024,6 +3026,19 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       // ── Mean ± Std Bands ──
       if (activeIndicators.mean) {
         const { rolling, period } = activeIndicators.mean;
+        const bandOp = activeIndicators.mean.bandOpacity ?? 0.8;
+        const shade = activeIndicators.mean.shade !== false;
+        // Band-line colors derive from the mean's own color at the chosen
+        // opacity (±2σ slightly fainter than ±1σ), replacing the old
+        // hardcoded rgba(...,0.4)/(...,0.25) that was near-invisible.
+        const meanRgb = (() => {
+          const m = /^#([0-9a-f]{6})$/i.exec(IC.mean ?? "");
+          if (!m) return "99, 102, 241";
+          const v = parseInt(m[1], 16);
+          return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
+        })();
+        const bandColor = (mult: number) =>
+          `rgba(${meanRgb}, ${(Math.abs(mult) === 1 ? bandOp : bandOp * 0.65).toFixed(2)})`;
 
         if (rolling) {
           // Rolling mean + rolling σ bands
@@ -3040,15 +3055,36 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
             for (const b of rb.bands) {
               const bs = chart.addSeries(LineSeries, {
-                color: Math.abs(b.mult) === 1
-                  ? "rgba(99, 102, 241, 0.4)"
-                  : "rgba(99, 102, 241, 0.25)",
-                lineWidth: 1,
+                color: bandColor(b.mult),
+                lineWidth: Math.abs(b.mult) === 1 ? 2 : 1,
                 title: `${b.mult > 0 ? "+" : ""}${b.mult}σ`,
                 lineStyle: LineStyle.Dotted,
               });
               bs.setData(b.data);
               indicatorSeriesRef.current.push(bs);
+            }
+
+            // Background shading between the bands so the envelope reads at a
+            // glance: light fill across ±2σ, a second pass across ±1σ (the
+            // overlap makes the inner band read stronger). Primitives attach
+            // to the mean-line series, so they die with it on re-render.
+            if (shade) {
+              const band = (mult: number) => rb.bands.find((b) => b.mult === mult)?.data as unknown as CloudPoint[] | undefined;
+              const fills = (alpha: number) => {
+                const c = `rgba(${meanRgb}, ${alpha.toFixed(3)})`;
+                return { up: c, down: c };
+              };
+              const outerA = band(2), outerB = band(-2), innerA = band(1), innerB = band(-1);
+              try {
+                if (outerA?.length && outerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(outerA, outerB, fills(0.07 * bandOp)));
+                }
+                if (innerA?.length && innerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(innerA, innerB, fills(0.1 * bandOp)));
+                }
+              } catch {}
             }
           }
         } else {
@@ -3073,10 +3109,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
             for (const mult of [1, -1, 2, -2]) {
               const band = chart.addSeries(LineSeries, {
-                color: Math.abs(mult) === 1
-                  ? "rgba(99, 102, 241, 0.4)"
-                  : "rgba(99, 102, 241, 0.25)",
-                lineWidth: 1,
+                color: bandColor(mult),
+                lineWidth: Math.abs(mult) === 1 ? 2 : 1,
                 title: `${mult > 0 ? "+" : ""}${mult}σ`,
                 lineStyle: LineStyle.Dotted,
               });
