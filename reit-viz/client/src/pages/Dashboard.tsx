@@ -1851,6 +1851,17 @@ export default function Dashboard() {
           plottedSeries={plottedSeries}
           panes={panes}
           indicatorsMap={indicatorsMap}
+          onToggleSubChart={(paneId, type) =>
+            setIndicatorsMap((prev) => {
+              const cur = prev[paneId];
+              if (!cur) return prev;
+              const hidden: string[] = cur.hiddenSubCharts ?? [];
+              const next = hidden.includes(type)
+                ? hidden.filter((t: string) => t !== type)
+                : [...hidden, type];
+              return { ...prev, [paneId]: { ...cur, hiddenSubCharts: next.length ? next : undefined } };
+            })
+          }
           activeTicker={activeTicker}
           onSetActiveTicker={handleSetActiveTicker}
           onAddSeriesWithMode={addSeriesWithMode}

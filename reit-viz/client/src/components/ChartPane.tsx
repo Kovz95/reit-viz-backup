@@ -48,7 +48,7 @@ import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info, Maximize2, Minimize2, Trash2, Rows3, X } from "lucide-react";
+import { Info, Maximize2, Minimize2, Trash2, Rows3, X, EyeOff } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
@@ -177,6 +177,10 @@ export interface ActiveIndicators {
   /** Fibonacci retracement levels from the recent swing. */
   fibLevels?: boolean;
   indicatorOverlays?: IndicatorOverlay[];
+  /** Sub-chart types (rsi, roc, registry ids, …) temporarily HIDDEN: the
+   *  subplot unmounts (its vertical space is reclaimed) but the indicator's
+   *  state stays enabled, so toggling visibility loses nothing. */
+  hiddenSubCharts?: string[];
   /** Generic state for registry-driven indicators (see indicatorRegistry.ts),
    *  keyed by indicator id. Each new indicator is one entry here at runtime —
    *  no typed field per indicator. */
@@ -277,6 +281,9 @@ interface ChartPaneProps {
   /** ✕ on a sub-indicator chart (RSI, ROC, registry, …) — turns that indicator
    *  off for this pane. Omitting it hides the close buttons. */
   onCloseSubIndicator?: (type: string) => void;
+  /** Eye on a sub-indicator chart — toggles it into hiddenSubCharts (subplot
+   *  unmounts, indicator state preserved). */
+  onToggleHideSubIndicator?: (type: string) => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -371,6 +378,7 @@ function SubIndicatorChart({
   isMaximized = false,
   onToggleMaximize,
   onClose,
+  onHide,
   height,
   onResizeStart,
   gridColor,
@@ -401,6 +409,8 @@ function SubIndicatorChart({
   onToggleMaximize?: () => void;
   /** Remove this indicator from the pane (the ✕ button in the header). */
   onClose?: () => void;
+  /** Temporarily hide this subplot (state kept — see hiddenSubCharts). */
+  onHide?: () => void;
   height?: number;
   onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
   gridColor: string;
@@ -1042,6 +1052,16 @@ function SubIndicatorChart({
             {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
           </button>
         )}
+        {onHide && (
+          <button
+            className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onHide(); }}
+            title={`Hide ${label} (keeps its settings — bring it back from the sidebar's Current Layout)`}
+            data-testid={`sub-indicator-${type}-hide`}
+          >
+            <EyeOff className="w-3 h-3" />
+          </button>
+        )}
         {onClose && (
           <button
             className="text-muted-foreground/50 hover:text-destructive bg-background/80 rounded p-0.5"
@@ -1082,6 +1102,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onDeleteFractal,
   onDeleteFractalAll,
   onCloseSubIndicator,
+  onToggleHideSubIndicator,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -4125,6 +4146,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   for (const def of PANE_INDICATORS) {
     if (activeIndicators.registry?.[def.id]?.enabled) subCharts.push(def.id);
   }
+  // Temporarily hidden subplots unmount entirely (state stays enabled).
+  const hiddenSet = new Set(activeIndicators.hiddenSubCharts ?? []);
+  const visibleSubCharts = subCharts.filter((st) => !hiddenSet.has(st));
 
   // Raw price OHLC bars for registry pane indicators (need real high/low).
   const ohlcBars: OhlcBar[] = Array.isArray(ohlcData) ? (ohlcData as OhlcBar[]) : [];
@@ -4371,7 +4395,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       )}
       {/* Sub-indicator charts (RSI, MACD, HA) stacked below. Double-click one
           (or its expand button) to fill the pane; others hide while expanded. */}
-      {subCloseData.length > 0 && subCharts.map((st) => {
+      {subCloseData.length > 0 && visibleSubCharts.map((st) => {
         const isMax = maxSub === st;
         const hidden = maxSub !== null && !isMax;
         return (
@@ -4391,6 +4415,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               onClose={onCloseSubIndicator ? () => {
                 setMaxSub((cur) => (cur === st ? null : cur));
                 onCloseSubIndicator(st);
+              } : undefined}
+              onHide={onToggleHideSubIndicator ? () => {
+                setMaxSub((cur) => (cur === st ? null : cur));
+                onToggleHideSubIndicator(st);
               } : undefined}
               height={subHeights[st]}
               onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}

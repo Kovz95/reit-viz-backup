@@ -6,28 +6,42 @@ import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { getIndicatorDef } from "@/lib/indicatorRegistry";
 
-/** Compact badge labels for a pane's enabled indicators (Current Layout list). */
-function indicatorBadgeLabels(ind?: ActiveIndicators): string[] {
+/** Compact badges for a pane's enabled indicators (Current Layout list).
+ *  `subChart` is set for indicators that render as their own subplot — those
+ *  chips become show/hide toggles (hiddenSubCharts). */
+interface IndicatorBadge {
+  label: string;
+  subChart?: string;
+  hidden?: boolean;
+}
+function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
   if (!ind) return [];
-  const out: string[] = [];
+  const hiddenSet = new Set(ind.hiddenSubCharts ?? []);
+  const out: IndicatorBadge[] = [];
   const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const sub = (label: string, subChart: string) =>
+    out.push({ label, subChart, hidden: hiddenSet.has(subChart) });
   for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"]) {
     const v = (ind as any)[k];
-    if (num(v)) out.push(`${k.toUpperCase()} ${v}`);
+    if (num(v)) out.push({ label: `${k.toUpperCase()} ${v}` });
   }
-  if (num(ind.rsi)) out.push(`RSI ${ind.rsi}`);
-  if ((ind as any).macd) out.push("MACD");
-  if (ind.bollinger) out.push(`BB ${ind.bollinger.period}`);
-  if (num((ind as any).atr)) out.push(`ATR ${(ind as any).atr}`);
-  if (num((ind as any).roc)) out.push(`ROC ${(ind as any).roc}`);
-  if (ind.stochastic) out.push(`Stoch ${ind.stochastic.kPeriod}`);
-  if ((ind as any).heikinAshi) out.push("HA");
-  if (ind.mean) out.push(ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean");
-  if ((ind as any).vwap) out.push("VWAP");
-  if (ind.fractalLines) out.push("Fractals");
+  if (num(ind.rsi)) sub(`RSI ${ind.rsi}`, "rsi");
+  if ((ind as any).macd) sub("MACD", "macd");
+  if (ind.bollinger) out.push({ label: `BB ${ind.bollinger.period}` });
+  if (num((ind as any).atr)) sub(`ATR ${(ind as any).atr}`, "atr");
+  if (num((ind as any).roc)) sub(`ROC ${(ind as any).roc}`, "roc");
+  if (ind.stochastic) sub(`Stoch ${ind.stochastic.kPeriod}`, "stochastic");
+  if ((ind as any).heikinAshi) sub("HA", "ha");
+  if ((ind as any).obv) sub("OBV", "obv");
+  if (ind.mean) out.push({ label: ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean" });
+  if ((ind as any).vwap) out.push({ label: "VWAP" });
+  if (ind.fractalLines) out.push({ label: "Fractals" });
   for (const [id, st] of Object.entries(ind.registry ?? {})) {
     if (!st?.enabled) continue;
-    out.push(getIndicatorDef(id)?.label ?? id);
+    const def = getIndicatorDef(id);
+    const label = def?.label ?? id;
+    if (def?.renderTarget === "pane") sub(label, id);
+    else out.push({ label });
   }
   return out;
 }
@@ -134,6 +148,9 @@ interface SidebarProps {
   plottedSeries: PlottedSeries[];
   /** Per-pane indicator state — shown as badges under each pane in Current Layout. */
   indicatorsMap?: Record<number, ActiveIndicators>;
+  /** Toggle a subplot (RSI, ROC, …) in/out of hiddenSubCharts for a pane —
+   *  the Current Layout chips become show/hide buttons when provided. */
+  onToggleSubChart?: (paneId: number, type: string) => void;
   panes: PaneInfo[];
   activeTicker: string | null;
   onSetActiveTicker: (t: string | null) => void;
@@ -194,6 +211,7 @@ export default function Sidebar({
   tickers,
   plottedSeries,
   indicatorsMap,
+  onToggleSubChart,
   panes,
   activeTicker,
   onSetActiveTicker,
@@ -1519,16 +1537,36 @@ export default function Sidebar({
                           <X className="w-3 h-3" />
                         </Button>
                       </div>
-                      {/* Active indicators on this pane */}
+                      {/* Active indicators on this pane. Subplot chips (RSI, ROC,
+                          registry sub-panes, …) toggle the subplot's visibility —
+                          hidden ones dim + strike through, state is preserved. */}
                       {(() => {
-                        const badges = indicatorBadgeLabels(indicatorsMap?.[pane.id]);
+                        const badges = indicatorBadges(indicatorsMap?.[pane.id]);
                         return badges.length > 0 ? (
                           <div className="flex flex-wrap gap-0.5 pl-4 pb-0.5" data-testid={`layout-indicators-${pane.id}`}>
-                            {badges.map((b) => (
-                              <span key={b} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
-                                {b}
-                              </span>
-                            ))}
+                            {badges.map((b) =>
+                              b.subChart && onToggleSubChart ? (
+                                <button
+                                  key={b.label}
+                                  type="button"
+                                  onClick={() => onToggleSubChart(pane.id, b.subChart!)}
+                                  title={b.hidden ? `Show the ${b.label} subplot` : `Hide the ${b.label} subplot (keeps its settings)`}
+                                  data-testid={`layout-subchart-${pane.id}-${b.subChart}`}
+                                  className={`flex items-center gap-0.5 px-1 py-px rounded text-[9px] leading-tight whitespace-nowrap transition-colors ${
+                                    b.hidden
+                                      ? "bg-muted text-muted-foreground/60 line-through hover:text-foreground"
+                                      : "bg-primary/10 text-primary/80 hover:bg-primary/20"
+                                  }`}
+                                >
+                                  {b.hidden ? <EyeOff className="w-2.5 h-2.5 shrink-0" /> : <Eye className="w-2.5 h-2.5 shrink-0 opacity-50" />}
+                                  {b.label}
+                                </button>
+                              ) : (
+                                <span key={b.label} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
+                                  {b.label}
+                                </span>
+                              )
+                            )}
                           </div>
                         ) : null;
                       })()}

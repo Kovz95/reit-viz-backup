@@ -1277,6 +1277,20 @@ export default function ChartArea({
     });
   }, [setIndicatorsMap]);
 
+  // Eye on a sub-indicator chart / sidebar layout chip: toggle the subplot in
+  // or out of hiddenSubCharts (unmounts the subplot, keeps indicator state).
+  const handleToggleSubChartHidden = useCallback((paneId: number, type: string) => {
+    setIndicatorsMap((prev) => {
+      const cur = prev[paneId];
+      if (!cur) return prev;
+      const hidden = cur.hiddenSubCharts ?? [];
+      const next = hidden.includes(type)
+        ? hidden.filter((t) => t !== type)
+        : [...hidden, type];
+      return { ...prev, [paneId]: { ...cur, hiddenSubCharts: next.length ? next : undefined } };
+    });
+  }, [setIndicatorsMap]);
+
   // Right-click "delete on all panes" for fractals: always drop them everywhere,
   // regardless of the current single/all-panes toggle.
   const handleDeleteFractalAll = useCallback(() => {
@@ -2694,6 +2708,7 @@ export default function ChartArea({
                   onDeleteFractal={() => handleDeleteFractal(pane.id)}
                   onDeleteFractalAll={handleDeleteFractalAll}
                   onCloseSubIndicator={(type) => handleCloseSubIndicator(pane.id, type)}
+                  onToggleHideSubIndicator={(type) => handleToggleSubChartHidden(pane.id, type)}
                   isActive={showIndicators && pane.id === (indicatorPaneId ?? (panes.length > 0 ? panes[0].id : null))}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}
