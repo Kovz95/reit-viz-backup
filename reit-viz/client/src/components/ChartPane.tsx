@@ -333,6 +333,7 @@ function SubIndicatorChart({
   closeData,
   ohlcBars,
   fullDates,
+  spacerTimes,
   activeIndicators,
   parentChart,
   baseLabel,
@@ -351,6 +352,12 @@ function SubIndicatorChart({
   /** Global trading-date axis — used for the invisible spacer so the sub-chart
    *  shares identical logical indices with the parent pane (see below). */
   fullDates: string[];
+  /** Non-daily frequency axis (weekly/monthly period-end dates or hourly epoch
+   *  seconds). When set, the spacer MUST use it instead of the daily fullDates —
+   *  the parent pane's spacer does (see the spacerSeriesRef effect), and the
+   *  logical-range sync copies raw indices, so a daily spacer here would map
+   *  the parent's window onto a completely different date span. */
+  spacerTimes?: (string | number)[] | null;
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   baseLabel: string;
@@ -424,7 +431,8 @@ function SubIndicatorChart({
     // oscillator horizontally off the price bars it is derived from. Giving the
     // sub-chart the same full-axis spacer makes logical index i map to the same
     // date here as in the parent, so RSI/MACD/etc. stay aligned by date.
-    if (fullDates.length > 0) {
+    const axisTimes: (string | number)[] = spacerTimes?.length ? spacerTimes : fullDates;
+    if (axisTimes.length > 0) {
       try {
         const spacer = chart.addSeries(LineSeries, {
           visible: false,
@@ -433,7 +441,7 @@ function SubIndicatorChart({
           crosshairMarkerVisible: false,
           autoscaleInfoProvider: () => null,
         });
-        spacer.setData(fullDates.map((t) => ({ time: t as unknown as Time })));
+        spacer.setData(axisTimes.map((t) => ({ time: t as unknown as Time })));
       } catch {}
     }
 
@@ -852,7 +860,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, activeIndicators, type, baseLabel, parentChart, IC, gridColor, frequency]);
+  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, parentChart, IC, gridColor, frequency]);
 
   // Resize
   useEffect(() => {
@@ -4162,6 +4170,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               closeData={subCloseData}
               ohlcBars={ohlcBars}
               fullDates={fullDates}
+              spacerTimes={spacerTimes}
               activeIndicators={activeIndicators}
               parentChart={chartRef.current}
               baseLabel={subBaseLabel}

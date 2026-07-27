@@ -70,6 +70,10 @@ export type RegistryIndicatorState = {
  *  period's LAST trading date as its time (so points land on existing chart
  *  dates, using only data available by that date — no lookahead). */
 export function resampleIndicatorBars(bars: OhlcBar[], freq: "weekly" | "monthly"): OhlcBar[] {
+  // Only date-string axes ("YYYY-MM-DD") can be bucketed into weeks/months.
+  // Hourly charts carry epoch-second times — return them untouched rather
+  // than collapsing every bar into one "Invalid Date" bucket.
+  if (!bars.length || typeof bars[0].time !== "string" || !/^\d{4}-\d{2}/.test(bars[0].time)) return bars;
   const keyOf = (t: string): string => {
     if (freq === "monthly") return t.slice(0, 7);
     const d = new Date(t + "T00:00:00Z");
