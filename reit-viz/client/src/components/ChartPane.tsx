@@ -1249,6 +1249,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (o.upColor) colorByTitle["Price"] = o.upColor; // candlestick main series
       } catch {}
     }
+    // Indicator overlays (MAs, mean ± σ bands, Bollinger…) live in a separate
+    // list — pick up their colors too so readout entries aren't all gray.
+    for (const s of indicatorSeriesRef.current) {
+      try {
+        const o: any = s.options();
+        if (o.title && !colorByTitle[o.title]) colorByTitle[o.title] = o.color || "#94a3b8";
+      } catch {}
+    }
     const items = Object.entries(values).map(([label, value]) => ({
       label,
       value,
@@ -4305,8 +4313,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           readout in the top toolbar). */}
       {hoverReadout && hoverReadout.items.length > 0 && (
         <div
-          className="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-1rem)] overflow-hidden"
-          style={{ top: colorByMetric ? 44 : 6 }}
+          // Sits BELOW the pane header row (label/LOG/transform buttons top-left,
+          // export/expand top-right) so it never covers those controls, and
+          // wraps onto extra lines instead of clipping — with mean ± σ bands or
+          // several MAs/RSIs active, every value stays visible.
+          className="absolute left-1/2 -translate-x-1/2 z-20 flex flex-wrap justify-center items-center gap-x-2 gap-y-0.5 text-[10px] font-mono tabular-nums bg-background/85 px-1.5 py-0.5 rounded pointer-events-none max-w-[calc(100%-5rem)]"
+          style={{ top: colorByMetric ? 44 : 26 }}
           data-testid={`chart-pane-${paneId}-readout`}
         >
           <span className="text-muted-foreground/70">{hoverReadout.time}</span>
