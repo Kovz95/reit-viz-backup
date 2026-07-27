@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 
 import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus, Layers } from "lucide-react";
@@ -18,9 +18,14 @@ import type { ActiveIndicators, IndicatorOverlay } from "./ChartPane";
 import { FindBestMAPanel } from "./FindBestMAPanel";
 import type { PaneInfo } from "@/pages/Dashboard";
 import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
+import { computeAcfSweep, type AcfSweepEntry, type OhlcBar } from "@/lib/indicators";
+import { loadMaInput, type FindBestMaInput } from "@/lib/findBestMA";
+import { getTickers } from "@/lib/dataService";
 import {
   ALL_REGISTRY_INDICATORS,
   resolveParams,
+  resampleIndicatorBars,
+  autocorrSourceFromParam,
   type IndicatorDef,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
@@ -385,6 +390,153 @@ function HeikinAshiControls({
   );
 }
 
+/** "Best lag" helper under the Autocorrelation controls (Charts panel only):
+ *  full-sample ACF sweep over lags 1..30 of the chosen source series
+ *  (Returns / RSI level / RSI change, honoring rsiPeriod and the effective
+ *  weekly/monthly frequency), ranked by |AC| with significance marked.
+ *  Clicking a row applies that lag to the indicator. */
+export function AutocorrBestLagPanel({
+  ticker,
+  frequency,
+  params,
+  indicatorFreq,
+  onApplyLag,
+}: {
+  ticker: string | null;
+  frequency?: string;
+  /** Resolved autocorr params (source / rsiPeriod / lag) from the registry row. */
+  params: Record<string, number>;
+  /** Per-indicator compute frequency override ("chart" | "weekly" | "monthly"). */
+  indicatorFreq?: string;
+  onApplyLag: (lag: number) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ entries: AcfSweepEntry[]; label: string; nBars: number; freq: string } | null>(null);
+  const [metric, setMetric] = useState<string>("close");
+  const [metrics, setMetrics] = useState<string[]>([]);
+
+  // Metric choices = Price plus the ticker's workbook metrics (so the sweep
+  // can run on e.g. "P/FFO (FY2)" to match a valuation-ratio pane).
+  useEffect(() => {
+    let alive = true;
+    setMetric("close");
+    if (!ticker) { setMetrics([]); return; }
+    getTickers()
+      .then((list) => {
+        if (!alive) return;
+        const m = (list.find((t) => t.ticker === ticker)?.metrics ?? []) as string[];
+        setMetrics(m.filter((x) => !["close", "open", "high", "low"].includes(x)));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [ticker]);
+
+  // Effective compute frequency: the per-indicator override wins; otherwise
+  // follow the chart (hourly charts sweep on daily bars — no intraday here).
+  const effFreq =
+    indicatorFreq === "weekly" || indicatorFreq === "monthly"
+      ? indicatorFreq
+      : frequency === "weekly" || frequency === "monthly"
+        ? frequency
+        : "daily";
+
+  const run = async () => {
+    if (!ticker) { setError("No ticker on this pane."); return; }
+    setRunning(true);
+    setError(null);
+    try {
+      const input: FindBestMaInput = metric === "close" ? { kind: "close" } : { kind: "workbook", metric };
+      const data = await loadMaInput(ticker, input);
+      if (!data || data.closes.length < 60) {
+        setError(`Not enough data (${data?.closes.length ?? 0} bars; need ≥ 60).`);
+        setResult(null);
+        return;
+      }
+      let bars: OhlcBar[] = data.closes.map((c, i) => ({
+        time: data.priceDates[i] ?? String(i),
+        open: c, high: c, low: c, close: c,
+      }));
+      if (effFreq === "weekly" || effFreq === "monthly") {
+        bars = resampleIndicatorBars(bars, effFreq);
+      }
+      const src = autocorrSourceFromParam(params.source);
+      const entries = computeAcfSweep(bars, src, 30, params.rsiPeriod ?? 14);
+      if (!entries.length) {
+        setError("Not enough bars after resampling for an ACF sweep.");
+        setResult(null);
+        return;
+      }
+      setResult({ entries, label: data.label, nBars: bars.length, freq: effFreq });
+    } catch (e: any) {
+      setError(`Sweep failed: ${e?.message ?? e}`);
+      setResult(null);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const srcLabel = params.source === 1 ? `RSI${params.rsiPeriod ?? 14} level` : params.source === 2 ? `RSI${params.rsiPeriod ?? 14} change` : "returns";
+  const ranked = result ? [...result.entries].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 8) : [];
+
+  return (
+    <div className="ml-0.5 mt-1 rounded border border-border/60 bg-card/40 p-1.5 space-y-1.5" data-testid="autocorr-best-lag">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 px-2 text-[10px]"
+          disabled={running}
+          onClick={run}
+          data-testid="autocorr-best-lag-run"
+        >
+          {running ? "Scanning…" : "Find best lag"}
+        </Button>
+        {metrics.length > 0 && (
+          <select
+            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background max-w-[9rem]"
+            value={metric}
+            onChange={(e) => setMetric(e.target.value)}
+            title="Series to sweep — match it to what this pane plots"
+            data-testid="autocorr-best-lag-metric"
+          >
+            <option value="close">Price (close)</option>
+            {metrics.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
+        <span className="text-[9px] text-muted-foreground">
+          {srcLabel} · {effFreq}
+        </span>
+      </div>
+      {error && <div className="text-[10px] text-destructive">{error}</div>}
+      {result && !error && (
+        <div className="space-y-0.5">
+          <div className="text-[9px] text-muted-foreground">
+            {result.label} · {result.nBars} {result.freq} bars · lags 1–30 by |AC|, ● = significant (95%) · click to apply
+          </div>
+          {ranked.map((e) => (
+            <button
+              key={e.lag}
+              type="button"
+              className={`w-full flex items-center justify-between px-1.5 py-0.5 rounded text-[10px] font-mono hover:bg-accent ${
+                e.lag === params.lag ? "bg-primary/15" : ""
+              }`}
+              onClick={() => onApplyLag(e.lag)}
+              title={`Apply lag ${e.lag} (AC ${e.value >= 0 ? "+" : ""}${e.value.toFixed(3)}, band ±${e.threshold.toFixed(3)})`}
+              data-testid={`autocorr-best-lag-row-${e.lag}`}
+            >
+              <span>lag {e.lag}{e.lag === params.lag ? " ✓" : ""}</span>
+              <span className={e.significant ? (e.value >= 0 ? "text-emerald-400" : "text-rose-400") : "text-muted-foreground"}>
+                {e.value >= 0 ? "+" : ""}{e.value.toFixed(3)}{e.significant ? " ●" : ""}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Auto-generated controls for registry-driven indicators (see
  *  indicatorRegistry.ts). One row per indicator with a toggle + numeric param
  *  inputs, grouped by category. Adding an indicator to the registry makes it
@@ -393,12 +545,17 @@ export function RegistryIndicatorControls({
   activeIndicators,
   onChange,
   frequency,
+  renderExtra,
 }: {
   activeIndicators: ActiveIndicators;
   onChange: (i: ActiveIndicators) => void;
   /** Pane bar frequency — shows frequency-specific param defaults so the
    *  inputs match what the pane actually renders. */
   frequency?: string;
+  /** Optional bespoke UI injected under an indicator's controls while it is
+   *  enabled (e.g. the Charts panel's Best-Lag helper under Autocorrelation).
+   *  Callers without extra context (Pairs/Macro) simply omit it. */
+  renderExtra?: (def: IndicatorDef, params: Record<string, number>) => ReactNode;
 }) {
   const reg = activeIndicators.registry ?? {};
   const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
@@ -489,6 +646,7 @@ export function RegistryIndicatorControls({
                     ))}
                   </div>
                 )}
+                {enabled && renderExtra?.(def, p)}
               </div>
             );
           })}
@@ -1360,6 +1518,26 @@ export default function IndicatorsPanel({
               activeIndicators={activeIndicators}
               onChange={setActiveIndicators}
               frequency={frequency}
+              renderExtra={(def, p) =>
+                def.id === "autocorr" ? (
+                  <AutocorrBestLagPanel
+                    ticker={activeTicker}
+                    frequency={frequency}
+                    params={p}
+                    indicatorFreq={activeIndicators.registry?.autocorr?.freq}
+                    onApplyLag={(lag) => {
+                      const cur = activeIndicators.registry?.autocorr ?? {};
+                      setActiveIndicators({
+                        ...activeIndicators,
+                        registry: {
+                          ...(activeIndicators.registry ?? {}),
+                          autocorr: { ...cur, params: { ...(cur.params ?? {}), lag } },
+                        },
+                      });
+                    }}
+                  />
+                ) : null
+              }
             />
           )}
         </div>

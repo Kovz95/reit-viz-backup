@@ -340,6 +340,7 @@ function SubIndicatorChart({
   activeIndicators,
   parentChart,
   baseLabel,
+  lookbackEntries,
   isMaximized = false,
   onToggleMaximize,
   onClose,
@@ -365,6 +366,10 @@ function SubIndicatorChart({
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   baseLabel: string;
+  /** Hover lookback-window lines drawn on THIS sub-chart (e.g. autocorr's
+   *  window over RSI values renders on the RSI sub-chart, not the price
+   *  chart). Undefined = no lines here. */
+  lookbackEntries?: LookbackEntry[];
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   /** Remove this indicator from the pane (the ✕ button in the header). */
@@ -711,6 +716,23 @@ function SubIndicatorChart({
       chart.timeScale().fitContent();
     }
 
+    // Hover lookback-window lines on this sub-chart (see lookbackEntries prop).
+    let lbPrim: LookbackWindowPrimitive | null = null;
+    if (lookbackEntries?.length && firstSubSeries) {
+      try {
+        lbPrim = new LookbackWindowPrimitive();
+        (firstSubSeries as unknown as { attachPrimitive: (p: unknown) => void }).attachPrimitive(lbPrim);
+        lbPrim.setEntries(lookbackEntries);
+      } catch {}
+    }
+    // Hover from this sub-chart itself (fires for real pointer moves AND for
+    // the parent-mirrored programmatic sets — both carry param.logical).
+    if (lbPrim) {
+      chart.subscribeCrosshairMove((param: any) => {
+        lbPrim!.setHover(typeof param.logical === "number" ? param.logical : null);
+      });
+    }
+
     // Sync time scale with parent
     if (parentChart) {
       const syncToSub = (range: any) => {
@@ -782,6 +804,10 @@ function SubIndicatorChart({
         // Parent → sub: when the parent crosshair moves, mirror it on the sub-chart
         // and also dispatch sub-chart values upward for the crosshair readout
         const handleParentCrosshair = (param: any) => {
+          // Parent and sub share one spacer axis, so the parent's logical index
+          // is valid here directly — drive the lookback lines from it even when
+          // the mirrored setCrosshairPosition below doesn't echo a logical.
+          lbPrim?.setHover(typeof param.logical === "number" ? param.logical : null);
           if (syncingRef.current) return;
           syncingRef.current = true;
           try {
@@ -866,7 +892,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, parentChart, IC, gridColor, frequency]);
+  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, parentChart, IC, gridColor, frequency]);
 
   // Resize
   useEffect(() => {
@@ -2954,6 +2980,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           const def = getIndicatorDef(regId);
           if (!def) continue;
           const p = resolveParams(def, st, (chartConfig as { frequency?: string }).frequency ?? "daily");
+          // Autocorr on an RSI source windows over RSI values, not price — its
+          // line is drawn on the RSI/autocorr sub-chart instead (subLookback).
+          if (regId === "autocorr" && (p.source ?? 0) !== 0) continue;
           const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
           if (barsKey) pushLb(p[barsKey], (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
         }
@@ -3962,6 +3991,30 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Raw price OHLC bars for registry pane indicators (need real high/low).
   const ohlcBars: OhlcBar[] = Array.isArray(ohlcData) ? (ohlcData as OhlcBar[]) : [];
 
+  // Lookback-window hover entries routed to a SUB-chart instead of the main
+  // price chart: autocorr on an RSI source windows over RSI values, so its
+  // line belongs on the RSI sub-chart (falls back to autocorr's own sub-chart
+  // when the RSI panel is off). Memoized — a fresh array every render would
+  // recreate the sub-charts on every ChartPane render.
+  const subLookback = useMemo(() => {
+    const out: Record<string, LookbackEntry[]> = {};
+    if (activeIndicators.showLookbackWindow === false) return out;
+    const acSt = activeIndicators.registry?.["autocorr"];
+    if (!acSt?.enabled) return out;
+    const def = getIndicatorDef("autocorr");
+    if (!def) return out;
+    const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
+    if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
+      const target = typeof activeIndicators.rsi === "number" ? "rsi" : "autocorr";
+      out[target] = [{
+        bars: Math.round(p.window),
+        color: (IC as Record<string, string>).autocorr_line ?? "#e879f9",
+        label: "AC",
+      }];
+    }
+    return out;
+  }, [activeIndicators, chartConfig, IC]);
+
   // Close data for sub-charts: use the first visible series data
   const primaryForSub = paneSeries.find((s) => s.visible && s.data.length > 0);
   const subCloseData = primaryForSub ? primaryForSub.data : [];
@@ -4193,6 +4246,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               activeIndicators={activeIndicators}
               parentChart={chartRef.current}
               baseLabel={subBaseLabel}
+              lookbackEntries={subLookback[st]}
               isMaximized={isMax}
               onToggleMaximize={() => setMaxSub((cur) => (cur === st ? null : st))}
               onClose={onCloseSubIndicator ? () => {

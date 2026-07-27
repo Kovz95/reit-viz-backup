@@ -1075,6 +1075,24 @@ export type AutocorrSource = "returns" | "rsi" | "rsiChange";
  *  Sources: log returns of close, RSI level, or 1-bar RSI change. Each output
  *  point is the Pearson correlation of (x[t], x[t-lag]) pairs within the
  *  trailing `window` values ending at that bar; range [-1, 1]. */
+/** The derived series an autocorrelation source refers to: log returns of
+ *  close, RSI level, or 1-bar RSI change. */
+function autocorrSourceSeries(bars: OhlcBar[], source: AutocorrSource, rsiPeriod: number): DataPoint[] {
+  if (source === "returns") {
+    const out: DataPoint[] = [];
+    for (let i = 1; i < bars.length; i++) {
+      if (bars[i].close > 0 && bars[i - 1].close > 0) {
+        out.push({ time: bars[i].time, value: Math.log(bars[i].close / bars[i - 1].close) });
+      }
+    }
+    return out;
+  }
+  const rsi = computeRSI(bars.map((b) => ({ time: b.time, value: b.close })), rsiPeriod);
+  return source === "rsi"
+    ? rsi
+    : rsi.slice(1).map((d, i) => ({ time: d.time, value: d.value - rsi[i].value }));
+}
+
 export function computeRollingAutocorr(
   bars: OhlcBar[],
   source: AutocorrSource = "returns",
@@ -1082,20 +1100,7 @@ export function computeRollingAutocorr(
   window = 63,
   rsiPeriod = 14,
 ): DataPoint[] {
-  let series: DataPoint[];
-  if (source === "returns") {
-    series = [];
-    for (let i = 1; i < bars.length; i++) {
-      if (bars[i].close > 0 && bars[i - 1].close > 0) {
-        series.push({ time: bars[i].time, value: Math.log(bars[i].close / bars[i - 1].close) });
-      }
-    }
-  } else {
-    const rsi = computeRSI(bars.map((b) => ({ time: b.time, value: b.close })), rsiPeriod);
-    series = source === "rsi"
-      ? rsi
-      : rsi.slice(1).map((d, i) => ({ time: d.time, value: d.value - rsi[i].value }));
-  }
+  const series = autocorrSourceSeries(bars, source, rsiPeriod);
   const n = series.length;
   const pairs = window - lag;
   if (pairs < 5 || n < window) return [];
@@ -1121,4 +1126,46 @@ export function computeRollingAutocorr(
     result.push({ time: series[i].time, value: denom === 0 ? 0 : Math.round((cov / denom) * 10000) / 10000 });
   }
   return result;
+}
+
+export interface AcfSweepEntry {
+  lag: number;
+  /** Full-sample lag-k Pearson autocorrelation of the source series. */
+  value: number;
+  pairs: number;
+  /** White-noise 95% significance threshold 1.96/√pairs. */
+  threshold: number;
+  significant: boolean;
+}
+
+/** Full-sample ACF of an autocorrelation source at every lag 1..maxLag — the
+ *  "which lag should the Autocorrelation indicator use" sweep. Unlike
+ *  computeRollingAutocorr (one lag, trailing window per bar) this uses ALL
+ *  history per lag, so it ranks lags by their overall strength. */
+export function computeAcfSweep(
+  bars: OhlcBar[],
+  source: AutocorrSource = "returns",
+  maxLag = 30,
+  rsiPeriod = 14,
+): AcfSweepEntry[] {
+  const x = autocorrSourceSeries(bars, source, rsiPeriod).map((d) => d.value);
+  const n = x.length;
+  const out: AcfSweepEntry[] = [];
+  if (n < 30) return out;
+  for (let lag = 1; lag <= Math.min(maxLag, n - 10); lag++) {
+    const pairs = n - lag;
+    let sx = 0, sy = 0;
+    for (let j = lag; j < n; j++) { sx += x[j - lag]; sy += x[j]; }
+    const mx = sx / pairs, my = sy / pairs;
+    let cov = 0, vx = 0, vy = 0;
+    for (let j = lag; j < n; j++) {
+      const dx = x[j - lag] - mx, dy = x[j] - my;
+      cov += dx * dy; vx += dx * dx; vy += dy * dy;
+    }
+    const denom = Math.sqrt(vx * vy);
+    const value = denom === 0 ? 0 : cov / denom;
+    const threshold = 1.96 / Math.sqrt(pairs);
+    out.push({ lag, value, pairs, threshold, significant: Math.abs(value) > threshold });
+  }
+  return out;
 }

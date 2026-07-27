@@ -347,6 +347,11 @@ const AUTOCORR_SOURCES: { value: number; label: string; src: AutocorrSource }[] 
   { value: 2, label: "RSI change", src: "rsiChange" },
 ];
 
+/** Map the autocorr "source" param value (a <select> index) to its engine source. */
+export function autocorrSourceFromParam(v: number | undefined): AutocorrSource {
+  return AUTOCORR_SOURCES[v ?? 0]?.src ?? "returns";
+}
+
 const AUTOCORR: IndicatorDef = {
   id: "autocorr",
   label: "Autocorrelation",
