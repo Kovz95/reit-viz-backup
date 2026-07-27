@@ -33,7 +33,7 @@ export function loadOverrides(): OverridesMap {
   }
 }
 
-function saveOverrides(overrides: OverridesMap): void {
+function saveOverridesLocal(overrides: OverridesMap): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
@@ -41,26 +41,54 @@ function saveOverrides(overrides: OverridesMap): void {
   } catch {
     // quota exceeded — ignore
   }
-  pushOverridesToServer(overrides);
 }
 
 // ── Server sync ──
 // localStorage is only a per-browser cache; the server copy
 // (/api/classification-overrides → DATA_DIR/classification-overrides.json)
 // is the durable record, so reclassifications survive storage clears and
-// follow the user across browsers/devices. Last write wins.
+// follow the user across browsers/devices.
+//
+// Per-edit syncs are PER-TICKER upserts/deletes, serialized through one
+// promise chain. A full-map "replace" push is reserved for the explicit
+// Import-replace / Reset actions — pushing the whole local map on every
+// edit meant any client with a stale or empty cache (fresh profile, edit
+// racing the initial hydrate, out-of-order concurrent POSTs) replaced the
+// server file with its own tiny snapshot and destroyed everyone's overrides.
 
-function pushOverridesToServer(overrides: OverridesMap): void {
-  try {
-    // The server's existing bulk route; "replace" mirrors the full local map.
-    void fetch("/api/classification-overrides/_bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides, mode: "replace" }),
-    }).catch(() => {});
-  } catch {
-    /* offline / legacy server — localStorage-only mode */
-  }
+let syncChain: Promise<void> = Promise.resolve();
+function queueSync(fn: () => Promise<unknown>): void {
+  syncChain = syncChain.then(async () => {
+    try {
+      await fn();
+    } catch {
+      /* offline / legacy server — localStorage-only mode */
+    }
+  });
+}
+
+/** Tickers touched this session — their local records win over the hydrate. */
+const sessionEdited = new Set<string>();
+/** Set by explicit Reset / Import-replace: the local map is the intended
+ *  full state, so a late-arriving hydrate must not resurrect the server copy. */
+let localIsAuthoritative = false;
+
+function syncTickerToServer(ticker: string): void {
+  sessionEdited.add(ticker);
+  queueSync(() => {
+    // Read at send time so rapid edits to one ticker collapse to the latest.
+    const record = loadOverrides()[ticker];
+    const base = `/api/classification-overrides/${encodeURIComponent(ticker)}`;
+    if (record && Object.keys(record).length > 0) {
+      return fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overrides: record }),
+        keepalive: true,
+      });
+    }
+    return fetch(`${base}/delete`, { method: "POST", keepalive: true });
+  });
 }
 
 let serverHydrateStarted = false;
@@ -73,14 +101,21 @@ async function hydrateOverridesFromServer(): Promise<void> {
     const text = await res.text();
     if (!text || text.trimStart().startsWith("<")) return; // SPA fallback (legacy server)
     const server = JSON.parse(text)?.overrides;
-    if (server && typeof server === "object" && !Array.isArray(server) && Object.keys(server).length > 0) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(server));
-      window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
-    } else {
-      // Server empty: migrate any existing browser-local overrides up so the
-      // durable copy is seeded from what this browser already has.
-      const local = loadOverrides();
-      if (Object.keys(local).length > 0) pushOverridesToServer(local);
+    if (!server || typeof server !== "object" || Array.isArray(server)) return;
+    if (localIsAuthoritative) return; // user reset/replaced while this was in flight
+    const local = loadOverrides();
+    // Server copy wins, except tickers edited this session (their pushes are
+    // already queued, so local is newer for those).
+    const merged: OverridesMap = { ...(server as OverridesMap) };
+    for (const t of sessionEdited) {
+      if (local[t]) merged[t] = local[t];
+      else delete merged[t];
+    }
+    saveOverridesLocal(merged);
+    if (Object.keys(server as OverridesMap).length === 0) {
+      // Server empty: seed the durable copy from this browser's cache via
+      // non-destructive per-ticker upserts.
+      for (const t of Object.keys(merged)) syncTickerToServer(t);
     }
   } catch {
     /* offline / legacy server — localStorage-only mode */
@@ -132,7 +167,8 @@ export function commitClassificationOverride(
   } else {
     overrides[ticker][field] = newValue;
   }
-  saveOverrides(overrides);
+  saveOverridesLocal(overrides);
+  syncTickerToServer(ticker);
 }
 
 /**
@@ -147,17 +183,48 @@ export function importClassificationOverrides(
     if (!existing[ticker]) existing[ticker] = {};
     Object.assign(existing[ticker], override);
   }
-  saveOverrides(existing);
+  saveOverridesLocal(existing);
+  for (const t of Object.keys(incoming)) sessionEdited.add(t);
+  if (mode === "replace") {
+    localIsAuthoritative = true;
+    const snapshot = { ...existing };
+    queueSync(() =>
+      fetch("/api/classification-overrides/_bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overrides: snapshot, mode: "replace" }),
+      })
+    );
+  } else {
+    // Push the post-merge records (local merge is field-level; the server's
+    // merge is ticker-level, so send the already-merged result per ticker).
+    const payload: OverridesMap = {};
+    for (const t of Object.keys(incoming)) {
+      if (existing[t]) payload[t] = existing[t];
+    }
+    queueSync(() =>
+      fetch("/api/classification-overrides/_bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overrides: payload, mode: "merge" }),
+      })
+    );
+  }
 }
 
 /** Removes all overrides for a single ticker. */
 export function revertClassificationOverride(ticker: string): void {
   const overrides = loadOverrides();
   delete overrides[ticker];
-  saveOverrides(overrides);
+  saveOverridesLocal(overrides);
+  syncTickerToServer(ticker);
 }
 
 /** Clears all overrides globally. */
 export function resetAllClassificationOverrides(): void {
-  saveOverrides({});
+  localIsAuthoritative = true;
+  saveOverridesLocal({});
+  queueSync(() =>
+    fetch("/api/classification-overrides/_reset", { method: "POST" })
+  );
 }

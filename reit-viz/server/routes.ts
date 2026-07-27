@@ -5188,6 +5188,17 @@ export async function registerRoutes(server: Server, app: Express) {
   function saveOverrides(map: Record<string, Record<string, string>>): void {
     fs.writeFileSync(overridesFile, JSON.stringify(map, null, 2));
   }
+  // Snapshot the current file before a destructive whole-map write so a bad
+  // replace/reset can be recovered from DATA_DIR/classification-overrides.json.bak.
+  function backupOverridesFile(): void {
+    try {
+      if (!fs.existsSync(overridesFile)) return;
+      const cur = fs.readFileSync(overridesFile, "utf8").trim();
+      if (cur && cur !== "{}") fs.writeFileSync(overridesFile + ".bak", cur);
+    } catch {
+      /* best effort */
+    }
+  }
   // Keep only known fields with non-empty string values.
   function sanitizeOverride(input: any): Record<string, string> {
     const out: Record<string, string> = {};
@@ -5215,6 +5226,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const clean = sanitizeOverride(ov);
       if (Object.keys(clean).length > 0) incoming[t.toUpperCase()] = clean;
     }
+    if (mode === "replace") backupOverridesFile();
     const next = mode === "replace" ? incoming : { ...loadOverrides(), ...incoming };
     saveOverrides(next);
     res.json({});
@@ -5222,6 +5234,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // Reset all overrides.
   app.post("/api/classification-overrides/_reset", (_req, res) => {
+    backupOverridesFile();
     saveOverrides({});
     res.json({});
   });
