@@ -29,6 +29,7 @@ import {
   X as XIcon,
 } from "lucide-react";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
+import { indicatorPeriods } from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import type { OhlcBar } from "@/lib/indicators";
@@ -259,14 +260,14 @@ function MacroPane({
     indicatorSeriesRef.current = [];
     const primaryData = resolvedSeries[0]?.data;
     if (primaryData && primaryData.length > 0) {
-      // SMA
-      if (activeIndicators.sma) {
-        const smaData = computeSMA(primaryData, activeIndicators.sma);
+      // SMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.sma)) {
+        const smaData = computeSMA(primaryData, p);
         if (smaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.sma,
             lineWidth: 1,
-            title: `SMA ${activeIndicators.sma}`,
+            title: `SMA ${p}`,
             lineStyle: LineStyle.Dashed,
             priceLineVisible: false,
             lastValueVisible: false,
@@ -276,14 +277,14 @@ function MacroPane({
         }
       }
 
-      // EMA
-      if (activeIndicators.ema) {
-        const emaData = computeEMA(primaryData, activeIndicators.ema);
+      // EMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.ema)) {
+        const emaData = computeEMA(primaryData, p);
         if (emaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.ema,
             lineWidth: 1,
-            title: `EMA ${activeIndicators.ema}`,
+            title: `EMA ${p}`,
             priceLineVisible: false,
             lastValueVisible: false,
           });
@@ -292,14 +293,14 @@ function MacroPane({
         }
       }
 
-      // HMA
-      if (activeIndicators.hma) {
-        const hmaData = computeHMA(primaryData, activeIndicators.hma);
+      // HMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.hma)) {
+        const hmaData = computeHMA(primaryData, p);
         if (hmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.hma,
             lineWidth: 2,
-            title: `HMA ${activeIndicators.hma}`,
+            title: `HMA ${p}`,
             priceLineVisible: false,
             lastValueVisible: false,
           });
@@ -308,14 +309,15 @@ function MacroPane({
         }
       }
 
-      // LSMA
-      if ((activeIndicators as any).lsma && (IndicatorMath as any).computeLSMA) {
-        const lsmaData = (IndicatorMath as any).computeLSMA(primaryData, (activeIndicators as any).lsma, 0);
+      // LSMA (one line per period)
+      for (const p of indicatorPeriods((activeIndicators as any).lsma)) {
+        if (!(IndicatorMath as any).computeLSMA) break;
+        const lsmaData = (IndicatorMath as any).computeLSMA(primaryData, p, 0);
         if (lsmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: (INDICATOR_COLORS as any).lsma,
             lineWidth: 1,
-            title: `LSMA ${(activeIndicators as any).lsma}`,
+            title: `LSMA ${p}`,
             priceLineVisible: false,
             lastValueVisible: false,
           });
@@ -324,14 +326,15 @@ function MacroPane({
         }
       }
 
-      // SLSMA
-      if ((activeIndicators as any).slsma && (IndicatorMath as any).computeSLSMA) {
-        const slsmaData = (IndicatorMath as any).computeSLSMA(primaryData, (activeIndicators as any).slsma, 0);
+      // SLSMA (one line per period)
+      for (const p of indicatorPeriods((activeIndicators as any).slsma)) {
+        if (!(IndicatorMath as any).computeSLSMA) break;
+        const slsmaData = (IndicatorMath as any).computeSLSMA(primaryData, p, 0);
         if (slsmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: (INDICATOR_COLORS as any).slsma,
             lineWidth: 2,
-            title: `SLSMA ${(activeIndicators as any).slsma}`,
+            title: `SLSMA ${p}`,
             priceLineVisible: false,
             lastValueVisible: false,
           });
@@ -340,14 +343,14 @@ function MacroPane({
         }
       }
 
-      // RSI
-      if (typeof activeIndicators.rsi === "number") {
-        const rsiData = computeRSI(primaryData, activeIndicators.rsi);
+      // RSI (first period only — Macro's facade band shows one RSI)
+      for (const p of indicatorPeriods(activeIndicators.rsi).slice(0, 1)) {
+        const rsiData = computeRSI(primaryData, p);
         if (rsiData.length > 0) {
           const rsiLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.rsi_line,
             lineWidth: 1,
-            title: `RSI ${activeIndicators.rsi}`,
+            title: `RSI ${p}`,
             priceScaleId: "rsi",
             priceLineVisible: false,
             lastValueVisible: false,
@@ -548,14 +551,14 @@ function MacroPane({
         }
       }
 
-      // ROC
-      if (typeof activeIndicators.roc === "number") {
-        const rocData = computeROC(primaryData, activeIndicators.roc);
+      // ROC (first period only — Macro's facade band shows one ROC)
+      for (const p of indicatorPeriods(activeIndicators.roc).slice(0, 1)) {
+        const rocData = computeROC(primaryData, p);
         if (rocData.length > 0) {
           const rocLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.roc,
             lineWidth: 1,
-            title: `ROC ${activeIndicators.roc}`,
+            title: `ROC ${p}`,
             priceScaleId: "roc",
             priceLineVisible: false,
             lastValueVisible: false,

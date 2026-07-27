@@ -68,6 +68,7 @@ import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection } from "@/components/IndicatorsPanel";
+import { indicatorPeriods } from "@/components/ChartPane";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
@@ -1157,9 +1158,10 @@ function PairsIndicatorsPanel({
 
 function MiniMaRow({ label, presets, defaultLen, active, onToggle }: {
   label: string; presets: number[]; defaultLen: number;
-  active: number | undefined; onToggle: (v: number | undefined) => void;
+  active: number | number[] | undefined; onToggle: (v: number | undefined) => void;
 }) {
-  const [len, setLen] = useState(active ?? defaultLen);
+  const firstActive = indicatorPeriods(active)[0];
+  const [len, setLen] = useState(firstActive ?? defaultLen);
   const [custom, setCustom] = useState("");
   const applyLen = (n: number) => { setLen(n); if (active !== undefined) onToggle(n); };
   return (
@@ -1436,13 +1438,13 @@ function fmtReadoutVal(v: number): string {
 
 function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
   const out: PairsSubChartType[] = [];
-  if (typeof indicators.rsi === "number") out.push("rsi");
+  if (indicatorPeriods(indicators.rsi).length > 0) out.push("rsi");
   if (indicators.macd) out.push("macd");
   // HA is now rendered as an overlay inside MiniChart, not as a sub-pane
   // if (indicators.heikinAshi) out.push("ha");
-  if (typeof indicators.roc === "number") out.push("roc");
+  if (indicatorPeriods(indicators.roc).length > 0) out.push("roc");
   if (indicators.stochastic) out.push("stochastic");
-  if (typeof indicators.atr === "number") out.push("atr");
+  if (indicatorPeriods(indicators.atr).length > 0) out.push("atr");
   if (indicators.obv) out.push("obv");
   for (const def of ALL_REGISTRY_INDICATORS) {
     if (def.renderTarget === "pane" && indicators.registry?.[def.id]?.enabled) {
@@ -1511,23 +1513,28 @@ function PairsSubIndicatorChart({
 
     let firstSeries: ISeriesApi<any> | null = null;
 
-    // RSI
-    if (type === "rsi" && typeof activeIndicators.rsi === "number") {
-      const rsiData = computeRSI(closeData, activeIndicators.rsi);
-      if (rsiData.length > 0) {
+    // RSI (one line per period)
+    if (type === "rsi") {
+      let refDrawn = false;
+      for (const p of indicatorPeriods(activeIndicators.rsi)) {
+        const rsiData = computeRSI(closeData, p);
+        if (rsiData.length === 0) continue;
         const rsiLine = chart.addSeries(LineSeries, {
           color: IC.rsi_line, lineWidth: 1,
-          title: `RSI ${activeIndicators.rsi}`,
+          title: `RSI ${p}`,
         });
         rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = rsiLine;
-        const first = rsiData[0].time as Time;
-        const last = rsiData[rsiData.length - 1].time as Time;
-        for (const [level, clr] of [[70, IC.rsi_overbought], [30, IC.rsi_oversold]] as [number, string][]) {
-          const ref = chart.addSeries(LineSeries, {
-            color: clr, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
-          });
-          ref.setData([{ time: first, value: level }, { time: last, value: level }]);
+        if (!firstSeries) firstSeries = rsiLine;
+        if (!refDrawn) {
+          refDrawn = true;
+          const first = rsiData[0].time as Time;
+          const last = rsiData[rsiData.length - 1].time as Time;
+          for (const [level, clr] of [[70, IC.rsi_overbought], [30, IC.rsi_oversold]] as [number, string][]) {
+            const ref = chart.addSeries(LineSeries, {
+              color: clr, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
+            });
+            ref.setData([{ time: first, value: level }, { time: last, value: level }]);
+          }
         }
         chart.timeScale().fitContent();
       }
@@ -1582,16 +1589,19 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // ROC
-    if (type === "roc" && typeof activeIndicators.roc === "number") {
-      const rocData = computeROC(closeData, activeIndicators.roc);
-      if (rocData.length > 0) {
+    // ROC (one line per period)
+    if (type === "roc") {
+      let zeroDrawn = false;
+      for (const p of indicatorPeriods(activeIndicators.roc)) {
+        const rocData = computeROC(closeData, p);
+        if (rocData.length === 0) continue;
         const rocLine = chart.addSeries(LineSeries, {
-          color: IC.roc, lineWidth: 1, title: `ROC ${activeIndicators.roc}`,
+          color: IC.roc, lineWidth: 1, title: `ROC ${p}`,
         });
         rocLine.setData(rocData.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = rocLine;
-        if (rocData.length >= 2) {
+        if (!firstSeries) firstSeries = rocLine;
+        if (!zeroDrawn && rocData.length >= 2) {
+          zeroDrawn = true;
           const zl = chart.addSeries(LineSeries, {
             color: "rgba(255,255,255,0.15)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
           });
@@ -1632,15 +1642,16 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // ATR
-    if (type === "atr" && typeof activeIndicators.atr === "number") {
-      const atrData = computeATR(closeData, activeIndicators.atr);
-      if (atrData.length > 0) {
+    // ATR (one line per period)
+    if (type === "atr") {
+      for (const p of indicatorPeriods(activeIndicators.atr)) {
+        const atrData = computeATR(closeData, p);
+        if (atrData.length === 0) continue;
         const atrLine = chart.addSeries(LineSeries, {
-          color: IC.atr, lineWidth: 1, title: `ATR ${activeIndicators.atr}`,
+          color: IC.atr, lineWidth: 1, title: `ATR ${p}`,
         });
         atrLine.setData(atrData.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = atrLine;
+        if (!firstSeries) firstSeries = atrLine;
         chart.timeScale().fitContent();
       }
     }
@@ -2001,35 +2012,35 @@ function MiniChart({
 
     // ── Indicators on main data ──
     if (data.length > 0) {
-      // SMA
-      if (activeIndicators.sma) {
-        const smaData = computeSMA(data, activeIndicators.sma);
+      // SMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.sma)) {
+        const smaData = computeSMA(data, p);
         if (smaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.sma, lineWidth: 1,
-            title: `SMA ${activeIndicators.sma}`, lineStyle: LineStyle.Dashed,
+            title: `SMA ${p}`, lineStyle: LineStyle.Dashed,
           });
           s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
         }
       }
-      // EMA
-      if (activeIndicators.ema) {
-        const emaData = computeEMA(data, activeIndicators.ema);
+      // EMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.ema)) {
+        const emaData = computeEMA(data, p);
         if (emaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.ema, lineWidth: 1,
-            title: `EMA ${activeIndicators.ema}`,
+            title: `EMA ${p}`,
           });
           s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
         }
       }
-      // HMA
-      if (activeIndicators.hma) {
-        const hmaData = computeHMA(data, activeIndicators.hma);
+      // HMA (one line per period)
+      for (const p of indicatorPeriods(activeIndicators.hma)) {
+        const hmaData = computeHMA(data, p);
         if (hmaData.length > 0) {
           const s = chart.addSeries(LineSeries, {
             color: IC.hma, lineWidth: 2,
-            title: `HMA ${activeIndicators.hma}`,
+            title: `HMA ${p}`,
           });
           s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
         }

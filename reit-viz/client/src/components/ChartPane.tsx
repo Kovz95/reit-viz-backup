@@ -110,6 +110,30 @@ function chartBarsPerIndicatorBar(chartFreq: string | undefined, indFreq: string
   return 1;
 }
 
+/** Period-style indicator fields accept one period OR a list — multiple
+ *  instances of the same indicator (SMA 50 + SMA 200, RSI 14 + RSI 21) render
+ *  as one line per period. This normalizes either shape to a clean list. */
+export function indicatorPeriods(v: number | number[] | undefined): number[] {
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) return [v];
+  if (Array.isArray(v)) return v.filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0);
+  return [];
+}
+
+/** Distinct-but-related color for the idx-th instance of one indicator:
+ *  base color first, then alternating lighter/darker shades. */
+function shadeHex(color: string, idx: number): string {
+  if (idx === 0 || !/^#[0-9a-f]{6}$/i.test(color)) return color;
+  const v = parseInt(color.slice(1), 16);
+  let r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+  const step = Math.ceil(idx / 2);
+  const a = Math.min(0.55, 0.3 * step);
+  const t = idx % 2 === 1 ? 255 : 0; // odd instances lighter, even darker
+  r = Math.round(r + (t - r) * a);
+  g = Math.round(g + (t - g) * a);
+  b = Math.round(b + (t - b) * a);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
 /** An indicator computed ON another indicator, drawn on top of that
  *  indicator's sub-chart (e.g. EMA of RSI, Bollinger on RSI, StochRSI,
  *  MACD of RSI). `source` is the sub-chart type id (built-in or registry);
@@ -138,21 +162,22 @@ export interface ActiveIndicators {
   /** RSI compute frequency — weekly/monthly resample the closes first
    *  (weekly RSI on a daily chart). Default the chart's own bars. */
   rsiFreq?: "chart" | "weekly" | "monthly";
-  sma?: number;
-  ema?: number;
-  hma?: number;
+  // MA overlays: one period or a list (one line per period — see indicatorPeriods).
+  sma?: number | number[];
+  ema?: number | number[];
+  hma?: number | number[];
   // Extended moving-average overlays (periods); toggleable from the Moving
   // Averages section and also driven by the Find Best MA panel.
-  wma?: number;
-  dema?: number;
-  tema?: number;
-  kama?: number;
-  frama?: number;
-  t3?: number;
-  alma?: number;
-  lsma?: number;
-  slsma?: number;
-  rsi?: number;       // period
+  wma?: number | number[];
+  dema?: number | number[];
+  tema?: number | number[];
+  kama?: number | number[];
+  frama?: number | number[];
+  t3?: number | number[];
+  alma?: number | number[];
+  lsma?: number | number[];
+  slsma?: number | number[];
+  rsi?: number | number[];       // period(s)
   macd?: boolean;
   /** Mean ± σ bands. bandOpacity drives band-line alpha (default 0.8);
    *  shade (rolling only, default on) fills the ±1σ/±2σ areas. */
@@ -160,9 +185,9 @@ export interface ActiveIndicators {
   heikinAshi?: boolean | HASmoothConfig; // true = no smoothing, object = smoothing config
   haSignals?: boolean;
   bollinger?: { period: number; mult: number };
-  atr?: number;       // period
+  atr?: number | number[];       // period(s)
   vwap?: boolean;
-  roc?: number;       // period
+  roc?: number | number[];       // period(s)
   stochastic?: { kPeriod: number; dPeriod: number };
   obv?: boolean;
   ad?: boolean;
@@ -493,7 +518,8 @@ function SubIndicatorChart({
       } catch {}
     }
 
-    if (type === "rsi" && typeof activeIndicators.rsi === "number") {
+    const rsiPeriods = indicatorPeriods(activeIndicators.rsi);
+    if (type === "rsi" && rsiPeriods.length > 0) {
       // Optional weekly/monthly compute frequency: resample closes first so a
       // daily chart can show a weekly RSI (points on period-end dates).
       const rsiFreq = activeIndicators.rsiFreq;
@@ -504,17 +530,22 @@ function SubIndicatorChart({
               rsiFreq,
             ).map((b) => ({ time: b.time as unknown as Time, value: b.close }))
           : closeData;
-      const rsiData = computeRSI(rsiInput as typeof closeData, activeIndicators.rsi);
-      if (rsiData.length > 0) {
+      // One RSI line per period (shaded variants of the RSI color).
+      let rsiData: { time: Time; value: number }[] = [];
+      rsiPeriods.forEach((p, pi) => {
+        const data = computeRSI(rsiInput as typeof closeData, p);
+        if (!data.length) return;
         const rsiLine = chart.addSeries(LineSeries, {
-          color: IC.rsi_line,
+          color: shadeHex(IC.rsi_line, pi),
           lineWidth: 1,
-          title: `RSI ${activeIndicators.rsi}${rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : ""}${baseLabel}`,
+          title: `RSI ${p}${rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : ""}${baseLabel}`,
         });
-        rsiLine.setData(rsiData);
+        rsiLine.setData(data);
         subSeriesList.push(rsiLine);
         if (!firstSubSeries) firstSubSeries = rsiLine;
-
+        if (!rsiData.length) rsiData = data as any;
+      });
+      if (rsiData.length > 0) {
         // Overbought/oversold reference lines
         const first = rsiData[0].time;
         const last = rsiData[rsiData.length - 1].time;
@@ -596,35 +627,40 @@ function SubIndicatorChart({
       }
     }
 
-    // ── ATR ──
-    if (type === "atr" && typeof activeIndicators.atr === "number") {
-      const atrData = computeATR(closeData, activeIndicators.atr);
-      if (atrData.length > 0) {
+    // ── ATR (one line per period) ──
+    if (type === "atr") {
+      indicatorPeriods(activeIndicators.atr).forEach((p, pi) => {
+        const atrData = computeATR(closeData, p);
+        if (!atrData.length) return;
         const atrLine = chart.addSeries(LineSeries, {
-          color: IC.atr,
+          color: shadeHex(IC.atr, pi),
           lineWidth: 1,
-          title: `ATR ${activeIndicators.atr}${baseLabel}`,
+          title: `ATR ${p}${baseLabel}`,
         });
         atrLine.setData(atrData);
         subSeriesList.push(atrLine);
         if (!firstSubSeries) firstSubSeries = atrLine;
         chart.timeScale().fitContent();
-      }
+      });
     }
 
-    // ── ROC ──
-    if (type === "roc" && typeof activeIndicators.roc === "number") {
-      const rocData = computeROC(closeData, activeIndicators.roc);
-      if (rocData.length > 0) {
+    // ── ROC (one line per period) ──
+    if (type === "roc" && indicatorPeriods(activeIndicators.roc).length > 0) {
+      let rocData: { time: Time; value: number }[] = [];
+      indicatorPeriods(activeIndicators.roc).forEach((p, pi) => {
+        const data = computeROC(closeData, p);
+        if (!data.length) return;
         const rocLine = chart.addSeries(LineSeries, {
-          color: IC.roc,
+          color: shadeHex(IC.roc, pi),
           lineWidth: 1,
-          title: `ROC ${activeIndicators.roc}${baseLabel}`,
+          title: `ROC ${p}${baseLabel}`,
         });
-        rocLine.setData(rocData);
+        rocLine.setData(data);
         subSeriesList.push(rocLine);
         if (!firstSubSeries) firstSubSeries = rocLine;
-
+        if (!rocData.length) rocData = data as any;
+      });
+      if (rocData.length > 0) {
         // Zero line
         if (rocData.length >= 2) {
           const zl = chart.addSeries(LineSeries, {
@@ -2892,58 +2928,29 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         );
       };
 
-      // ── SMA ──
-      if (activeIndicators.sma) {
-        const smaData = computeSMA(closeData, activeIndicators.sma);
-        if (smaData.length > 0) {
-          const grad = !!IC_G.sma;
+      // ── SMA / EMA / HMA (one line per period — see indicatorPeriods) ──
+      const CORE_MA: Array<["sma" | "ema" | "hma", string, (d: typeof closeData, p: number) => typeof closeData]> = [
+        ["sma", "SMA", computeSMA],
+        ["ema", "EMA", computeEMA],
+        ["hma", "HMA", computeHMA],
+      ];
+      for (const [key, name, compute] of CORE_MA) {
+        indicatorPeriods(activeIndicators[key]).forEach((p, pi) => {
+          const maData = compute(closeData, p);
+          if (maData.length === 0) return;
+          const grad = !!IC_G[key];
+          const base = shadeHex(IC[key], pi);
           const s = chart.addSeries(LineSeries, {
-            color: withOpacity(IC.sma, IC_O.sma),
-            lineWidth: IC_W.sma as any,
-            title: `SMA ${activeIndicators.sma}${baseLabel}`,
-            lineStyle: maLineStyle(IC_S.sma),
+            color: withOpacity(base, IC_O[key]),
+            lineWidth: IC_W[key] as any,
+            title: `${name} ${p}${baseLabel}`,
+            lineStyle: maLineStyle(IC_S[key]),
             lineVisible: !grad,
           });
-          s.setData(smaData);
+          s.setData(maData);
           indicatorSeriesRef.current.push(s);
-          if (grad) attachGradient(s, smaData, "sma", IC.sma);
-        }
-      }
-
-      // ── EMA ──
-      if (activeIndicators.ema) {
-        const emaData = computeEMA(closeData, activeIndicators.ema);
-        if (emaData.length > 0) {
-          const grad = !!IC_G.ema;
-          const s = chart.addSeries(LineSeries, {
-            color: withOpacity(IC.ema, IC_O.ema),
-            lineWidth: IC_W.ema as any,
-            title: `EMA ${activeIndicators.ema}${baseLabel}`,
-            lineStyle: maLineStyle(IC_S.ema),
-            lineVisible: !grad,
-          });
-          s.setData(emaData);
-          indicatorSeriesRef.current.push(s);
-          if (grad) attachGradient(s, emaData, "ema", IC.ema);
-        }
-      }
-
-      // ── HMA ──
-      if (activeIndicators.hma) {
-        const hmaData = computeHMA(closeData, activeIndicators.hma);
-        if (hmaData.length > 0) {
-          const grad = !!IC_G.hma;
-          const s = chart.addSeries(LineSeries, {
-            color: withOpacity(IC.hma, IC_O.hma),
-            lineWidth: IC_W.hma as any,
-            title: `HMA ${activeIndicators.hma}${baseLabel}`,
-            lineStyle: maLineStyle(IC_S.hma),
-            lineVisible: !grad,
-          });
-          s.setData(hmaData);
-          indicatorSeriesRef.current.push(s);
-          if (grad) attachGradient(s, hmaData, "hma", IC.hma);
-        }
+          if (grad) attachGradient(s, maData, key, base);
+        });
       }
 
       // ── Extended MAs (WMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA), driven by Find Best MA ──
@@ -2960,27 +2967,28 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       ];
       const closeVals = closeData.map((d) => d.value as number);
       for (const [field, maType, width, color] of EXTRA_MA) {
-        const period = activeIndicators[field] as number | undefined;
-        if (!period) continue;
-        const series = computeMaByType(closeVals, period, maType);
-        const maData: { time: Time; value: number }[] = [];
-        for (let i = 0; i < closeData.length; i++) {
-          const v = series[i];
-          if (v != null && Number.isFinite(v)) maData.push({ time: closeData[i].time, value: v as number });
-        }
-        if (maData.length > 0) {
-          const grad = !!IC_G[field];
-          const s = chart.addSeries(LineSeries, {
-            color: withOpacity(color, IC_O[field]),
-            lineWidth: (IC_W[field] ?? width) as any,
-            title: `${maType} ${period}${baseLabel}`,
-            lineStyle: maLineStyle(IC_S[field]),
-            lineVisible: !grad,
-          });
-          s.setData(maData);
-          indicatorSeriesRef.current.push(s);
-          if (grad) attachGradient(s, maData, field as string, color);
-        }
+        indicatorPeriods(activeIndicators[field] as number | number[] | undefined).forEach((period, pi) => {
+          const series = computeMaByType(closeVals, period, maType);
+          const maData: { time: Time; value: number }[] = [];
+          for (let i = 0; i < closeData.length; i++) {
+            const v = series[i];
+            if (v != null && Number.isFinite(v)) maData.push({ time: closeData[i].time, value: v as number });
+          }
+          if (maData.length > 0) {
+            const grad = !!IC_G[field];
+            const base = shadeHex(color, pi);
+            const s = chart.addSeries(LineSeries, {
+              color: withOpacity(base, IC_O[field]),
+              lineWidth: (IC_W[field] ?? width) as any,
+              title: `${maType} ${period}${baseLabel}`,
+              lineStyle: maLineStyle(IC_S[field]),
+              lineVisible: !grad,
+            });
+            s.setData(maData);
+            indicatorSeriesRef.current.push(s);
+            if (grad) attachGradient(s, maData, field as string, base);
+          }
+        });
       }
 
       // ── Bollinger Bands ── (overlay on main chart)
@@ -3085,18 +3093,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           }
         };
         for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
-          pushLb((activeIndicators as any)[k], (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
+          for (const p of indicatorPeriods((activeIndicators as any)[k])) {
+            pushLb(p, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
+          }
         }
-        pushLb(
-          typeof activeIndicators.rsi === "number"
-            ? activeIndicators.rsi * chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.rsiFreq)
-            : undefined,
-          (IC as any).rsi ?? "#a855f7",
-          "RSI"
-        );
+        const rsiMult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.rsiFreq);
+        for (const p of indicatorPeriods(activeIndicators.rsi)) {
+          pushLb(p * rsiMult, (IC as any).rsi ?? "#a855f7", "RSI");
+        }
         pushLb(activeIndicators.bollinger?.period, (IC as any).bollinger_basis ?? "#f59e0b", "BB");
-        pushLb(typeof activeIndicators.atr === "number" ? activeIndicators.atr : undefined, (IC as any).atr ?? "#f59e0b", "ATR");
-        pushLb(typeof activeIndicators.roc === "number" ? activeIndicators.roc : undefined, (IC as any).roc ?? "#38bdf8", "ROC");
+        for (const p of indicatorPeriods(activeIndicators.atr)) pushLb(p, (IC as any).atr ?? "#f59e0b", "ATR");
+        for (const p of indicatorPeriods(activeIndicators.roc)) pushLb(p, (IC as any).roc ?? "#38bdf8", "ROC");
         pushLb(activeIndicators.stochastic?.kPeriod, (IC as any).stoch_k ?? "#22c55e", "Stoch");
         if (activeIndicators.mean?.rolling) pushLb(activeIndicators.mean.period, (IC as any).mean ?? "#94a3b8", "Mean");
         for (const [regId, st] of Object.entries(activeIndicators.registry ?? {})) {
@@ -4135,11 +4142,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
   // Determine which sub-indicator charts to show
   const subCharts: SubChartType[] = [];
-  if (typeof activeIndicators.rsi === "number") subCharts.push("rsi");
+  if (indicatorPeriods(activeIndicators.rsi).length > 0) subCharts.push("rsi");
   if (activeIndicators.macd) subCharts.push("macd");
   if (activeIndicators.heikinAshi) subCharts.push("ha");
-  if (typeof activeIndicators.atr === "number") subCharts.push("atr");
-  if (typeof activeIndicators.roc === "number") subCharts.push("roc");
+  if (indicatorPeriods(activeIndicators.atr).length > 0) subCharts.push("atr");
+  if (indicatorPeriods(activeIndicators.roc).length > 0) subCharts.push("roc");
   if (activeIndicators.stochastic) subCharts.push("stochastic");
   if (activeIndicators.obv) subCharts.push("obv");
   // Registry-driven sub-pane indicators (see indicatorRegistry.ts).
@@ -4167,7 +4174,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     if (!def) return out;
     const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
     if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
-      const target = typeof activeIndicators.rsi === "number" ? "rsi" : "autocorr";
+      const target = indicatorPeriods(activeIndicators.rsi).length > 0 ? "rsi" : "autocorr";
       const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, acSt.freq);
       out[target] = [{
         bars: Math.round(p.window * mult),

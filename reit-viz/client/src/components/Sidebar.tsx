@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
-import type { ActiveIndicators } from "@/components/ChartPane";
+import { indicatorPeriods, type ActiveIndicators } from "@/components/ChartPane";
 import { getIndicatorDef } from "@/lib/indicatorRegistry";
 
 /** Compact badges for a pane's enabled indicators (Current Layout list).
@@ -18,18 +18,26 @@ function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
   if (!ind) return [];
   const hiddenSet = new Set(ind.hiddenSubCharts ?? []);
   const out: IndicatorBadge[] = [];
-  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
   const sub = (label: string, subChart: string) =>
     out.push({ label, subChart, hidden: hiddenSet.has(subChart) });
   for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"]) {
-    const v = (ind as any)[k];
-    if (num(v)) out.push({ label: `${k.toUpperCase()} ${v}` });
+    const ps = indicatorPeriods((ind as any)[k]);
+    if (ps.length) out.push({ label: `${k.toUpperCase()} ${ps.join("/")}` });
   }
-  if (num(ind.rsi)) sub(`RSI ${ind.rsi}`, "rsi");
+  {
+    const ps = indicatorPeriods(ind.rsi);
+    if (ps.length) sub(`RSI ${ps.join("/")}`, "rsi");
+  }
   if ((ind as any).macd) sub("MACD", "macd");
   if (ind.bollinger) out.push({ label: `BB ${ind.bollinger.period}` });
-  if (num((ind as any).atr)) sub(`ATR ${(ind as any).atr}`, "atr");
-  if (num((ind as any).roc)) sub(`ROC ${(ind as any).roc}`, "roc");
+  {
+    const ps = indicatorPeriods((ind as any).atr);
+    if (ps.length) sub(`ATR ${ps.join("/")}`, "atr");
+  }
+  {
+    const ps = indicatorPeriods((ind as any).roc);
+    if (ps.length) sub(`ROC ${ps.join("/")}`, "roc");
+  }
   if (ind.stochastic) sub(`Stoch ${ind.stochastic.kPeriod}`, "stochastic");
   if ((ind as any).heikinAshi) sub("HA", "ha");
   if ((ind as any).obv) sub("OBV", "obv");

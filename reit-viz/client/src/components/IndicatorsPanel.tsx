@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 
 import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus, Layers } from "lucide-react";
@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { indicatorPeriods } from "./ChartPane";
 import type { ActiveIndicators, IndicatorOverlay } from "./ChartPane";
 import { FindBestMAPanel } from "./FindBestMAPanel";
 import type { PaneInfo } from "@/pages/Dashboard";
@@ -222,6 +223,82 @@ function SectionHeader({
 }
 
 /** Compact row for a moving-average indicator with preset buttons + custom input */
+/** Multi-select period picker: preset buttons toggle membership (several can
+ *  be active at once → one indicator line per period), non-preset periods
+ *  show as removable chips, and the number input ADDS a period on Enter.
+ *  Clicking a period while the indicator is off turns it on with just that
+ *  period. */
+function PeriodMultiSelect({
+  presets,
+  active,
+  onChange,
+  testid,
+  min = 2,
+}: {
+  presets: number[];
+  active: number | number[] | undefined;
+  onChange: (list: number[] | undefined) => void;
+  testid: string;
+  min?: number;
+}) {
+  const list = indicatorPeriods(active);
+  const [custom, setCustom] = useState("");
+  const toggle = (p: number) => {
+    const next = list.includes(p)
+      ? list.filter((x) => x !== p)
+      : [...list, p].sort((a, b) => a - b);
+    onChange(next.length ? next : undefined);
+  };
+  return (
+    <>
+      {presets.map((p) => (
+        <Button
+          key={p}
+          variant={list.includes(p) ? "default" : "secondary"}
+          size="sm"
+          className="h-6 px-2 text-[10px] flex-1"
+          onClick={() => toggle(p)}
+          title={list.includes(p) ? `Remove the ${p}-period line` : `Add a ${p}-period line`}
+        >
+          {p}
+        </Button>
+      ))}
+      {list.filter((p) => !presets.includes(p)).map((p) => (
+        <Button
+          key={p}
+          variant="default"
+          size="sm"
+          className="h-6 px-1.5 text-[10px]"
+          onClick={() => toggle(p)}
+          title={`Remove the ${p}-period line`}
+        >
+          {p} ×
+        </Button>
+      ))}
+      <Input
+        type="number"
+        placeholder="+#"
+        className="h-6 w-14 text-[10px] px-1.5"
+        value={custom}
+        min={min}
+        onChange={(e) => setCustom(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const n = parseInt(custom, 10);
+            if (Number.isFinite(n) && n >= min) {
+              toggle(n);
+              setCustom("");
+            }
+          }
+        }}
+        title="Type a period and press Enter to add another line"
+        data-testid={testid}
+      />
+    </>
+  );
+}
+
 function MaRow({
   label,
   presets,
@@ -232,16 +309,13 @@ function MaRow({
   label: string;
   presets: number[];
   defaultLen: number;
-  active: number | undefined;
-  onToggle: (val: number | undefined) => void;
+  active: number | number[] | undefined;
+  onToggle: (val: number[] | undefined) => void;
 }) {
-  const [len, setLen] = useState(active ?? defaultLen);
-  const [custom, setCustom] = useState("");
-
-  const applyLen = (n: number) => {
-    setLen(n);
-    if (active !== undefined) onToggle(n);
-  };
+  const activeList = indicatorPeriods(active);
+  // Remember the last non-empty selection so the on/off switch restores it.
+  const lastRef = useRef<number[]>(activeList.length ? activeList : [defaultLen]);
+  if (activeList.length) lastRef.current = activeList;
 
   // Each MA's colour key is its lowercased label (sma, ema, dema, …). Show an
   // inline colour dot so the line colour is editable right where it's toggled;
@@ -261,35 +335,18 @@ function MaRow({
           <Label className="text-xs font-medium ml-0.5">{label}</Label>
         </div>
         <Switch
-          checked={active !== undefined}
-          onCheckedChange={(on) => onToggle(on ? len : undefined)}
+          checked={activeList.length > 0}
+          onCheckedChange={(on) => onToggle(on ? lastRef.current : undefined)}
           data-testid={`toggle-${label.toLowerCase()}`}
         />
       </div>
-      <div className="flex gap-1 items-center">
-        {presets.map((p) => (
-          <Button
-            key={p}
-            variant={len === p ? "default" : "secondary"}
-            size="sm"
-            className="h-6 px-2 text-[10px] flex-1"
-            onClick={() => applyLen(p)}
-          >
-            {p}
-          </Button>
-        ))}
-        <Input
-          type="number"
-          placeholder="Custom"
-          className="h-6 w-20 text-[10px] px-1.5"
-          value={custom}
+      <div className="flex gap-1 items-center flex-wrap">
+        <PeriodMultiSelect
+          presets={presets}
+          active={active}
+          onChange={onToggle}
+          testid={`custom-${label.toLowerCase()}`}
           min={1}
-          onChange={(e) => {
-            setCustom(e.target.value);
-            const n = parseInt(e.target.value);
-            if (n > 0) applyLen(n);
-          }}
-          data-testid={`custom-${label.toLowerCase()}`}
         />
       </div>
     </div>
@@ -997,51 +1054,30 @@ export default function IndicatorsPanel({
           />
 
           {!isCollapsed("Oscillators") && (<>
-          {/* RSI */}
+          {/* RSI — multi-period: several lines can share the RSI subplot */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">RSI</Label>
               <Switch
-                checked={activeIndicators.rsi !== undefined}
+                checked={indicatorPeriods(activeIndicators.rsi).length > 0}
                 onCheckedChange={(on) =>
                   setActiveIndicators({
                     ...activeIndicators,
-                    rsi: on ? rsiPeriod : undefined,
+                    rsi: on ? [rsiPeriod] : undefined,
                   })
                 }
                 data-testid="toggle-rsi"
               />
             </div>
-            <div className="flex gap-1 items-center">
-              {[7, 14, 21].map((p) => (
-                <Button
-                  key={p}
-                  variant={rsiPeriod === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setRsiPeriod(p);
-                    if (activeIndicators.rsi !== undefined)
-                      setActiveIndicators({ ...activeIndicators, rsi: p });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-              <Input
-                type="number"
-                placeholder="#"
-                className="h-6 w-14 text-[10px] px-1.5"
-                min={2}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value);
-                  if (n > 1) {
-                    setRsiPeriod(n);
-                    if (activeIndicators.rsi !== undefined)
-                      setActiveIndicators({ ...activeIndicators, rsi: n });
-                  }
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[7, 14, 21]}
+                active={activeIndicators.rsi}
+                onChange={(list) => {
+                  if (list?.length) setRsiPeriod(list[0]);
+                  setActiveIndicators({ ...activeIndicators, rsi: list });
                 }}
-                data-testid="custom-rsi"
+                testid="custom-rsi"
               />
               <select
                 className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
@@ -1122,51 +1158,31 @@ export default function IndicatorsPanel({
             </div>
           </div>
 
-          {/* ROC */}
+          {/* ROC — multi-period: several lines share the ROC subplot */}
           <div className="space-y-2 mt-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">ROC (Rate of Change)</Label>
               <Switch
-                checked={activeIndicators.roc !== undefined}
+                checked={indicatorPeriods(activeIndicators.roc).length > 0}
                 onCheckedChange={(on) =>
                   setActiveIndicators({
                     ...activeIndicators,
-                    roc: on ? rocPeriod : undefined,
+                    roc: on ? [rocPeriod] : undefined,
                   })
                 }
                 data-testid="toggle-roc"
               />
             </div>
-            <div className="flex gap-1 items-center">
-              {[9, 12, 20, 50].map((p) => (
-                <Button
-                  key={p}
-                  variant={rocPeriod === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setRocPeriod(p);
-                    if (activeIndicators.roc !== undefined)
-                      setActiveIndicators({ ...activeIndicators, roc: p });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-              <Input
-                type="number"
-                placeholder="#"
-                className="h-6 w-14 text-[10px] px-1.5"
-                min={1}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value);
-                  if (n > 0) {
-                    setRocPeriod(n);
-                    if (activeIndicators.roc !== undefined)
-                      setActiveIndicators({ ...activeIndicators, roc: n });
-                  }
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[9, 12, 20, 50]}
+                active={activeIndicators.roc}
+                onChange={(list) => {
+                  if (list?.length) setRocPeriod(list[0]);
+                  setActiveIndicators({ ...activeIndicators, roc: list });
                 }}
-                data-testid="custom-roc"
+                testid="custom-roc"
+                min={1}
               />
             </div>
           </div>
@@ -1236,51 +1252,30 @@ export default function IndicatorsPanel({
             </div>
           </div>
 
-          {/* ATR */}
+          {/* ATR — multi-period: several lines share the ATR subplot */}
           <div className="space-y-2 mt-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">ATR</Label>
               <Switch
-                checked={activeIndicators.atr !== undefined}
+                checked={indicatorPeriods(activeIndicators.atr).length > 0}
                 onCheckedChange={(on) =>
                   setActiveIndicators({
                     ...activeIndicators,
-                    atr: on ? atrPeriod : undefined,
+                    atr: on ? [atrPeriod] : undefined,
                   })
                 }
                 data-testid="toggle-atr"
               />
             </div>
-            <div className="flex gap-1 items-center">
-              {[7, 14, 21].map((p) => (
-                <Button
-                  key={p}
-                  variant={atrPeriod === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setAtrPeriod(p);
-                    if (activeIndicators.atr !== undefined)
-                      setActiveIndicators({ ...activeIndicators, atr: p });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-              <Input
-                type="number"
-                placeholder="#"
-                className="h-6 w-14 text-[10px] px-1.5"
-                min={2}
-                onChange={(e) => {
-                  const n = parseInt(e.target.value);
-                  if (n > 1) {
-                    setAtrPeriod(n);
-                    if (activeIndicators.atr !== undefined)
-                      setActiveIndicators({ ...activeIndicators, atr: n });
-                  }
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[7, 14, 21]}
+                active={activeIndicators.atr}
+                onChange={(list) => {
+                  if (list?.length) setAtrPeriod(list[0]);
+                  setActiveIndicators({ ...activeIndicators, atr: list });
                 }}
-                data-testid="custom-atr"
+                testid="custom-atr"
               />
             </div>
           </div>
