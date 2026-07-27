@@ -37,6 +37,7 @@ import {
   OVERLAY_INDICATORS,
   getIndicatorDef,
   resolveParams,
+  resolveParamList,
   resampleIndicatorBars,
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
@@ -760,32 +761,46 @@ function SubIndicatorChart({
         regBars = resampleIndicatorBars(regBars, regFreq);
       }
       const params = resolveParams(regDef, activeIndicators.registry?.[type], frequency);
-      regDef.renderPane(
-        {
-          chart,
-          colors: IC as unknown as Record<string, string>,
-          baseLabel,
-          register: (s) => {
-            subSeriesList.push(s);
-            if (!firstSubSeries) firstSubSeries = s;
+      const drawRefLine = (level: number, color: string, first: unknown, last: unknown) => {
+        const ref = chart.addSeries(LineSeries, {
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          title: "",
+          crosshairMarkerVisible: false,
+        });
+        ref.setData([
+          { time: first as Time, value: level },
+          { time: last as Time, value: level },
+        ]);
+      };
+      // Multi-instance param (e.g. autocorr lag list): render once per value —
+      // extra instances get shaded line colors and skip the reference lines.
+      const instValues: (number | null)[] = regDef.multiInstanceParam
+        ? resolveParamList(regDef, activeIndicators.registry?.[type], frequency, regDef.multiInstanceParam)
+        : [null];
+      instValues.forEach((iv, ii) => {
+        const p2 = iv === null ? params : { ...params, [regDef.multiInstanceParam!]: iv };
+        const lineKey = regDef.colorKeys[0];
+        const colors =
+          ii === 0
+            ? (IC as unknown as Record<string, string>)
+            : { ...(IC as unknown as Record<string, string>), [lineKey]: shadeHex((IC as Record<string, string>)[lineKey], ii) };
+        regDef.renderPane!(
+          {
+            chart,
+            colors,
+            baseLabel,
+            register: (s) => {
+              subSeriesList.push(s);
+              if (!firstSubSeries) firstSubSeries = s;
+            },
+            refLine: ii === 0 ? drawRefLine : () => {},
           },
-          refLine: (level, color, first, last) => {
-            const ref = chart.addSeries(LineSeries, {
-              color,
-              lineWidth: 1,
-              lineStyle: LineStyle.Dotted,
-              title: "",
-              crosshairMarkerVisible: false,
-            });
-            ref.setData([
-              { time: first as Time, value: level },
-              { time: last as Time, value: level },
-            ]);
-          },
-        },
-        regBars,
-        params,
-      );
+          regBars,
+          p2,
+        );
+      });
       chart.timeScale().fitContent();
     }
 

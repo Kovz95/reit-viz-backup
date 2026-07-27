@@ -59,7 +59,9 @@ export type RenderTarget = "pane" | "overlay";
 /** Generic per-indicator UI state, stored under ActiveIndicators.registry[id]. */
 export type RegistryIndicatorState = {
   enabled?: boolean;
-  params?: Record<string, number>;
+  /** A param flagged as `multiInstanceParam` on the def may hold a LIST —
+   *  the indicator renders once per value (e.g. autocorr lag 1+6+21). */
+  params?: Record<string, number | number[]>;
   /** Compute frequency: bars are resampled to weekly/monthly before the
    *  indicator runs (results plot on period-end dates of the chart axis).
    *  Default "chart" = the pane's own bar frequency. */
@@ -135,6 +137,10 @@ export type IndicatorDef = {
   colorKeys: string[];
   renderPane?: (ctx: PaneRenderCtx, bars: OhlcBar[], p: Record<string, number>) => void;
   renderOverlay?: (ctx: OverlayRenderCtx, bars: OhlcBar[], p: Record<string, number>) => void;
+  /** Param key that may hold multiple values (stored as an array in state):
+   *  the sub-chart renders the indicator once per value, extra instances in
+   *  shaded colors. Only meaningful for renderTarget "pane". */
+  multiInstanceParam?: string;
 };
 
 /** Resolve effective params for an indicator: state overrides, else the
@@ -147,11 +153,31 @@ export function resolveParams(
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const pr of def.params) {
-    const v = st?.params?.[pr.key];
+    const raw = st?.params?.[pr.key];
+    // Multi-instance params store arrays — collapse to the first value here so
+    // every single-instance consumer (overlays, Pairs/Macro, lookback) still
+    // sees a plain number; resolveParamList exposes the full list.
+    const v = Array.isArray(raw) ? raw[0] : raw;
     const fallback = (frequency ? pr.defaultByFrequency?.[frequency] : undefined) ?? pr.default;
     out[pr.key] = typeof v === "number" && Number.isFinite(v) ? v : fallback;
   }
   return out;
+}
+
+/** Full value list for a (potentially multi-instance) param: the stored array
+ *  when present, else the single resolved value. */
+export function resolveParamList(
+  def: IndicatorDef,
+  st: RegistryIndicatorState | undefined,
+  frequency: string | undefined,
+  key: string,
+): number[] {
+  const raw = st?.params?.[key];
+  if (Array.isArray(raw)) {
+    const list = [...new Set(raw.filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
+    if (list.length) return list;
+  }
+  return [resolveParams(def, st, frequency)[key]];
 }
 
 // ── Small helpers shared by the render fns ──
@@ -358,6 +384,8 @@ const AUTOCORR: IndicatorDef = {
   category: "Statistics",
   renderTarget: "pane",
   worksOnCloseOnly: true,
+  // Lag accepts a list — one AC line per lag in the same sub-pane.
+  multiInstanceParam: "lag",
   params: [
     {
       key: "source",

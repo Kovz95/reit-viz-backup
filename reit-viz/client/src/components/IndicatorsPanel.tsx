@@ -673,7 +673,25 @@ export function RegistryIndicatorControls({
                     {def.params.map((pr) => (
                       <div key={pr.key} className="flex items-center gap-1">
                         <span className="text-[9px] text-muted-foreground/70">{pr.label}</span>
-                        {pr.options ? (
+                        {pr.key === def.multiInstanceParam ? (
+                          // Multi-instance param (e.g. autocorr lag): several
+                          // values → one indicator line per value.
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <PeriodMultiSelect
+                              presets={[]}
+                              active={(st?.params?.[pr.key] as number | number[] | undefined) ?? p[pr.key]}
+                              onChange={(list) => {
+                                const cur = reg[def.id] ?? {};
+                                const nextParams = { ...(cur.params ?? {}) };
+                                if (list?.length) nextParams[pr.key] = list.length === 1 ? list[0] : list;
+                                else delete nextParams[pr.key];
+                                update(def.id, { params: nextParams });
+                              }}
+                              testid={`param-${def.id}-${pr.key}`}
+                              min={pr.min}
+                            />
+                          </div>
+                        ) : pr.options ? (
                           <select
                             className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
                             value={p[pr.key]}
@@ -1537,11 +1555,17 @@ export default function IndicatorsPanel({
                     indicatorFreq={activeIndicators.registry?.autocorr?.freq}
                     onApplyLag={(lag) => {
                       const cur = activeIndicators.registry?.autocorr ?? {};
+                      const raw = cur.params?.lag;
+                      // Multi-lag active → clicking a row ADDS that lag as a
+                      // new line; single-lag → replace as before.
+                      const next = Array.isArray(raw)
+                        ? (raw.includes(lag) ? raw : [...raw, lag].sort((a, b) => a - b))
+                        : lag;
                       setActiveIndicators({
                         ...activeIndicators,
                         registry: {
                           ...(activeIndicators.registry ?? {}),
-                          autocorr: { ...cur, params: { ...(cur.params ?? {}), lag } },
+                          autocorr: { ...cur, params: { ...(cur.params ?? {}), lag: next } },
                         },
                       });
                     }}
