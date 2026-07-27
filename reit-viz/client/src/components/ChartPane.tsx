@@ -97,6 +97,19 @@ function generateFutureBars(lastDate: string, count: number): string[] {
   return out;
 }
 
+/** Chart bars spanned by ONE bar of an indicator computed on weekly/monthly
+ *  resampled data — scales lookback-window hover lines so "RSI 14 weekly" on a
+ *  daily chart marks ~70 daily bars, not 14. Resampling no-ops when the chart
+ *  is already at (or coarser than) the indicator frequency, and on hourly
+ *  epoch axes (see resampleIndicatorBars), so those return 1. */
+function chartBarsPerIndicatorBar(chartFreq: string | undefined, indFreq: string | undefined): number {
+  if (indFreq !== "weekly" && indFreq !== "monthly") return 1;
+  const cf = chartFreq ?? "daily";
+  if (cf === "daily") return indFreq === "weekly" ? 5 : 21;
+  if (cf === "weekly") return indFreq === "monthly" ? 4 : 1;
+  return 1;
+}
+
 /** A moving-average-style overlay drawn on top of an active sub-chart indicator. */
 export interface IndicatorOverlay {
   id: string;
@@ -2969,7 +2982,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
           pushLb((activeIndicators as any)[k], (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
         }
-        pushLb(typeof activeIndicators.rsi === "number" ? activeIndicators.rsi : undefined, (IC as any).rsi ?? "#a855f7", "RSI");
+        pushLb(
+          typeof activeIndicators.rsi === "number"
+            ? activeIndicators.rsi * chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.rsiFreq)
+            : undefined,
+          (IC as any).rsi ?? "#a855f7",
+          "RSI"
+        );
         pushLb(activeIndicators.bollinger?.period, (IC as any).bollinger_basis ?? "#f59e0b", "BB");
         pushLb(typeof activeIndicators.atr === "number" ? activeIndicators.atr : undefined, (IC as any).atr ?? "#f59e0b", "ATR");
         pushLb(typeof activeIndicators.roc === "number" ? activeIndicators.roc : undefined, (IC as any).roc ?? "#38bdf8", "ROC");
@@ -2984,7 +3003,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           // line is drawn on the RSI/autocorr sub-chart instead (subLookback).
           if (regId === "autocorr" && (p.source ?? 0) !== 0) continue;
           const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
-          if (barsKey) pushLb(p[barsKey], (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
+          // A weekly/monthly compute-freq override means period/window count
+          // RESAMPLED bars — scale to chart bars so the line marks the real span.
+          const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, st.freq);
+          if (barsKey) pushLb(p[barsKey] * mult, (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
         }
         const lbAnchor = seriesMapRef.current.values().next().value;
         if (lbEntries.length > 0 && lbAnchor) {
@@ -4006,8 +4028,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
     if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
       const target = typeof activeIndicators.rsi === "number" ? "rsi" : "autocorr";
+      const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, acSt.freq);
       out[target] = [{
-        bars: Math.round(p.window),
+        bars: Math.round(p.window * mult),
         color: (IC as Record<string, string>).autocorr_line ?? "#e879f9",
         label: "AC",
       }];
