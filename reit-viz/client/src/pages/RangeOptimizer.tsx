@@ -522,8 +522,12 @@ function fmtSigned(v: number): string {
 }
 
 // ─── Worker creator ───────────────────────────────────────────────────────────
+// The original hashed worker chunk was lost with the recovered bundle (the
+// stale URL resolved to the SPA's index.html and the run hung forever) — the
+// kernel now lives in src/workers/rangeSearch.worker.ts, bundled by Vite.
 function createWorker(): Worker {
-  return new Worker("" + new URL("rangeSearch.worker-DWovBQhj.js", import.meta.url).href, {
+  return new Worker(new URL("../workers/rangeSearch.worker.ts", import.meta.url), {
+    type: "module",
     name: "rangeSearch",
   });
 }

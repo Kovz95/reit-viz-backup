@@ -271,11 +271,15 @@ function detectComposite(
 
 // ── Worker factory ─────────────────────────────────────────────────────────────
 
+// The original hashed worker chunk was lost with the recovered bundle (the
+// stale URL resolved to the SPA's index.html, the worker failed to compile,
+// and Run hung forever) — the kernel now lives in
+// src/workers/harsiOptimizer.worker.ts, bundled by Vite.
 function createHarsiWorker(opts?: { name?: string }): Worker {
-  return new Worker(
-    "" + new URL("harsiOptimizer.worker-D5NE8xS_.js", import.meta.url).href,
-    { name: opts?.name }
-  );
+  return new Worker(new URL("../workers/harsiOptimizer.worker.ts", import.meta.url), {
+    type: "module",
+    name: opts?.name,
+  });
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -896,12 +900,13 @@ export default function HarsiOptimizer() {
 
     // Set up worker pool for universe mode
     let pool: any = null;
-    if (runMode === "universe") {
+    if (runMode === "universe" || runMode === "basket" || runMode === "pairCombo") {
+      // Real worker pool — the old `{ W }` destructure of lib/workerPool was
+      // always undefined (no such export), so universe runs silently no-oped.
       const cores = Math.min(Math.max(2, navigator.hardwareConcurrency || 4), 8);
-      // workerPool import
       try {
-        const { W: WorkerPool } = await import("@/lib/workerPool" as any);
-        pool = new WorkerPool(() => createHarsiWorker(), cores);
+        const { RealWorkerPool } = await import("@/lib/realWorkerPool");
+        pool = new RealWorkerPool(() => createHarsiWorker(), cores);
         workerPoolRef.current = pool;
       } catch {
         workerPoolRef.current = null;

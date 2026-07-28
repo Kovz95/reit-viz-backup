@@ -7,6 +7,8 @@ import { useBaskets } from "@/lib/useBaskets";
 import { getScoreWeights, createDateRangeFromPreset, pct, hitRateColor, pctSigned,
   profitFactorColor, RANK_BY_OPTIONS, DATE_PRESETS, summarizeSignals, pickBestByRankMode } from "@/lib/forwardReturns";
 import { createDateRange } from "@/lib/optimizerInputSeries";
+import { computeROC as rocComputeROC } from "@/lib/rocSignalDetect";
+import { clipArraysByDateRange as clipArraysByDateRangeFn } from "@/lib/clipArraysByDateRange";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useUniverse } from "@/lib/universeContext";
 import { getTickers, getDates } from "@/lib/dataService";
@@ -48,15 +50,19 @@ const getDailyIndexFromWeekly = getDailyIndexFromWeeklyFn as any;
 // pickBestByRankMode imported from @/lib/forwardReturns above
 const fetchWorkbookSeriesForTicker = fetchWorkbookSeriesForTickerFn as any;
 
-// rocSignalDetect (c from rocSignalDetect-B1VJ2Cnc.js): ROC array over period
-// Unresolved: @/lib/rocSignalDetect
-const rocSignalDetect = ((_prices: number[], _period: number) => [] as number[]) as any;
-
-// dk = clipArraysByDateRange(dates, range, ...arrays) → { dates, arrays }
-// dl = compareSummaries(summaryA, scoreA, summaryB, scoreB, direction, weights) → number
-// Unresolved: @/lib/clipArraysByDateRange
-const clipArraysByDateRange = ((..._args: any[]) => ({ dates: [] as string[], arrays: [] as any[][] })) as any;
-const compareSummaries = ((_a: any, _b: any, _c: any, _d: any, _e: any, _f: any) => 0) as any;
+// These three were "Unresolved" reconstruction stubs — clipArraysByDateRange
+// returned EMPTY arrays, which reduced every run to zero bars (silent "no
+// results"); rocSignalDetect returned [] (dead ROC triggers); compareSummaries
+// returned 0 (no ranking). Now real implementations.
+const rocSignalDetect = ((prices: number[], period: number) =>
+  rocComputeROC(prices, period)) as any;
+const clipArraysByDateRange = clipArraysByDateRangeFn as any;
+const compareSummaries = ((
+  summaryA: any, scoreA: number, summaryB: any, scoreB: number,
+  direction: any, weights: any,
+) =>
+  (pickBestByRankMode as any)(summaryB, scoreB, direction, weights) -
+  (pickBestByRankMode as any)(summaryA, scoreA, direction, weights)) as any;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
