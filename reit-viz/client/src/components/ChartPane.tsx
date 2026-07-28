@@ -7,6 +7,7 @@ import {
   LineSeries,
   BaselineSeries,
   CandlestickSeries,
+  HistogramSeries,
   createSeriesMarkers,
   PriceScaleMode,
 } from "lightweight-charts";
@@ -606,6 +607,20 @@ function SubIndicatorChart({
     if (type === "macd" && activeIndicators.macd) {
       const macd = computeMACD(closeData, 12, 26, 9);
       if (macd.macdLine.length > 0) {
+        // Histogram first so the MACD/signal lines draw on top of the bars.
+        if (macd.histogram.length > 0) {
+          const hist = chart.addSeries(HistogramSeries, {
+            title: "",
+            base: 0,
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          hist.setData(macd.histogram.map((d) => ({
+            time: d.time as Time,
+            value: d.value,
+            color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
+          })));
+        }
         const ml = chart.addSeries(LineSeries, {
           color: IC.macd_line,
           lineWidth: 1,
@@ -857,7 +872,7 @@ function SubIndicatorChart({
         const OVERLAY_PALETTE = ["#38bdf8", "#f472b6", "#facc15", "#4ade80", "#c084fc", "#fb923c"];
         const srcLabel = type === "rsi" ? "RSI" : type === "roc" ? "ROC" : type === "atr" ? "ATR"
           : type === "stochastic" ? "Stoch" : type === "obv" ? "OBV" : type === "macd" ? "MACD"
-          : type === "ha" ? "HA" : (getIndicatorDef(type)?.label?.split(" ")[0] ?? type);
+          : type === "ha" ? "HA" : (getIndicatorDef(type)?.label ?? type);
         paneOverlays.forEach((o, oi) => {
           const color = OVERLAY_PALETTE[oi % OVERLAY_PALETTE.length];
           const addLine = (data: { time: any; value: number }[], title: string, opts: Record<string, unknown> = {}) => {
@@ -891,10 +906,40 @@ function SubIndicatorChart({
             } else if (o.type === "macd") {
               const mc = computeMACD(srcData as any, o.period, o.slow ?? 26, o.signal ?? 9);
               const scaleId = `ovl-macd-${o.id}`;
+              if (mc.histogram.length > 0) {
+                const hist = chart.addSeries(HistogramSeries, {
+                  title: "", base: 0, lastValueVisible: false, priceLineVisible: false,
+                  priceScaleId: scaleId,
+                });
+                hist.setData(mc.histogram.map((d) => ({
+                  time: d.time as Time,
+                  value: d.value,
+                  color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
+                })));
+              }
               const m1 = addLine(mc.macdLine, `MACD on ${srcLabel}`, { priceScaleId: scaleId });
               addLine(mc.signalLine, "", { priceScaleId: scaleId, lineStyle: LineStyle.Dotted });
               try {
                 m1?.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0.02 }, visible: false });
+              } catch {}
+            } else if (o.type === "rsi") {
+              // RSI of the indicator (e.g. RSI on % from MA). Own hidden
+              // bottom-band scale — the source pane usually isn't 0–100 —
+              // with 30/70 overbought/oversold reference lines.
+              const rs = computeRSI(srcData as any, o.period);
+              const scaleId = `ovl-rsi-${o.id}`;
+              const line = addLine(rs, `RSI${o.period} on ${srcLabel}`, { priceScaleId: scaleId });
+              if (rs.length >= 2) {
+                for (const lvl of [70, 30]) {
+                  addLine(
+                    [{ time: rs[0].time, value: lvl }, { time: rs[rs.length - 1].time, value: lvl }],
+                    "",
+                    { priceScaleId: scaleId, lineStyle: LineStyle.Dotted },
+                  );
+                }
+              }
+              try {
+                line?.priceScale().applyOptions({ scaleMargins: { top: 0.68, bottom: 0.02 }, visible: false });
               } catch {}
             } else {
               // One of the 12 maEngine moving averages (lowercase type id).

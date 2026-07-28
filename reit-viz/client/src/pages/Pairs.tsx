@@ -9,6 +9,7 @@ import {
   CrosshairMode,
   LineSeries,
   CandlestickSeries,
+  HistogramSeries,
   LineStyle,
   PriceScaleMode,
   createSeriesMarkers,
@@ -1544,6 +1545,17 @@ function PairsSubIndicatorChart({
     if (type === "macd" && activeIndicators.macd) {
       const macd = computeMACD(closeData, 12, 26, 9);
       if (macd.macdLine.length > 0) {
+        // Histogram first so the lines draw on top of the bars.
+        if (macd.histogram.length > 0) {
+          const hist = chart.addSeries(HistogramSeries, {
+            title: "", base: 0, lastValueVisible: false, priceLineVisible: false,
+          });
+          hist.setData(macd.histogram.map((d) => ({
+            time: d.time as Time,
+            value: d.value,
+            color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
+          })));
+        }
         const ml = chart.addSeries(LineSeries, {
           color: IC.macd_line, lineWidth: 1, title: "MACD",
         });

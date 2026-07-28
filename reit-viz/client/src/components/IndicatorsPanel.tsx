@@ -1738,6 +1738,7 @@ const OVERLAY_TYPES: { value: string; label: string }[] = [
   { value: "bollinger", label: "Bollinger Bands" },
   { value: "meanband", label: "Rolling Mean ± σ" },
   { value: "stochastic", label: "Stochastic (StochRSI-style)" },
+  { value: "rsi", label: "RSI (own bottom scale)" },
   { value: "macd", label: "MACD (own bottom scale)" },
 ];
 
