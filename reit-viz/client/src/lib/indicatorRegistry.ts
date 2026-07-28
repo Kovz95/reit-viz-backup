@@ -37,6 +37,18 @@ import {
   computeRollingAutocorr,
   type AutocorrSource,
 } from "./indicators";
+import {
+  computeRollingZScore,
+  computeRollingPercentile,
+  computeRealizedVol,
+  computeRollingDrawdown,
+  computeBollingerPctB,
+  computeBollingerBandwidth,
+  computeHalfLife,
+  computeHurst,
+  computeEfficiencyRatio,
+  computeRegSlope,
+} from "./quantIndicators";
 
 export type IndicatorParam = {
   key: string;
@@ -834,7 +846,227 @@ const HMM_REGIME: IndicatorDef = {
 };
 
 // ── The registry ──
-export const PANE_INDICATORS: IndicatorDef[] = [ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, AUTOCORR];
+// ── Quant / mean-reversion panes (close-only, see quantIndicators.ts) ──
+
+const simpleLinePane = (
+  compute: (bars: OhlcBar[], p: Record<string, number>) => { time: string | number; value: number }[],
+  colorKey: string,
+  title: (p: Record<string, number>) => string,
+  refs?: (p: Record<string, number>) => { level: number; colorKey?: string }[],
+) => (ctx: PaneRenderCtx, bars: OhlcBar[], p: Record<string, number>): void => {
+  const data = compute(bars, p);
+  if (!data.length) return;
+  const s = ctx.chart.addSeries(LineSeries, {
+    color: ctx.colors[colorKey],
+    lineWidth: 1,
+    title: `${title(p)}${ctx.baseLabel}`,
+  });
+  s.setData(asLine(data as { time: string; value: number }[]));
+  ctx.register(s);
+  if (data.length >= 2 && refs) {
+    const f = String(data[0].time), l = String(data[data.length - 1].time);
+    for (const r of refs(p)) {
+      ctx.refLine(r.level, r.colorKey ? ctx.colors[r.colorKey] : "rgba(255,255,255,0.15)", f, l);
+    }
+  }
+};
+
+const ZSCORE: IndicatorDef = {
+  id: "zscore",
+  label: "Rolling Z-Score",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["zscore_line", "zscore_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingZScore(bars, p.window),
+    "zscore_line",
+    (p) => `Z ${p.window}`,
+    () => [{ level: 0 }, { level: 2, colorKey: "zscore_ref" }, { level: -2, colorKey: "zscore_ref" }],
+  ),
+};
+
+const PCTRANK: IndicatorDef = {
+  id: "pctrank",
+  label: "Percentile Rank",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 252, min: 20, max: 2520, defaultByFrequency: { weekly: 52, monthly: 36 } }],
+  colorKeys: ["pctrank_line", "pctrank_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingPercentile(bars, p.window),
+    "pctrank_line",
+    (p) => `PctRank ${p.window}`,
+    () => [{ level: 50 }, { level: 90, colorKey: "pctrank_ref" }, { level: 10, colorKey: "pctrank_ref" }],
+  ),
+};
+
+const REALIZED_VOL: IndicatorDef = {
+  id: "realizedvol",
+  label: "Realized Vol (ann. %)",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 21, min: 5, max: 504, defaultByFrequency: { weekly: 13, monthly: 12 } }],
+  colorKeys: ["realizedvol_line"],
+  renderPane: (ctx, bars, p) => {
+    // Annualization follows the COMPUTE frequency (weekly bars → √52).
+    const ppy = bars.length >= 2 && typeof bars[0].time === "string" && typeof bars[1].time === "string"
+      ? (() => {
+          const gap = (new Date(bars[bars.length - 1].time as string).getTime() - new Date(bars[0].time as string).getTime()) / 86400000 / Math.max(1, bars.length - 1);
+          return gap > 20 ? 12 : gap > 4 ? 52 : 252;
+        })()
+      : 252;
+    simpleLinePane(
+      (b, pp) => computeRealizedVol(b, pp.window, ppy),
+      "realizedvol_line",
+      (pp) => `RVol ${pp.window}`,
+    )(ctx, bars, p);
+  },
+};
+
+const DRAWDOWN: IndicatorDef = {
+  id: "drawdown",
+  label: "Rolling Drawdown %",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 252, min: 10, max: 2520, defaultByFrequency: { weekly: 52, monthly: 36 } }],
+  colorKeys: ["drawdown_line"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingDrawdown(bars, p.window),
+    "drawdown_line",
+    (p) => `DD ${p.window}`,
+    () => [{ level: 0 }],
+  ),
+};
+
+const BB_PCTB: IndicatorDef = {
+  id: "bbpctb",
+  label: "Bollinger %B",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "period", label: "Period", default: 20, min: 3, max: 200 },
+    { key: "mult", label: "σ", default: 2, min: 0.5, max: 4, step: 0.5 },
+  ],
+  colorKeys: ["bbpctb_line", "bbpctb_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeBollingerPctB(bars, p.period, p.mult),
+    "bbpctb_line",
+    (p) => `%B ${p.period}`,
+    () => [{ level: 1, colorKey: "bbpctb_ref" }, { level: 0.5 }, { level: 0, colorKey: "bbpctb_ref" }],
+  ),
+};
+
+const BB_WIDTH: IndicatorDef = {
+  id: "bbwidth",
+  label: "BB Bandwidth %",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "period", label: "Period", default: 20, min: 3, max: 200 },
+    { key: "mult", label: "σ", default: 2, min: 0.5, max: 4, step: 0.5 },
+  ],
+  colorKeys: ["bbwidth_line"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeBollingerBandwidth(bars, p.period, p.mult),
+    "bbwidth_line",
+    (p) => `BBW ${p.period}`,
+  ),
+};
+
+const HALF_LIFE: IndicatorDef = {
+  id: "halflife",
+  label: "AR(1) Half-Life",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 126, min: 20, max: 1008, defaultByFrequency: { weekly: 52, monthly: 24 } }],
+  colorKeys: ["halflife_line"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeHalfLife(bars, p.window),
+    "halflife_line",
+    (p) => `HL ${p.window}`,
+  ),
+};
+
+const HURST: IndicatorDef = {
+  id: "hurst",
+  label: "Hurst Exponent",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 252, min: 48, max: 1008, defaultByFrequency: { weekly: 104 } }],
+  colorKeys: ["hurst_line", "hurst_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeHurst(bars, p.window),
+    "hurst_line",
+    (p) => `Hurst ${p.window}`,
+    () => [{ level: 0.5, colorKey: "hurst_ref" }],
+  ),
+};
+
+const EFF_RATIO: IndicatorDef = {
+  id: "effratio",
+  label: "Efficiency Ratio",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "period", label: "Period", default: 20, min: 2, max: 200 }],
+  colorKeys: ["effratio_line", "effratio_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeEfficiencyRatio(bars, p.period),
+    "effratio_line",
+    (p) => `ER ${p.period}`,
+    () => [{ level: 0.3, colorKey: "effratio_ref" }],
+  ),
+};
+
+const REG_SLOPE: IndicatorDef = {
+  id: "regslope",
+  label: "Regression Slope + R²",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "window", label: "Window", default: 63, min: 10, max: 1008, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["regslope_line", "regslope_r2"],
+  renderPane: (ctx, bars, p) => {
+    const { slope, r2 } = computeRegSlope(bars, p.window);
+    if (!slope.length) return;
+    const s = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.regslope_line,
+      lineWidth: 1,
+      title: `Slope ${p.window} (ann.%)${ctx.baseLabel}`,
+    });
+    s.setData(asLine(slope as { time: string; value: number }[]));
+    ctx.register(s);
+    ctx.refLine(0, "rgba(255,255,255,0.15)", String(slope[0].time), String(slope[slope.length - 1].time));
+    // R² rides its own hidden bottom band (0–1 vs slope's % scale).
+    const rs = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.regslope_r2,
+      lineWidth: 1,
+      title: "R²",
+      priceScaleId: "regslope-r2",
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    rs.setData(asLine(r2 as { time: string; value: number }[]));
+    ctx.register(rs);
+    try {
+      rs.priceScale().applyOptions({ scaleMargins: { top: 0.72, bottom: 0.02 }, visible: false });
+    } catch { /* scale may not exist yet */ }
+  },
+};
+
+export const PANE_INDICATORS: IndicatorDef[] = [
+  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, AUTOCORR,
+  ZSCORE, PCTRANK, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 
