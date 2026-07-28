@@ -1176,7 +1176,9 @@ function SubIndicatorChart({
 
   return (
     <div
-      className={`relative w-full border-t border-border/30 ${isMaximized ? "flex-1 min-h-0" : "flex-shrink-0"}`}
+      // Strong top rule + faint tint so each subplot's start/end reads at a
+      // glance when several stack under the price chart.
+      className={`relative w-full border-t-2 border-border/80 bg-white/[0.015] ${isMaximized ? "flex-1 min-h-0" : "flex-shrink-0"}`}
       style={isMaximized ? undefined : { height: height ?? (type === "ha" ? 100 : 80) }}
       onDoubleClick={(e) => { e.stopPropagation(); onToggleMaximize?.(); }}
       data-testid={`sub-indicator-${type}`}
@@ -1193,7 +1195,7 @@ function SubIndicatorChart({
         </div>
       )}
       <div className="absolute left-2 z-10 mt-0.5">
-        <span className="text-[9px] font-mono text-muted-foreground/50 bg-background/80 px-1 py-0.5 rounded">
+        <span className="text-[9px] font-mono text-muted-foreground/80 bg-background/90 border border-border/50 px-1 py-0.5 rounded">
           {label}
         </span>
       </div>
