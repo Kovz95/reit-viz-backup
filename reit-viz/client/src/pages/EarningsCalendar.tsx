@@ -24,7 +24,9 @@ export default function EarningsCalendar() {
   const { records } = useGlobalUniverse();
   const [rows, setRows] = useState<CalRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const today = new Date().toISOString().slice(0, 10);
+  // "Today" in US/Eastern (the market calendar's day) — a UTC date rolls to
+  // tomorrow at 8pm ET and mislabeled the evening's after-market reporters.
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
   const [monthAnchor, setMonthAnchor] = useState(() => today.slice(0, 7)); // YYYY-MM
 
   useEffect(() => {

@@ -2526,18 +2526,32 @@ export async function registerRoutes(server: Server, app: Express) {
         return known.has(s) || known.has(s.split(".")[0]);
       });
     };
+    // Dates in US/Eastern — the market calendar's timezone. A UTC "today"
+    // rolls to tomorrow at 8pm ET, so evening cache refreshes silently
+    // dropped the current day's after-market reporters. `from` reaches one
+    // day back as a safety margin (the client dims past days anyway).
+    const etIso = (msOffset = 0) =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(Date.now() + msOffset));
+    const fromWanted = etIso(-86400000);
     try {
       try {
         const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
-        if (cached && Date.now() - (cached.fetchedAt ?? 0) < TTL_MS && Array.isArray(cached.rows)) {
+        if (
+          cached &&
+          Date.now() - (cached.fetchedAt ?? 0) < TTL_MS &&
+          Array.isArray(cached.rows) &&
+          // Older caches (no `from`, or fetched with a UTC from) may start
+          // after the current ET day — refetch rather than serve them.
+          typeof cached.from === "string" &&
+          cached.from <= fromWanted
+        ) {
           return res.json(filterToUniverse(cached.rows));
         }
       } catch { /* no/stale cache */ }
       const key = process.env.FMP_API_KEY?.trim() ?? "";
       if (!key) return res.json([]);
-      const iso = (d: Date) => d.toISOString().slice(0, 10);
-      const from = iso(new Date());
-      const to = iso(new Date(Date.now() + 90 * 86400000));
+      const from = fromWanted;
+      const to = etIso(90 * 86400000);
       const url = `https://financialmodelingprep.com/api/v3/earning_calendar?from=${from}&to=${to}&apikey=${key}`;
       const resp = await fetch(url);
       if (!resp.ok) return res.json([]);
@@ -2550,7 +2564,7 @@ export async function registerRoutes(server: Server, app: Express) {
           time: typeof r.time === "string" ? r.time : "",
           epsEstimated: Number.isFinite(r.epsEstimated) ? r.epsEstimated : null,
         }));
-      try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), rows })); } catch {}
+      try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), from, rows })); } catch {}
       res.json(filterToUniverse(rows));
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "earnings-calendar failed" });

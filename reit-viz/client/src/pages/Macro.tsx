@@ -195,6 +195,18 @@ function MacroPane({
   const [showLegend, setShowLegend] = useState(false);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
+  // Shared spacer axis: the union of every loaded series' dates. Identical on
+  // every pane, so the cross-chart LOGICAL-range sync maps bar-for-bar even
+  // though macro series have wildly different lengths/frequencies (monthly
+  // CPI vs daily prices) — without it the sync yanked panes while dragging.
+  const spacerTimes = useMemo(() => {
+    const s = new Set<string>();
+    for (const k of Object.keys(allData)) {
+      for (const d of allData[k]?.data ?? []) s.add(d.time);
+    }
+    return [...s].sort();
+  }, [allData]);
+
   const resolvedSeries = useMemo(() => pane.series.filter(s => s.visible).map(s => {
     const entry = allData[s.id];
     if (!entry?.data?.length) return null;
@@ -230,6 +242,20 @@ function MacroPane({
     });
     chartRef.current = chart;
     onRegisterChart(pane.id, chart);
+
+    // Invisible spacer spanning the shared union axis (see spacerTimes).
+    if (spacerTimes.length > 0) {
+      try {
+        const spacer = chart.addSeries(LineSeries, {
+          visible: false,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+          autoscaleInfoProvider: () => null,
+        });
+        spacer.setData(spacerTimes.map((t) => ({ time: t as Time })));
+      } catch {}
+    }
 
     const multiScale = new Set(resolvedSeries.map(s => s.unit)).size > 1;
     const isScatter = chartType === "line-scatter";
@@ -751,7 +777,7 @@ function MacroPane({
       chartRef.current = null;
       indicatorSeriesRef.current = [];
     };
-  }, [resolvedSeries, height, pane.id, isMaximized, effectiveFlexHeight, activeIndicators, chartType, gridColor]);
+  }, [resolvedSeries, spacerTimes, height, pane.id, isMaximized, effectiveFlexHeight, activeIndicators, chartType, gridColor]);
 
   // Log scale
   useEffect(() => {
@@ -1015,7 +1041,10 @@ export default function Macro() {
           try { other.timeScale().setVisibleLogicalRange(range); } catch {}
         }
       });
-      syncingRef.current = false;
+      // Programmatic range-set notifications arrive asynchronously — clearing
+      // the flag in rAF (not synchronously) stops them echoing back and
+      // yanking the chart the user is dragging.
+      requestAnimationFrame(() => { syncingRef.current = false; });
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
 
