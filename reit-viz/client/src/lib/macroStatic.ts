@@ -76,9 +76,38 @@ async function getComputedSpecs(): Promise<Record<string, ComputedSpec>> {
 
 /** Fetch a single static macro series JSON */
 export async function fetchStaticSeries(id: string): Promise<DataPoint[]> {
-  const resp = await fetch(`data/macro/${id}.json`);
-  if (!resp.ok) return [];
-  return resp.json();
+  // Static file first (cron-prefetched). The prod server answers MISSING
+  // static paths with the SPA's index.html (200 text/html) — resp.ok alone
+  // is not enough, so guard the content type (this was crashing
+  // /rates-forward with "Unexpected token '<'"). When the file is missing
+  // or its tail is stale, fall back to /api/macro/series, which curls FRED
+  // live on the server and caches to disk.
+  let staticData: DataPoint[] = [];
+  try {
+    const resp = await fetch(`data/macro/${id}.json`);
+    if (resp.ok && (resp.headers.get("content-type") ?? "").includes("json")) {
+      const j = await resp.json();
+      if (Array.isArray(j)) staticData = j;
+    }
+  } catch { /* fall through to the API */ }
+  const freshEnough =
+    staticData.length > 0 &&
+    Date.now() - new Date(String(staticData[staticData.length - 1].time)).getTime() < 7 * 86400000;
+  if (freshEnough) return staticData;
+  try {
+    const resp = await fetch(`api/macro/series?ids=${encodeURIComponent(id)}`);
+    if (resp.ok && (resp.headers.get("content-type") ?? "").includes("json")) {
+      const j = await resp.json();
+      const d = j?.[id]?.data;
+      // Prefer whichever copy runs later (monthly/quarterly series are
+      // legitimately "stale" by the 7-day test — keep the longer tail).
+      if (Array.isArray(d) && d.length > 0) {
+        if (!staticData.length) return d;
+        return String(d[d.length - 1].time) >= String(staticData[staticData.length - 1].time) ? d : staticData;
+      }
+    }
+  } catch { /* server unreachable */ }
+  return staticData;
 }
 
 /** Compute spread between two series */

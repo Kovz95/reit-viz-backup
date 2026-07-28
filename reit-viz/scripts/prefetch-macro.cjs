@@ -14,10 +14,21 @@ if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR, { recursive: true });
 
 // ── All FRED series (mirrored from routes.ts) ──
 const FRED_SERIES = {
+  // Full tenor set — /rates-forward builds the yield curve from these.
+  DGS1MO: { id: "DGS1MO", label: "1-Month Treasury Yield", category: "Rates",   unit: "%",    freq: "D" },
+  DGS3MO: { id: "DGS3MO", label: "3-Month Treasury Yield", category: "Rates",   unit: "%",    freq: "D" },
+  DGS6MO: { id: "DGS6MO", label: "6-Month Treasury Yield", category: "Rates",   unit: "%",    freq: "D" },
+  DGS1:   { id: "DGS1",   label: "1-Year Treasury Yield",  category: "Rates",   unit: "%",    freq: "D" },
   DGS2:   { id: "DGS2",   label: "2-Year Treasury Yield",  category: "Rates",   unit: "%",    freq: "D" },
+  DGS3:   { id: "DGS3",   label: "3-Year Treasury Yield",  category: "Rates",   unit: "%",    freq: "D" },
   DGS5:   { id: "DGS5",   label: "5-Year Treasury Yield",  category: "Rates",   unit: "%",    freq: "D" },
+  DGS7:   { id: "DGS7",   label: "7-Year Treasury Yield",  category: "Rates",   unit: "%",    freq: "D" },
   DGS10:  { id: "DGS10",  label: "10-Year Treasury Yield", category: "Rates",   unit: "%",    freq: "D" },
   DGS30:  { id: "DGS30",  label: "30-Year Treasury Yield", category: "Rates",   unit: "%",    freq: "D" },
+  // ACM term-premium decomposition (also /rates-forward).
+  THREEFY10:   { id: "THREEFY10",   label: "10Y Risk-Neutral Expected Rate (ACM)", category: "Rates", unit: "%", freq: "D" },
+  THREEFYTP10: { id: "THREEFYTP10", label: "10Y Term Premium (ACM)",               category: "Rates", unit: "%", freq: "D" },
+  THREEFF10:   { id: "THREEFF10",   label: "10Y Fitted Yield (ACM)",               category: "Rates", unit: "%", freq: "D" },
   DFEDTARU: { id: "DFEDTARU", label: "Fed Funds Upper Bound", category: "Rates", unit: "%",  freq: "D" },
   SOFR:   { id: "SOFR",   label: "SOFR Rate",              category: "Rates",   unit: "%",    freq: "D" },
   DFII10: { id: "DFII10", label: "10Y TIPS (Real Yield)",   category: "Rates",   unit: "%",    freq: "D" },
