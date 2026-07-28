@@ -370,12 +370,44 @@ function basketMetricSeries(res: BasketOhlcResult, metric: string): { time: stri
  * Basket-aware replacement for getMetricSeries: routes BASKET: tickers through
  * the basket OHLC pipeline, everything else through the normal path.
  */
+/** "AKR/BXP"-style pair ticker → its two legs, or null. A pair target plots
+ *  leg-A ÷ leg-B for EVERY metric (close ratio, relative P/FFO, …), letting
+ *  the whole current layout be remapped onto a ratio without rebuilding. */
+export function parsePairTicker(t: string | null | undefined): { a: string; b: string } | null {
+  if (!t) return null;
+  const m = /^([A-Za-z0-9.\-]{1,12})\s*\/\s*([A-Za-z0-9.\-]{1,12})$/.exec(t.trim());
+  return m ? { a: m[1].toUpperCase(), b: m[2].toUpperCase() } : null;
+}
+
+function divideAligned(
+  sa: { time: string; value: number }[],
+  sb: { time: string; value: number }[],
+): { time: string; value: number }[] {
+  const bm = new Map(sb.map((p) => [p.time, p.value]));
+  const out: { time: string; value: number }[] = [];
+  for (const p of sa) {
+    const bv = bm.get(p.time);
+    if (bv != null && Math.abs(bv) > 1e-12 && Number.isFinite(p.value)) {
+      out.push({ time: p.time, value: p.value / bv });
+    }
+  }
+  return out;
+}
+
 async function getMetricSeriesResolved(
   ticker: string,
   metric: string,
   resolve: (id: string) => Basket | undefined,
   basketCache?: Map<string, BasketOhlcResult | null>
 ): Promise<{ time: string; value: number }[]> {
+  const pair = parsePairTicker(ticker);
+  if (pair) {
+    const [sa, sb] = await Promise.all([
+      getMetricSeriesResolved(pair.a, metric, resolve, basketCache),
+      getMetricSeriesResolved(pair.b, metric, resolve, basketCache),
+    ]);
+    return divideAligned(sa, sb);
+  }
   if (isBasketTicker(ticker)) {
     let res = basketCache?.get(ticker);
     if (res === undefined) {
@@ -693,6 +725,31 @@ export default function Dashboard() {
   useEffect(() => {
     for (const tk of uniquePaneTickers) {
       if (!ohlcCache[tk]) {
+        const pair = parsePairTicker(tk);
+        if (pair) {
+          // Ratio candles: component-wise A÷B with high/low taken as the
+          // envelope of the divided fields (the true intrabar ratio extremes
+          // aren't observable — this bounded approximation renders sensibly).
+          Promise.all([getOhlcData(pair.a), getOhlcData(pair.b)]).then(([ca, cb]) => {
+            if (!Array.isArray(ca) || !Array.isArray(cb)) return;
+            const bm = new Map(cb.map((c: any) => [c.time, c]));
+            const out: any[] = [];
+            for (const c of ca as any[]) {
+              const d = bm.get(c.time);
+              if (!d || !(d.open > 0) || !(d.close > 0) || !(d.high > 0) || !(d.low > 0)) continue;
+              const vals = [c.open / d.open, c.close / d.close, c.high / d.high, c.low / d.low];
+              out.push({
+                time: c.time,
+                open: c.open / d.open,
+                close: c.close / d.close,
+                high: Math.max(...vals),
+                low: Math.min(...vals),
+              });
+            }
+            if (out.length) setOhlcCache(prev => ({ ...prev, [tk]: out }));
+          }).catch(() => {});
+          continue;
+        }
         if (isBasketTicker(tk)) {
           fetchBasketOhlc(tk, resolveBasket).then(res => {
             if (res) setOhlcCache(prev => ({ ...prev, [tk]: basketOhlcToCandles(res) }));

@@ -15,6 +15,7 @@ import {
 } from "@/lib/chartFrequency";
 import type { EventType } from "@/lib/dataService";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
+import { parsePairTicker } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
 import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
 import type { IChartApi } from "lightweight-charts";
@@ -505,6 +506,9 @@ export default function ChartArea({
     window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
   }, [drawAll]);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
+  // Ticker-search text — typing "AKR/BXP" surfaces a "plot the ratio" entry
+  // that remaps the whole current layout onto A ÷ B (see parsePairTicker).
+  const [tickerQuery, setTickerQuery] = useState("");
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
@@ -1028,10 +1032,10 @@ export default function ChartArea({
     if (frequency !== "hourly") return;
     let alive = true;
     const wanted = new Set<string>();
-    if (activeTicker) wanted.add(activeTicker);
+    if (activeTicker && !activeTicker.includes("/")) wanted.add(activeTicker);
     for (const p of panes) {
       const pt = p.ticker || (seriesByPane[p.id] || []).find((s) => s.metric === "close")?.ticker;
-      if (pt && !pt.startsWith("BASKET:") && !pt.startsWith("__")) wanted.add(pt);
+      if (pt && !pt.startsWith("BASKET:") && !pt.startsWith("__") && !pt.includes("/")) wanted.add(pt);
     }
     for (const t of wanted) {
       if (intradayCache[t]) continue;
@@ -1414,9 +1418,43 @@ export default function ChartArea({
               );
             })()}
             <Command>
-              <CommandInput placeholder="Search ticker or name..." className="h-8 text-xs" />
+              <CommandInput
+                placeholder="Search ticker… or A/B for a ratio"
+                className="h-8 text-xs"
+                value={tickerQuery}
+                onValueChange={setTickerQuery}
+              />
               <CommandList className="max-h-[300px]">
-                <CommandEmpty>No ticker found.</CommandEmpty>
+                <CommandEmpty>No ticker found. Tip: type AKR/BXP to plot a ratio.</CommandEmpty>
+                {(() => {
+                  const pair = parsePairTicker(tickerQuery);
+                  if (!pair) return null;
+                  const okA = tickerList.some((t) => t.ticker === pair.a);
+                  const okB = tickerList.some((t) => t.ticker === pair.b);
+                  return (
+                    <CommandGroup heading="Ratio">
+                      <CommandItem
+                        value={tickerQuery}
+                        disabled={!okA || !okB}
+                        onSelect={() => {
+                          if (!okA || !okB) return;
+                          onSelectTicker(`${pair.a}/${pair.b}`);
+                          setTickerPopoverOpen(false);
+                          setTickerQuery("");
+                        }}
+                        className="text-xs"
+                        data-testid="carousel-pair-ratio"
+                      >
+                        <span className="font-mono font-semibold mr-2">{pair.a} ÷ {pair.b}</span>
+                        <span className="text-muted-foreground">
+                          {okA && okB
+                            ? "plot the ratio — keeps the current layout"
+                            : `unknown ticker: ${!okA ? pair.a : pair.b}`}
+                        </span>
+                      </CommandItem>
+                    </CommandGroup>
+                  );
+                })()}
                 <CommandGroup>
                   {carouselTickerList.map((t) => (
                     <CommandItem
