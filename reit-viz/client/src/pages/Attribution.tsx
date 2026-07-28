@@ -446,8 +446,16 @@ function TickerSearchSelect({ options, value, valueLabel, onChange }: {
     const up = t.toUpperCase();
     const exact = options.find(o => !o.ticker.startsWith("BASKET:") && o.ticker.toUpperCase() === up);
     if (exact) return { value: exact.ticker, label: exact.ticker };
-    const bMatches = options.filter(o => o.ticker.startsWith("BASKET:") && (o.label ?? "").toLowerCase().includes(t.toLowerCase()));
-    if (bMatches.length === 1) return { value: bMatches[0].ticker, label: bMatches[0].label ?? bMatches[0].ticker };
+    // Basket by name: exact match, then prefix, then substring (shortest name
+    // wins on ties — several baskets can share a stem, e.g. auto-baskets).
+    const low = t.toLowerCase();
+    const bs = options.filter(o => o.ticker.startsWith("BASKET:"));
+    const byLen = (arr: TickerOption[]) => arr.sort((x, y) => (x.label ?? "").length - (y.label ?? "").length)[0];
+    const cand =
+      bs.find(o => (o.label ?? "").toLowerCase() === low)
+      ?? byLen(bs.filter(o => (o.label ?? "").toLowerCase().startsWith(low)))
+      ?? byLen(bs.filter(o => (o.label ?? "").toLowerCase().includes(low)));
+    if (cand) return { value: cand.ticker, label: cand.label ?? cand.ticker };
     if (/^[A-Za-z0-9.\-]{1,12}$/.test(t)) return { value: up, label: up };
     return null;
   }, [options]);
