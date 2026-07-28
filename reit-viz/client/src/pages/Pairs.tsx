@@ -1513,6 +1513,23 @@ function PairsSubIndicatorChart({
 
     let firstSeries: ISeriesApi<any> | null = null;
 
+    // Invisible spacer spanning the parent's FULL axis: indicator series are
+    // trimmed by their warmup, so without it the sub-chart's axis is shorter
+    // than the parent's — the old TIME-range sync then clamped to the sub's
+    // extent and echoed back, yanking the parent while dragging (pan felt
+    // dead once any sub-pane was visible). Identical axes also make the
+    // logical-range sync below exact.
+    try {
+      const spacer = chart.addSeries(LineSeries, {
+        visible: false,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      spacer.setData(closeData.map((d) => ({ time: d.time as Time })));
+    } catch {}
+
     // RSI (one line per period)
     if (type === "rsi") {
       let refDrawn = false;
@@ -1744,8 +1761,10 @@ function PairsSubIndicatorChart({
         if (syncSource === "sub") return;
         syncSource = "parent";
         try {
-          const range = parentChart.timeScale().getVisibleRange();
-          if (range) chart.timeScale().setVisibleRange(range);
+          // LOGICAL range (valid because the spacer gives both charts the
+          // same axis) — never clamped to the sub's trimmed data extent.
+          const range = parentChart.timeScale().getVisibleLogicalRange();
+          if (range) chart.timeScale().setVisibleLogicalRange(range);
         } catch {}
         requestAnimationFrame(() => { syncSource = null; });
       };
@@ -1753,8 +1772,8 @@ function PairsSubIndicatorChart({
         if (syncSource === "parent") return;
         syncSource = "sub";
         try {
-          const range = chart.timeScale().getVisibleRange();
-          if (range) parentChart.timeScale().setVisibleRange(range);
+          const range = chart.timeScale().getVisibleLogicalRange();
+          if (range) parentChart.timeScale().setVisibleLogicalRange(range);
         } catch {}
         requestAnimationFrame(() => { syncSource = null; });
       };
@@ -1764,8 +1783,8 @@ function PairsSubIndicatorChart({
       // Initial sync — use requestAnimationFrame to ensure both charts are fully rendered
       requestAnimationFrame(() => {
         try {
-          const range = parentChart.timeScale().getVisibleRange();
-          if (range) chart.timeScale().setVisibleRange(range);
+          const range = parentChart.timeScale().getVisibleLogicalRange();
+          if (range) chart.timeScale().setVisibleLogicalRange(range);
         } catch {}
       });
 
@@ -3418,6 +3437,18 @@ export default function Pairs() {
           onClick={exportCSV} data-testid="pairs-csv">
           <Download className="w-3 h-3" />
           CSV
+        </Button>
+
+        {/* Hand-off: remap the Charts tab's current layout onto this pair. */}
+        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs"
+          onClick={() => {
+            try { sessionStorage.setItem("reit-viz:pair-remap-to-charts", `${tickerA}/${tickerB}`); } catch {}
+            window.location.hash = "#/";
+          }}
+          title={`Open ${tickerA}/${tickerB} on the Charts tab — keeps your Charts layout, remaps every pane to the ratio`}
+          data-testid="pairs-open-in-charts">
+          <TrendingUp className="w-3 h-3" />
+          Open in Charts
         </Button>
 
         <div className="h-5 w-px bg-border mx-0.5" />

@@ -22,6 +22,7 @@ import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
 import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
 import { useGridProminence, useChartChrome } from "@/lib/gridPref";
+import { navigateToPairs } from "@/lib/navigateToPairs";
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
@@ -1830,13 +1831,26 @@ function HeatmapMatrix({
   labels,
   pValues,
   lagApplied,
+  fullLabels,
 }: {
   matrix: number[][];
   labels: string[];
   pValues: number[][];
   /** Lead/lag matrix: the diagonal is real data (autocorrelation), not 1. */
   lagApplied?: boolean;
+  /** Untruncated specs ("TICKER:metric") for the click-through to Pairs;
+   *  falls back to `labels` when omitted. */
+  fullLabels?: string[];
 }) {
+  // Cell click → Pairs page with that row/column pair loaded. Only for plain
+  // ticker legs (MACRO rows have no pair-trade meaning).
+  const pairLeg = (idx: number): { ticker: string; metric: string } | null => {
+    const spec = (fullLabels ?? labels)[idx];
+    if (!spec || spec.startsWith("MACRO:")) return null;
+    const [ticker, ...rest] = spec.split(":");
+    if (!ticker || !/^[A-Za-z0-9.\-]{1,12}$/.test(ticker)) return null;
+    return { ticker: ticker.toUpperCase(), metric: rest.join(":") || "close" };
+  };
   return (
     <div className="overflow-auto">
       <table className="text-[10px] font-mono border-collapse">
@@ -1861,12 +1875,16 @@ function HeatmapMatrix({
                 const cell = trivialDiag
                   ? { backgroundColor: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.3)" }
                   : heatCellStyle(val);
+                const A = i !== j ? pairLeg(i) : null;
+                const B = i !== j ? pairLeg(j) : null;
+                const clickable = !!A && !!B;
                 return (
                   <td
                     key={j}
-                    className="p-1 border border-border/30 text-center"
+                    className={`p-1 border border-border/30 text-center ${clickable ? "cursor-pointer hover:outline hover:outline-1 hover:outline-primary/70" : ""}`}
                     style={{ backgroundColor: cell.backgroundColor }}
-                    title={`${formatSpec(labels[i])} × ${formatSpec(labels[j])}: ${val.toFixed(4)} (p=${pValues[i][j].toFixed(4)})${i === j && lagApplied ? " — autocorrelation at the applied lag" : ""}`}
+                    onClick={clickable ? () => navigateToPairs(A!.ticker, B!.ticker, A!.metric) : undefined}
+                    title={`${formatSpec(labels[i])} × ${formatSpec(labels[j])}: ${val.toFixed(4)} (p=${pValues[i][j].toFixed(4)})${i === j && lagApplied ? " — autocorrelation at the applied lag" : ""}${clickable ? " — click to open in Pairs" : ""}`}
                   >
                     <span style={{ color: cell.color, fontWeight: cell.fontWeight }}>
                       {trivialDiag ? "1.00" : val.toFixed(2)}
@@ -4854,6 +4872,34 @@ function PairwiseView({
             </Button>
           </>
         )}
+
+        {/* Hand-off: remap the Charts tab's layout onto this pair's ratio.
+            Only for plain ticker legs (MACRO series have no price ratio). */}
+        {(() => {
+          const legTicker = (spec: string): string | null => {
+            if (!spec || spec.startsWith("MACRO:")) return null;
+            const t = spec.split(":")[0];
+            return /^[A-Za-z0-9.\-]{1,12}$/.test(t) ? t.toUpperCase() : null;
+          };
+          const a = legTicker(specA);
+          const b = legTicker(specB);
+          if (!a || !b || a === b) return null;
+          return (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[10px] gap-1"
+              onClick={() => {
+                try { sessionStorage.setItem("reit-viz:pair-remap-to-charts", `${a}/${b}`); } catch {}
+                window.location.hash = "#/";
+              }}
+              title={`Open ${a}/${b} on the Charts tab — keeps your Charts layout, remaps every pane to the ratio`}
+              data-testid="corr-open-in-charts"
+            >
+              {a}/{b} → Charts
+            </Button>
+          );
+        })()}
       </div>
 
       {/* Chart grid — fills the remaining viewport; dividers drag-resize tracks */}
@@ -5151,6 +5197,7 @@ function UniverseMatrixView({
         labels={displayLabels}
         pValues={data.pValues}
         lagApplied={!!lagBars}
+        fullLabels={data.labels}
       />
 
       {/* Hierarchical clusters + HRP weights on this matrix */}

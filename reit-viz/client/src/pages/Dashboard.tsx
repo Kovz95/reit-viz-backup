@@ -1686,6 +1686,40 @@ export default function Dashboard() {
     } catch {}
   }, []);
 
+  // Drain the "Open in Charts as ratio" hand-off (Pairs / Correlation pages
+  // stash a plain "A/B" pair string). Once the restored layout is ready it is
+  // remapped in place — identical to typing A/B in the carousel search.
+  const pendingPairRemapRef = useRef<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("reit-viz:pair-remap-to-charts");
+      if (raw) {
+        sessionStorage.removeItem("reit-viz:pair-remap-to-charts");
+        if (parsePairTicker(raw)) pendingPairRemapRef.current = raw.trim();
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const pending = pendingPairRemapRef.current;
+    if (!pending || isLoadingView) return;
+    if (panes.length === 0) return; // wait for the workspace restore
+    pendingPairRemapRef.current = null;
+    remapLayoutToTicker(pending);
+  }, [panes, isLoadingView, remapLayoutToTicker]);
+  // Fallback: no saved layout ever arrives (fresh browser) — remap anyway,
+  // which routes through loadViewForTicker for the pair.
+  useEffect(() => {
+    if (!pendingPairRemapRef.current) return;
+    const t = setTimeout(() => {
+      const pending = pendingPairRemapRef.current;
+      if (pending) {
+        pendingPairRemapRef.current = null;
+        remapLayoutToTicker(pending);
+      }
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [remapLayoutToTicker]);
+
   // Read ?ticker= from URL search params (from Ranking tab click-through)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
