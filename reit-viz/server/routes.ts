@@ -2504,7 +2504,15 @@ export async function registerRoutes(server: Server, app: Express) {
   // for the next ~90 days. FMP_API_KEY lives only in the prod environment;
   // without it (local dev) the route returns an empty list. Cached to disk
   // for 12h — the calendar moves slowly and FMP calls are metered.
-  app.get("/api/earnings-calendar", async (_req, res) => {
+  app.get("/api/earnings-calendar", async (req, res) => {
+    // Optional overrides: ?from=YYYY-MM-DD widens/rewinds the fetch window
+    // (forces a refetch when the cache doesn't reach back that far);
+    // ?raw=1 skips the universe filter — both mainly for diagnosis.
+    const qFrom =
+      typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)
+        ? req.query.from
+        : null;
+    const skipFilter = req.query.raw === "1";
     const cacheFile = path.join(DATA_DIR, "earnings-calendar.json");
     const TTL_MS = 12 * 3600 * 1000;
     // Filter applied at RESPONSE time (cache may hold the raw global feed):
@@ -2532,7 +2540,7 @@ export async function registerRoutes(server: Server, app: Express) {
     // day back as a safety margin (the client dims past days anyway).
     const etIso = (msOffset = 0) =>
       new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(Date.now() + msOffset));
-    const fromWanted = etIso(-86400000);
+    const fromWanted = qFrom ?? etIso(-86400000);
     try {
       try {
         const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
@@ -2543,27 +2551,60 @@ export async function registerRoutes(server: Server, app: Express) {
           // Older caches (no `from`, or fetched with a UTC from) may start
           // after the current ET day — refetch rather than serve them.
           typeof cached.from === "string" &&
-          cached.from <= fromWanted
+          cached.from <= fromWanted &&
+          // Caches fetched via the legacy v3 endpoint miss the current day.
+          cached.source === "stable"
         ) {
-          return res.json(filterToUniverse(cached.rows));
+          return res.json(skipFilter ? cached.rows : filterToUniverse(cached.rows));
         }
       } catch { /* no/stale cache */ }
       const key = process.env.FMP_API_KEY?.trim() ?? "";
       if (!key) return res.json([]);
       const from = fromWanted;
       const to = etIso(90 * 86400000);
-      const url = `https://financialmodelingprep.com/api/v3/earning_calendar?from=${from}&to=${to}&apikey=${key}`;
-      const resp = await fetch(url);
-      if (!resp.ok) return res.json([]);
-      const raw = await resp.json();
-      const rows = (Array.isArray(raw) ? raw : [])
+      // The legacy /api/v3/earning_calendar endpoint silently drops the
+      // current day (its "past" cutoff rolls at UTC midnight = 8pm ET), so we
+      // use the stable endpoint — but that one caps responses at 4000 rows
+      // and keeps the TAIL of the window (a 90-day ask returns only the last
+      // few weeks). Fetch in 3-day chunks, splitting any chunk that hits the
+      // cap; the global feed peaks ~1-2k rows/day so splits stay rare.
+      const addDays = (iso: string, n: number) => {
+        const d = new Date(`${iso}T12:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + n);
+        return d.toISOString().slice(0, 10);
+      };
+      const fetchWindow = async (a: string, b: string, depth = 0): Promise<any[]> => {
+        const url = `https://financialmodelingprep.com/stable/earnings-calendar?from=${a}&to=${b}&includeReportTimes=true&apikey=${key}`;
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
+        const raw = await resp.json();
+        const list = Array.isArray(raw) ? raw : [];
+        if (list.length >= 4000 && a < b && depth < 4) {
+          const mid = addDays(a, Math.floor((new Date(`${b}T12:00:00Z`).getTime() - new Date(`${a}T12:00:00Z`).getTime()) / 172800000));
+          return [...(await fetchWindow(a, mid, depth + 1)), ...(await fetchWindow(addDays(mid, 1), b, depth + 1))];
+        }
+        return list;
+      };
+      const chunks: Array<[string, string]> = [];
+      for (let a = from; a <= to; a = addDays(a, 3)) {
+        chunks.push([a, addDays(a, 2) < to ? addDays(a, 2) : to]);
+      }
+      const rawRows = (await Promise.all(chunks.map(([a, b]) => fetchWindow(a, b)))).flat();
+      const seen = new Set<string>();
+      const rows = rawRows
         .filter((r: any) => r?.symbol && r?.date)
         .map((r: any) => ({
           symbol: String(r.symbol),
           date: String(r.date).slice(0, 10),
           time: typeof r.time === "string" ? r.time : "",
           epsEstimated: Number.isFinite(r.epsEstimated) ? r.epsEstimated : null,
-        }));
+        }))
+        .filter((r: any) => {
+          const k = `${r.symbol}|${r.date}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
       // FMP drops "past" days by ITS clock even inside the requested window —
       // an evening refresh would lose the current ET day's reporters. Keep any
       // previously-cached rows dated >= from that the new fetch no longer has.
@@ -2578,8 +2619,8 @@ export async function registerRoutes(server: Server, app: Express) {
           }
         }
       } catch { /* no previous cache */ }
-      try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), from, rows })); } catch {}
-      res.json(filterToUniverse(rows));
+      try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), from, source: "stable", rows })); } catch {}
+      res.json(skipFilter ? rows : filterToUniverse(rows));
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "earnings-calendar failed" });
     }
