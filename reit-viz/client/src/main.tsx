@@ -33,6 +33,24 @@ window.addEventListener("error", (e) => {
   if (isStaleChunkError(String(e.message ?? ""))) reloadOnceForStaleChunk();
 }, true);
 
+// lightweight-charts schedules internal repaints on its own rAF; removing a
+// chart (React effect cleanup — every indicator toggle recreates charts) can
+// leave one pending paint that then throws "Object is disposed" from deep
+// inside the library. The chart is already gone, nothing is broken, and the
+// race is upstream — swallow EXACTLY that error so it doesn't spam the
+// console. Anything else propagates untouched.
+const isDisposedNoise = (v: unknown): boolean =>
+  ((v as { message?: unknown })?.message ?? v) === "Object is disposed";
+window.addEventListener("error", (e) => {
+  if (isDisposedNoise(e.error) || e.message === "Object is disposed") {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+}, true);
+window.addEventListener("unhandledrejection", (e) => {
+  if (isDisposedNoise(e.reason)) e.preventDefault();
+});
+
 if (!window.location.hash) {
   window.location.hash = "#/";
 }
