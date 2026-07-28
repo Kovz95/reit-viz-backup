@@ -2564,6 +2564,20 @@ export async function registerRoutes(server: Server, app: Express) {
           time: typeof r.time === "string" ? r.time : "",
           epsEstimated: Number.isFinite(r.epsEstimated) ? r.epsEstimated : null,
         }));
+      // FMP drops "past" days by ITS clock even inside the requested window —
+      // an evening refresh would lose the current ET day's reporters. Keep any
+      // previously-cached rows dated >= from that the new fetch no longer has.
+      try {
+        const prev = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
+        if (Array.isArray(prev?.rows)) {
+          const have = new Set(rows.map((r: any) => `${r.symbol}|${r.date}`));
+          for (const r of prev.rows) {
+            if (r?.symbol && typeof r?.date === "string" && r.date >= from && !have.has(`${r.symbol}|${r.date}`)) {
+              rows.push(r);
+            }
+          }
+        }
+      } catch { /* no previous cache */ }
       try { fs.writeFileSync(cacheFile, JSON.stringify({ fetchedAt: Date.now(), from, rows })); } catch {}
       res.json(filterToUniverse(rows));
     } catch (e: any) {
