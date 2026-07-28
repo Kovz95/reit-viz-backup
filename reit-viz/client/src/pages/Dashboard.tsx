@@ -855,7 +855,49 @@ export default function Dashboard() {
         }).catch(() => {});
       }
     }
-  }, [uniquePaneTickers]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ohlcCache in deps: deleting an entry (live basket-edit refetch above)
+  // re-runs this effect so the candles rebuild; existing entries are guarded
+  // by the !ohlcCache[tk] check, so this doesn't loop.
+  }, [uniquePaneTickers, ohlcCache]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live basket updates: when a basket is edited (weighting scheme, members,
+  // custom weights), refetch every plotted series that depends on it — plain
+  // BASKET: tickers and A/B pairs with a basket leg — and drop their cached
+  // candles so the OHLC effect rebuilds them with the new weights. Deferred a
+  // tick so basketsRef has the updated basket by the time we resolve it.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onBasketsChanged = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const affected = plottedSeriesRef.current.filter((s) => {
+          if (isBasketTicker(s.ticker)) return true;
+          const pair = parsePairTicker(s.ticker);
+          return !!pair && (isBasketTicker(pair.a) || isBasketTicker(pair.b));
+        });
+        if (affected.length === 0) return;
+        setOhlcCache((prev) => {
+          const next = { ...prev };
+          for (const s of affected) delete next[s.ticker];
+          return next;
+        });
+        const basketCache = new Map<string, BasketOhlcResult | null>();
+        await Promise.all(
+          affected.map(async (s) => {
+            try {
+              const data = await getMetricSeriesResolved(s.ticker, s.metric, resolveBasket, basketCache);
+              setPlottedSeries((prev) => prev.map((ps) => (ps.id === s.id ? { ...ps, data } : ps)));
+            } catch { /* keep the old data on failure */ }
+          })
+        );
+      }, 200);
+    };
+    window.addEventListener("reit-viz:baskets:changed", onBasketsChanged);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("reit-viz:baskets:changed", onBasketsChanged);
+    };
+  }, [resolveBasket]);
 
   // For backward compat: ohlcData for the active ticker
   const ohlcData = activeTicker ? ohlcCache[activeTicker] : undefined;
