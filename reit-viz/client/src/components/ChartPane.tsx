@@ -144,7 +144,7 @@ function shadeHex(color: string, idx: number): string {
 /** priceLinesOn: true/false forces the dashed current-value line on/off;
  *  undefined leaves the series' own setting untouched (sub-charts use that so
  *  re-showing never forces lines onto series designed without one). */
-function setSeriesAxisLabels(s: any, labelsOn: boolean, priceLinesOn?: boolean): void {
+export function setSeriesAxisLabels(s: any, labelsOn: boolean, priceLinesOn?: boolean): void {
   try {
     const o = s.options();
     if (!labelsOn) {
@@ -158,7 +158,7 @@ function setSeriesAxisLabels(s: any, labelsOn: boolean, priceLinesOn?: boolean):
     if (priceLinesOn !== undefined) s.applyOptions({ priceLineVisible: priceLinesOn });
   } catch {}
 }
-function readSeriesTitle(s: any): string {
+export function readSeriesTitle(s: any): string {
   try {
     return s.options().title || s.__labelsOffTitle || "";
   } catch {

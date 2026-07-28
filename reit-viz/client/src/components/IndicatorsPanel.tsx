@@ -228,7 +228,7 @@ function SectionHeader({
  *  show as removable chips, and the number input ADDS a period on Enter.
  *  Clicking a period while the indicator is off turns it on with just that
  *  period. */
-function PeriodMultiSelect({
+export function PeriodMultiSelect({
   presets,
   active,
   onChange,

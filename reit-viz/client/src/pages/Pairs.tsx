@@ -68,8 +68,9 @@ import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection } from "@/components/IndicatorsPanel";
-import { indicatorPeriods } from "@/components/ChartPane";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect } from "@/components/IndicatorsPanel";
+import { indicatorPeriods, setSeriesAxisLabels } from "@/components/ChartPane";
+import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useBaskets } from "@/lib/useBaskets";
@@ -893,24 +894,23 @@ function PairsIndicatorsPanel({
         {/* ───── Oscillators ───── */}
         <div className="border-t border-border pt-3">
           <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Oscillators</p>
-          {/* RSI */}
+          {/* RSI — multi-period, one line per period (Charts parity) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">RSI</Label>
-              <Switch checked={activeIndicators.rsi !== undefined}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, rsi: on ? rsiPeriod : undefined })} data-testid="toggle-rsi" />
+              <Switch checked={indicatorPeriods(activeIndicators.rsi).length > 0}
+                onCheckedChange={(on) => setIndicators({ ...activeIndicators, rsi: on ? [rsiPeriod] : undefined })} data-testid="toggle-rsi" />
             </div>
-            <div className="flex gap-1 items-center">
-              {[7, 14, 21].map((p) => (
-                <Button key={p} variant={rsiPeriod === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setRsiPeriod(p); if (activeIndicators.rsi !== undefined) setIndicators({ ...activeIndicators, rsi: p }); }}>
-                  {p}
-                </Button>
-              ))}
-              <Input type="number" placeholder="#" className="h-6 w-14 text-[10px] px-1.5" min={2}
-                onChange={(e) => { const n = parseInt(e.target.value); if (n > 1) { setRsiPeriod(n); if (activeIndicators.rsi !== undefined) setIndicators({ ...activeIndicators, rsi: n }); } }}
-                data-testid="custom-rsi" />
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[7, 14, 21]}
+                active={activeIndicators.rsi}
+                onChange={(list) => {
+                  if (list?.length) setRsiPeriod(list[0]);
+                  setIndicators({ ...activeIndicators, rsi: list });
+                }}
+                testid="custom-rsi"
+              />
             </div>
           </div>
           {/* MACD */}
@@ -947,24 +947,24 @@ function PairsIndicatorsPanel({
               ))}
             </div>
           </div>
-          {/* ROC */}
+          {/* ROC — multi-period (Charts parity) */}
           <div className="space-y-2 mt-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">ROC (Rate of Change)</Label>
-              <Switch checked={activeIndicators.roc !== undefined}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, roc: on ? rocPeriod : undefined })} data-testid="toggle-roc" />
+              <Switch checked={indicatorPeriods(activeIndicators.roc).length > 0}
+                onCheckedChange={(on) => setIndicators({ ...activeIndicators, roc: on ? [rocPeriod] : undefined })} data-testid="toggle-roc" />
             </div>
-            <div className="flex gap-1 items-center">
-              {[9, 12, 20, 50].map((p) => (
-                <Button key={p} variant={rocPeriod === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setRocPeriod(p); if (activeIndicators.roc !== undefined) setIndicators({ ...activeIndicators, roc: p }); }}>
-                  {p}
-                </Button>
-              ))}
-              <Input type="number" placeholder="#" className="h-6 w-14 text-[10px] px-1.5" min={1}
-                onChange={(e) => { const n = parseInt(e.target.value); if (n > 0) { setRocPeriod(n); if (activeIndicators.roc !== undefined) setIndicators({ ...activeIndicators, roc: n }); } }}
-                data-testid="custom-roc" />
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[9, 12, 20, 50]}
+                active={activeIndicators.roc}
+                onChange={(list) => {
+                  if (list?.length) setRocPeriod(list[0]);
+                  setIndicators({ ...activeIndicators, roc: list });
+                }}
+                testid="custom-roc"
+                min={1}
+              />
             </div>
           </div>
         </div>
@@ -1000,24 +1000,23 @@ function PairsIndicatorsPanel({
               ))}
             </div>
           </div>
-          {/* ATR */}
+          {/* ATR — multi-period (Charts parity) */}
           <div className="space-y-2 mt-3">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-medium">ATR</Label>
-              <Switch checked={activeIndicators.atr !== undefined}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, atr: on ? atrPeriod : undefined })} data-testid="toggle-atr" />
+              <Switch checked={indicatorPeriods(activeIndicators.atr).length > 0}
+                onCheckedChange={(on) => setIndicators({ ...activeIndicators, atr: on ? [atrPeriod] : undefined })} data-testid="toggle-atr" />
             </div>
-            <div className="flex gap-1 items-center">
-              {[7, 14, 21].map((p) => (
-                <Button key={p} variant={atrPeriod === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setAtrPeriod(p); if (activeIndicators.atr !== undefined) setIndicators({ ...activeIndicators, atr: p }); }}>
-                  {p}
-                </Button>
-              ))}
-              <Input type="number" placeholder="#" className="h-6 w-14 text-[10px] px-1.5" min={2}
-                onChange={(e) => { const n = parseInt(e.target.value); if (n > 1) { setAtrPeriod(n); if (activeIndicators.atr !== undefined) setIndicators({ ...activeIndicators, atr: n }); } }}
-                data-testid="custom-atr" />
+            <div className="flex gap-1 items-center flex-wrap">
+              <PeriodMultiSelect
+                presets={[7, 14, 21]}
+                active={activeIndicators.atr}
+                onChange={(list) => {
+                  if (list?.length) setAtrPeriod(list[0]);
+                  setIndicators({ ...activeIndicators, atr: list });
+                }}
+                testid="custom-atr"
+              />
             </div>
           </div>
         </div>
@@ -1159,37 +1158,24 @@ function PairsIndicatorsPanel({
 
 function MiniMaRow({ label, presets, defaultLen, active, onToggle }: {
   label: string; presets: number[]; defaultLen: number;
-  active: number | number[] | undefined; onToggle: (v: number | undefined) => void;
+  active: number | number[] | undefined; onToggle: (v: number[] | undefined) => void;
 }) {
-  const firstActive = indicatorPeriods(active)[0];
-  const [len, setLen] = useState(firstActive ?? defaultLen);
-  const [custom, setCustom] = useState("");
-  const applyLen = (n: number) => { setLen(n); if (active !== undefined) onToggle(n); };
+  const activeList = indicatorPeriods(active);
+  const lastRef = useRef<number[]>(activeList.length ? activeList : [defaultLen]);
+  if (activeList.length) lastRef.current = activeList;
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
         <Label className="text-xs font-medium">{label}</Label>
-        <Switch checked={active !== undefined} onCheckedChange={(on) => onToggle(on ? len : undefined)} />
+        <Switch checked={activeList.length > 0} onCheckedChange={(on) => onToggle(on ? lastRef.current : undefined)} />
       </div>
-      <div className="flex gap-1 items-center">
-        {presets.map((p) => (
-          <Button key={p} variant={len === p ? "default" : "secondary"} size="sm"
-            className="h-5 px-2 text-[10px] flex-1" onClick={() => applyLen(p)}>
-            {p}
-          </Button>
-        ))}
-        <Input
-          type="number"
-          placeholder="Custom"
-          className="h-5 w-16 text-[10px] px-1.5"
-          value={custom}
+      <div className="flex gap-1 items-center flex-wrap">
+        <PeriodMultiSelect
+          presets={presets}
+          active={active}
+          onChange={onToggle}
+          testid={`custom-${label.toLowerCase()}`}
           min={1}
-          onChange={(e) => {
-            setCustom(e.target.value);
-            const n = parseInt(e.target.value);
-            if (n > 0) applyLen(n);
-          }}
-          data-testid={`custom-${label.toLowerCase()}`}
         />
       </div>
     </div>
@@ -1474,6 +1460,7 @@ function PairsSubIndicatorChart({
   const syncingRef = useRef(false);
   const { colors: IC } = useIndicatorColors();
   const gridColor = useGridColor("rgba(255,255,255,0.03)");
+  const [chrome] = useChartChrome();
   // In-plot crosshair readout for this sub-pane (fires for both direct hover
   // and the parent chart's synced crosshair).
   const [hoverReadout, setHoverReadout] = useState<{
@@ -1511,6 +1498,18 @@ function PairsSubIndicatorChart({
       handleScale: { mouseWheel: true, pinch: true },
     });
     chartRef.current = chart;
+
+    // Record every series created so the global Labels/Px-line preference can
+    // be applied at the end without touching each addSeries site.
+    const createdSeries: ISeriesApi<any>[] = [];
+    {
+      const origAdd = chart.addSeries.bind(chart);
+      (chart as any).addSeries = (...args: unknown[]) => {
+        const s = (origAdd as any)(...args);
+        createdSeries.push(s);
+        return s;
+      };
+    }
 
     let firstSeries: ISeriesApi<any> | null = null;
 
@@ -1817,13 +1816,21 @@ function PairsSubIndicatorChart({
       }
     }
 
+    // Global Labels/Px-line preference — only the OFF state is applied; the
+    // chart is recreated with originals when toggled back on (chrome in deps).
+    if (!chrome.axisLabels || !chrome.priceLines) {
+      for (const s of createdSeries) {
+        setSeriesAxisLabels(s, chrome.axisLabels, chrome.priceLines ? undefined : false);
+      }
+    }
+
     return () => {
       chartRef.current = null;
       removeParentSubs?.();
       setHoverReadout(null);
       try { chart.remove(); } catch {}
     };
-  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor]);
+  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome]);
 
   // Resize
   useEffect(() => {
@@ -1926,6 +1933,7 @@ function MiniChart({
     items: { label: string; value: number; color: string }[];
   } | null>(null);
   const [logScale, setLogScale] = useState(false);
+  const [chrome] = useChartChrome();
   // Counter that increments when chart + main series are ready, to trigger re-render
   // so sub-charts receive the actual parentChart/parentSeries refs (not null).
   const [chartReady, setChartReady] = useState(0);
@@ -1951,6 +1959,18 @@ function MiniChart({
     });
     chartRef.current = chart;
     onRegisterChart(id, chart, data.length);
+
+    // Record every series created so the global Labels/Px-line preference can
+    // be applied at the end without touching each addSeries site.
+    const createdSeries: ISeriesApi<any>[] = [];
+    {
+      const origAdd = chart.addSeries.bind(chart);
+      (chart as any).addSeries = (...args: unknown[]) => {
+        const s = (origAdd as any)(...args);
+        createdSeries.push(s);
+        return s;
+      };
+    }
 
     // Labels/colors for the in-plot readout, for principal series with no title.
     const readoutMeta = new Map<unknown, { label: string; color: string }>();
@@ -2250,6 +2270,14 @@ function MiniChart({
 
     chart.timeScale().fitContent();
 
+    // Global Labels/Px-line preference — OFF state only; toggling back on
+    // recreates the chart with original options (chrome in deps).
+    if (!chrome.axisLabels || !chrome.priceLines) {
+      for (const s of createdSeries) {
+        setSeriesAxisLabels(s, chrome.axisLabels, chrome.priceLines ? undefined : false);
+      }
+    }
+
     const ro = new ResizeObserver(() => {
       if (chartRef.current && el) {
         chartRef.current.applyOptions({
@@ -2270,7 +2298,7 @@ function MiniChart({
       chartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands, gridColor]);
+  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands, gridColor, chrome]);
 
   // Log scale
   useEffect(() => {
@@ -2541,6 +2569,7 @@ export default function Pairs() {
   const [search, setSearch] = useState("");
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [showIndicators, setShowIndicators] = useState(false);
+  const [pageChrome, setPageChrome] = useChartChrome();
   // Per-chart indicator state: chartId → ActiveIndicators
   const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
   const [indicatorChartId, setIndicatorChartId] = useState<string>("prices");
@@ -3363,6 +3392,26 @@ export default function Pairs() {
         >
           <TrendingUp className="w-3 h-3" />
           Indicators
+        </Button>
+
+        {/* Axis labels + current-value lines (Charts parity — global pref) */}
+        <Button
+          variant="ghost" size="sm"
+          className={`h-7 gap-1 text-xs ${!pageChrome.axisLabels ? "text-muted-foreground/50" : ""}`}
+          onClick={() => setPageChrome({ axisLabels: !pageChrome.axisLabels })}
+          title={pageChrome.axisLabels ? "Hide the right-axis series labels — hover still shows all values" : "Show the right-axis series labels"}
+          data-testid="pairs-toggle-axis-labels"
+        >
+          Labels
+        </Button>
+        <Button
+          variant="ghost" size="sm"
+          className={`h-7 gap-1 text-xs ${!pageChrome.priceLines ? "text-muted-foreground/50" : ""}`}
+          onClick={() => setPageChrome({ priceLines: !pageChrome.priceLines })}
+          title={pageChrome.priceLines ? "Hide the dashed current-value lines" : "Show the dashed current-value lines"}
+          data-testid="pairs-toggle-price-lines"
+        >
+          Px line
         </Button>
 
         <Button variant="outline" size="sm" className="h-7 gap-1 text-xs"
