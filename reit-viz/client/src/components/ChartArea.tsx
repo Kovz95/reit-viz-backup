@@ -25,6 +25,7 @@ import IndicatorsPanel from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
 import AttributionPickerPanel from "./AttributionPickerPanel";
 import QuickAnalyzePanel from "./QuickAnalyzePanel";
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import SignalEngineAnalyzer from "./SignalEngineAnalyzer";
 import { SeededOverlaysManager } from "./SeededOverlaysManager";
 import { ChartsSimilarSetupsPanel } from "./ChartsSimilarSetupsPanel";
@@ -2962,11 +2963,13 @@ export default function ChartArea({
         )}
 
         {showSignalAnalyzer && activeTicker && (
-          <SignalEngineAnalyzer
-            ticker={activeTicker}
-            asFloating
-            onClose={() => setShowSignalAnalyzer(false)}
-          />
+          // Docked like the other side panels (was a floating 760px window).
+          <ResizableSidebar storageKey="charts-signal-analyzer-width" defaultWidth={620} maxWidth={900}>
+            <SignalEngineAnalyzer
+              ticker={activeTicker}
+              onClose={() => setShowSignalAnalyzer(false)}
+            />
+          </ResizableSidebar>
         )}
 
       </div>

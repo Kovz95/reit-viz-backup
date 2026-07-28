@@ -1344,7 +1344,7 @@ export default function SignalEngineAnalyzer({
           </span>
         )}
         <div className="flex-1" />
-        {asFloating && onClose && (
+        {onClose && (
           <Button
             variant="ghost"
             size="sm"
