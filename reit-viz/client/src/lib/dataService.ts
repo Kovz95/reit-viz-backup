@@ -7,6 +7,7 @@
  */
 
 import type { ClassificationField } from "@/lib/reclassificationOverrides";
+import { parseMultipleMetric } from "@/lib/tickerData";
 
 // ---- Types ----
 export interface TickerMeta {
@@ -706,6 +707,46 @@ export async function getMetricSeries(symbol: string, metric: string): Promise<T
   for (const [idx, val] of pairs) {
     if (idx < dates.length) {
       data.push({ time: dates[idx], value: val * mult });
+    }
+  }
+  return extendStaleMultiplePairs(rawData, metric, dates, data, mult);
+}
+
+/** Sparse-pairs twin of tickerData's extendStaleMultiple: stored price
+ *  multiples (P/FFO FY2, …) sometimes freeze days before close/estimates do
+ *  (vendor lag). The stored columns equal close ÷ estimate exactly, so append
+ *  the missing tail with that formula (estimate forward-filled). Stored
+ *  values are never rewritten. */
+function extendStaleMultiplePairs(
+  rawData: RawTickerData,
+  metric: string,
+  dates: string[],
+  data: TimeValue[],
+  mult: number,
+): TimeValue[] {
+  if (!data.length || !dates.length) return data;
+  const lastTime = data[data.length - 1].time;
+  if (dates[dates.length - 1] <= lastTime) return data; // already fresh
+  const pm = parseMultipleMetric(metric);
+  if (!pm) return data;
+  const estPairs = rawData[pm.estimateMetric];
+  const closePairs = rawData["close"];
+  if (!estPairs?.length || !closePairs?.length) return data;
+  let lastIdx = dates.length - 1;
+  while (lastIdx > 0 && dates[lastIdx] > lastTime) lastIdx--;
+  let lastEst: number | null = null;
+  let lastEstIdx = -1;
+  for (const [i, v] of estPairs) {
+    if (i <= lastIdx && i > lastEstIdx && Number.isFinite(v) && v !== 0) { lastEstIdx = i; lastEst = v; }
+  }
+  const estByIdx = new Map<number, number>(estPairs.filter(([i]) => i > lastIdx) as [number, number][]);
+  const closeByIdx = new Map<number, number>(closePairs.filter(([i]) => i > lastIdx) as [number, number][]);
+  for (let i = lastIdx + 1; i < dates.length; i++) {
+    const e = estByIdx.get(i);
+    if (e != null && Number.isFinite(e) && e !== 0) lastEst = e;
+    const c = closeByIdx.get(i);
+    if (lastEst != null && c != null && Number.isFinite(c) && c > 0) {
+      data.push({ time: dates[i], value: (c / lastEst) * mult });
     }
   }
   return data;

@@ -204,5 +204,63 @@ export function getDenseSeries(
     const v = arr[i];
     if (typeof v === "number" && !Number.isNaN(v)) out.push({ time: dates[i], value: v });
   }
+  return extendStaleMultiple(raw, metric, out);
+}
+
+// "P/FFO FY2", "P/FFO (FY1)", "P/E LTM", "P/AFFO (FY0)", … → family + period.
+const MULTIPLE_METRIC_RE = /^P\/(FFO|AFFO|E)\s*(?:\((FY\d|LTM)\)|(FY\d|LTM))\s*$/i;
+
+/** Parse a stored price-multiple metric name into its family/period and the
+ *  matching per-share estimate metric ("P/FFO FY2" → "FFO FY2"). Shared with
+ *  dataService's sparse-pairs path so both read paths freshen stale tails. */
+export function parseMultipleMetric(
+  metric: string
+): { family: string; period: string; estimateMetric: string } | null {
+  const m = metric.trim().match(MULTIPLE_METRIC_RE);
+  if (!m) return null;
+  const family = m[1].toUpperCase() === "E" ? "EPS" : m[1].toUpperCase();
+  const period = (m[2] ?? m[3] ?? "").toUpperCase();
+  return { family, period, estimateMetric: `${family} ${period}` };
+}
+
+/** Stored price multiples sometimes stop updating days before the close
+ *  series does (vendor lag — e.g. AHR's P/FFO columns froze at 2026-07-20
+ *  while close and the FFO estimates kept printing through 2026-07-24). The
+ *  stored columns equal close ÷ estimate exactly (verified to 4 decimals), so
+ *  extend the stale tail with that same formula, forward-filling the estimate
+ *  over gaps. Only APPENDS after the last stored point — stored values are
+ *  never rewritten and mid-series gaps are left alone. */
+function extendStaleMultiple(
+  raw: RawTicker,
+  metric: string,
+  out: { time: string; value: number }[]
+): { time: string; value: number }[] {
+  if (out.length === 0) return out;
+  const dates = raw.dates;
+  const lastTime = out[out.length - 1].time;
+  if (!dates.length || dates[dates.length - 1] <= lastTime) return out; // already fresh
+  const pm = parseMultipleMetric(metric);
+  if (!pm) return out;
+  const estRaw = raw.metrics[pm.estimateMetric];
+  const closeRaw = raw.metrics.close;
+  if (!estRaw || !closeRaw) return out;
+  let tailStart = dates.length - 1;
+  while (tailStart > 0 && dates[tailStart - 1] > lastTime) tailStart--;
+  const est = expandRLE(estRaw);
+  const close = expandRLE(closeRaw);
+  // Last known estimate at/before the tail (estimates are stepwise).
+  let lastEst: number | null = null;
+  for (let i = Math.min(tailStart, est.length) - 1; i >= 0; i--) {
+    const e = est[i];
+    if (typeof e === "number" && Number.isFinite(e) && e !== 0) { lastEst = e; break; }
+  }
+  for (let i = tailStart; i < dates.length; i++) {
+    const e = est[i];
+    if (typeof e === "number" && Number.isFinite(e) && e !== 0) lastEst = e;
+    const c = close[i];
+    if (lastEst != null && typeof c === "number" && Number.isFinite(c) && c > 0) {
+      out.push({ time: dates[i], value: c / lastEst });
+    }
+  }
   return out;
 }
