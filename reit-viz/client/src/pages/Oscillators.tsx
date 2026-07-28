@@ -102,8 +102,13 @@ const kt = (ticker: string) => ticker?.startsWith?.("BASKET:") ?? false;
 const qe = (closes: number[], dates: string[]) => (weeklyDownsamplePrices as any)(closes, dates);
 const Vt = (arr: any[], weekIndex: number[], n: number) => (expandWeeklyToDaily as any)(arr, weekIndex, n);
 
+// The original hashed worker chunk was lost with the recovered bundle; the
+// EWO sweep then ran on the MAIN THREAD via the lib/workerPool shim (correct
+// but UI-freezing). Real worker restored: src/workers/oscillatorOptimizer.
+// worker.ts wraps the same runEwoDailyScan kernel.
 function createOscWorker(opts?: { name?: string }) {
-  return new Worker("" + new URL("oscillatorOptimizer.worker-C5wv6LuK.js", import.meta.url).href, {
+  return new Worker(new URL("../workers/oscillatorOptimizer.worker.ts", import.meta.url), {
+    type: "module",
     name: opts?.name,
   });
 }
@@ -363,7 +368,8 @@ export default function Oscillators() {
       if (frequency === "daily") {
         workerPoolRef.current?.terminate();
         const concurrency = Math.min(Math.max(2, navigator.hardwareConcurrency || 4), 8);
-        const pool = new kr(() => createOscWorker(), concurrency);
+        const { RealWorkerPool } = await import("@/lib/realWorkerPool");
+        const pool = new RealWorkerPool(() => createOscWorker(), concurrency);
         workerPoolRef.current = pool;
 
         const ewoParams = {

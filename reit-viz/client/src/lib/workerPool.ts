@@ -30,7 +30,7 @@ const ewo = stochOscillator as any;
 const detect = detectSignals as any;
 const yieldToUi = () => new Promise<void>((r) => setTimeout(r, 0));
 
-interface EwoTask {
+export interface EwoTask {
   type: string;
   ticker: string;
   name?: string;
@@ -49,7 +49,7 @@ interface EwoTask {
   };
 }
 
-async function runEwoDailyScan(task: EwoTask, isCancelled: () => boolean): Promise<any | null> {
+export async function runEwoDailyScan(task: EwoTask, isCancelled: () => boolean): Promise<any | null> {
   const { ticker, name, closes, highs, lows, params } = task;
   const n = closes.length;
   if (!Array.isArray(closes) || n < 252) return null;
