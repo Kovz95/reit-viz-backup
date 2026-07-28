@@ -19,6 +19,7 @@ import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
 import { isBasketTicker, extractBasketId } from "@/lib/basketUtils";
 import { getBasketOhlc, buildBasketOhlc } from "@/lib/basketOhlc";
+import { computeBasketWeights } from "@/lib/basketWeights";
 import type { BasketOhlcResult } from "@/lib/basketOhlc";
 import { getRerateMetric, LOOKBACKS } from "@/lib/valuationRerate";
 import { buildRerateSeries } from "@/lib/valuationRerateSeries";
@@ -446,9 +447,12 @@ async function getMetricSeriesResolved(
       if (!res) return [];
       return basketMetricSeries(res, metric);
     }
-    // Fundamental metrics (P/FFO FY2, growth, yields, …): equal-weight
-    // average across the basket's constituents, on dates where at least half
-    // the members with any data have a value (avoids composition jumps).
+    // Fundamental metrics (P/FFO FY2, growth, yields, …): weighted average
+    // across the basket's constituents using the basket's OWN weighting
+    // scheme (equal / custom / market-cap / price / inverse-vol — the same
+    // computeBasketWeights the price index uses), on dates where at least
+    // half the members with any data have a value. Weights renormalize over
+    // the members present at each date so gaps don't deflate the average.
     const id = extractBasketId(ticker);
     const basket = id ? resolve(id) : undefined;
     if (!basket?.tickers?.length) return [];
@@ -457,19 +461,38 @@ async function getMetricSeriesResolved(
     );
     const withData = legs.filter((l) => l.length > 0).length;
     if (withData === 0) return [];
-    const minCount = Math.max(1, Math.ceil(withData / 2));
-    const byDate = new Map<string, number[]>();
-    for (const leg of legs) {
-      for (const p of leg) {
-        if (!Number.isFinite(p.value)) continue;
-        const a = byDate.get(p.time);
-        if (a) a.push(p.value);
-        else byDate.set(p.time, [p.value]);
+    let weights: Record<string, number> = {};
+    try {
+      const needCloses = basket.weighting === "price" || basket.weighting === "inverse_vol";
+      const closesByTicker: Record<string, { time: string; value: number }[]> = {};
+      if (needCloses) {
+        const closes = await Promise.all(
+          basket.tickers.map((t) => getMetricSeries(t, "close").catch(() => [] as { time: string; value: number }[]))
+        );
+        basket.tickers.forEach((t, i) => { closesByTicker[t] = closes[i]; });
       }
-    }
+      weights = (await computeBasketWeights({ ...basket }, closesByTicker, getMetricSeries)).weights;
+    } catch { /* fall back to equal below */ }
+    const wOf = (t: string) => {
+      const w = weights[t];
+      return Number.isFinite(w) && w! > 0 ? w! : 1 / basket.tickers.length;
+    };
+    const minCount = Math.max(1, Math.ceil(withData / 2));
+    const byDate = new Map<string, { v: number; w: number; n: number }>();
+    basket.tickers.forEach((t, i) => {
+      const w = wOf(t);
+      for (const p of legs[i]) {
+        if (!Number.isFinite(p.value)) continue;
+        const e = byDate.get(p.time) ?? { v: 0, w: 0, n: 0 };
+        e.v += w * p.value;
+        e.w += w;
+        e.n += 1;
+        byDate.set(p.time, e);
+      }
+    });
     return [...byDate.entries()]
-      .filter(([, vs]) => vs.length >= minCount)
-      .map(([time, vs]) => ({ time, value: vs.reduce((s, v) => s + v, 0) / vs.length }))
+      .filter(([, e]) => e.n >= minCount && e.w > 0)
+      .map(([time, e]) => ({ time, value: e.v / e.w }))
       .sort((a, b) => a.time.localeCompare(b.time));
   }
   return getMetricSeries(ticker, metric);
