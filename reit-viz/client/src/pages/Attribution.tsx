@@ -396,6 +396,112 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: Roll
   );
 }
 
+// ── Share-of-Move Chart Component ────────────────────────────────────────────
+// Rolling |Δln M| / (|Δln M| + |Δln E|) as a percent — "over the trailing
+// window, what % of the gross move came from the multiple vs estimates".
+// The two lines sum to 100 by construction (same formula as the Charts-tab
+// Attribution panel's "Share of move %" display).
+
+interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
+
+function ShareChart({ data, earningsDates = [], spacerTimes = [], sync }: ShareChartProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const estSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const midSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spacerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const detachSyncRef = useRef<(() => void) | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; mult: number; est: number } | null>(null);
+  const gridColor = useGridColor("rgba(255,255,255,0.04)");
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const init = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
+      const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
+      chartRef.current = chart;
+      const pf = { type: "price" as const, precision: 0, minMove: 1 };
+      spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      midSeriesRef.current = chart.addSeries(LineSeries, { color: "rgba(255,255,255,0.18)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      estSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_EST, lineWidth: 2, title: "Est share %", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
+      multSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_MULT, lineWidth: 2, title: "Multiple share %", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
+      if (sync) detachSyncRef.current = sync.attach(chart, multSeriesRef.current, el);
+      chart.subscribeCrosshairMove(param => {
+        if (!param.time || !param.seriesData || !param.point || !(param as any).sourceEvent) { setTooltip(null); return; }
+        const mv = multSeriesRef.current ? param.seriesData.get(multSeriesRef.current) : null;
+        const ev = estSeriesRef.current ? param.seriesData.get(estSeriesRef.current) : null;
+        if (!mv && !ev) { setTooltip(null); return; }
+        const t = param.time;
+        const dateStr = typeof t === "object" && (t as any).year
+          ? `${(t as any).year}-${String((t as any).month).padStart(2, "0")}-${String((t as any).day).padStart(2, "0")}` : String(t);
+        setTooltip({ x: param.point.x, y: param.point.y, date: dateStr, mult: (mv as any)?.value ?? 0, est: (ev as any)?.value ?? 0 });
+      });
+      const ro = new ResizeObserver(entries => {
+        if (!chartRef.current) return;
+        const { width, height } = entries[0].contentRect;
+        if (width > 0 && height > 0) chartRef.current.applyOptions({ width, height });
+      });
+      ro.observe(el); (chart as any).__ro = ro;
+    };
+    init();
+    return () => {
+      const c = chartRef.current;
+      if ((c as any)?.__ro) (c as any).__ro.disconnect();
+      detachSyncRef.current?.(); detachSyncRef.current = null;
+      chartRef.current?.remove();
+      chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; midSeriesRef.current = null; spacerSeriesRef.current = null;
+    };
+  }, [gridColor]);
+
+  useEffect(() => {
+    if (!chartRef.current || !multSeriesRef.current || !estSeriesRef.current) return;
+    spacerSeriesRef.current?.setData(spacerTimes.map(t => ({ time: t, value: 0 })));
+    if (data.length < 2) {
+      multSeriesRef.current.setData([]); estSeriesRef.current.setData([]); midSeriesRef.current?.setData([]);
+      return;
+    }
+    const seen = new Set<string>();
+    const deduped = data.filter(p => { const k = p.date.slice(0, 10); return seen.has(k) ? false : (seen.add(k), true); });
+    const shares = deduped.map(p => {
+      const denom = Math.abs(p.mult) + Math.abs(p.est);
+      const mult = denom > 1e-12 ? (Math.abs(p.mult) / denom) * 100 : 50;
+      return { time: p.date.slice(0, 10), mult, est: 100 - mult };
+    });
+    multSeriesRef.current.setData(shares.map(s => ({ time: s.time, value: s.mult })));
+    estSeriesRef.current.setData(shares.map(s => ({ time: s.time, value: s.est })));
+    midSeriesRef.current?.setData([
+      { time: shares[0].time, value: 50 },
+      { time: shares[shares.length - 1].time, value: 50 },
+    ]);
+    chartRef.current.timeScale().fitContent();
+  }, [data, spacerTimes, gridColor]);
+
+  useEarningsLines(multSeriesRef, earningsDates, [data, gridColor]);
+
+  // Container must always mount — see CumulativeChart note.
+  return (
+    <div className="relative w-full" style={{ height: 200 }}>
+      <div ref={containerRef} className="absolute inset-0" />
+      {data.length < 2 && (
+        <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
+          Insufficient data for share-of-move (needs the rolling decomposition).
+        </div>
+      )}
+      {tooltip && (
+        <div className="pointer-events-none absolute z-10 rounded border border-border bg-popover/95 px-2 py-1 text-[10px] shadow-md backdrop-blur"
+          style={{ left: Math.min(tooltip.x + 12, (containerRef.current?.clientWidth ?? 0) - 170), top: Math.max(8, tooltip.y - 55) }}>
+          <div className="text-muted-foreground mb-0.5">{tooltip.date}</div>
+          <div className="flex items-center justify-between gap-3"><span style={{ color: COLOR_MULT }}>Multiple share</span><span className="font-mono">{tooltip.mult.toFixed(0)}%</span></div>
+          <div className="flex items-center justify-between gap-3"><span style={{ color: COLOR_EST }}>Est share</span><span className="font-mono">{tooltip.est.toFixed(0)}%</span></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Composition Bar ───────────────────────────────────────────────────────────
 
 interface CompositionBarProps { multShare: number; estShare: number; multSign: number; estSign: number }
@@ -612,6 +718,19 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, setActive
             </div>
           </div>
           <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
+        </div>
+        {/* Share-of-move chart */}
+        <div className="p-3 border-t border-border">
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-[11px] font-semibold" title="Over each trailing window: |Δln M| / (|Δln M| + |Δln E|). The two lines sum to 100%.">
+              Share of Rolling {rollingDays}-day Move (% multiple vs % estimates)
+            </div>
+            <div className="flex items-center gap-3 text-[10px]">
+              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple share %</span>
+              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimate share %</span>
+            </div>
+          </div>
+          <ShareChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
         </div>
       </div>
     </div>
