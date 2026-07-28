@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/command";
 import type { PlottedSeries, PaneInfo } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
+import { useBaskets } from "@/lib/useBaskets";
 import {
-  BASIS_FAMILIES, BASIS_PERIODS, getBasisDef, loadBasisAligned, buildRollingPath,
+  BASIS_FAMILIES, BASIS_PERIODS, getBasisDef, loadBasisAlignedAny, parseAttributionPair, buildRollingPath,
   type BasisMode, type BasisPeriod,
 } from "@/lib/attribution";
 
@@ -59,15 +60,57 @@ export default function AttributionPickerPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pop, setPop] = useState(false);
+  const [pairInput, setPairInput] = useState("");
+  const { baskets } = useBaskets();
+
+  // Friendly display for BASKET:<id> legs and A/B pairs.
+  const displayName = useCallback((sym: string) => {
+    const nameOf = (leg: string) => leg.startsWith("BASKET:")
+      ? (baskets.find((b) => b.id === leg.slice("BASKET:".length))?.name ?? leg)
+      : leg;
+    const pair = parseAttributionPair(sym);
+    return pair ? `${nameOf(pair.a)}/${nameOf(pair.b)}` : nameOf(sym);
+  }, [baskets]);
+
+  // Pair-leg resolution: known ticker, else basket by name (exact > prefix >
+  // substring, shortest wins), else plain-ticker fallback — mirrors the
+  // /attribution page picker.
+  const resolveLeg = useCallback((raw: string): string | null => {
+    const t = raw.trim();
+    if (!t) return null;
+    if (/^BASKET:[^/]+$/.test(t)) return t;
+    const up = t.toUpperCase();
+    if (tickerList.some((x) => x.ticker.toUpperCase() === up)) return up;
+    const low = t.toLowerCase();
+    const byLen = (arr: typeof baskets) => arr.sort((x, y) => x.name.length - y.name.length)[0];
+    const cand = baskets.find((b) => b.name.toLowerCase() === low)
+      ?? byLen(baskets.filter((b) => b.name.toLowerCase().startsWith(low)))
+      ?? byLen(baskets.filter((b) => b.name.toLowerCase().includes(low)));
+    if (cand) return `BASKET:${cand.id}`;
+    if (/^[A-Za-z0-9.\-]{1,12}$/.test(t)) return up;
+    return null;
+  }, [tickerList, baskets]);
+
+  const applyPair = useCallback(() => {
+    const idx = pairInput.indexOf("/");
+    if (idx <= 0 || idx === pairInput.length - 1) return;
+    const a = resolveLeg(pairInput.slice(0, idx));
+    const b = resolveLeg(pairInput.slice(idx + 1));
+    if (a && b) { setTicker(`${a}/${b}`); setPairInput(""); setError(null); }
+    else setError("Couldn't resolve one of the pair legs.");
+  }, [pairInput, resolveLeg]);
 
   const handlePlot = useCallback(async () => {
     if (!ticker || win < 2) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await loadBasisAligned(ticker, basisMode, period);
+      const res = await loadBasisAlignedAny(
+        ticker, basisMode, period, undefined,
+        (id) => { const b = baskets.find((x) => x.id === id); return b ? { ...b } : undefined; },
+      );
       if (!res) {
-        setError(`No ${basisMode === "auto" ? "FFO/EPRA/EPS" : basisMode} ${period} estimate data for ${ticker}.`);
+        setError(`No ${basisMode === "auto" ? "FFO/EPRA/EPS" : basisMode} ${period} estimate data for ${displayName(ticker)}.`);
         return;
       }
       const path = buildRollingPath(res.aligned, 0, win);
@@ -76,7 +119,7 @@ export default function AttributionPickerPanel({
         return;
       }
       const basisLabel = getBasisDef(res.basis, period).label;
-      const tag = `${ticker} ${win}d`;
+      const tag = `${displayName(ticker)} ${win}d`;
       const stamp = Date.now();
       const targetPaneId = plotMode === "new" ? undefined : parseInt(plotMode);
       const mk = (
@@ -140,7 +183,7 @@ export default function AttributionPickerPanel({
     } finally {
       setLoading(false);
     }
-  }, [ticker, basisMode, period, win, display, plotMode, panes, onPlot]);
+  }, [ticker, basisMode, period, win, display, plotMode, panes, onPlot, baskets, displayName]);
 
   return (
     <ResizableSidebar storageKey="charts-attribution-picker-width" defaultWidth={280}>
@@ -161,7 +204,7 @@ export default function AttributionPickerPanel({
           <Popover open={pop} onOpenChange={setPop}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-7 px-2 text-xs w-full justify-between font-mono" data-testid="attribution-ticker-trigger">
-                {ticker || "Select ticker"}
+                <span className="truncate">{ticker ? displayName(ticker) : "Select ticker"}</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[320px] p-0" align="start">
@@ -182,10 +225,47 @@ export default function AttributionPickerPanel({
                       </CommandItem>
                     ))}
                   </CommandGroup>
+                  {baskets.length > 0 && (
+                    <CommandGroup heading="Baskets">
+                      {baskets.map((b) => (
+                        <CommandItem
+                          key={b.id}
+                          value={`basket ${b.name}`}
+                          onSelect={() => { setTicker(`BASKET:${b.id}`); setPop(false); }}
+                          className="text-xs"
+                          data-testid={`attribution-basket-opt-${b.id}`}
+                        >
+                          <span className="font-bold mr-1 truncate">{b.name}</span>
+                          <span className="text-muted-foreground">{b.tickers.length} names</span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
                 </CommandList>
               </Command>
             </PopoverContent>
           </Popover>
+          {/* Pair entry — ratio attribution; legs are tickers or basket names */}
+          <div className="flex items-center gap-1">
+            <Input
+              value={pairInput}
+              onChange={(e) => setPairInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") applyPair(); }}
+              placeholder="Pair: WELL/healthcare"
+              className="h-7 text-xs flex-1"
+              data-testid="attribution-pair-input"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={applyPair}
+              disabled={!pairInput.includes("/")}
+              data-testid="attribution-pair-apply"
+            >
+              Set
+            </Button>
+          </div>
         </div>
 
         {/* Basis + period */}
