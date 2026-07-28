@@ -922,6 +922,22 @@ function SubIndicatorChart({
               try {
                 m1?.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0.02 }, visible: false });
               } catch {}
+            } else if (o.type === "roc") {
+              // ROC of the indicator — percent around 0, own hidden bottom
+              // band with a zero reference line.
+              const rc = computeROC(srcData as any, o.period);
+              const scaleId = `ovl-roc-${o.id}`;
+              const line = addLine(rc, `ROC${o.period} on ${srcLabel}`, { priceScaleId: scaleId });
+              if (rc.length >= 2) {
+                addLine(
+                  [{ time: rc[0].time, value: 0 }, { time: rc[rc.length - 1].time, value: 0 }],
+                  "",
+                  { priceScaleId: scaleId, lineStyle: LineStyle.Dotted },
+                );
+              }
+              try {
+                line?.priceScale().applyOptions({ scaleMargins: { top: 0.68, bottom: 0.02 }, visible: false });
+              } catch {}
             } else if (o.type === "rsi") {
               // RSI of the indicator (e.g. RSI on % from MA). Own hidden
               // bottom-band scale — the source pane usually isn't 0–100 —
