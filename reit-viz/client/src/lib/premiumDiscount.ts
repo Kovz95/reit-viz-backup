@@ -156,12 +156,21 @@ export async function computePremiumSeries(
     )
   ).filter((x): x is { ticker: string; indexed: Float64Array } => x !== null);
 
+  // The peer aggregate EXCLUDES the subject by default (opts.excludeSelf =
+  // false restores the old behavior). Including the subject dampens the
+  // premium and — with small peer groups — zeroes it entirely: AMT vs the
+  // 3-name tower group used "median of {AMT, CCI, SBAC}", which IS AMT
+  // whenever it's the middle name, so the growth differential pinned at 0.
+  const excludeSelf = _opts?.excludeSelf !== false;
+  let aggFetched = excludeSelf ? fetched.filter((f) => f.ticker !== target) : fetched;
+  if (aggFetched.length === 0) aggFetched = fetched; // lone-member group: keep
+
   // Build aggregated group series
   const groupIndexed = new Float64Array(tradingDates.length);
   const peerCount = new Array<number>(tradingDates.length).fill(0);
   for (let d = 0; d < tradingDates.length; d++) {
     const vals: number[] = [];
-    for (const f of fetched) {
+    for (const f of aggFetched) {
       const v = f.indexed[d];
       if (Number.isFinite(v)) vals.push(v);
     }
@@ -198,7 +207,7 @@ export async function computePremiumSeries(
     values,
     targetSeries: targetSeries as any,
     groupSeries: groupSeries as any,
-    peerTickers: fetched.map((f) => f.ticker),
+    peerTickers: aggFetched.map((f) => f.ticker),
   };
 }
 

@@ -604,13 +604,16 @@ export default function PremiumDiscount() {
       }
       const sorted = Array.from(times).sort();
       const result: any[] = [];
+      // require ≥3 contributors for large groups, but let 1-2 name groups through
+      const nonEmpty = maps.filter((m) => m.size > 0).length;
+      const minVals = Math.max(1, Math.min(3, nonEmpty));
       for (const t of sorted) {
         const vals: number[] = [];
         for (const m of maps) {
           const v = m.get(t);
           if (v != null && Number.isFinite(v)) vals.push(v);
         }
-        if (vals.length < 3) continue;
+        if (vals.length < minVals) continue;
         vals.sort((a, b) => a - b);
         const mid = Math.floor(vals.length / 2);
         const median = vals.length % 2 === 0 ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
@@ -2020,10 +2023,11 @@ export default function PremiumDiscount() {
             </select>
           </div>
 
-          <div className="flex-1" />
+        </div>
 
-          {/* Chart toggles */}
-          <div className="flex items-center gap-1.5" data-testid="chart-toggles">
+        {/* ── Second header row: chart visibility (left) + actions (right) ── */}
+        <div className="mt-2 pt-2 border-t border-border/50 flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap" data-testid="chart-toggles">
             <span className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider mr-1">
               <LayoutIcon className="w-3 h-3" /> Charts
             </span>
@@ -2043,8 +2047,7 @@ export default function PremiumDiscount() {
             })}
           </div>
 
-          {/* Controls row */}
-          <div className="flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2">
             <button onClick={() => setShowEarnings(!showEarnings)} className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border rounded ${showEarnings ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`} data-testid="toggle-earnings" title="Toggle earnings date markers">
               <Calendar className="w-3.5 h-3.5" /> Earnings
             </button>
@@ -2066,7 +2069,7 @@ export default function PremiumDiscount() {
             <>
               <span><span className="text-muted-foreground/60">PEER GROUP:</span> <span className="text-foreground">{peerLabel || "—"}</span> <span className="text-muted-foreground/60">({DIMENSION_LABELS[dimension]})</span></span>
               <span><span className="text-muted-foreground/60">PEERS:</span> <span className="text-foreground">{peerTickers.length}</span>{peerCount > 0 && peerCount !== peerTickers.length && <span className="text-muted-foreground/60"> · {peerCount} with data</span>}</span>
-              <span><span className="text-muted-foreground/60">METHOD:</span> <span className="text-foreground">median, % diff vs peer</span></span>
+              <span><span className="text-muted-foreground/60">METHOD:</span> <span className="text-foreground">median of peers (excl. self), % diff</span></span>
             </>
           ) : compareMode === "ticker" ? (
             <>
@@ -2091,7 +2094,7 @@ export default function PremiumDiscount() {
       </div>
 
       {/* ── Summary stats row ── */}
-      <div className="grid grid-cols-2 md:grid-cols-7 gap-px bg-border border-b border-border flex-shrink-0">
+      <div className="grid grid-cols-2 md:grid-cols-4 min-[1500px]:grid-cols-8 gap-px bg-border border-b border-border flex-shrink-0">
         <StatCard
           label="Premium / Discount"
           value={formatPercent(summaryStats.lastP)}
@@ -2273,7 +2276,7 @@ export default function PremiumDiscount() {
             </div>
           ) : (
             <div className="px-3 py-3 text-[10px] font-mono text-muted-foreground">
-              Need at least 60 aligned bars and 252 paired closes — still loading or insufficient history.
+              Analog search needs ≥60 aligned bars and ≥252 paired closes — data may still be loading, or this pairing's history is too short.
             </div>
           )}
           {similarAnalysis && similarAnalysis.matches.length > 0 && (
@@ -2403,7 +2406,7 @@ export default function PremiumDiscount() {
           <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("relReturn") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
-                Rel Return (pp) <span className="text-muted-foreground/60 normal-case tracking-normal">vs anchor: {anchorDate || "—"}</span>
+                Rel Return (pp) <span className="text-muted-foreground/60 normal-case tracking-normal">{anchorDate ? `vs anchor: ${anchorDate}${pinDate ? " (pin)" : " · set Pin Date to move"}` : "— no aligned close data"}</span>
               </span>
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? relReturnMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}pp`} color="text-emerald-300" testId="hover-relreturn" />
@@ -2416,14 +2419,21 @@ export default function PremiumDiscount() {
                 )}
               </div>
             </div>
-            <div ref={relReturnContainerRef} className="flex-1 min-h-0" data-testid="chart-rel-return" />
+            <div className="flex-1 min-h-0 relative">
+              <div ref={relReturnContainerRef} className="absolute inset-0" data-testid="chart-rel-return" />
+              {!anchorDate && !loadingCloses && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-[11px] font-mono text-muted-foreground/70 border border-dashed border-border rounded px-3 py-1.5 bg-card/80">No aligned close data for this pairing — target and comparison need overlapping price history</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Rel Ratio chart */}
           <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("relRatio") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
-                Rel Strength (×, log) <span className="text-muted-foreground/60 normal-case tracking-normal">vs anchor: {anchorDate || "—"}</span>
+                Rel Strength (×, log) <span className="text-muted-foreground/60 normal-case tracking-normal">{anchorDate ? `vs anchor: ${anchorDate}${pinDate ? " (pin)" : " · set Pin Date to move"}` : "— no aligned close data"}</span>
               </span>
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? relRatioMap.get(crosshairTime) : undefined} format={(v) => `${v.toFixed(3)}×`} color="text-rose-300" testId="hover-relratio" />
@@ -2436,7 +2446,14 @@ export default function PremiumDiscount() {
                 )}
               </div>
             </div>
-            <div ref={relRatioContainerRef} className="flex-1 min-h-0" data-testid="chart-rel-ratio" />
+            <div className="flex-1 min-h-0 relative">
+              <div ref={relRatioContainerRef} className="absolute inset-0" data-testid="chart-rel-ratio" />
+              {!anchorDate && !loadingCloses && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-[11px] font-mono text-muted-foreground/70 border border-dashed border-border rounded px-3 py-1.5 bg-card/80">No aligned close data for this pairing — target and comparison need overlapping price history</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Raw Ratio chart */}
@@ -2681,8 +2698,9 @@ interface StatCardProps {
 function StatCard({ label, value, sub, tone }: StatCardProps) {
   const valueClass = tone === "rich" ? "text-red-400" : tone === "cheap" ? "text-green-400" : "text-foreground";
   const ToneIcon = tone === "rich" ? TrendingUp : tone === "cheap" ? TrendingDown : null;
+  const empty = value === "—";
   return (
-    <div className="bg-card px-3 py-2 flex flex-col gap-0.5">
+    <div className={`bg-card px-3 py-2 flex flex-col gap-0.5 ${empty ? "opacity-45" : ""}`}>
       <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">{label}</span>
       <span className={`text-base font-mono font-semibold flex items-center gap-1 ${valueClass}`}>
         {ToneIcon && <ToneIcon className="w-3.5 h-3.5" />}
