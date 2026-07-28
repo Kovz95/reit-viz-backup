@@ -21,7 +21,7 @@ import type { ActiveIndicators } from "@/components/ChartPane";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
 import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
-import { useGridProminence } from "@/lib/gridPref";
+import { useGridProminence, useChartChrome } from "@/lib/gridPref";
 import { useUniverse } from "@/lib/universeContext";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { runDriverScan, driverScanToCsv, SCAN_WINDOWS } from "@/lib/driverScan";
@@ -1590,9 +1590,16 @@ function CorrLwcPane({
 }) {
   const chartRef = useRef<IChartApi | null>(null);
   const [gridProminence] = useGridProminence();
+  const [chrome] = useChartChrome();
   const chartConfig = useMemo(
-    () => ({ chartType: "line" as const, showVolume: false, gridProminence }),
-    [gridProminence]
+    () => ({
+      chartType: "line" as const,
+      showVolume: false,
+      gridProminence,
+      axisLabels: chrome.axisLabels,
+      priceLines: chrome.priceLines,
+    }),
+    [gridProminence, chrome]
   );
   const handleChartReady = useCallback((id: number, chart: IChartApi) => {
     chartRef.current = chart;
@@ -4163,6 +4170,7 @@ function PairwiseView({
   const [acfMode, setAcfMode] = useState<"acf" | "pacf">("acf");
   const [paneOffset, setPaneOffset] = useState(0);
   const [showIndicators, setShowIndicators] = useState(false);
+  const [chartChrome, setChartChrome] = useChartChrome();
   const [indicatorPaneId, setIndicatorPaneId] = useState<number | null>(null);
   // Drag-resize track fractions (ChartArea parity)
   const [colFracs, setColFracs] = useState<number[]>([1]);
@@ -4814,6 +4822,37 @@ function PairwiseView({
             <SlidersHorizontal className="w-3 h-3" />
             Indicators
           </Button>
+        )}
+
+        {/* Axis labels + current-value lines (Charts-tab parity — global
+            preference shared by all non-Charts chart surfaces) */}
+        {lwcPaneInfos.length > 0 && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`h-6 px-2 text-[10px] gap-1 ${!chartChrome.axisLabels ? "text-muted-foreground/50" : ""}`}
+              onClick={() => setChartChrome({ axisLabels: !chartChrome.axisLabels })}
+              title={chartChrome.axisLabels
+                ? "Hide the right-axis series labels — hover still shows all values"
+                : "Show the right-axis series labels"}
+              data-testid="corr-toggle-axis-labels"
+            >
+              Labels
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`h-6 px-2 text-[10px] gap-1 ${!chartChrome.priceLines ? "text-muted-foreground/50" : ""}`}
+              onClick={() => setChartChrome({ priceLines: !chartChrome.priceLines })}
+              title={chartChrome.priceLines
+                ? "Hide the dashed current-value line extending across the chart"
+                : "Show the dashed current-value line"}
+              data-testid="corr-toggle-price-lines"
+            >
+              Px line
+            </Button>
+          </>
         )}
       </div>
 
