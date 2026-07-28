@@ -47,6 +47,9 @@ const CHANGE_EVENT = "reit-viz:baskets:changed";
 // synchronously (and mutators can update it optimistically before the server
 // round-trips).
 let cache: Basket[] = [];
+// True after the first successful server load — gates the changed-broadcast
+// in refresh() so initial population doesn't fire a spurious change event.
+let everLoaded = false;
 let inflight: Promise<Basket[]> | null = null;
 
 function emitChanged(): void {
@@ -143,7 +146,18 @@ function refresh(): Promise<Basket[]> {
         }
       }
     } catch { /* ignore migration errors */ }
+    // Broadcast when a refresh actually changed something (edits made in
+    // another tab/device arriving via the focus refetch) so listeners that
+    // react to basket changes — e.g. the Charts live-refetch of plotted
+    // basket series — fire for remote edits too, not just local saves. The
+    // very first load (cache never populated) stays silent: everything is
+    // still fetching then anyway.
+    const changed = everLoaded && JSON.stringify(cache) !== JSON.stringify(server);
     cache = server;
+    everLoaded = true;
+    if (changed && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
+    }
     return server;
   })();
   inflight = p;
