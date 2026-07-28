@@ -12,6 +12,7 @@
  */
 import { useState, useMemo } from "react";
 import { X, BarChart3 } from "lucide-react";
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -320,11 +321,14 @@ export default function QuickAnalyzePanel({
   );
 
   return (
-    <div
-      className="fixed top-20 right-4 z-50 bg-card border border-border rounded-md shadow-xl p-3 w-[460px] max-h-[calc(100vh-6rem)] overflow-y-auto"
-      data-testid="quick-analyze-panel"
+    // Docked side panel (same chrome as the Indicators / Attribution panels)
+    // instead of the old floating window that covered the charts.
+    <ResizableSidebar
+      storageKey="charts-quick-analyze-width"
+      defaultWidth={460}
+      className="flex flex-col"
     >
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border flex-shrink-0" data-testid="quick-analyze-panel">
         <h3 className="text-[11px] font-semibold uppercase tracking-wide text-foreground flex items-center gap-1.5">
           <BarChart3 className="h-3.5 w-3.5 text-primary" />
           Quick Analyze — Conditional Stats
@@ -338,7 +342,7 @@ export default function QuickAnalyzePanel({
           <X className="h-3 w-3" />
         </Button>
       </div>
-
+      <div className="p-3 flex-1 min-h-0 overflow-y-auto">
       {eligible.length < 2 ? (
         <div className="text-[11px] text-muted-foreground py-4 text-center">
           Need at least 2 visible series on the chart.
@@ -622,6 +626,7 @@ export default function QuickAnalyzePanel({
           )}
         </div>
       )}
-    </div>
+      </div>
+    </ResizableSidebar>
   );
 }
