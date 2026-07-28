@@ -1001,7 +1001,7 @@ const HURST: IndicatorDef = {
   category: "Quant",
   renderTarget: "pane",
   worksOnCloseOnly: true,
-  params: [{ key: "window", label: "Window", default: 252, min: 48, max: 1008, defaultByFrequency: { weekly: 104 } }],
+  params: [{ key: "window", label: "Window", default: 252, min: 48, max: 1008, defaultByFrequency: { weekly: 104, monthly: 60 } }],
   colorKeys: ["hurst_line", "hurst_ref"],
   renderPane: simpleLinePane(
     (bars, p) => computeHurst(bars, p.window),
