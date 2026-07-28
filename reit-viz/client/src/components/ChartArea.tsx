@@ -16,6 +16,7 @@ import {
 import type { EventType } from "@/lib/dataService";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import { parsePairTicker } from "@/pages/Dashboard";
+import { useBaskets } from "@/lib/useBaskets";
 import type { TickerMeta } from "@shared/schema";
 import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
 import type { IChartApi } from "lightweight-charts";
@@ -60,6 +61,9 @@ import {
   StickyNote,
   Search,
   Filter,
+  Tag,
+  EyeOff,
+  Minus,
 } from "lucide-react";
 import { FilterDropdown, emptyClassFilters, type ClassFilters } from "./ClassificationFilters";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "./GridLayoutPicker";
@@ -125,6 +129,8 @@ interface ChartAreaProps {
   /** Display label for activeTicker (resolves BASKET:<id> to the basket name). */
   activeTickerLabel?: string | null;
   chartConfig: ChartConfig;
+  /** Update chartConfig from toolbar controls (axis-labels toggle). */
+  onChartConfigChange?: (c: ChartConfig) => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   tickerList: TickerMeta[];
@@ -231,6 +237,7 @@ export default function ChartArea({
   activeTicker,
   activeTickerLabel,
   chartConfig,
+  onChartConfigChange,
   sidebarOpen,
   onToggleSidebar,
   tickerList,
@@ -506,9 +513,11 @@ export default function ChartArea({
     window.dispatchEvent(new CustomEvent("reit-viz-measure-clear"));
   }, [drawAll]);
   const [tickerPopoverOpen, setTickerPopoverOpen] = useState(false);
-  // Ticker-search text — typing "AKR/BXP" surfaces a "plot the ratio" entry
-  // that remaps the whole current layout onto A ÷ B (see parsePairTicker).
+  // Ticker-search text — typing "AKR/BXP" (or "WELL/healthcare" with a basket
+  // name) surfaces a "plot the ratio" entry that remaps the whole current
+  // layout onto A ÷ B (see parsePairTicker).
   const [tickerQuery, setTickerQuery] = useState("");
+  const { baskets: ratioBaskets } = useBaskets();
   const [paneOffset, setPaneOffset] = useState(0);
   const [showQuarterShading, setShowQuarterShading] = useState(false);
   const [showEarnings, setShowEarnings] = useState(false);
@@ -1427,29 +1436,52 @@ export default function ChartArea({
               <CommandList className="max-h-[300px]">
                 <CommandEmpty>No ticker found. Tip: type AKR/BXP to plot a ratio.</CommandEmpty>
                 {(() => {
-                  const pair = parsePairTicker(tickerQuery);
-                  if (!pair) return null;
-                  const okA = tickerList.some((t) => t.ticker === pair.a);
-                  const okB = tickerList.some((t) => t.ticker === pair.b);
+                  // "A/B" ratio entry: each leg resolves to a ticker symbol
+                  // (exact) or a BASKET by name (substring match, prefix wins) —
+                  // "WELL/health" → WELL ÷ Healthcare REITs basket.
+                  const q = tickerQuery;
+                  const slash = q.indexOf("/");
+                  if (slash <= 0 || slash >= q.length - 1) return null;
+                  const termA = q.slice(0, slash).trim();
+                  const termB = q.slice(slash + 1).trim();
+                  if (!termA || !termB) return null;
+                  const resolveLeg = (term: string): { token: string; name: string } | null => {
+                    const up = term.toUpperCase();
+                    if (tickerList.some((t) => t.ticker === up)) return { token: up, name: up };
+                    const lc = term.toLowerCase();
+                    const matches = ratioBaskets.filter((b) => b.name.toLowerCase().includes(lc));
+                    if (!matches.length) return null;
+                    const best = [...matches].sort(
+                      (x, y) =>
+                        (x.name.toLowerCase().startsWith(lc) ? 0 : 1) - (y.name.toLowerCase().startsWith(lc) ? 0 : 1) ||
+                        x.name.length - y.name.length
+                    )[0];
+                    return { token: `BASKET:${best.id}`, name: best.name };
+                  };
+                  const A = resolveLeg(termA);
+                  const B = resolveLeg(termB);
+                  const ok = !!A && !!B;
                   return (
                     <CommandGroup heading="Ratio">
                       <CommandItem
                         value={tickerQuery}
-                        disabled={!okA || !okB}
+                        disabled={!ok}
                         onSelect={() => {
-                          if (!okA || !okB) return;
-                          onSelectTicker(`${pair.a}/${pair.b}`);
+                          if (!ok) return;
+                          onSelectTicker(`${A!.token}/${B!.token}`);
                           setTickerPopoverOpen(false);
                           setTickerQuery("");
                         }}
                         className="text-xs"
                         data-testid="carousel-pair-ratio"
                       >
-                        <span className="font-mono font-semibold mr-2">{pair.a} ÷ {pair.b}</span>
+                        <span className="font-mono font-semibold mr-2">
+                          {(A?.name ?? termA)} ÷ {(B?.name ?? termB)}
+                        </span>
                         <span className="text-muted-foreground">
-                          {okA && okB
+                          {ok
                             ? "plot the ratio — keeps the current layout"
-                            : `unknown ticker: ${!okA ? pair.a : pair.b}`}
+                            : `no ticker or basket matches "${!A ? termA : termB}"`}
                         </span>
                       </CommandItem>
                     </CommandGroup>
@@ -2612,6 +2644,38 @@ export default function ChartArea({
         >
           Similar Setups
         </button>
+
+        {/* Axis labels: hide/show the right-axis series badges + price lines
+            (long series titles crowd the scale; hover readout keeps the values). */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`h-7 px-2 text-[10px] font-mono font-semibold ${chartConfig.axisLabels === false ? "text-muted-foreground/50" : ""}`}
+          onClick={() => onChartConfigChange?.({ ...chartConfig, axisLabels: chartConfig.axisLabels === false ? undefined : false })}
+          title={chartConfig.axisLabels === false
+            ? "Show the right-axis series labels (last-value badges + price lines)"
+            : "Hide the right-axis series labels — long titles stop covering the scale; hover still shows all values"}
+          data-testid="toggle-axis-labels"
+        >
+          {chartConfig.axisLabels === false ? <EyeOff className="w-3 h-3 mr-1" /> : <Tag className="w-3 h-3 mr-1" />}
+          Labels
+        </Button>
+
+        {/* Current-value price lines: the dashed full-width line at each
+            series' latest value — on/off independently of the labels. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`h-7 px-2 text-[10px] font-mono font-semibold ${chartConfig.priceLines === false ? "text-muted-foreground/50" : ""}`}
+          onClick={() => onChartConfigChange?.({ ...chartConfig, priceLines: chartConfig.priceLines === false ? undefined : false })}
+          title={chartConfig.priceLines === false
+            ? "Show the dashed current-value line that extends across the chart"
+            : "Hide the dashed current-value line (the one extending all the way left)"}
+          data-testid="toggle-price-lines"
+        >
+          <Minus className="w-3 h-3 mr-1" />
+          Px line
+        </Button>
 
         {/* Auto-size: reset all pane sizes (fit content) to defaults */}
         <Button

@@ -57,6 +57,13 @@ export interface ChartConfig {
   gridProminence?: "off" | "normal" | "bold";
   /** Price-bar frequency: hourly (Yahoo intraday, ~2y) / daily / weekly / monthly. */
   frequency?: "hourly" | "daily" | "weekly" | "monthly";
+  /** Show the right-axis last-value badges (series title + value). Default
+   *  true; toggled from the toolbar when long series labels crowd the axis —
+   *  hover readout still shows every value. */
+  axisLabels?: boolean;
+  /** Show the dashed full-width line at each series' current value. Default
+   *  true; separate from axisLabels so the line can extend (or not) on its own. */
+  priceLines?: boolean;
 }
 
 export interface PaneInfo {
@@ -375,8 +382,15 @@ function basketMetricSeries(res: BasketOhlcResult, metric: string): { time: stri
  *  the whole current layout be remapped onto a ratio without rebuilding. */
 export function parsePairTicker(t: string | null | undefined): { a: string; b: string } | null {
   if (!t) return null;
-  const m = /^([A-Za-z0-9.\-]{1,12})\s*\/\s*([A-Za-z0-9.\-]{1,12})$/.exec(t.trim());
-  return m ? { a: m[1].toUpperCase(), b: m[2].toUpperCase() } : null;
+  // Legs are plain tickers OR BASKET:<id> tokens. Basket ids keep their case
+  // and may contain spaces/colons (auto-basket ids do) — anything but "/".
+  const m = /^(BASKET:[^/]+|[A-Za-z0-9.\-]{1,12})\s*\/\s*(BASKET:[^/]+|[A-Za-z0-9.\-]{1,12})$/.exec(t.trim());
+  if (!m) return null;
+  const norm = (x: string) => {
+    const v = x.trim();
+    return v.toUpperCase().startsWith("BASKET:") ? v : v.toUpperCase();
+  };
+  return { a: norm(m[1]), b: norm(m[2]) };
 }
 
 /** Metrics quoted in percent/rate units combine as a SPREAD (A − B) — a ratio
@@ -488,6 +502,15 @@ export default function Dashboard() {
   // so a plotted basket reads as its name instead of "BASKET:<uuid>".
   const tickerDisplayName = useCallback(
     (tk: string): string => {
+      // Pair targets: show each leg's resolved name ("WELL/Healthcare REITs").
+      const pair = parsePairTicker(tk);
+      if (pair && (pair.a.startsWith("BASKET:") || pair.b.startsWith("BASKET:"))) {
+        const leg = (x: string) => {
+          const lid = extractBasketId(x);
+          return lid ? resolveBasket(lid)?.name ?? x : x;
+        };
+        return `${leg(pair.a)}/${leg(pair.b)}`;
+      }
       const id = extractBasketId(tk);
       return id ? resolveBasket(id)?.name ?? tk : tk;
     },
@@ -743,7 +766,15 @@ export default function Dashboard() {
           // Ratio candles: component-wise A÷B with high/low taken as the
           // envelope of the divided fields (the true intrabar ratio extremes
           // aren't observable — this bounded approximation renders sensibly).
-          Promise.all([getOhlcData(pair.a), getOhlcData(pair.b)]).then(([ca, cb]) => {
+          // Legs may be baskets — their candles come from the basket pipeline.
+          const legCandles = async (leg: string): Promise<any[]> => {
+            if (isBasketTicker(leg)) {
+              const res = await fetchBasketOhlc(leg, resolveBasket);
+              return res ? basketOhlcToCandles(res) : [];
+            }
+            return getOhlcData(leg);
+          };
+          Promise.all([legCandles(pair.a), legCandles(pair.b)]).then(([ca, cb]) => {
             if (!Array.isArray(ca) || !Array.isArray(cb)) return;
             const bm = new Map(cb.map((c: any) => [c.time, c]));
             const out: any[] = [];
@@ -1957,6 +1988,7 @@ export default function Dashboard() {
           activeTicker={activeTicker}
           activeTickerLabel={activeTicker ? tickerDisplayName(activeTicker) : null}
           chartConfig={chartConfig}
+          onChartConfigChange={setChartConfig}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           tickerList={tickerList}

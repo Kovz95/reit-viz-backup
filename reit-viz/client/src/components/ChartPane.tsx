@@ -135,6 +135,36 @@ function shadeHex(color: string, idx: number): string {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
 }
 
+// ── Axis-label hiding (toolbar "Labels" toggle) ──
+// LWC renders the series TITLE chip on the price axis regardless of
+// lastValueVisible, so hiding labels must also blank the title. The original
+// is stashed on the series object; every readout builder goes through
+// readSeriesTitle so hover values keep their names while labels are hidden.
+/** priceLinesOn: true/false forces the dashed current-value line on/off;
+ *  undefined leaves the series' own setting untouched (sub-charts use that so
+ *  re-showing never forces lines onto series designed without one). */
+function setSeriesAxisLabels(s: any, labelsOn: boolean, priceLinesOn?: boolean): void {
+  try {
+    const o = s.options();
+    if (!labelsOn) {
+      if (o.title) s.__labelsOffTitle = o.title;
+      s.applyOptions({ title: "", lastValueVisible: false });
+    } else {
+      const saved = s.__labelsOffTitle;
+      s.applyOptions({ lastValueVisible: true, ...(saved ? { title: saved } : {}) });
+      delete s.__labelsOffTitle;
+    }
+    if (priceLinesOn !== undefined) s.applyOptions({ priceLineVisible: priceLinesOn });
+  } catch {}
+}
+function readSeriesTitle(s: any): string {
+  try {
+    return s.options().title || s.__labelsOffTitle || "";
+  } catch {
+    return s?.__labelsOffTitle || "";
+  }
+}
+
 /** An indicator computed ON another indicator, drawn on top of that
  *  indicator's sub-chart (e.g. EMA of RSI, Bollinger on RSI, StochRSI,
  *  MACD of RSI). `source` is the sub-chart type id (built-in or registry);
@@ -401,6 +431,8 @@ function SubIndicatorChart({
   parentChart,
   baseLabel,
   lookbackEntries,
+  axisLabelsVisible = true,
+  priceLinesVisible = true,
   isMaximized = false,
   onToggleMaximize,
   onClose,
@@ -431,6 +463,10 @@ function SubIndicatorChart({
    *  window over RSI values renders on the RSI sub-chart, not the price
    *  chart). Undefined = no lines here. */
   lookbackEntries?: LookbackEntry[];
+  /** Toolbar "Labels" toggle — false hides the right-axis badges here too. */
+  axisLabelsVisible?: boolean;
+  /** Toolbar "Px line" toggle — false hides the current-value lines here too. */
+  priceLinesVisible?: boolean;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   /** Remove this indicator from the pane (the ✕ button in the header). */
@@ -874,6 +910,16 @@ function SubIndicatorChart({
       }
     }
 
+    // Toolbar "Labels"/"Px line" toggles — strip the axis badges/title chips
+    // and current-value lines from every sub-chart series too. Only the OFF
+    // state is applied here; toggling back on recreates this chart with the
+    // original options (both flags are in this effect's deps).
+    if (!axisLabelsVisible || !priceLinesVisible) {
+      for (const s of subSeriesList) {
+        setSeriesAxisLabels(s, axisLabelsVisible, priceLinesVisible ? undefined : false);
+      }
+    }
+
     // Hover lookback-window lines on this sub-chart (see lookbackEntries prop).
     let lbPrim: LookbackWindowPrimitive | null = null;
     if (lookbackEntries?.length && firstSubSeries) {
@@ -945,8 +991,7 @@ function SubIndicatorChart({
               try {
                 const d = (series as any).dataByIndex(idx);
                 if (!d) continue;
-                const opts = series.options() as any;
-                const title = opts.title || "";
+                const title = readSeriesTitle(series);
                 if (!title) continue;
                 if ("value" in d && d.value != null) {
                   values[title] = d.value;
@@ -1017,8 +1062,7 @@ function SubIndicatorChart({
               // Extract values from all sub-chart series
               const values: Record<string, number> = {};
               param.seriesData.forEach((data: any, series: any) => {
-                const opts = series.options();
-                const title = opts.title || "";
+                const title = readSeriesTitle(series);
                 if (!title) return; // skip reference lines (empty title)
                 if ("value" in data && data.value != null) {
                   values[title] = data.value;
@@ -1050,7 +1094,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, parentChart, IC, gridColor, frequency]);
+  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency]);
 
   // Resize
   useEffect(() => {
@@ -1245,7 +1289,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     for (const s of seriesMapRef.current.values()) {
       try {
         const o: any = s.options();
-        if (o.title) colorByTitle[o.title] = o.color || o.upColor || "#94a3b8";
+        const t = readSeriesTitle(s);
+        if (t) colorByTitle[t] = o.color || o.upColor || "#94a3b8";
         if (o.upColor) colorByTitle["Price"] = o.upColor; // candlestick main series
       } catch {}
     }
@@ -1254,7 +1299,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     for (const s of indicatorSeriesRef.current) {
       try {
         const o: any = s.options();
-        if (o.title && !colorByTitle[o.title]) colorByTitle[o.title] = o.color || "#94a3b8";
+        const t = readSeriesTitle(s);
+        if (t && !colorByTitle[t]) colorByTitle[t] = o.color || "#94a3b8";
       } catch {}
     }
     const items = Object.entries(values).map(([label, value]) => ({
@@ -1688,9 +1734,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
         const values: Record<string, number> = {};
         param.seriesData.forEach((data: any, series: any) => {
-          const opts = series.options();
           if ("value" in data) {
-            const title = opts.title || "";
+            const title = readSeriesTitle(series);
             if (title) values[title] = data.value;
           } else if ("close" in data) {
             values["Price"] = data.close;
@@ -3574,6 +3619,24 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
   }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
+  // Toolbar "Labels" toggle: hide/show the right-axis last-value badges +
+  // price lines on every series in this pane. Runs AFTER the render effect
+  // above (definition order) so freshly recreated series get the state too.
+  // Marker-carrier series (":markers" keys) are permanently badge-less — skip
+  // them so re-showing doesn't surface badges that never existed.
+  const axisLabelsOn = (chartConfig as { axisLabels?: boolean }).axisLabels !== false;
+  const priceLinesOn = (chartConfig as { priceLines?: boolean }).priceLines !== false;
+  useEffect(() => {
+    if (!chartReady) return;
+    for (const [key, s] of seriesMapRef.current) {
+      if (key.endsWith(":markers")) continue;
+      setSeriesAxisLabels(s, axisLabelsOn, priceLinesOn);
+    }
+    for (const s of indicatorSeriesRef.current) {
+      setSeriesAxisLabels(s, axisLabelsOn, priceLinesOn);
+    }
+  }, [axisLabelsOn, priceLinesOn, chartReady, paneSeries, ohlcData, activeIndicators, chartConfig, dataTransform, IC, IC_W, IC_S, IC_O, IC_G, colorByData]);
+
   // ── Seed persistence: clear any previously-applied seed series when the ticker changes ──
   // Seed series are tagged with ids beginning "sr-seed-" / "tl-seed-"; everything else
   // (user-drawn lines) is preserved.
@@ -4444,6 +4507,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               parentChart={chartRef.current}
               baseLabel={subBaseLabel}
               lookbackEntries={subLookback[st]}
+              axisLabelsVisible={axisLabelsOn}
+              priceLinesVisible={priceLinesOn}
               isMaximized={isMax}
               onToggleMaximize={() => setMaxSub((cur) => (cur === st ? null : st))}
               onClose={onCloseSubIndicator ? () => {
