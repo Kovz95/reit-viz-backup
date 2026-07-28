@@ -156,6 +156,52 @@ export async function loadBasisAligned(
   return null;
 }
 
+// ── Pair (A/B ratio) support ─────────────────────────────────────────────────
+// For a ratio the identity survives componentwise: P_A/P_B = (M_A/M_B) ×
+// (E_A/E_B), so the same log decomposition applies to the combined series.
+
+export function parseAttributionPair(symbol: string): { a: string; b: string } | null {
+  const m = symbol.trim().match(/^([A-Za-z0-9.\-]{1,12})\s*\/\s*([A-Za-z0-9.\-]{1,12})$/);
+  return m ? { a: m[1].toUpperCase(), b: m[2].toUpperCase() } : null;
+}
+
+export function combineAlignedRatio(a: AlignedData, b: AlignedData): AlignedData {
+  const idx = new Map<string, number>();
+  b.dates.forEach((d, i) => idx.set(d, i));
+  const dates: string[] = [], close: number[] = [], multiple: number[] = [], estimate: number[] = [];
+  a.dates.forEach((d, i) => {
+    const j = idx.get(d);
+    if (j === undefined) return;
+    dates.push(d);
+    close.push(a.close[i] / b.close[j]);
+    multiple.push(a.multiple[i] / b.multiple[j]);
+    estimate.push(a.estimate[i] / b.estimate[j]);
+  });
+  return { dates, close, multiple, estimate };
+}
+
+// Like loadBasisAligned but also accepts "A/B" pair symbols (each leg loaded
+// under the same basis mode/period, inner-joined, divided). Under "auto" the
+// legs may resolve different families (e.g. FFO vs EPS) — the identity still
+// holds per leg, so the ratio decomposition stays exact.
+export async function loadBasisAlignedAny(
+  symbol: string,
+  mode: BasisMode,
+  period: BasisPeriod,
+  opts?: { end?: string },
+): Promise<{ basis: BasisFamily; aligned: AlignedData } | null> {
+  const pair = parseAttributionPair(symbol);
+  if (!pair) return loadBasisAligned(symbol, mode, period, opts);
+  const [ra, rb] = await Promise.all([
+    loadBasisAligned(pair.a, mode, period, opts),
+    loadBasisAligned(pair.b, mode, period, opts),
+  ]);
+  if (!ra || !rb) return null;
+  const aligned = combineAlignedRatio(ra.aligned, rb.aligned);
+  if (aligned.dates.length < 2) return null;
+  return { basis: ra.basis, aligned };
+}
+
 export interface RollingPoint { date: string; total: number; mult: number; est: number }
 
 // Trailing-`rollingDays` decomposition at every aligned date from `startIdx`

@@ -28,6 +28,8 @@ import {
   getBasisDef,
   getStartIndex,
   loadBasisAligned,
+  loadBasisAlignedAny,
+  parseAttributionPair,
   computeAttributionRow,
   buildRollingPath,
   type RollingPoint,
@@ -74,11 +76,61 @@ const CHART_OPTIONS_BASE = {
     horzLine: { color: "rgba(14, 165, 233, 0.3)", width: 1 as const, style: LineStyle.Dashed, labelBackgroundColor: "#0ea5e9" },
   },
   rightPriceScale: { borderColor: "rgba(255,255,255,0.08)", scaleMargins: { top: 0.1, bottom: 0.1 }, minimumWidth: 70 },
-  timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: false, rightOffset: 5, barSpacing: 3, minBarSpacing: 1 },
-  handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-  handleScale: false,
-  kineticScroll: { mouse: false, touch: false },
+  timeScale: { borderColor: "rgba(255,255,255,0.08)", timeVisible: false, rightOffset: 5, barSpacing: 3, minBarSpacing: 0.05 },
+  // Same interaction set as the Charts-tab panes: wheel/pinch zoom + drag pan.
+  handleScroll: { mouseWheel: false, pressedMouseMove: true },
+  handleScale: { mouseWheel: true, pinch: true },
 };
+
+// ── Cross-chart sync (cumulative ↔ rolling) ──────────────────────────────────
+// Both charts carry an invisible spacer series over the SAME union-of-dates
+// axis, so mirroring the visible LOGICAL range keeps them aligned without the
+// clamp-echo feedback that time-range syncing causes on trimmed data.
+// Crosshair mirroring gates on param.sourceEvent so programmatic echoes never
+// bounce back (see the Pairs/Charts sync fixes).
+
+function createChartSyncGroup() {
+  const members = new Map<IChartApi, { series: ISeriesApi<any> }>();
+  let syncing = false;
+  return {
+    attach(chart: IChartApi, series: ISeriesApi<any>, el: HTMLElement) {
+      members.set(chart, { series });
+      const onRange = (range: { from: number; to: number } | null) => {
+        if (syncing || !range) return;
+        syncing = true;
+        for (const [other] of members) {
+          if (other === chart) continue;
+          try { other.timeScale().setVisibleLogicalRange(range); } catch {}
+        }
+        requestAnimationFrame(() => { syncing = false; });
+      };
+      const onCross = (param: any) => {
+        if (!param.sourceEvent) return;
+        for (const [other, m] of members) {
+          if (other === chart) continue;
+          try {
+            if (param.time != null) other.setCrosshairPosition(NaN, param.time, m.series);
+            else other.clearCrosshairPosition();
+          } catch {}
+        }
+      };
+      const onLeave = () => {
+        for (const [other] of members) {
+          if (other === chart) continue;
+          try { other.clearCrosshairPosition(); } catch {}
+        }
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+      chart.subscribeCrosshairMove(onCross);
+      el.addEventListener("mouseleave", onLeave);
+      return () => {
+        members.delete(chart);
+        el.removeEventListener("mouseleave", onLeave);
+      };
+    },
+  };
+}
+type ChartSyncGroup = ReturnType<typeof createChartSyncGroup>;
 
 const COLOR_TOTAL = "#e5e7eb";
 const COLOR_MULT = "#38bdf8";
@@ -151,14 +203,16 @@ function useEarningsLines(
 
 // ── Cumulative Chart Component ────────────────────────────────────────────────
 
-interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[] }
+interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
 
-function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
+function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync }: CumulativeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spacerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const detachSyncRef = useRef<(() => void) | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; total: number; mult: number; est: number } | null>(null);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
@@ -169,14 +223,15 @@ function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
       const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
-      chart.applyOptions({ handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false } });
       chartRef.current = chart;
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
+      spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       estSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_EST, lineWidth: 2, title: "Estimates", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
       multSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_MULT, lineWidth: 2, title: "Multiple", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
       totalSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_TOTAL, lineWidth: 2, title: "Total", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
+      if (sync) detachSyncRef.current = sync.attach(chart, totalSeriesRef.current, el);
       chart.subscribeCrosshairMove(param => {
-        if (!param.time || !param.seriesData || !param.point) { setTooltip(null); return; }
+        if (!param.time || !param.seriesData || !param.point || !(param as any).sourceEvent) { setTooltip(null); return; }
         const tv = totalSeriesRef.current ? param.seriesData.get(totalSeriesRef.current) : null;
         const mv = multSeriesRef.current ? param.seriesData.get(multSeriesRef.current) : null;
         const ev = estSeriesRef.current ? param.seriesData.get(estSeriesRef.current) : null;
@@ -198,13 +253,15 @@ function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
     return () => {
       const c = chartRef.current;
       if ((c as any)?.__ro) (c as any).__ro.disconnect();
+      detachSyncRef.current?.(); detachSyncRef.current = null;
       chartRef.current?.remove();
-      chartRef.current = null; totalSeriesRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null;
+      chartRef.current = null; totalSeriesRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; spacerSeriesRef.current = null;
     };
   }, [gridColor]);
 
   useEffect(() => {
     if (!chartRef.current || !totalSeriesRef.current || !multSeriesRef.current || !estSeriesRef.current) return;
+    spacerSeriesRef.current?.setData(spacerTimes.map(t => ({ time: t, value: 0 })));
     if (data.length < 2) {
       totalSeriesRef.current.setData([]); multSeriesRef.current.setData([]); estSeriesRef.current.setData([]);
       return;
@@ -215,7 +272,7 @@ function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
     multSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.mult })));
     estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est })));
     chartRef.current.timeScale().fitContent();
-  }, [data, gridColor]);
+  }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
 
@@ -245,14 +302,16 @@ function CumulativeChart({ data, earningsDates = [] }: CumulativeChartProps) {
 
 // ── Rolling Chart Component ───────────────────────────────────────────────────
 
-interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[] }
+interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
 
-function RollingChart({ data, earningsDates = [] }: RollingChartProps) {
+function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: RollingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const spacerSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const detachSyncRef = useRef<(() => void) | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; total: number; mult: number; est: number } | null>(null);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
 
@@ -263,14 +322,15 @@ function RollingChart({ data, earningsDates = [] }: RollingChartProps) {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
       const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
-      chart.applyOptions({ handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: false, axisDoubleClickReset: false } });
       chartRef.current = chart;
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
+      spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       multSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_MULT + "b3", title: "Δln(Multiple)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: false });
       estSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_EST + "b3", title: "Δln(Estimate)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: false });
       totalSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_TOTAL, lineWidth: 2, title: "Total Δln(Price)", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
+      if (sync) detachSyncRef.current = sync.attach(chart, totalSeriesRef.current, el);
       chart.subscribeCrosshairMove(param => {
-        if (!param.time || !param.seriesData || !param.point) { setTooltip(null); return; }
+        if (!param.time || !param.seriesData || !param.point || !(param as any).sourceEvent) { setTooltip(null); return; }
         const tv = totalSeriesRef.current ? param.seriesData.get(totalSeriesRef.current) : null;
         const mv = multSeriesRef.current ? param.seriesData.get(multSeriesRef.current) : null;
         const ev = estSeriesRef.current ? param.seriesData.get(estSeriesRef.current) : null;
@@ -291,13 +351,15 @@ function RollingChart({ data, earningsDates = [] }: RollingChartProps) {
     return () => {
       const c = chartRef.current;
       if ((c as any)?.__ro) (c as any).__ro.disconnect();
+      detachSyncRef.current?.(); detachSyncRef.current = null;
       chartRef.current?.remove();
-      chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; totalSeriesRef.current = null;
+      chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; totalSeriesRef.current = null; spacerSeriesRef.current = null;
     };
   }, [gridColor]);
 
   useEffect(() => {
     if (!chartRef.current || !multSeriesRef.current || !estSeriesRef.current || !totalSeriesRef.current) return;
+    spacerSeriesRef.current?.setData(spacerTimes.map(t => ({ time: t, value: 0 })));
     if (data.length < 2) {
       multSeriesRef.current.setData([]); estSeriesRef.current.setData([]); totalSeriesRef.current.setData([]);
       return;
@@ -308,7 +370,7 @@ function RollingChart({ data, earningsDates = [] }: RollingChartProps) {
     estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est, color: p.est >= 0 ? COLOR_EST + "b3" : "#d97706b3" })));
     totalSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.total })));
     chartRef.current.timeScale().fitContent();
-  }, [data, gridColor]);
+  }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
 
@@ -367,19 +429,33 @@ function TickerSearchSelect({ options, value, onChange }: {
       .filter(o => o.ticker.toLowerCase().includes(s) || (o.name ?? "").toLowerCase().includes(s))
       .slice(0, 60);
   }, [options, q]);
+  // Typing "A/B" offers the pair (ratio) — attribution runs on the combined
+  // legs (P_A/P_B = M_A/M_B × E_A/E_B keeps the identity exact).
+  const pairQ = useMemo(() => (parseAttributionPair(q) ? q.trim().toUpperCase().replace(/\s+/g, "") : null), [q]);
   return (
     <div className="relative" data-testid="attr-ticker-select">
       <input
         value={open ? q : value}
-        placeholder="Search ticker or company…"
+        placeholder="Ticker or pair (AKR/BXP)…"
         onFocus={() => { setOpen(true); setQ(""); }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onChange={e => setQ(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" && pairQ) { onChange(pairQ); setOpen(false); (e.target as HTMLInputElement).blur(); } }}
         className="w-60 px-2 py-1 text-[11px] bg-input border border-border rounded outline-none focus:border-primary"
         data-testid="attr-ticker-input"
       />
       {open && (
         <div className="absolute z-30 mt-1 w-80 max-h-72 overflow-y-auto bg-popover border border-border rounded shadow-lg">
+          {pairQ && (
+            <button
+              onMouseDown={() => { onChange(pairQ); setOpen(false); }}
+              className="w-full text-left px-2 py-1 text-[10px] hover:bg-muted flex items-center gap-2 border-b border-border"
+              data-testid="attr-ticker-pair-opt"
+            >
+              <span className="font-semibold flex-shrink-0">{pairQ}</span>
+              <span className="text-muted-foreground">pair — ratio attribution</span>
+            </button>
+          )}
           {matches.map(o => (
             <button
               key={o.ticker}
@@ -417,6 +493,16 @@ interface SinglePanelProps {
 }
 
 function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
+  // One sync group per mounted panel: the cumulative + rolling charts share a
+  // spacer axis (union of both date lists) and mirror pan/zoom + crosshair.
+  const syncRef = useRef<ChartSyncGroup | null>(null);
+  if (!syncRef.current) syncRef.current = createChartSyncGroup();
+  const spacerTimes = useMemo(() => {
+    const seen = new Set<string>();
+    for (const p of cumPath) seen.add(p.date.slice(0, 10));
+    for (const p of rollingPath) seen.add(p.date.slice(0, 10));
+    return Array.from(seen).sort();
+  }, [cumPath, rollingPath]);
   return (
     <div className="flex h-full">
       {/* Charts */}
@@ -476,7 +562,7 @@ function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cu
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimates</span>
             </div>
           </div>
-          <CumulativeChart data={cumPath} earningsDates={earningsDates} />
+          <CumulativeChart data={cumPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
         </div>
         {/* Rolling chart */}
         <div className="p-3">
@@ -488,7 +574,7 @@ function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cu
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Δln(Price)</span>
             </div>
           </div>
-          <RollingChart data={rollingPath} earningsDates={earningsDates} />
+          <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
         </div>
       </div>
     </div>
@@ -609,18 +695,20 @@ export default function Attribution() {
       return;
     }
     let cancelled = false;
-    getTickerEvents(activeTicker).then(events => {
+    // Dates may be YYYY-MM-DD or MM/DD/YYYY — normalize to YYYY-MM-DD
+    const normalize = (arr: string[] | undefined) =>
+      (arr || []).map(d => {
+        if (d.includes("-")) return d;
+        const [m, day, y] = d.split("/");
+        return `${y}-${m.padStart(2, "0")}-${day.padStart(2, "0")}`;
+      }).filter(d => d && d.length === 10).sort();
+    const pair = parseAttributionPair(activeTicker);
+    const legs = pair ? [pair.a, pair.b] : [activeTicker];
+    Promise.all(legs.map(t => getTickerEvents(t).catch(() => null))).then(results => {
       if (cancelled) return;
-      // Dates may be YYYY-MM-DD or MM/DD/YYYY — normalize to YYYY-MM-DD
-      const normalize = (arr: string[] | undefined) =>
-        (arr || []).map(d => {
-          if (d.includes("-")) return d;
-          const [m, day, y] = d.split("/");
-          return `${y}-${m.padStart(2, "0")}-${day.padStart(2, "0")}`;
-        }).filter(d => d && d.length === 10).sort();
-      setEarningsDates(normalize((events as any)?.earnings));
-    }).catch(() => {
-      if (!cancelled) setEarningsDates([]);
+      const merged = new Set<string>();
+      for (const events of results) for (const d of normalize((events as any)?.earnings)) merged.add(d);
+      setEarningsDates(Array.from(merged).sort());
     });
     return () => { cancelled = true; };
   }, [showEarnings, activeTicker]);
@@ -638,7 +726,7 @@ export default function Attribution() {
     if (!activeTicker) return;
     setLoadingSingle(true);
     try {
-      const res = await loadBasisAligned(activeTicker, basisMode, basisPeriod);
+      const res = await loadBasisAlignedAny(activeTicker, basisMode, basisPeriod);
       setAligned(res?.aligned ?? null);
       if (res) setResolvedBasis(res.basis);
     } catch (err) {

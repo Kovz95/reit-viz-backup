@@ -1741,6 +1741,7 @@ const OVERLAY_TYPES: { value: string; label: string }[] = [
   { value: "rsi", label: "RSI (own bottom scale)" },
   { value: "roc", label: "ROC (own bottom scale)" },
   { value: "macd", label: "MACD (own bottom scale)" },
+  { value: "autocorr", label: "Autocorrelation (own bottom scale)" },
 ];
 
 function IndicatorOverlays({
@@ -1778,6 +1779,7 @@ function IndicatorOverlays({
   const [dSmooth, setDSmooth] = useState(3);
   const [macdSlow, setMacdSlow] = useState(26);
   const [macdSignal, setMacdSignal] = useState(9);
+  const [acLag, setAcLag] = useState(1);
 
   const addOverlay = () => {
     if (!source) return;
@@ -1785,10 +1787,13 @@ function IndicatorOverlays({
       id: `${source}-${type}-${period}-${Date.now()}`,
       source,
       type,
-      period,
+      // Autocorr interprets `period` as the trailing window — nudge tiny
+      // MA-style defaults up so window − lag has enough pairs to correlate.
+      period: type === "autocorr" ? Math.max(period, acLag + 10) : period,
       ...(type === "bollinger" || type === "meanband" ? { mult: bbMult } : {}),
       ...(type === "stochastic" ? { d: dSmooth } : {}),
       ...(type === "macd" ? { slow: macdSlow, signal: macdSignal } : {}),
+      ...(type === "autocorr" ? { lag: acLag } : {}),
     };
     onChangeIndicators({ ...activeIndicators, indicatorOverlays: [...overlays, overlay] });
   };
@@ -1819,7 +1824,8 @@ function IndicatorOverlays({
                 >
                   {o.type.toUpperCase()}({o.period}
                   {o.type === "macd" ? `,${o.slow ?? 26},${o.signal ?? 9}` : ""}
-                  {o.type === "stochastic" ? `,${o.d ?? 3}` : ""})
+                  {o.type === "stochastic" ? `,${o.d ?? 3}` : ""}
+                  {o.type === "autocorr" ? `,lag ${o.lag ?? 1}` : ""})
                   {(o.type === "bollinger" || o.type === "meanband") && o.mult !== undefined ? ` ${o.mult}σ` : ""} on{" "}
                   {sourceLabel(o.source)}
                   <button
@@ -1896,6 +1902,35 @@ function IndicatorOverlays({
                       {g}σ
                     </Button>
                   ))}
+                </div>
+              )}
+              {type === "autocorr" && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[9px] text-muted-foreground">Lag</span>
+                  {[1, 2, 5, 10].map((l) => (
+                    <Button
+                      key={l}
+                      size="sm"
+                      variant={acLag === l ? "default" : "secondary"}
+                      className="h-5 px-1.5 text-[9px] flex-1"
+                      onClick={() => setAcLag(l)}
+                    >
+                      {l}
+                    </Button>
+                  ))}
+                  <Input
+                    type="number"
+                    min={1}
+                    value={acLag}
+                    onChange={(e) => { const v = parseInt(e.target.value, 10); if (v >= 1) setAcLag(v); }}
+                    className="h-5 w-12 text-[9px] px-1"
+                    data-testid="overlay-ac-lag"
+                  />
+                </div>
+              )}
+              {type === "autocorr" && (
+                <div className="text-[9px] text-muted-foreground">
+                  Period above = trailing window (63 ≈ 3mo of daily bars).
                 </div>
               )}
               {type === "stochastic" && (

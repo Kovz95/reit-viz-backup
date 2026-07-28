@@ -30,6 +30,7 @@ import {
   computeVWAP,
   computeROC,
   computeStochastic,
+  rollingAutocorrOfSeries,
   computeOBV,
 } from "@/lib/indicators";
 import type { HASmoothConfig, OhlcBar } from "@/lib/indicators";
@@ -185,6 +186,8 @@ export interface IndicatorOverlay {
   slow?: number;
   /** MACD signal period. */
   signal?: number;
+  /** Autocorrelation lag (period = trailing window). */
+  lag?: number;
 }
 
 export interface ActiveIndicators {
@@ -934,6 +937,27 @@ function SubIndicatorChart({
                   "",
                   { priceScaleId: scaleId, lineStyle: LineStyle.Dotted },
                 );
+              }
+              try {
+                line?.priceScale().applyOptions({ scaleMargins: { top: 0.68, bottom: 0.02 }, visible: false });
+              } catch {}
+            } else if (o.type === "autocorr") {
+              // Rolling autocorrelation OF the indicator itself (e.g. AC of
+              // RSI on the RSI pane). Own hidden bottom scale with a zero
+              // line and the ±1.96/√(window−lag) white-noise band.
+              const lag = Math.max(1, o.lag ?? 1);
+              const ac = rollingAutocorrOfSeries(srcData as any, lag, o.period);
+              const scaleId = `ovl-ac-${o.id}`;
+              const line = addLine(ac, `AC(lag ${lag}, w${o.period}) on ${srcLabel}`, { priceScaleId: scaleId });
+              if (ac.length >= 2) {
+                const th = 1.96 / Math.sqrt(Math.max(1, o.period - lag));
+                for (const lvl of [0, th, -th]) {
+                  addLine(
+                    [{ time: ac[0].time, value: lvl }, { time: ac[ac.length - 1].time, value: lvl }],
+                    "",
+                    { priceScaleId: scaleId, lineStyle: LineStyle.Dotted },
+                  );
+                }
               }
               try {
                 line?.priceScale().applyOptions({ scaleMargins: { top: 0.68, bottom: 0.02 }, visible: false });

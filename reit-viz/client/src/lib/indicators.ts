@@ -1100,7 +1100,17 @@ export function computeRollingAutocorr(
   window = 63,
   rsiPeriod = 14,
 ): DataPoint[] {
-  const series = autocorrSourceSeries(bars, source, rsiPeriod);
+  return rollingAutocorrOfSeries(autocorrSourceSeries(bars, source, rsiPeriod), lag, window);
+}
+
+/** Rolling lag-k autocorrelation of an ARBITRARY value series (indicator
+ *  overlays feed the sub-chart's own displayed series in here — e.g.
+ *  autocorrelation of RSI drawn on the RSI pane). */
+export function rollingAutocorrOfSeries(
+  series: DataPoint[],
+  lag = 1,
+  window = 63,
+): DataPoint[] {
   const n = series.length;
   const pairs = window - lag;
   if (pairs < 5 || n < window) return [];

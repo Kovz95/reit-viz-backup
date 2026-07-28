@@ -756,6 +756,39 @@ export default function SigmaMove() {
   const [manualTickers, setManualTickers] = React.useState<Set<string>>(new Set());
   const geo = useGeoFilter(tickerList as any[], "sigma-geo");
 
+  // Custom tickers — any Yahoo symbol, not just workbook names. Persisted;
+  // history via /api/yahoo-prices (same pipe as the index/ETF rows), quotes
+  // ride the same /api/quotes/live batch. Live + Period modes only (earnings
+  // mode needs workbook earnings-date events).
+  const [customTickers, setCustomTickers] = React.useState<string[]>(() => {
+    try {
+      const s = localStorage.getItem("sigma-custom-tickers-v1");
+      if (s) {
+        const p = JSON.parse(s);
+        if (Array.isArray(p)) return p.filter((t): t is string => typeof t === "string" && !!t);
+      }
+    } catch {}
+    return [];
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-custom-tickers-v1", JSON.stringify(customTickers)); } catch {}
+  }, [customTickers]);
+  const customHistoryCache = React.useRef<Map<string, { dates: string[]; closes: number[] }>>(new Map());
+  const needQuoteRefreshRef = React.useRef(false);
+  const [customTickerInput, setCustomTickerInput] = React.useState("");
+  const [customTickerError, setCustomTickerError] = React.useState<string | null>(null);
+  const addCustomTicker = React.useCallback(() => {
+    const tk = customTickerInput.trim().toUpperCase();
+    if (!tk) return;
+    setCustomTickerError(null);
+    setCustomTickers((prev) => (prev.includes(tk) ? prev : [...prev, tk]));
+    setCustomTickerInput("");
+  }, [customTickerInput]);
+  const removeCustomTicker = React.useCallback((tk: string) => {
+    setCustomTickers((prev) => prev.filter((t) => t !== tk));
+    customHistoryCache.current.delete(tk);
+  }, []);
+
   // Per-ticker distribution: selected ticker + its own lookback (persisted)
   const [selectedTicker, setSelectedTicker] = React.useState<string | null>(() => {
     try { return localStorage.getItem("sigma-selected-ticker-v1") || null; } catch { return null; }
@@ -933,14 +966,72 @@ export default function SigmaMove() {
           percentileN: 0,
         });
       }
+      // Custom (non-workbook) tickers: Yahoo daily closes, same math.
+      const have = new Set(rows.map((r) => r.ticker));
+      const failed: string[] = [];
+      await Promise.all(
+        customTickers
+          .map((t) => t.toUpperCase())
+          .filter((t, i, a) => t && !have.has(t) && a.indexOf(t) === i)
+          .map(async (tk) => {
+            try {
+              let hist = customHistoryCache.current.get(tk);
+              if (!hist) {
+                hist = await fetchYahooPrices(tk);
+                customHistoryCache.current.set(tk, hist);
+              }
+              let closes = (hist.closes || []).slice(-minBars);
+              const dates = (hist.dates || []).slice(-minBars);
+              if (closes.length < 2) { failed.push(tk); return; }
+              if (effFreq !== "daily") {
+                closes = weeklyDownsamplePrices(closes, dates, effFreq).prices;
+              }
+              const { sigmaDaily, sigmaEwmaDaily, hvWindow } = computeVolAndDistribution(
+                closes,
+                closes.length - 1,
+                lookbackDays,
+                horizonN,
+              );
+              rows.push({
+                ticker: tk,
+                name: tk,
+                sector: "Custom",
+                subindustry: "",
+                closes,
+                last: null,
+                previousClose: null,
+                quoteTime: null,
+                marketState: null,
+                dollarChange: null,
+                pctChange: null,
+                logReturnToday: null,
+                logReturnN: null,
+                pctChangeN: null,
+                sigmaDaily,
+                sigmaAnnualized: sigmaDaily != null ? sigmaDaily * effAnnFactor : null,
+                sigmaEwmaDaily,
+                sigmaEwmaAnnualized: sigmaEwmaDaily != null ? sigmaEwmaDaily * effAnnFactor : null,
+                hvWindow,
+                sigmaMove: null,
+                sigmaMoveEwma: null,
+                percentile: null,
+                percentileN: 0,
+              });
+            } catch {
+              failed.push(tk);
+            }
+          }),
+      );
+      if (failed.length) setCustomTickerError(`No price history for: ${failed.join(", ")}`);
       rows.sort((a, b) => a.ticker.localeCompare(b.ticker));
+      needQuoteRefreshRef.current = true;
       setLiveRows(rows);
     } catch (err: any) {
       setGlobalError(err?.message || "Failed to load historical data");
     } finally {
       setLoadingHistory(false);
     }
-  }, [tickerList, lookbackDays, horizonN, distLookback, isPeriodMode, isEarningsMode, periodWindow, freq]);
+  }, [tickerList, customTickers, lookbackDays, horizonN, distLookback, isPeriodMode, isEarningsMode, periodWindow, freq]);
 
   React.useEffect(() => {
     loadHistoricalData();
@@ -1041,6 +1132,16 @@ export default function SigmaMove() {
       fetchLiveQuotes();
     }
   }, [liveRows.length, mode]);
+
+  // History rebuilds (added custom ticker, changed lookback/frequency) reset
+  // every row's quote fields to null — re-pull quotes so the table doesn't sit
+  // on dashes until a manual refresh. The ref gates it to one fetch per rebuild.
+  React.useEffect(() => {
+    if (mode !== "live" || !needQuoteRefreshRef.current) return;
+    if (!liveRows.length || fetchingQuotes || !fetchedAt) return;
+    needQuoteRefreshRef.current = false;
+    fetchLiveQuotes();
+  }, [liveRows, mode, fetchingQuotes, fetchedAt, fetchLiveQuotes]);
 
   // ---------------------------------------------------------------------------
   // loadIndexData (live mode)
@@ -1422,8 +1523,12 @@ export default function SigmaMove() {
   const allowedTickers = React.useMemo(() => {
     let r = applyClassFilters(tickerList as any[], classFilters, "", manualTickers);
     r = geo.filterByGeo(r as any[]);
-    return new Set((r as any[]).map((t) => t.ticker));
-  }, [tickerList, classFilters, manualTickers, geo.filterByGeo]);
+    const set = new Set((r as any[]).map((t) => t.ticker));
+    // User-added custom tickers always show — they were pinned explicitly and
+    // have no workbook classification for the filters to act on.
+    for (const t of customTickers) set.add(t.toUpperCase());
+    return set;
+  }, [tickerList, classFilters, manualTickers, geo.filterByGeo, customTickers]);
 
   // Period-mode rows: most-recent trailing-window return in σ units, from the
   // historical closes already loaded for the live rows (no live quotes needed).
@@ -1964,6 +2069,53 @@ export default function SigmaMove() {
               </button>
             )}
           </div>
+
+          {/* Add any ticker (Yahoo symbol — not limited to the workbook) */}
+          {!isEarningsMode && (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={customTickerInput}
+                onChange={(e) => { setCustomTickerInput(e.target.value); setCustomTickerError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") addCustomTicker(); }}
+                placeholder="Add any ticker (e.g. AAPL)"
+                title="Add any Yahoo Finance symbol — history + live quotes fetched on the fly (Live & Period modes)"
+                className="h-7 px-2 text-[11px] font-mono bg-background border border-border rounded w-[150px] focus:outline-none focus:border-amber-500/60"
+                data-testid="input-custom-ticker"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={addCustomTicker}
+                disabled={!customTickerInput.trim()}
+                data-testid="btn-add-custom-ticker"
+              >
+                Add
+              </Button>
+              {customTickers.map((tk) => (
+                <span
+                  key={tk}
+                  className="inline-flex items-center gap-0.5 h-6 pl-1.5 pr-0.5 text-[10px] font-mono bg-amber-500/10 border border-amber-500/30 rounded"
+                  data-testid={`custom-ticker-chip-${tk}`}
+                >
+                  {tk}
+                  <button
+                    type="button"
+                    onClick={() => removeCustomTicker(tk)}
+                    className="p-0.5 text-muted-foreground hover:text-foreground rounded"
+                    aria-label={`Remove ${tk}`}
+                    data-testid={`btn-remove-custom-${tk}`}
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              {customTickerError && (
+                <span className="text-[10px] text-red-400" data-testid="custom-ticker-error">{customTickerError}</span>
+              )}
+            </div>
+          )}
 
           {/* Refresh quotes (live mode) */}
           {!isEarningsMode && (
