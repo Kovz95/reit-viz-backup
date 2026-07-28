@@ -379,15 +379,28 @@ export function parsePairTicker(t: string | null | undefined): { a: string; b: s
   return m ? { a: m[1].toUpperCase(), b: m[2].toUpperCase() } : null;
 }
 
-function divideAligned(
+/** Metrics quoted in percent/rate units combine as a SPREAD (A − B) — a ratio
+ *  of two growth rates or yields is meaningless and explodes near zero.
+ *  Prices, multiples, and per-share estimates combine as a RATIO (A ÷ B). */
+export function pairCombineMode(metric: string): "ratio" | "spread" {
+  return /growth|yield|margin|rate|payout|occupancy|roe|roic|spread|beta|cagr|return|%/i.test(metric)
+    ? "spread"
+    : "ratio";
+}
+
+function combineAligned(
   sa: { time: string; value: number }[],
   sb: { time: string; value: number }[],
+  mode: "ratio" | "spread",
 ): { time: string; value: number }[] {
   const bm = new Map(sb.map((p) => [p.time, p.value]));
   const out: { time: string; value: number }[] = [];
   for (const p of sa) {
     const bv = bm.get(p.time);
-    if (bv != null && Math.abs(bv) > 1e-12 && Number.isFinite(p.value)) {
+    if (bv == null || !Number.isFinite(p.value) || !Number.isFinite(bv)) continue;
+    if (mode === "spread") {
+      out.push({ time: p.time, value: p.value - bv });
+    } else if (Math.abs(bv) > 1e-12) {
       out.push({ time: p.time, value: p.value / bv });
     }
   }
@@ -406,7 +419,7 @@ async function getMetricSeriesResolved(
       getMetricSeriesResolved(pair.a, metric, resolve, basketCache),
       getMetricSeriesResolved(pair.b, metric, resolve, basketCache),
     ]);
-    return divideAligned(sa, sb);
+    return combineAligned(sa, sb, pairCombineMode(metric));
   }
   if (isBasketTicker(ticker)) {
     let res = basketCache?.get(ticker);
