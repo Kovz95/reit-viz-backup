@@ -51,7 +51,7 @@ import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsamplePrices, expandWeeklyToDaily } from "@/lib/weeklyDownsample";
+import { weeklyDownsample, weeklyDownsamplePrices, expandWeeklyToDaily } from "@/lib/weeklyDownsample";
 import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
@@ -87,7 +87,12 @@ const xo = getDates;
 const nr = getDates as any;
 const mr = fetchTickerOHLCV as any;
 const fr = filterByDateRange as any;
-const mo = weeklyDownsamplePrices as any;
+// `mo` was mis-aliased to weeklyDownsamplePrices (array-in, {prices,weekIndex}
+// out) during the bundle reconstruction; every call site passes an OHLC object
+// and reads .closes/.adjCloses — that's weeklyDownsample. The mismatch threw
+// "undefined.length" inside a silent catch, killing the entire Slow Stoch
+// mode and EWO's weekly/monthly paths.
+const mo = weeklyDownsample as any;
 const fo = getDailyIndexFromWeekly as any;
 const Lt = computeForwardProfile as any;
 const Ve = summarizeSignals as any;
@@ -968,7 +973,10 @@ export default function Oscillators() {
           currentValuePct: null,
         });
         if (idx % 5 === 0 || idx === tickerList.length - 1) setResults([...accumulated]);
-      } catch {}
+      } catch (e) {
+        // Swallowing this silently hid a broken stoch path for weeks.
+        console.error(`[oscillators] stoch run failed for ${ticker?.ticker}: ${String((e as any)?.stack ?? e)}`);
+      }
     }
     setResults(accumulated);
     setIsRunning(false);

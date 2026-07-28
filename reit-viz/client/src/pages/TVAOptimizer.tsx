@@ -194,6 +194,26 @@ function detectTvaSignals(prices: number[], volumes: number[], params: TvaParams
   };
 }
 
+/** Yahoo daily volumes keyed by date — the workbook has no daily Volume
+ *  series, so this is the only source that lets TVA run on plain tickers. */
+async function fetchYahooVolumesByDate(ticker: string): Promise<Map<string, number>> {
+  try {
+    const resp = await fetch(`/api/yahoo-prices/${encodeURIComponent(ticker)}`);
+    if (!resp.ok || !(resp.headers.get("content-type") ?? "").includes("json")) return new Map();
+    const j = await resp.json();
+    const m = new Map<string, number>();
+    if (Array.isArray(j?.dates) && Array.isArray(j?.volumes)) {
+      for (let i = 0; i < j.dates.length; i++) {
+        const v = j.volumes[i];
+        if (Number.isFinite(v) && v > 0) m.set(String(j.dates[i]).slice(0, 10), v);
+      }
+    }
+    return m;
+  } catch {
+    return new Map();
+  }
+}
+
 function formatOsSignal(os: number | null | undefined): string {
   if (os == null || !Number.isFinite(os)) return "—";
   if (os > 0) return "BULL";
@@ -551,8 +571,17 @@ export default function TVAOptimizer() {
             setProgress({ current: s + 1, total: tickerEntries.length }); continue;
           }
           if (filtered.volumes.reduce((a: number, v: number) => a + (Number.isFinite(v) ? v : 0), 0) <= 0) {
-            allSkipped.push({ ticker: entry.ticker, reason: "no volume" });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            // The workbook carries NO daily Volume series (only avg-volume
+            // aggregates), so a volume-driven indicator can never run off it —
+            // fall back to Yahoo daily volumes mapped by date.
+            const ym = await fetchYahooVolumesByDate(entry.ticker);
+            const yv = filtered.dates.map((d: string) => ym.get(d) ?? 0);
+            if (yv.reduce((a: number, v: number) => a + v, 0) > 0) {
+              filtered.volumes = yv;
+            } else {
+              allSkipped.push({ ticker: entry.ticker, reason: "no volume (workbook or Yahoo)" });
+              setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            }
           }
           rawVolumes2 = filtered.volumes;
 

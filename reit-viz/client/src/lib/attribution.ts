@@ -303,6 +303,32 @@ export async function loadBasisAlignedAny(
   return { basis: ra.basis, aligned };
 }
 
+/** Resample aligned daily data to weekly bars (last observation per ISO week,
+ *  carrying that week's final trading date). The P = M × E identity survives
+ *  pointwise sampling untouched. */
+export function resampleAlignedWeekly(a: AlignedData): AlignedData {
+  const keyOf = (t: string): string => {
+    const d = new Date(t.slice(0, 10) + "T00:00:00Z");
+    if (Number.isNaN(d.getTime())) return t;
+    const day = (d.getUTCDay() + 6) % 7; // Mon=0
+    d.setUTCDate(d.getUTCDate() - day);
+    return d.toISOString().slice(0, 10);
+  };
+  const dates: string[] = [], close: number[] = [], multiple: number[] = [], estimate: number[] = [];
+  let curKey = "";
+  for (let i = 0; i < a.dates.length; i++) {
+    const k = keyOf(a.dates[i]);
+    if (k !== curKey) {
+      dates.push(a.dates[i]); close.push(a.close[i]); multiple.push(a.multiple[i]); estimate.push(a.estimate[i]);
+      curKey = k;
+    } else {
+      const j = dates.length - 1;
+      dates[j] = a.dates[i]; close[j] = a.close[i]; multiple[j] = a.multiple[i]; estimate[j] = a.estimate[i];
+    }
+  }
+  return { dates, close, multiple, estimate };
+}
+
 export interface CumPoint { date: string; total: number; mult: number; est: number }
 
 /** Cumulative log-% decomposition anchored at `startIdx` (the /attribution

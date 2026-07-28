@@ -22,6 +22,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@
 import { useGridColor } from "@/lib/gridPref";
 import {
   getStartIndex, loadBasisAlignedAny, buildCumulativePath, buildRollingPath, computeAttributionRow,
+  resampleAlignedWeekly,
   type BasisMode, type BasisPeriod, type BasisFamily, type AlignedData, type AttributionBasketLike,
   type CumPoint, type RollingPoint,
 } from "@/lib/attribution";
@@ -64,6 +65,8 @@ interface AttributionCompareProps {
   period: BasisPeriod;
   windowDays: number;
   rollingDays: number;
+  /** "weekly" samples one point per ISO week; Rolling then counts weeks. */
+  freq?: "daily" | "weekly";
   displaySymbol: (sym: string) => string;
   resolveBasket: (id: string) => AttributionBasketLike | undefined;
   onOpenSingle: (sym: string) => void;
@@ -76,7 +79,7 @@ function shareOf(p: RollingPoint): number {
 
 export default function AttributionCompare({
   tickerOptions, universeTickers, basisMode, period, windowDays, rollingDays,
-  displaySymbol, resolveBasket, onOpenSingle,
+  freq = "daily", displaySymbol, resolveBasket, onOpenSingle,
 }: AttributionCompareProps) {
   const [symbols, setSymbols] = useState<string[]>(() => {
     try {
@@ -151,15 +154,17 @@ export default function AttributionCompare({
     const res = cacheRef.current.get(sym);
     if (res === undefined) return { sym, name, color, failed: false, loading: true, cum: [], roll: [], row: null };
     if (res === null) return { sym, name, color, failed: true, loading: false, cum: [], roll: [], row: null };
-    const startIdx = getStartIndex(res.aligned.dates, windowDays);
+    const aligned = freq === "weekly" ? resampleAlignedWeekly(res.aligned) : res.aligned;
+    const effWindow = freq === "weekly" && windowDays > 0 ? Math.max(2, Math.round(windowDays / 5)) : windowDays;
+    const startIdx = getStartIndex(aligned.dates, effWindow);
     return {
       sym, name, color, failed: false, loading: false, basis: res.basis,
-      cum: buildCumulativePath(res.aligned, startIdx),
-      roll: buildRollingPath(res.aligned, startIdx, rollingDays),
-      row: computeAttributionRow(sym, res.basis, res.aligned, windowDays),
+      cum: buildCumulativePath(aligned, startIdx),
+      roll: buildRollingPath(aligned, startIdx, rollingDays),
+      row: computeAttributionRow(sym, res.basis, aligned, effWindow),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [symbols, windowDays, rollingDays, cacheVer, displaySymbol]);
+  }), [symbols, windowDays, rollingDays, freq, cacheVer, displaySymbol]);
 
   const ready = entries.filter(e => !e.loading && !e.failed && e.cum.length >= 2);
 

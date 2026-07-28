@@ -31,6 +31,7 @@ import {
   loadBasisAligned,
   loadBasisAlignedAny,
   parseAttributionPair,
+  resampleAlignedWeekly,
   computeAttributionRow,
   buildRollingPath,
   type RollingPoint,
@@ -621,6 +622,7 @@ export function TickerSearchSelect({ options, value, valueLabel, onChange }: {
 
 interface SinglePanelProps {
   activeTickerLabel: string;
+  freqUnit: "day" | "week";
   tickerOptions: TickerOption[];
   activeTicker: string;
   setActiveTicker: (t: string) => void;
@@ -636,7 +638,7 @@ interface SinglePanelProps {
   earningsDates: string[];
 }
 
-function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
+function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
   // One sync group per mounted panel: the cumulative + rolling charts share a
   // spacer axis (union of both date lists) and mirror pan/zoom + crosshair.
   const syncRef = useRef<ChartSyncGroup | null>(null);
@@ -711,7 +713,7 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, setActive
         {/* Rolling chart */}
         <div className="p-3">
           <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] font-semibold">Rolling {rollingDays}-day Contribution (stacked)</div>
+            <div className="text-[11px] font-semibold">Rolling {rollingDays}-{freqUnit} Contribution (stacked)</div>
             <div className="flex items-center gap-3 text-[10px]">
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-sky-400/70" /> Δln(Multiple)</span>
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-amber-400/70" /> Δln(Estimate)</span>
@@ -724,7 +726,7 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, setActive
         <div className="p-3 border-t border-border">
           <div className="flex items-center justify-between mb-1">
             <div className="text-[11px] font-semibold" title="Over each trailing window: |Δln M| / (|Δln M| + |Δln E|). The two lines sum to 100%.">
-              Share of Rolling {rollingDays}-day Move (% multiple vs % estimates)
+              Share of Rolling {rollingDays}-{freqUnit} Move (% multiple vs % estimates)
             </div>
             <div className="flex items-center gap-3 text-[10px]">
               <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple share %</span>
@@ -825,6 +827,9 @@ export default function Attribution() {
   const [basisPeriod, setBasisPeriod] = useState<BasisPeriod>("FY2");
   const [windowDays, setWindowDays] = useState(252);
   const [rollingDays, setRollingDays] = useState(21);
+  // Chart/decomposition frequency: weekly samples one point per ISO week and
+  // makes the Rolling number mean weeks instead of trading days.
+  const [attrFreq, setAttrFreq] = useState<"daily" | "weekly">("daily");
   const [aligned, setAligned] = useState<AlignedData | null>(null);
   // Universe-table filters (classification + country/exchange)
   const [classFilters, setClassFilters] = useState(emptyClassFilters());
@@ -961,22 +966,30 @@ export default function Attribution() {
     };
   }, [tableRows]);
 
-  // Derived paths
-  const cumPath = useMemo(() => aligned ? buildCumulativePath(aligned, getStartIndex(aligned.dates, windowDays)) : [], [aligned, windowDays]);
-  const rollingPath = useMemo(() => aligned ? buildRollingPath(aligned, getStartIndex(aligned.dates, windowDays), rollingDays) : [], [aligned, windowDays, rollingDays]);
+  // Derived paths. Weekly frequency: sample the aligned data to one point per
+  // ISO week (identity survives pointwise) and convert the calendar window
+  // from trading days to bars; the Rolling number then means BARS of the
+  // chosen frequency (21 = 21 weeks on weekly).
+  const alignedView = useMemo(
+    () => (aligned && attrFreq === "weekly" ? resampleAlignedWeekly(aligned) : aligned),
+    [aligned, attrFreq],
+  );
+  const effWindowDays = attrFreq === "weekly" && windowDays > 0 ? Math.max(2, Math.round(windowDays / 5)) : windowDays;
+  const cumPath = useMemo(() => alignedView ? buildCumulativePath(alignedView, getStartIndex(alignedView.dates, effWindowDays)) : [], [alignedView, effWindowDays]);
+  const rollingPath = useMemo(() => alignedView ? buildRollingPath(alignedView, getStartIndex(alignedView.dates, effWindowDays), rollingDays) : [], [alignedView, effWindowDays, rollingDays]);
   const summary: AttributionSummary | null = useMemo(() => {
-    if (!cumPath.length || !aligned) return null;
+    if (!cumPath.length || !alignedView) return null;
     const last = cumPath[cumPath.length - 1];
     const sumAbs = Math.abs(last.mult) + Math.abs(last.est);
     return {
       total: last.total, mult: last.mult, est: last.est,
       multShare: sumAbs > 0 ? Math.abs(last.mult) / sumAbs : 0,
       estShare: sumAbs > 0 ? Math.abs(last.est) / sumAbs : 0,
-      totalSimple: (aligned.close[aligned.close.length - 1] / aligned.close[getStartIndex(aligned.dates, windowDays)] - 1) * 100,
+      totalSimple: (alignedView.close[alignedView.close.length - 1] / alignedView.close[getStartIndex(alignedView.dates, effWindowDays)] - 1) * 100,
       startDate: cumPath[0].date,
       endDate: last.date,
     };
-  }, [cumPath, aligned, windowDays]);
+  }, [cumPath, alignedView, effWindowDays]);
 
   // Sort table rows
   const sortedRows = useMemo(() => {
@@ -1114,12 +1127,48 @@ export default function Attribution() {
           {/* Rolling (single mode only) */}
           {(mode === "single" || mode === "compare") && (
             <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">Rolling:</span>
+              <span className="text-[10px] text-muted-foreground">Freq:</span>
               <div className="flex items-center gap-0.5 border border-border rounded">
-                {ROLLING_OPTIONS.map(o => (
-                  <button key={o.label} onClick={() => setRollingDays(o.days)} className={`px-1.5 py-0.5 text-[10px] ${rollingDays === o.days ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>{o.label}</button>
+                {(["daily", "weekly"] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setAttrFreq(f)}
+                    className={`px-1.5 py-0.5 text-[10px] ${attrFreq === f ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                    title={f === "weekly" ? "One point per week — Rolling counts weeks" : "Daily bars — Rolling counts trading days"}
+                    data-testid={`attr-freq-${f}`}
+                  >
+                    {f === "daily" ? "D" : "W"}
+                  </button>
                 ))}
               </div>
+              <span className="text-[10px] text-muted-foreground ml-1">Rolling:</span>
+              <div className="flex items-center gap-0.5 border border-border rounded">
+                {ROLLING_OPTIONS.map(o => (
+                  <button key={o.label} onClick={() => setRollingDays(o.days)} className={`px-1.5 py-0.5 text-[10px] ${rollingDays === o.days ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                    {attrFreq === "weekly" ? `${o.days}w` : o.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number"
+                min={2}
+                max={1000}
+                placeholder={attrFreq === "weekly" ? "custom w" : "custom d"}
+                defaultValue={ROLLING_OPTIONS.some(o => o.days === rollingDays) ? "" : rollingDays}
+                className={`w-[64px] bg-transparent border rounded px-1 py-0.5 text-[10px] ${ROLLING_OPTIONS.some(o => o.days === rollingDays) ? "border-border" : "border-primary text-primary"}`}
+                title={`Custom rolling window in ${attrFreq === "weekly" ? "weeks" : "trading days"}`}
+                data-testid="attr-rolling-custom"
+                onBlur={e => {
+                  const v = parseInt(e.target.value);
+                  if (!isNaN(v) && v >= 2 && v <= 1000) setRollingDays(v);
+                }}
+                onKeyDown={e => {
+                  if (e.key === "Enter") {
+                    const v = parseInt((e.target as HTMLInputElement).value);
+                    if (!isNaN(v) && v >= 2 && v <= 1000) setRollingDays(v);
+                  }
+                }}
+              />
             </div>
           )}
           {/* Earnings-date markers (single mode only) */}
@@ -1156,7 +1205,8 @@ export default function Attribution() {
             activeTicker={activeTicker}
             activeTickerLabel={activeTickerLabel}
             setActiveTicker={setActiveTicker}
-            aligned={aligned}
+            aligned={alignedView}
+            freqUnit={attrFreq === "weekly" ? "week" : "day"}
             cumPath={cumPath}
             rollingPath={rollingPath}
             summary={summary}
@@ -1175,6 +1225,7 @@ export default function Attribution() {
             period={basisPeriod}
             windowDays={windowDays}
             rollingDays={rollingDays}
+            freq={attrFreq}
             displaySymbol={displaySymbol}
             resolveBasket={resolveBasketFn}
             onOpenSingle={(sym) => { setActiveTicker(sym); setMode("single"); }}
