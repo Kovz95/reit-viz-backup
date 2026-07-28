@@ -190,6 +190,27 @@ export interface IndicatorOverlay {
   lag?: number;
 }
 
+/** Overlay types that render as their OWN sub-chart pane (indicator-on-
+ *  indicator whose value domain differs from the source — MACD/RSI/ROC/
+ *  Autocorr of RSI etc.) instead of a squeezed bottom band on the source
+ *  pane. Their sub-chart type id is "ovl:<overlay id>". */
+export const PANE_OVERLAY_TYPES = new Set(["rsi", "roc", "macd", "autocorr"]);
+
+/** Short display label for a sub-chart type (built-in or registry id). */
+export function subChartSourceLabel(type: string): string {
+  return type === "rsi" ? "RSI" : type === "roc" ? "ROC" : type === "atr" ? "ATR"
+    : type === "stochastic" ? "Stoch" : type === "obv" ? "OBV" : type === "macd" ? "MACD"
+    : type === "ha" ? "HA" : (getIndicatorDef(type)?.label ?? type);
+}
+
+/** Header/badge label for a pane-overlay ("MACD(12,26,9) on RSI"). */
+export function overlayPaneLabel(o: IndicatorOverlay): string {
+  const src = subChartSourceLabel(o.source);
+  if (o.type === "macd") return `MACD(${o.period},${o.slow ?? 26},${o.signal ?? 9}) on ${src}`;
+  if (o.type === "autocorr") return `AC(lag ${Math.max(1, o.lag ?? 1)}, w${o.period}) on ${src}`;
+  return `${o.type.toUpperCase()}${o.period} on ${src}`;
+}
+
 export interface ActiveIndicators {
   /** Hover lookback-window lines (dashed vline N bars behind the crosshair
    *  per period indicator). Default ON; set false to hide. */
@@ -445,6 +466,9 @@ function SubIndicatorChart({
   onResizeStart,
   gridColor,
   frequency,
+  overlayDef,
+  sourceData,
+  onPrimaryData,
 }: {
   type: SubChartType;
   closeData: { time: string; value: number }[];
@@ -483,6 +507,15 @@ function SubIndicatorChart({
   /** Pane bar frequency ("hourly"|"daily"|"weekly"|"monthly") — drives
    *  frequency-specific registry param defaults. */
   frequency?: string;
+  /** Set when type = "ovl:<id>": this pane renders the overlay indicator
+   *  (MACD/RSI/ROC/Autocorr) computed ON `sourceData`. */
+  overlayDef?: IndicatorOverlay | null;
+  /** The source sub-chart's primary displayed series (published upward via
+   *  onPrimaryData by the source pane). */
+  sourceData?: { time: Time; value: number }[];
+  /** Non-ovl panes publish their first plotted series here so derived
+   *  overlay panes can compute from exactly what's displayed. */
+  onPrimaryData?: (type: string, data: { time: Time; value: number }[]) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -557,6 +590,75 @@ function SubIndicatorChart({
         });
         spacer.setData(axisTimes.map((t) => ({ time: t as unknown as Time })));
       } catch {}
+    }
+
+    // ── Derived overlay pane: MACD/RSI/ROC/Autocorr computed ON another
+    // indicator's displayed series (type = "ovl:<id>"). Renders exactly like
+    // a built-in sub-chart — own axis, reference lines, readout titles.
+    if (type.startsWith("ovl:") && overlayDef) {
+      const o = overlayDef;
+      const src = (sourceData ?? []).filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+      if (src.length > 5) {
+        const srcLabel = subChartSourceLabel(o.source);
+        const addL = (
+          data: { time: any; value: number }[],
+          title: string,
+          color: string,
+          opts: Record<string, unknown> = {},
+        ) => {
+          if (!data?.length) return null;
+          const s = chart.addSeries(LineSeries, {
+            color, lineWidth: 1, title,
+            priceLineVisible: false,
+            ...opts,
+          });
+          s.setData(data);
+          if (title) subSeriesList.push(s);
+          if (!firstSubSeries && title) firstSubSeries = s;
+          return s;
+        };
+        const dotted = (points: { time: any; value: number }[], color = "rgba(255,255,255,0.15)") =>
+          addL(points, "", color, { lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false, lastValueVisible: false });
+        const refSpan = (data: { time: any; value: number }[], lvl: number, color?: string) => {
+          if (data.length >= 2) dotted([{ time: data[0].time, value: lvl }, { time: data[data.length - 1].time, value: lvl }], color);
+        };
+        try {
+          if (o.type === "macd") {
+            const mc = computeMACD(src as any, o.period, o.slow ?? 26, o.signal ?? 9);
+            if (mc.histogram.length > 0) {
+              const hist = chart.addSeries(HistogramSeries, {
+                title: "", base: 0, lastValueVisible: false, priceLineVisible: false,
+              });
+              hist.setData(mc.histogram.map((d) => ({
+                time: d.time as Time,
+                value: d.value,
+                color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
+              })));
+            }
+            addL(mc.macdLine, `MACD on ${srcLabel}`, IC.macd_line);
+            addL(mc.signalLine, `Signal`, IC.macd_signal, { crosshairMarkerVisible: false });
+            refSpan(mc.macdLine, 0);
+          } else if (o.type === "rsi") {
+            const rs = computeRSI(src as any, o.period);
+            addL(rs, `RSI${o.period} on ${srcLabel}`, IC.rsi_line);
+            refSpan(rs, 70, IC.rsi_overbought);
+            refSpan(rs, 30, IC.rsi_oversold);
+          } else if (o.type === "roc") {
+            const rc = computeROC(src as any, o.period);
+            addL(rc, `ROC${o.period} on ${srcLabel}`, IC.roc);
+            refSpan(rc, 0);
+          } else if (o.type === "autocorr") {
+            const lag = Math.max(1, o.lag ?? 1);
+            const ac = rollingAutocorrOfSeries(src as any, lag, o.period);
+            addL(ac, `AC(lag ${lag}, w${o.period}) on ${srcLabel}`, (IC as any).autocorr_line ?? "#e879f9");
+            const th = 1.96 / Math.sqrt(Math.max(1, o.period - lag));
+            refSpan(ac, 0);
+            refSpan(ac, th);
+            refSpan(ac, -th);
+          }
+          chart.timeScale().fitContent();
+        } catch {}
+      }
     }
 
     const rsiPeriods = indicatorPeriods(activeIndicators.rsi);
@@ -863,7 +965,11 @@ function SubIndicatorChart({
     // plotted series, so this works identically for built-in AND registry
     // sub-charts. MACD gets its own hidden bottom-band scale — its values
     // live near 0, not on the source's scale.
-    const paneOverlays = (activeIndicators.indicatorOverlays ?? []).filter((o) => o.source === type);
+    // (MACD/RSI/ROC/Autocorr overlays render as their OWN panes — see the
+    // "ovl:" branch above — so only same-domain overlays stay in-pane here.)
+    const paneOverlays = (activeIndicators.indicatorOverlays ?? []).filter(
+      (o) => o.source === type && !PANE_OVERLAY_TYPES.has(o.type),
+    );
     if (paneOverlays.length > 0 && firstSubSeries) {
       let srcData: { time: Time; value: number }[] = [];
       try {
@@ -1175,11 +1281,24 @@ function SubIndicatorChart({
       }
     }
 
+    // Publish this pane's primary displayed series so derived overlay panes
+    // (autocorr/MACD/... ON this indicator) compute from exactly what's shown.
+    if (onPrimaryData && !type.startsWith("ovl:")) {
+      try {
+        const d = firstSubSeries
+          ? ((firstSubSeries as ISeriesApi<any>).data() as any[])
+              .map((p) => ({ time: p.time, value: typeof p.value === "number" ? p.value : p.close }))
+              .filter((p) => typeof p.value === "number" && Number.isFinite(p.value))
+          : [];
+        onPrimaryData(type, d);
+      } catch {}
+    }
+
     return () => {
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency]);
+  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency, overlayDef, sourceData, onPrimaryData]);
 
   // Resize
   useEffect(() => {
@@ -1194,7 +1313,8 @@ function SubIndicatorChart({
     return () => ro.disconnect();
   });
 
-  const label = type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
+  const label = type.startsWith("ovl:") && overlayDef ? overlayPaneLabel(overlayDef)
+    : type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
     : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic"
     : type === "obv" ? "OBV" : (getIndicatorDef(type)?.label ?? type);
 
@@ -4326,6 +4446,18 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   for (const def of PANE_INDICATORS) {
     if (activeIndicators.registry?.[def.id]?.enabled) subCharts.push(def.id);
   }
+  // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
+  // in right after their source pane.
+  const paneOverlayDefs = (activeIndicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
+  if (paneOverlayDefs.length > 0) {
+    const interleaved: SubChartType[] = [];
+    for (const st of subCharts) {
+      interleaved.push(st);
+      for (const o of paneOverlayDefs) if (o.source === st) interleaved.push(`ovl:${o.id}`);
+    }
+    subCharts.length = 0;
+    subCharts.push(...interleaved);
+  }
   // Temporarily hidden subplots unmount entirely (state stays enabled).
   const hiddenSet = new Set(activeIndicators.hiddenSubCharts ?? []);
   const visibleSubCharts = subCharts.filter((st) => !hiddenSet.has(st));
@@ -4342,18 +4474,43 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const out: Record<string, LookbackEntry[]> = {};
     if (activeIndicators.showLookbackWindow === false) return out;
     const acSt = activeIndicators.registry?.["autocorr"];
-    if (!acSt?.enabled) return out;
-    const def = getIndicatorDef("autocorr");
-    if (!def) return out;
-    const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
-    if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
-      const target = indicatorPeriods(activeIndicators.rsi).length > 0 ? "rsi" : "autocorr";
-      const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, acSt.freq);
-      out[target] = [{
-        bars: Math.round(p.window * mult),
-        color: (IC as Record<string, string>).autocorr_line ?? "#e879f9",
-        label: "AC",
-      }];
+    if (acSt?.enabled) {
+      const def = getIndicatorDef("autocorr");
+      if (def) {
+        const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
+        if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
+          const target = indicatorPeriods(activeIndicators.rsi).length > 0 ? "rsi" : "autocorr";
+          const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, acSt.freq);
+          out[target] = [{
+            bars: Math.round(p.window * mult),
+            color: (IC as Record<string, string>).autocorr_line ?? "#e879f9",
+            label: "AC",
+          }];
+        }
+      }
+    }
+    // Derived overlay panes window over their SOURCE indicator's values, so
+    // their lookback lines belong on the source sub-chart (e.g. autocorr-on-
+    // RSI's trailing window renders on the RSI pane).
+    for (const o of activeIndicators.indicatorOverlays ?? []) {
+      if (!PANE_OVERLAY_TYPES.has(o.type)) continue;
+      const bars = o.type === "macd" ? (o.slow ?? 26) : o.period;
+      if (!(bars > 1)) continue;
+      // RSI sources may be resampled (weekly/monthly RSI on a daily chart) —
+      // scale the window into chart bars like the registry autocorr does.
+      const srcFreq = o.source === "rsi" ? activeIndicators.rsiFreq : undefined;
+      const mult = srcFreq === "weekly" || srcFreq === "monthly"
+        ? chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, srcFreq)
+        : 1;
+      const color = o.type === "autocorr" ? ((IC as Record<string, string>).autocorr_line ?? "#e879f9")
+        : o.type === "macd" ? IC.macd_line
+        : o.type === "rsi" ? IC.rsi_line
+        : IC.roc;
+      (out[o.source] ??= []).push({
+        bars: Math.round(bars * mult),
+        color,
+        label: o.type === "autocorr" ? "AC" : o.type.toUpperCase(),
+      });
     }
     return out;
   }, [activeIndicators, chartConfig, IC]);
@@ -4362,6 +4519,20 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const primaryForSub = paneSeries.find((s) => s.visible && s.data.length > 0);
   const subCloseData = primaryForSub ? primaryForSub.data : [];
   const subBaseLabel = primaryForSub && primaryForSub.metric !== "close" ? ` (${primaryForSub.metric})` : "";
+
+  // Source sub-charts publish their primary displayed series here; derived
+  // overlay panes ("ovl:<id>") read it. The version bump re-renders so the
+  // overlay pane picks up fresh data; the signature check stops ping-pong.
+  const subPrimaryRef = useRef(new Map<string, { time: Time; value: number }[]>());
+  const [, setSubPrimaryVer] = useState(0);
+  const handleSubPrimaryData = useCallback((t: string, data: { time: Time; value: number }[]) => {
+    const sig = (d: { time: Time; value: number }[]) =>
+      d.length ? `${d.length}:${String(d[0].time)}:${String(d[d.length - 1].time)}:${d[d.length - 1].value}` : "0";
+    const prev = subPrimaryRef.current.get(t);
+    if (prev && sig(prev) === sig(data)) return;
+    subPrimaryRef.current.set(t, data);
+    setSubPrimaryVer((v) => v + 1);
+  }, []);
 
   return (
     <div
@@ -4582,10 +4753,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       {subCloseData.length > 0 && visibleSubCharts.map((st) => {
         const isMax = maxSub === st;
         const hidden = maxSub !== null && !isMax;
+        const ovlDef = st.startsWith("ovl:")
+          ? (activeIndicators.indicatorOverlays ?? []).find((o) => `ovl:${o.id}` === st) ?? null
+          : null;
         return (
           <div key={st} className={hidden ? "hidden" : "contents"}>
             <SubIndicatorChart
               type={st}
+              overlayDef={ovlDef}
+              sourceData={ovlDef ? subPrimaryRef.current.get(ovlDef.source) : undefined}
+              onPrimaryData={st.startsWith("ovl:") ? undefined : handleSubPrimaryData}
               closeData={subCloseData}
               ohlcBars={ohlcBars}
               fullDates={fullDates}

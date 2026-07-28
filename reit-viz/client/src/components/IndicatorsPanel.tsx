@@ -1738,10 +1738,10 @@ const OVERLAY_TYPES: { value: string; label: string }[] = [
   { value: "bollinger", label: "Bollinger Bands" },
   { value: "meanband", label: "Rolling Mean ± σ" },
   { value: "stochastic", label: "Stochastic (StochRSI-style)" },
-  { value: "rsi", label: "RSI (own bottom scale)" },
-  { value: "roc", label: "ROC (own bottom scale)" },
-  { value: "macd", label: "MACD (own bottom scale)" },
-  { value: "autocorr", label: "Autocorrelation (own bottom scale)" },
+  { value: "rsi", label: "RSI (own pane)" },
+  { value: "roc", label: "ROC (own pane)" },
+  { value: "macd", label: "MACD (own pane)" },
+  { value: "autocorr", label: "Autocorrelation (own pane)" },
 ];
 
 function IndicatorOverlays({

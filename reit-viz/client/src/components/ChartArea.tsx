@@ -1274,6 +1274,16 @@ export default function ChartArea({
       const cur = prev[paneId];
       if (!cur) return prev;
       const next = { ...cur };
+      // Derived overlay panes ("ovl:<id>") map back to their overlay entry.
+      if (type.startsWith("ovl:")) {
+        const id = type.slice("ovl:".length);
+        next.indicatorOverlays = (next.indicatorOverlays ?? []).filter((o) => o.id !== id);
+        if (!next.indicatorOverlays.length) delete next.indicatorOverlays;
+        if (next.hiddenSubCharts?.includes(type)) {
+          next.hiddenSubCharts = next.hiddenSubCharts.filter((t) => t !== type);
+        }
+        return { ...prev, [paneId]: next };
+      }
       switch (type) {
         case "rsi": delete next.rsi; delete next.rsiFreq; break;
         case "macd": delete next.macd; break;

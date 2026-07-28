@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
-import { indicatorPeriods, type ActiveIndicators } from "@/components/ChartPane";
+import { indicatorPeriods, PANE_OVERLAY_TYPES, overlayPaneLabel, type ActiveIndicators } from "@/components/ChartPane";
 import { getIndicatorDef } from "@/lib/indicatorRegistry";
 
 /** Compact badges for a pane's enabled indicators (Current Layout list).
@@ -50,6 +50,13 @@ function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
     const label = def?.label ?? id;
     if (def?.renderTarget === "pane") sub(label, id);
     else out.push({ label });
+  }
+  // Indicator-on-indicator overlays: MACD/RSI/ROC/Autocorr render as their
+  // own sub-chart pane (hide/show like any subplot); same-domain overlays
+  // (MAs, Bollinger, …) stay plain badges.
+  for (const o of ind.indicatorOverlays ?? []) {
+    if (PANE_OVERLAY_TYPES.has(o.type)) sub(overlayPaneLabel(o), `ovl:${o.id}`);
+    else out.push({ label: overlayPaneLabel(o) });
   }
   return out;
 }
