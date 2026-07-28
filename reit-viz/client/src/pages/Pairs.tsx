@@ -69,6 +69,7 @@ import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect } from "@/components/IndicatorsPanel";
+import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { indicatorPeriods, setSeriesAxisLabels } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
@@ -838,7 +839,9 @@ function PairsIndicatorsPanel({
   };
 
   return (
-    <div className="absolute right-0 top-0 bottom-0 w-[260px] border-l border-border bg-card/95 backdrop-blur overflow-y-auto z-30 flex-shrink-0">
+    // Docked side panel (charts yield space) instead of the old absolute
+    // overlay that covered the right edge of the chart grid.
+    <ResizableSidebar storageKey="pairs-indicators-width" defaultWidth={280}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-3.5 h-3.5 text-primary" />
@@ -1152,7 +1155,7 @@ function PairsIndicatorsPanel({
         {/* Colors editor */}
         <IndicatorColorEditor />
       </div>
-    </div>
+    </ResizableSidebar>
   );
 }
 
