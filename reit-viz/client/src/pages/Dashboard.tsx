@@ -436,14 +436,41 @@ async function getMetricSeriesResolved(
     return combineAligned(sa, sb, pairCombineMode(metric));
   }
   if (isBasketTicker(ticker)) {
-    let res = basketCache?.get(ticker);
-    if (res === undefined) {
-      res = await fetchBasketOhlc(ticker, resolve);
-      basketCache?.set(ticker, res);
+    // Price-family metrics come from the basket OHLC pipeline (weighted index).
+    if (["close", "open", "high", "low", "Volume"].includes(metric)) {
+      let res = basketCache?.get(ticker);
+      if (res === undefined) {
+        res = await fetchBasketOhlc(ticker, resolve);
+        basketCache?.set(ticker, res);
+      }
+      if (!res) return [];
+      return basketMetricSeries(res, metric);
     }
-    if (!res) return [];
-    // Only price-source metrics are defined for a synthetic basket series.
-    return basketMetricSeries(res, metric);
+    // Fundamental metrics (P/FFO FY2, growth, yields, …): equal-weight
+    // average across the basket's constituents, on dates where at least half
+    // the members with any data have a value (avoids composition jumps).
+    const id = extractBasketId(ticker);
+    const basket = id ? resolve(id) : undefined;
+    if (!basket?.tickers?.length) return [];
+    const legs = await Promise.all(
+      basket.tickers.map((t) => getMetricSeries(t, metric).catch(() => [] as { time: string; value: number }[]))
+    );
+    const withData = legs.filter((l) => l.length > 0).length;
+    if (withData === 0) return [];
+    const minCount = Math.max(1, Math.ceil(withData / 2));
+    const byDate = new Map<string, number[]>();
+    for (const leg of legs) {
+      for (const p of leg) {
+        if (!Number.isFinite(p.value)) continue;
+        const a = byDate.get(p.time);
+        if (a) a.push(p.value);
+        else byDate.set(p.time, [p.value]);
+      }
+    }
+    return [...byDate.entries()]
+      .filter(([, vs]) => vs.length >= minCount)
+      .map(([time, vs]) => ({ time, value: vs.reduce((s, v) => s + v, 0) / vs.length }))
+      .sort((a, b) => a.time.localeCompare(b.time));
   }
   return getMetricSeries(ticker, metric);
 }
