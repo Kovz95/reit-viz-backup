@@ -413,11 +413,14 @@ function CompositionBar({ multShare, estShare, multSign, estSign }: CompositionB
 
 // ── Searchable single-ticker picker (symbol OR company name) ─────────────────
 
-export interface TickerOption { ticker: string; name?: string }
+/** `label` overrides how the option renders (baskets show their name while
+ *  `ticker` carries the canonical "BASKET:<id>" value). */
+export interface TickerOption { ticker: string; name?: string; label?: string }
 
-function TickerSearchSelect({ options, value, onChange }: {
+function TickerSearchSelect({ options, value, valueLabel, onChange }: {
   options: TickerOption[];
   value: string;
+  valueLabel?: string;
   onChange: (t: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -426,21 +429,46 @@ function TickerSearchSelect({ options, value, onChange }: {
     const s = q.trim().toLowerCase();
     if (!s) return options.slice(0, 60);
     return options
-      .filter(o => o.ticker.toLowerCase().includes(s) || (o.name ?? "").toLowerCase().includes(s))
+      .filter(o => o.ticker.toLowerCase().includes(s) || (o.label ?? "").toLowerCase().includes(s) || (o.name ?? "").toLowerCase().includes(s))
       .slice(0, 60);
   }, [options, q]);
   // Typing "A/B" offers the pair (ratio) — attribution runs on the combined
-  // legs (P_A/P_B = M_A/M_B × E_A/E_B keeps the identity exact).
-  const pairQ = useMemo(() => (parseAttributionPair(q) ? q.trim().toUpperCase().replace(/\s+/g, "") : null), [q]);
+  // legs (P_A/P_B = M_A/M_B × E_A/E_B keeps the identity exact). Each side
+  // resolves to a ticker OR a basket by name ("WELL/healthcare" →
+  // "WELL/BASKET:<id>").
+  const resolveLeg = useMemo(() => (raw: string): { value: string; label: string } | null => {
+    const t = raw.trim();
+    if (!t) return null;
+    if (/^BASKET:[^/]+$/.test(t)) {
+      const b = options.find(o => o.ticker === t);
+      return { value: t, label: b?.label ?? t };
+    }
+    const up = t.toUpperCase();
+    const exact = options.find(o => !o.ticker.startsWith("BASKET:") && o.ticker.toUpperCase() === up);
+    if (exact) return { value: exact.ticker, label: exact.ticker };
+    const bMatches = options.filter(o => o.ticker.startsWith("BASKET:") && (o.label ?? "").toLowerCase().includes(t.toLowerCase()));
+    if (bMatches.length === 1) return { value: bMatches[0].ticker, label: bMatches[0].label ?? bMatches[0].ticker };
+    if (/^[A-Za-z0-9.\-]{1,12}$/.test(t)) return { value: up, label: up };
+    return null;
+  }, [options]);
+  const pairQ = useMemo(() => {
+    const idx = q.indexOf("/");
+    if (idx <= 0 || idx === q.length - 1) return null;
+    const a = resolveLeg(q.slice(0, idx));
+    const b = resolveLeg(q.slice(idx + 1));
+    if (!a || !b) return null;
+    return { value: `${a.value}/${b.value}`, label: `${a.label}/${b.label}` };
+  }, [q, resolveLeg]);
   return (
     <div className="relative" data-testid="attr-ticker-select">
       <input
-        value={open ? q : value}
-        placeholder="Ticker or pair (AKR/BXP)…"
+        value={open ? q : (valueLabel ?? value)}
+        placeholder="Ticker, pair, or basket…"
         onFocus={() => { setOpen(true); setQ(""); }}
+        onClick={() => { if (!open) { setOpen(true); setQ(""); } }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onChange={e => setQ(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && pairQ) { onChange(pairQ); setOpen(false); (e.target as HTMLInputElement).blur(); } }}
+        onKeyDown={e => { if (e.key === "Enter" && pairQ) { onChange(pairQ.value); setOpen(false); (e.target as HTMLInputElement).blur(); } }}
         className="w-60 px-2 py-1 text-[11px] bg-input border border-border rounded outline-none focus:border-primary"
         data-testid="attr-ticker-input"
       />
@@ -448,11 +476,11 @@ function TickerSearchSelect({ options, value, onChange }: {
         <div className="absolute z-30 mt-1 w-80 max-h-72 overflow-y-auto bg-popover border border-border rounded shadow-lg">
           {pairQ && (
             <button
-              onMouseDown={() => { onChange(pairQ); setOpen(false); }}
+              onMouseDown={() => { onChange(pairQ.value); setOpen(false); }}
               className="w-full text-left px-2 py-1 text-[10px] hover:bg-muted flex items-center gap-2 border-b border-border"
               data-testid="attr-ticker-pair-opt"
             >
-              <span className="font-semibold flex-shrink-0">{pairQ}</span>
+              <span className="font-semibold flex-shrink-0">{pairQ.label}</span>
               <span className="text-muted-foreground">pair — ratio attribution</span>
             </button>
           )}
@@ -463,7 +491,7 @@ function TickerSearchSelect({ options, value, onChange }: {
               className={`w-full text-left px-2 py-1 text-[10px] hover:bg-muted flex items-center justify-between gap-2 ${o.ticker === value ? "bg-primary/20" : ""}`}
               data-testid={`attr-ticker-opt-${o.ticker}`}
             >
-              <span className="font-semibold flex-shrink-0">{o.ticker}</span>
+              <span className="font-semibold flex-shrink-0">{o.label ?? o.ticker}</span>
               <span className="text-muted-foreground truncate">{o.name ?? ""}</span>
             </button>
           ))}
@@ -477,6 +505,7 @@ function TickerSearchSelect({ options, value, onChange }: {
 // ── Single Ticker Panel ───────────────────────────────────────────────────────
 
 interface SinglePanelProps {
+  activeTickerLabel: string;
   tickerOptions: TickerOption[];
   activeTicker: string;
   setActiveTicker: (t: string) => void;
@@ -492,7 +521,7 @@ interface SinglePanelProps {
   earningsDates: string[];
 }
 
-function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
+function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
   // One sync group per mounted panel: the cumulative + rolling charts share a
   // spacer axis (union of both date lists) and mirror pan/zoom + crosshair.
   const syncRef = useRef<ChartSyncGroup | null>(null);
@@ -509,20 +538,20 @@ function SinglePanel({ tickerOptions, activeTicker, setActiveTicker, aligned, cu
       <div className="flex-1 flex flex-col overflow-auto">
         {/* Ticker picker + summary header */}
         <div className="px-3 py-2 border-b border-border bg-muted/20 flex items-start gap-4 flex-wrap">
-          <TickerSearchSelect options={tickerOptions} value={activeTicker} onChange={setActiveTicker} />
+          <TickerSearchSelect options={tickerOptions} value={activeTicker} valueLabel={activeTickerLabel} onChange={setActiveTicker} />
           {loadingSingle ? (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Loading {activeTicker}…
+              <RefreshCw className="w-3 h-3 animate-spin" /> Loading {activeTickerLabel}…
             </div>
           ) : !summary || !aligned ? (
             <div className="text-muted-foreground">
-              No data for {activeTicker}. {resolvedBasis === "EPS" ? "" : "(FFO not available — try forcing EPS basis)"}
+              No data for {activeTickerLabel}. {resolvedBasis === "EPS" ? "" : "(FFO not available — try forcing EPS basis)"}
             </div>
           ) : (
             <div className="flex items-center gap-6 flex-wrap">
               <div>
                 <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Ticker / Basis</div>
-                <div className="text-sm font-bold">{activeTicker} <span className="text-[10px] text-muted-foreground font-normal">({getBasisDef(resolvedBasis, basisPeriod).label})</span></div>
+                <div className="text-sm font-bold">{activeTickerLabel} <span className="text-[10px] text-muted-foreground font-normal">({getBasisDef(resolvedBasis, basisPeriod).label})</span></div>
                 <div className="text-[9px] text-muted-foreground">{summary.startDate} → {summary.endDate}</div>
               </div>
               <div>
@@ -703,7 +732,8 @@ export default function Attribution() {
         return `${y}-${m.padStart(2, "0")}-${day.padStart(2, "0")}`;
       }).filter(d => d && d.length === 10).sort();
     const pair = parseAttributionPair(activeTicker);
-    const legs = pair ? [pair.a, pair.b] : [activeTicker];
+    // Basket legs have no single earnings series — only plain-ticker legs mark.
+    const legs = (pair ? [pair.a, pair.b] : [activeTicker]).filter(l => !l.startsWith("BASKET:"));
     Promise.all(legs.map(t => getTickerEvents(t).catch(() => null))).then(results => {
       if (cancelled) return;
       const merged = new Set<string>();
@@ -726,7 +756,10 @@ export default function Attribution() {
     if (!activeTicker) return;
     setLoadingSingle(true);
     try {
-      const res = await loadBasisAlignedAny(activeTicker, basisMode, basisPeriod);
+      const res = await loadBasisAlignedAny(
+        activeTicker, basisMode, basisPeriod, undefined,
+        (id) => { const b = baskets.find(x => x.id === id); return b ? { ...b } : undefined; },
+      );
       setAligned(res?.aligned ?? null);
       if (res) setResolvedBasis(res.basis);
     } catch (err) {
@@ -735,7 +768,7 @@ export default function Attribution() {
     } finally {
       setLoadingSingle(false);
     }
-  }, [activeTicker, basisMode, basisPeriod]);
+  }, [activeTicker, basisMode, basisPeriod, baskets]);
 
   useEffect(() => { loadSingle(); }, [loadSingle]);
 
@@ -846,8 +879,9 @@ export default function Attribution() {
       if (!cumPath.length) return;
       const header = "date,total_ln_pct,multiple_ln_pct,estimate_ln_pct";
       const rows = cumPath.map(p => `${p.date},${p.total.toFixed(4)},${p.mult.toFixed(4)},${p.est.toFixed(4)}`);
-      const meta = `# ${activeTicker} | basis=${resolvedBasis} ${basisPeriod} | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | start=${summary?.startDate ?? ""} | end=${summary?.endDate ?? ""}`;
-      downloadCsv([meta, header, ...rows].join("\n"), `attribution_${activeTicker}_${windowDays === 0 ? "ytd" : `${windowDays}d`}.csv`);
+      const meta = `# ${activeTickerLabel} | basis=${resolvedBasis} ${basisPeriod} | window=${windowDays === 0 ? "YTD" : `${windowDays}d`} | start=${summary?.startDate ?? ""} | end=${summary?.endDate ?? ""}`;
+      const safeName = activeTickerLabel.replace(/[^A-Za-z0-9._\-]+/g, "-");
+      downloadCsv([meta, header, ...rows].join("\n"), `attribution_${safeName}_${windowDays === 0 ? "ytd" : `${windowDays}d`}.csv`);
     } else {
       if (!sortedRows.length) return;
       const header = "ticker,basis,total_pct,multiple_pct,estimate_pct,multiple_share,estimate_share,same_direction";
@@ -858,9 +892,24 @@ export default function Attribution() {
   }
 
   const tickerOptions = useMemo(
-    () => filteredTickersList.map((t: any) => ({ ticker: t.ticker as string, name: t.name as string | undefined })),
-    [filteredTickersList]
+    () => [
+      ...filteredTickersList.map((t: any) => ({ ticker: t.ticker as string, name: t.name as string | undefined })),
+      // Baskets are selectable directly or as pair legs ("WELL/healthcare").
+      ...baskets.map(b => ({ ticker: `BASKET:${b.id}`, name: `${b.tickers.length} names · ${b.weighting || "equal"}`, label: b.name })),
+    ],
+    [filteredTickersList, baskets]
   );
+
+  // Friendly display for the picker/header: swap BASKET:<id> legs for names.
+  const activeTickerLabel = useMemo(() => {
+    const nameOf = (leg: string) => {
+      if (!leg.startsWith("BASKET:")) return leg;
+      const b = baskets.find(x => x.id === leg.slice("BASKET:".length));
+      return b ? b.name : leg;
+    };
+    const pair = parseAttributionPair(activeTicker);
+    return pair ? `${nameOf(pair.a)}/${nameOf(pair.b)}` : nameOf(activeTicker);
+  }, [activeTicker, baskets]);
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground font-mono text-xs">
@@ -972,6 +1021,7 @@ export default function Attribution() {
           <SinglePanel
             tickerOptions={tickerOptions}
             activeTicker={activeTicker}
+            activeTickerLabel={activeTickerLabel}
             setActiveTicker={setActiveTicker}
             aligned={aligned}
             cumPath={cumPath}

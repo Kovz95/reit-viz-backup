@@ -7,6 +7,7 @@
 // basis-series loader live here so both consume one implementation.
 
 import { fetchMetricSeries, type MetricSeriesPoint } from "./fetchMetricSeries";
+import { computeBasketWeights } from "./basketWeights";
 
 export type BasisFamily = "FFO" | "AFFO" | "EPS" | "EPRA" | "Default";
 export type BasisPeriod = "FY0" | "FY1" | "FY2" | "LTM";
@@ -159,10 +160,103 @@ export async function loadBasisAligned(
 // ── Pair (A/B ratio) support ─────────────────────────────────────────────────
 // For a ratio the identity survives componentwise: P_A/P_B = (M_A/M_B) ×
 // (E_A/E_B), so the same log decomposition applies to the combined series.
+// Legs may be plain tickers or baskets ("BASKET:<id>", ids kept verbatim —
+// they can contain spaces/colons but never "/").
 
 export function parseAttributionPair(symbol: string): { a: string; b: string } | null {
-  const m = symbol.trim().match(/^([A-Za-z0-9.\-]{1,12})\s*\/\s*([A-Za-z0-9.\-]{1,12})$/);
-  return m ? { a: m[1].toUpperCase(), b: m[2].toUpperCase() } : null;
+  const m = symbol.trim().match(/^(BASKET:[^/]+?|[A-Za-z0-9.\-]{1,12})\s*\/\s*(BASKET:[^/]+|[A-Za-z0-9.\-]{1,12})$/);
+  if (!m) return null;
+  const norm = (s: string) => (s.startsWith("BASKET:") ? s.trim() : s.toUpperCase());
+  return { a: norm(m[1]), b: norm(m[2]) };
+}
+
+// ── Basket legs ──────────────────────────────────────────────────────────────
+// A basket leg aggregates close AND estimate as per-date weighted averages of
+// its constituents (same computeBasketWeights scheme as the price index;
+// weights renormalize over the members present at each date; a date needs at
+// least half the members-with-data). The basket multiple is DERIVED as
+// close ÷ estimate, which keeps P = M × E exact for the aggregate — a
+// weighted average of member multiples would not.
+
+export interface AttributionBasketLike {
+  id: string;
+  name: string;
+  tickers: string[];
+  [key: string]: unknown;
+}
+
+async function weightedBasketSeries(
+  basket: AttributionBasketLike,
+  metric: string,
+  weights: Record<string, number>,
+): Promise<MetricSeriesPoint[]> {
+  const legs = await Promise.all(
+    basket.tickers.map((t) => fetchMetricSeries(t, metric).catch(() => [] as MetricSeriesPoint[])),
+  );
+  const withData = legs.filter((l) => l.length > 0).length;
+  if (withData === 0) return [];
+  const wOf = (t: string) => {
+    const w = weights[t];
+    return Number.isFinite(w) && w > 0 ? w : 1 / basket.tickers.length;
+  };
+  const minCount = Math.max(1, Math.ceil(withData / 2));
+  const byDate = new Map<string, { v: number; w: number; n: number }>();
+  basket.tickers.forEach((t, i) => {
+    const w = wOf(t);
+    for (const p of legs[i]) {
+      if (!Number.isFinite(p.value)) continue;
+      const e = byDate.get(p.time) ?? { v: 0, w: 0, n: 0 };
+      e.v += w * p.value;
+      e.w += w;
+      e.n += 1;
+      byDate.set(p.time, e);
+    }
+  });
+  return [...byDate.entries()]
+    .filter(([, e]) => e.n >= minCount && e.w > 0)
+    .map(([time, e]) => ({ time, value: e.v / e.w }))
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+export async function loadBasketBasisAligned(
+  basket: AttributionBasketLike,
+  mode: BasisMode,
+  period: BasisPeriod,
+): Promise<{ basis: BasisFamily; aligned: AlignedData } | null> {
+  if (!basket.tickers?.length) return null;
+  let weights: Record<string, number> = {};
+  try {
+    const needCloses = basket.weighting === "price" || basket.weighting === "inverse_vol";
+    const closesByTicker: Record<string, MetricSeriesPoint[]> = {};
+    if (needCloses) {
+      const closes = await Promise.all(
+        basket.tickers.map((t) => fetchMetricSeries(t, "close").catch(() => [] as MetricSeriesPoint[])),
+      );
+      basket.tickers.forEach((t, i) => { closesByTicker[t] = closes[i]; });
+    }
+    weights = (await computeBasketWeights({ ...basket }, closesByTicker, fetchMetricSeries)).weights;
+  } catch { /* equal-weight fallback inside weightedBasketSeries */ }
+  const closeSeries = await weightedBasketSeries(basket, "close", weights);
+  if (!closeSeries.length) return null;
+  const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPRA", "EPS"] : [mode];
+  for (const family of families) {
+    const def = getBasisDef(family, period);
+    if (!def.estimate) continue;
+    const estSeries = await weightedBasketSeries(basket, def.estimate, weights);
+    if (!estSeries.length) continue;
+    const estMap = new Map(estSeries.map((p) => [p.time, p.value]));
+    const multSeries: MetricSeriesPoint[] = [];
+    for (const p of closeSeries) {
+      const e = estMap.get(p.time);
+      if (e !== undefined && e > 0 && Number.isFinite(p.value) && p.value > 0) {
+        multSeries.push({ time: p.time, value: p.value / e });
+      }
+    }
+    if (!multSeries.length) continue;
+    const aligned = alignData(closeSeries, multSeries, estSeries);
+    if (aligned.dates.length >= 2) return { basis: family, aligned };
+  }
+  return null;
 }
 
 export function combineAlignedRatio(a: AlignedData, b: AlignedData): AlignedData {
@@ -181,21 +275,28 @@ export function combineAlignedRatio(a: AlignedData, b: AlignedData): AlignedData
 }
 
 // Like loadBasisAligned but also accepts "A/B" pair symbols (each leg loaded
-// under the same basis mode/period, inner-joined, divided). Under "auto" the
-// legs may resolve different families (e.g. FFO vs EPS) — the identity still
-// holds per leg, so the ratio decomposition stays exact.
+// under the same basis mode/period, inner-joined, divided) and basket legs
+// ("BASKET:<id>" — resolved via `resolveBasket`, aggregated by the basket's
+// weighting scheme). Under "auto" the legs may resolve different families
+// (e.g. FFO vs EPS) — the identity still holds per leg, so the ratio
+// decomposition stays exact.
 export async function loadBasisAlignedAny(
   symbol: string,
   mode: BasisMode,
   period: BasisPeriod,
   opts?: { end?: string },
+  resolveBasket?: (id: string) => AttributionBasketLike | undefined,
 ): Promise<{ basis: BasisFamily; aligned: AlignedData } | null> {
+  const loadLeg = (leg: string) => {
+    if (leg.startsWith("BASKET:")) {
+      const basket = resolveBasket?.(leg.slice("BASKET:".length));
+      return basket ? loadBasketBasisAligned(basket, mode, period) : Promise.resolve(null);
+    }
+    return loadBasisAligned(leg, mode, period, opts);
+  };
   const pair = parseAttributionPair(symbol);
-  if (!pair) return loadBasisAligned(symbol, mode, period, opts);
-  const [ra, rb] = await Promise.all([
-    loadBasisAligned(pair.a, mode, period, opts),
-    loadBasisAligned(pair.b, mode, period, opts),
-  ]);
+  if (!pair) return loadLeg(symbol.trim());
+  const [ra, rb] = await Promise.all([loadLeg(pair.a), loadLeg(pair.b)]);
   if (!ra || !rb) return null;
   const aligned = combineAlignedRatio(ra.aligned, rb.aligned);
   if (aligned.dates.length < 2) return null;
