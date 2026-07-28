@@ -54,7 +54,7 @@ export default function AttributionPickerPanel({
   const [basisMode, setBasisMode] = useState<BasisMode>("auto");
   const [period, setPeriod] = useState<BasisPeriod>("FY1");
   const [win, setWin] = useState(63);
-  const [display, setDisplay] = useState<"components" | "stacked">("components");
+  const [display, setDisplay] = useState<"components" | "stacked" | "share">("components");
   const [plotMode, setPlotMode] = useState<"new" | string>("new");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +105,7 @@ export default function AttributionPickerPanel({
         const paneId = onPlot(mk("est", COLOR_EST, est, `${tag} Est Δ (${basisLabel})`), targetPaneId);
         onPlot(mk("mult", COLOR_MULT, mult, `${tag} Multiple Δ`), paneId);
         onPlot(mk("total", COLOR_TOTAL, total, `${tag} Total Δ`), paneId);
-      } else {
+      } else if (display === "stacked") {
         // Stacked shaded areas from zero: est+mult (= total log return) drawn
         // first, estimate layered on top — the visible band between the two
         // fills is the multiple contribution.
@@ -115,6 +115,24 @@ export default function AttributionPickerPanel({
           targetPaneId,
         );
         onPlot(mk("est", COLOR_EST, est, `${tag} Est Δ (${basisLabel})`, { seriesType: "area" }), paneId);
+      } else {
+        // Share of move: over the trailing window, what PERCENT of the gross
+        // move came from multiple change vs estimate revisions. Shares use
+        // |mult| / (|mult| + |est|) so opposing-sign windows still split
+        // sensibly; the two lines sum to 100 by construction.
+        const shares = path.map((p) => {
+          const denom = Math.abs(p.mult) + Math.abs(p.est);
+          const multShare = denom > 1e-12 ? (Math.abs(p.mult) / denom) * 100 : 50;
+          return { time: p.date, mult: multShare, est: 100 - multShare };
+        });
+        const paneId = onPlot(
+          mk("mshare", COLOR_MULT, shares.map((s) => ({ time: s.time, value: s.mult })), `${tag} Multiple share %`),
+          targetPaneId,
+        );
+        onPlot(
+          mk("eshare", COLOR_EST, shares.map((s) => ({ time: s.time, value: s.est })), `${tag} Est share % (${basisLabel})`),
+          paneId,
+        );
       }
     } catch (e) {
       console.error("Failed to compute attribution series", e);
@@ -146,10 +164,10 @@ export default function AttributionPickerPanel({
                 {ticker || "Select ticker"}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-[220px] p-0" align="start">
+            <PopoverContent className="w-[320px] p-0" align="start">
               <Command>
                 <CommandInput placeholder="Search..." className="h-8 text-xs" />
-                <CommandList className="max-h-[220px]">
+                <CommandList className="max-h-[420px]">
                   <CommandEmpty>No ticker found.</CommandEmpty>
                   <CommandGroup>
                     {tickerList.map((t) => (
@@ -179,7 +197,7 @@ export default function AttributionPickerPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto" className="text-xs">Auto</SelectItem>
+                <SelectItem value="auto" className="text-xs">Auto (FFO → EPRA → EPS)</SelectItem>
                 {BASIS_FAMILIES.map((f) => (
                   <SelectItem key={f} value={f} className="text-xs">{f}</SelectItem>
                 ))}
@@ -233,6 +251,7 @@ export default function AttributionPickerPanel({
             <SelectContent>
               <SelectItem value="components" className="text-xs">Lines: Est / Multiple / Total</SelectItem>
               <SelectItem value="stacked" className="text-xs">Stacked area: Est + Multiple band</SelectItem>
+              <SelectItem value="share" className="text-xs">Share of move %: Multiple vs Est</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -272,6 +291,15 @@ export default function AttributionPickerPanel({
           earnings estimate vs the change in the valuation multiple (log-%, so the two
           components sum exactly to the total). Same math as the Attribution tab, rolled
           over time.
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          <span className="text-foreground/80 font-medium">Auto</span> basis picks the
+          first family with estimate data: FFO, then EPRA, then EPS.{" "}
+          <span className="text-foreground/80 font-medium">Stacked area</span> fills the
+          absolute contributions (amber = estimate, blue band above it = multiple).{" "}
+          <span className="text-foreground/80 font-medium">Share of move %</span> answers
+          "over the window, X% of the move was multiple, Y% estimate revisions" — the
+          two lines always sum to 100 (shares of |mult| + |est|).
         </p>
       </div>
     </ResizableSidebar>
