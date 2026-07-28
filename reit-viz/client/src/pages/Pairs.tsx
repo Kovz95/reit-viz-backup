@@ -63,14 +63,17 @@ import {
   computeOBV,
   computeHeikinAshi,
   computeHASignals,
+  rollingAutocorrOfSeries,
 } from "@/lib/indicators";
+import { computeMaByType, type MaType } from "@/lib/maEngine";
 import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect } from "@/components/IndicatorsPanel";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays } from "@/components/IndicatorsPanel";
 import { ResizableSidebar } from "@/components/ResizableSidebar";
-import { indicatorPeriods, setSeriesAxisLabels } from "@/components/ChartPane";
+import { indicatorPeriods, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
+import type { IndicatorOverlay } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
@@ -802,6 +805,7 @@ function PairsIndicatorsPanel({
   const [rocPeriod, setRocPeriod] = useState(typeof activeIndicators.roc === "number" ? activeIndicators.roc : 12);
   const [stochK, setStochK] = useState(activeIndicators.stochastic?.kPeriod ?? 14);
   const [stochD, setStochD] = useState(activeIndicators.stochastic?.dPeriod ?? 3);
+  const [ovlCollapsed, setOvlCollapsed] = useState(false);
 
   // Heikin-Ashi state
   const haVal = activeIndicators.heikinAshi;
@@ -1146,6 +1150,14 @@ function PairsIndicatorsPanel({
           <RegistryIndicatorControls activeIndicators={activeIndicators} onChange={setIndicators} />
         </div>
 
+        {/* ───── Indicator Overlays (indicator-on-indicator, same as Charts) ───── */}
+        <IndicatorOverlays
+          activeIndicators={activeIndicators}
+          onChangeIndicators={setIndicators}
+          collapsed={ovlCollapsed}
+          onToggle={() => setOvlCollapsed(v => !v)}
+        />
+
         <div className="border-t border-border pt-3">
           <p className="text-[10px] text-muted-foreground">
             MAs, Bollinger, VWAP, and overlay-type indicators draw on the chart. RSI, MACD, ATR, ROC, Stochastic, OBV, and sub-pane indicators render below. Select which chart to apply to above.
@@ -1405,7 +1417,7 @@ function OlsScatterChart({
 // ── Which indicators get their own sub-pane (oscillators/separate-scale) ──
 // Registry-driven sub-pane indicators (ADX, CCI, Aroon, …) are encoded as
 // "reg:<id>" so one component handles both the bespoke and registry kinds.
-type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv" | `reg:${string}`;
+type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv" | `reg:${string}` | `ovl:${string}`;
 
 const SUB_CHART_HEIGHT = 70;
 
@@ -1441,6 +1453,19 @@ function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
       out.push(`reg:${def.id}`);
     }
   }
+  // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
+  // in right after their source pane — same as the Charts tab. Overlay
+  // sources use the plain registry id ("adx"), Pairs pane ids are "reg:adx".
+  const paneOvls = (indicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
+  if (paneOvls.length > 0) {
+    const interleaved: PairsSubChartType[] = [];
+    for (const st of out) {
+      interleaved.push(st);
+      const src = st.startsWith("reg:") ? st.slice(4) : st;
+      for (const o of paneOvls) if (o.source === src) interleaved.push(`ovl:${o.id}`);
+    }
+    return interleaved;
+  }
   return out;
 }
 
@@ -1451,12 +1476,22 @@ function PairsSubIndicatorChart({
   activeIndicators,
   parentChart,
   parentSeries,
+  overlayDef,
+  sourceData,
+  onPrimaryData,
 }: {
   type: PairsSubChartType;
   closeData: DataPoint[];
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   parentSeries: ISeriesApi<any> | null;
+  /** Set when type = "ovl:<id>": renders the overlay (MACD/RSI/ROC/Autocorr)
+   *  computed ON `sourceData` — the source sub-pane's displayed series. */
+  overlayDef?: IndicatorOverlay | null;
+  sourceData?: DataPoint[];
+  /** Non-ovl panes publish their first plotted series (keyed by plain source
+   *  id — "rsi", "adx") so derived panes compute from what's displayed. */
+  onPrimaryData?: (type: string, data: DataPoint[]) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1532,6 +1567,61 @@ function PairsSubIndicatorChart({
       });
       spacer.setData(closeData.map((d) => ({ time: d.time as Time })));
     } catch {}
+
+    // ── Derived overlay pane: MACD/RSI/ROC/Autocorr ON another indicator
+    // (type = "ovl:<id>") — same treatment as the Charts tab.
+    if (type.startsWith("ovl:") && overlayDef) {
+      const o = overlayDef;
+      const src = (sourceData ?? []).filter((d) => Number.isFinite(d.value));
+      if (src.length > 5) {
+        const srcLabel = subChartSourceLabel(o.source);
+        const addL = (data: { time: any; value: number }[], title: string, color: string, opts: Record<string, unknown> = {}) => {
+          if (!data?.length) return null;
+          const s = chart.addSeries(LineSeries, { color, lineWidth: 1, title, priceLineVisible: false, ...opts });
+          s.setData(data.map((d) => ({ time: d.time as Time, value: d.value })));
+          if (!firstSeries && title) firstSeries = s;
+          return s;
+        };
+        const dotted = (pts: { time: any; value: number }[], color = "rgba(255,255,255,0.15)") =>
+          addL(pts, "", color, { lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false, lastValueVisible: false });
+        const refSpan = (data: { time: any; value: number }[], lvl: number, color?: string) => {
+          if (data.length >= 2) dotted([{ time: data[0].time, value: lvl }, { time: data[data.length - 1].time, value: lvl }], color);
+        };
+        try {
+          if (o.type === "macd") {
+            const mc = computeMACD(src, o.period, o.slow ?? 26, o.signal ?? 9);
+            if (mc.histogram.length > 0) {
+              const hist = chart.addSeries(HistogramSeries, { title: "", base: 0, lastValueVisible: false, priceLineVisible: false });
+              hist.setData(mc.histogram.map((d) => ({
+                time: d.time as Time, value: d.value,
+                color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
+              })));
+            }
+            addL(mc.macdLine, `MACD on ${srcLabel}`, IC.macd_line);
+            addL(mc.signalLine, "Signal", IC.macd_signal, { crosshairMarkerVisible: false });
+            refSpan(mc.macdLine, 0);
+          } else if (o.type === "rsi") {
+            const rs = computeRSI(src, o.period);
+            addL(rs, `RSI${o.period} on ${srcLabel}`, IC.rsi_line);
+            refSpan(rs, 70, IC.rsi_overbought);
+            refSpan(rs, 30, IC.rsi_oversold);
+          } else if (o.type === "roc") {
+            const rc = computeROC(src, o.period);
+            addL(rc, `ROC${o.period} on ${srcLabel}`, IC.roc);
+            refSpan(rc, 0);
+          } else if (o.type === "autocorr") {
+            const lag = Math.max(1, o.lag ?? 1);
+            const ac = rollingAutocorrOfSeries(src, lag, o.period);
+            addL(ac, `AC(lag ${lag}, w${o.period}) on ${srcLabel}`, (IC as any).autocorr_line ?? "#e879f9");
+            const th = 1.96 / Math.sqrt(Math.max(1, o.period - lag));
+            refSpan(ac, 0);
+            refSpan(ac, th);
+            refSpan(ac, -th);
+          }
+          chart.timeScale().fitContent();
+        } catch {}
+      }
+    }
 
     // RSI (one line per period)
     if (type === "rsi") {
@@ -1732,6 +1822,77 @@ function PairsSubIndicatorChart({
       }
     }
 
+    // ── Same-domain indicator-on-indicator overlays (EMA of RSI, Bollinger
+    // on RSI, StochRSI, …) draw on the source sub-pane; MACD/RSI/ROC/Autocorr
+    // get their own pane via the "ovl:" branch above (same as the Charts tab).
+    {
+      const srcId = type.startsWith("reg:") ? type.slice(4) : type;
+      const inPaneOverlays = (activeIndicators.indicatorOverlays ?? []).filter(
+        (o) => o.source === srcId && !PANE_OVERLAY_TYPES.has(o.type),
+      );
+      if (inPaneOverlays.length > 0 && firstSeries) {
+        let srcData: { time: Time; value: number }[] = [];
+        try {
+          srcData = ((firstSeries as ISeriesApi<any>).data() as any[])
+            .map((d) => ({ time: d.time, value: typeof d.value === "number" ? d.value : d.close }))
+            .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+        } catch {}
+        if (srcData.length > 5) {
+          const OVERLAY_PALETTE = ["#38bdf8", "#f472b6", "#facc15", "#4ade80", "#c084fc", "#fb923c"];
+          const srcLabel = subChartSourceLabel(srcId);
+          inPaneOverlays.forEach((o, oi) => {
+            const color = OVERLAY_PALETTE[oi % OVERLAY_PALETTE.length];
+            const addLine = (data: { time: any; value: number }[], title: string, opts: Record<string, unknown> = {}) => {
+              if (!data?.length) return null;
+              const s = chart.addSeries(LineSeries, {
+                color, lineWidth: 1, title, priceLineVisible: false, lastValueVisible: false, ...opts,
+              });
+              s.setData(data);
+              return s;
+            };
+            try {
+              if (o.type === "bollinger") {
+                const bb = computeBollingerBands(srcData as any, o.period, o.mult ?? 2);
+                addLine(bb.basis, `BB${o.period} on ${srcLabel}`);
+                addLine(bb.upper, "", { lineStyle: LineStyle.Dotted });
+                addLine(bb.lower, "", { lineStyle: LineStyle.Dotted });
+              } else if (o.type === "meanband") {
+                const rb = computeRollingMeanBands(srcData as any, o.period);
+                addLine(rb.mean, `Mean${o.period} on ${srcLabel}`, { lineStyle: LineStyle.LargeDashed });
+                const maxMult = o.mult ?? 2;
+                for (const b of rb.bands) {
+                  if (Math.abs(b.mult) <= maxMult) addLine(b.data, "", { lineStyle: LineStyle.Dotted });
+                }
+              } else if (o.type === "stochastic") {
+                const so = computeStochastic(srcData as any, o.period, o.d ?? 3);
+                addLine(so.k, `Stoch${o.period} on ${srcLabel}`);
+                addLine(so.d, "", { lineStyle: LineStyle.Dotted });
+              } else {
+                const vals = srcData.map((d) => d.value);
+                const ma = computeMaByType(vals, o.period, o.type.toUpperCase() as MaType);
+                const data = srcData
+                  .map((d, i) => ({ time: d.time, value: ma[i] as number }))
+                  .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+                addLine(data, `${o.type.toUpperCase()}${o.period} on ${srcLabel}`);
+              }
+            } catch {}
+          });
+        }
+      }
+    }
+
+    // Publish this pane's primary displayed series for derived overlay panes.
+    if (onPrimaryData && !type.startsWith("ovl:")) {
+      try {
+        const d = firstSeries
+          ? ((firstSeries as ISeriesApi<any>).data() as any[])
+              .map((p) => ({ time: p.time, value: typeof p.value === "number" ? p.value : p.close }))
+              .filter((p) => typeof p.value === "number" && Number.isFinite(p.value))
+          : [];
+        onPrimaryData(type.startsWith("reg:") ? type.slice(4) : type, d as DataPoint[]);
+      } catch {}
+    }
+
     // Sync time scale with parent chart using TIME-based range (not logical range)
     // because indicator data may have fewer points than the parent (e.g. HA skips
     // the first data point), so logical indices don't map to the same calendar dates.
@@ -1852,7 +2013,7 @@ function PairsSubIndicatorChart({
       setHoverReadout(null);
       try { chart.remove(); } catch {}
     };
-  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome]);
+  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome, overlayDef, sourceData, onPrimaryData]);
 
   // Resize
   useEffect(() => {
@@ -1867,7 +2028,8 @@ function PairsSubIndicatorChart({
     return () => ro.disconnect();
   });
 
-  const label = type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
+  const label = type.startsWith("ovl:") && overlayDef ? overlayPaneLabel(overlayDef)
+    : type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
     : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV"
     : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
 
@@ -2335,6 +2497,19 @@ function MiniChart({
 
   const subCharts = getActiveSubCharts(activeIndicators);
 
+  // Source sub-panes publish their displayed primary series; derived overlay
+  // panes ("ovl:<id>") read it — see the Charts-tab pane-overlay machinery.
+  const subPrimaryRef = useRef(new Map<string, DataPoint[]>());
+  const [, setSubPrimaryVer] = useState(0);
+  const handleSubPrimaryData = useCallback((t: string, data: DataPoint[]) => {
+    const sig = (d: DataPoint[]) =>
+      d.length ? `${d.length}:${String(d[0].time)}:${String(d[d.length - 1].time)}:${d[d.length - 1].value}` : "0";
+    const prev = subPrimaryRef.current.get(t);
+    if (prev && sig(prev) === sig(data)) return;
+    subPrimaryRef.current.set(t, data);
+    setSubPrimaryVer((v) => v + 1);
+  }, []);
+
   return (
     <div
       className={`flex flex-col ${
@@ -2421,16 +2596,24 @@ function MiniChart({
         )}
       </div>
       {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV) */}
-      {subCharts.map(sc => (
-        <PairsSubIndicatorChart
-          key={sc}
-          type={sc}
-          closeData={data}
-          activeIndicators={activeIndicators}
-          parentChart={chartRef.current}
-          parentSeries={mainSeriesRef.current}
-        />
-      ))}
+      {subCharts.map(sc => {
+        const ovlDef = sc.startsWith("ovl:")
+          ? (activeIndicators.indicatorOverlays ?? []).find(o => `ovl:${o.id}` === sc) ?? null
+          : null;
+        return (
+          <PairsSubIndicatorChart
+            key={sc}
+            type={sc}
+            closeData={data}
+            activeIndicators={activeIndicators}
+            parentChart={chartRef.current}
+            parentSeries={mainSeriesRef.current}
+            overlayDef={ovlDef}
+            sourceData={ovlDef ? subPrimaryRef.current.get(ovlDef.source) : undefined}
+            onPrimaryData={sc.startsWith("ovl:") ? undefined : handleSubPrimaryData}
+          />
+        );
+      })}
     </div>
   );
 }

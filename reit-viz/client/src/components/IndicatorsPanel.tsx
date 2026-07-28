@@ -1744,7 +1744,7 @@ const OVERLAY_TYPES: { value: string; label: string }[] = [
   { value: "autocorr", label: "Autocorrelation (own pane)" },
 ];
 
-function IndicatorOverlays({
+export function IndicatorOverlays({
   activeIndicators,
   onChangeIndicators,
   collapsed,
