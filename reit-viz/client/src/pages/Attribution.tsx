@@ -18,6 +18,7 @@ import { ArrowUpDown } from "@/components/ui/icons";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { useGridColor } from "@/lib/gridPref";
 import ClassificationFilters, { emptyClassFilters, applyClassFilters } from "@/components/ClassificationFilters";
+import AttributionCompare from "@/components/AttributionCompare";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useBaskets } from "@/lib/useBaskets";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -523,7 +524,7 @@ function CompositionBar({ multShare, estShare, multSign, estSign }: CompositionB
  *  `ticker` carries the canonical "BASKET:<id>" value). */
 export interface TickerOption { ticker: string; name?: string; label?: string }
 
-function TickerSearchSelect({ options, value, valueLabel, onChange }: {
+export function TickerSearchSelect({ options, value, valueLabel, onChange }: {
   options: TickerOption[];
   value: string;
   valueLabel?: string;
@@ -819,7 +820,7 @@ export default function Attribution() {
   const { filteredTickersList } = useAppContext();
   const tickers = useMemo(() => filteredTickersList.map(t => t.ticker), [filteredTickersList]);
 
-  const [mode, setMode] = useState<"single" | "basket" | "table">("single");
+  const [mode, setMode] = useState<"single" | "compare" | "basket" | "table">("single");
   const [basisMode, setBasisMode] = useState<BasisMode>("auto");
   const [basisPeriod, setBasisPeriod] = useState<BasisPeriod>("FY2");
   const [windowDays, setWindowDays] = useState(252);
@@ -1027,16 +1028,21 @@ export default function Attribution() {
     [filteredTickersList, baskets]
   );
 
-  // Friendly display for the picker/header: swap BASKET:<id> legs for names.
-  const activeTickerLabel = useMemo(() => {
+  // Friendly display for pickers/headers: swap BASKET:<id> legs for names.
+  const displaySymbol = useCallback((sym: string) => {
     const nameOf = (leg: string) => {
       if (!leg.startsWith("BASKET:")) return leg;
       const b = baskets.find(x => x.id === leg.slice("BASKET:".length));
       return b ? b.name : leg;
     };
-    const pair = parseAttributionPair(activeTicker);
-    return pair ? `${nameOf(pair.a)}/${nameOf(pair.b)}` : nameOf(activeTicker);
-  }, [activeTicker, baskets]);
+    const pair = parseAttributionPair(sym);
+    return pair ? `${nameOf(pair.a)}/${nameOf(pair.b)}` : nameOf(sym);
+  }, [baskets]);
+  const activeTickerLabel = useMemo(() => displaySymbol(activeTicker), [displaySymbol, activeTicker]);
+  const resolveBasketFn = useCallback((id: string) => {
+    const b = baskets.find(x => x.id === id);
+    return b ? { ...b } : undefined;
+  }, [baskets]);
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground font-mono text-xs">
@@ -1049,9 +1055,9 @@ export default function Attribution() {
         <div className="flex items-center gap-2">
           {/* Mode toggle */}
           <div className="flex items-center gap-0.5 border border-border rounded">
-            {(["single", "basket", "table"] as const).map(m => (
+            {(["single", "compare", "basket", "table"] as const).map(m => (
               <button key={m} onClick={() => setMode(m)} className={`px-2 py-1 text-[10px] ${mode === m ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`} data-testid={`attr-mode-${m}`}>
-                {m === "single" ? "Single Ticker" : m === "basket" ? "Basket" : "Universe Table"}
+                {m === "single" ? "Single Ticker" : m === "compare" ? "Compare" : m === "basket" ? "Basket" : "Universe Table"}
               </button>
             ))}
           </div>
@@ -1106,7 +1112,7 @@ export default function Attribution() {
             />
           </div>
           {/* Rolling (single mode only) */}
-          {mode === "single" && (
+          {(mode === "single" || mode === "compare") && (
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-muted-foreground">Rolling:</span>
               <div className="flex items-center gap-0.5 border border-border rounded">
@@ -1160,6 +1166,18 @@ export default function Attribution() {
             rollingDays={rollingDays}
             loadingSingle={loadingSingle}
             earningsDates={showEarnings ? earningsDates : []}
+          />
+        ) : mode === "compare" ? (
+          <AttributionCompare
+            tickerOptions={tickerOptions}
+            universeTickers={filteredUniverseTickers}
+            basisMode={basisMode}
+            period={basisPeriod}
+            windowDays={windowDays}
+            rollingDays={rollingDays}
+            displaySymbol={displaySymbol}
+            resolveBasket={resolveBasketFn}
+            onOpenSingle={(sym) => { setActiveTicker(sym); setMode("single"); }}
           />
         ) : mode === "basket" ? (
           <div>

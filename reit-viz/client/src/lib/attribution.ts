@@ -303,6 +303,25 @@ export async function loadBasisAlignedAny(
   return { basis: ra.basis, aligned };
 }
 
+export interface CumPoint { date: string; total: number; mult: number; est: number }
+
+/** Cumulative log-% decomposition anchored at `startIdx` (the /attribution
+ *  page keeps a local copy of this — shared here for the Compare views). */
+export function buildCumulativePath(data: AlignedData, startIdx: number): CumPoint[] {
+  const result: CumPoint[] = [];
+  const c0 = data.close[startIdx], m0 = data.multiple[startIdx], e0 = data.estimate[startIdx];
+  if (!Number.isFinite(c0) || !Number.isFinite(m0) || !Number.isFinite(e0)) return result;
+  for (let i = startIdx; i < data.dates.length; i++) {
+    result.push({
+      date: data.dates[i],
+      total: Math.log(data.close[i] / c0) * 100,
+      mult: Math.log(data.multiple[i] / m0) * 100,
+      est: Math.log(data.estimate[i] / e0) * 100,
+    });
+  }
+  return result;
+}
+
 export interface RollingPoint { date: string; total: number; mult: number; est: number }
 
 // Trailing-`rollingDays` decomposition at every aligned date from `startIdx`
