@@ -403,8 +403,13 @@ export default function Ratings() {
         if (ga !== gb) return dir * ga.localeCompare(gb);
         return (b.buyPct ?? 0) - (a.buyPct ?? 0);
       }
-      const va = (a as any)[sortKey] ?? -Infinity;
-      const vb = (b as any)[sortKey] ?? -Infinity;
+      // Nulls sort LAST in both directions (−Infinity would float them to the
+      // top of ascending sorts, noticeable now that history columns can be —).
+      const va = (a as any)[sortKey];
+      const vb = (b as any)[sortKey];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
       return dir * (va - vb);
     });
     return arr;
