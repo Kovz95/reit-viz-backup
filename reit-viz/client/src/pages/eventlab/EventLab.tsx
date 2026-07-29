@@ -11,12 +11,13 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { CalendarRange, FlaskConical, Activity } from "lucide-react";
 
 const PerfFamily = lazy(() => import("./PerfFamily"));
+const StudyFamily = lazy(() => import("./StudyFamily"));
 
 export type EventLabFamily = "performance" | "study" | "sigma";
 
 const FAMILY_TABS: Array<{ id: EventLabFamily; label: string; icon: typeof Activity; ready: boolean }> = [
   { id: "performance", label: "Performance", icon: CalendarRange, ready: true },
-  { id: "study", label: "Event Study", icon: FlaskConical, ready: false },
+  { id: "study", label: "Event Study", icon: FlaskConical, ready: true },
   { id: "sigma", label: "Sigma", icon: Activity, ready: false },
 ];
 
@@ -58,6 +59,7 @@ export default function EventLab({ initialFamily }: { initialFamily?: EventLabFa
       <div className="flex-1 min-h-0">
         <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading…</div>}>
           {active === "performance" && <PerfFamily />}
+          {active === "study" && <StudyFamily />}
         </Suspense>
       </div>
     </div>
