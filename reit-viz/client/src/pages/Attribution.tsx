@@ -11,8 +11,10 @@ import {
   LineStyle,
 } from "lightweight-charts";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
-import { Download, RefreshCw, Info, SortAsc, SortDesc, Megaphone } from "lucide-react";
+import { Download, RefreshCw, Info, SortAsc, SortDesc, Megaphone, FlaskConical, Tag, EyeOff, Maximize2, Minimize2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
+import { setSeriesAxisLabels } from "@/components/ChartPane";
+import AttributionBacktestModal from "@/components/AttributionBacktestModal";
 import { getTickerEvents } from "@/lib/dataService";
 import { ArrowUpDown } from "@/components/ui/icons";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
@@ -205,9 +207,9 @@ function useEarningsLines(
 
 // ── Cumulative Chart Component ────────────────────────────────────────────────
 
-interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
+interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
 
-function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync }: CumulativeChartProps) {
+function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, height = 280, fill = false, showAxisLabels = true }: CumulativeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -278,11 +280,18 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync }: C
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
 
+  // Axis-label visibility (data dep so it re-applies after chart re-creation).
+  useEffect(() => {
+    for (const s of [totalSeriesRef.current, multSeriesRef.current, estSeriesRef.current]) {
+      if (s) setSeriesAxisLabels(s, showAxisLabels);
+    }
+  }, [showAxisLabels, data, gridColor]);
+
   // NOTE: the container must always mount — the chart is created in a
   // [gridColor]-keyed effect, so an early return while data is still loading
   // would leave the chart uncreated forever once data arrives.
   return (
-    <div className="relative w-full" style={{ height: 280 }}>
+    <div className={`relative w-full ${fill ? "flex-1 min-h-0" : ""}`} style={fill ? undefined : { height }}>
       <div ref={containerRef} className="absolute inset-0" />
       {data.length < 2 && (
         <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
@@ -304,9 +313,9 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync }: C
 
 // ── Rolling Chart Component ───────────────────────────────────────────────────
 
-interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
+interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
 
-function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: RollingChartProps) {
+function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height = 260, fill = false, showAxisLabels = true }: RollingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
@@ -327,8 +336,8 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: Roll
       chartRef.current = chart;
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
       spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      multSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_MULT + "b3", title: "Δln(Multiple)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: false });
-      estSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_EST + "b3", title: "Δln(Estimate)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: false });
+      multSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_MULT + "b3", title: "Δln(Multiple)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: true });
+      estSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_EST + "b3", title: "Δln(Estimate)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: true });
       totalSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_TOTAL, lineWidth: 2, title: "Total Δln(Price)", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
       if (sync) detachSyncRef.current = sync.attach(chart, totalSeriesRef.current, el);
       chart.subscribeCrosshairMove(param => {
@@ -376,9 +385,15 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: Roll
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
 
+  useEffect(() => {
+    for (const s of [multSeriesRef.current, estSeriesRef.current, totalSeriesRef.current]) {
+      if (s) setSeriesAxisLabels(s, showAxisLabels);
+    }
+  }, [showAxisLabels, data, gridColor]);
+
   // Container must always mount — see CumulativeChart note.
   return (
-    <div className="relative w-full" style={{ height: 260 }}>
+    <div className={`relative w-full ${fill ? "flex-1 min-h-0" : ""}`} style={fill ? undefined : { height }}>
       <div ref={containerRef} className="absolute inset-0" />
       {data.length < 2 && (
         <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
@@ -404,9 +419,9 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync }: Roll
 // The two lines sum to 100 by construction (same formula as the Charts-tab
 // Attribution panel's "Share of move %" display).
 
-interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup }
+interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
 
-function ShareChart({ data, earningsDates = [], spacerTimes = [], sync }: ShareChartProps) {
+function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height = 200, fill = false, showAxisLabels = true }: ShareChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -483,9 +498,15 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync }: ShareC
 
   useEarningsLines(multSeriesRef, earningsDates, [data, gridColor]);
 
+  useEffect(() => {
+    for (const s of [multSeriesRef.current, estSeriesRef.current]) {
+      if (s) setSeriesAxisLabels(s, showAxisLabels);
+    }
+  }, [showAxisLabels, data, gridColor]);
+
   // Container must always mount — see CumulativeChart note.
   return (
-    <div className="relative w-full" style={{ height: 200 }}>
+    <div className={`relative w-full ${fill ? "flex-1 min-h-0" : ""}`} style={fill ? undefined : { height }}>
       <div ref={containerRef} className="absolute inset-0" />
       {data.length < 2 && (
         <div className="absolute inset-0 flex items-center justify-center text-[10px] text-muted-foreground">
@@ -636,9 +657,14 @@ interface SinglePanelProps {
   rollingDays: number;
   loadingSingle: boolean;
   earningsDates: string[];
+  showAxisLabels: boolean;
 }
 
-function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates }: SinglePanelProps) {
+const CHART_HEIGHTS_KEY = "reit-viz:attr-chart-heights";
+const DEFAULT_CHART_HEIGHTS = [280, 260, 200];
+const MIN_CHART_HEIGHT = 120;
+
+function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates, showAxisLabels }: SinglePanelProps) {
   // One sync group per mounted panel: the cumulative + rolling charts share a
   // spacer axis (union of both date lists) and mirror pan/zoom + crosshair.
   const syncRef = useRef<ChartSyncGroup | null>(null);
@@ -649,6 +675,62 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
     for (const p of rollingPath) seen.add(p.date.slice(0, 10));
     return Array.from(seen).sort();
   }, [cumPath, rollingPath]);
+
+  // Per-chart heights (drag the divider under a chart to resize it) + a
+  // per-chart maximize that gives one chart the whole panel.
+  const [heights, setHeights] = useState<number[]>(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem(CHART_HEIGHTS_KEY) || "");
+      if (Array.isArray(s) && s.length === 3 && s.every(n => Number.isFinite(n) && n >= MIN_CHART_HEIGHT)) return s;
+    } catch {}
+    return DEFAULT_CHART_HEIGHTS;
+  });
+  const [expanded, setExpanded] = useState<"cum" | "roll" | "share" | null>(null);
+  const heightsRef = useRef(heights);
+  heightsRef.current = heights;
+  const startDividerDrag = useCallback((idx: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = heightsRef.current[idx];
+    const onMove = (ev: MouseEvent) => {
+      setHeights(h => {
+        const next = [...h];
+        next[idx] = Math.max(MIN_CHART_HEIGHT, startH + ev.clientY - startY);
+        return next;
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      setHeights(h => { try { localStorage.setItem(CHART_HEIGHTS_KEY, JSON.stringify(h)); } catch {} return h; });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "row-resize";
+  }, []);
+
+  const expandBtn = (id: "cum" | "roll" | "share", title: string) => (
+    <button
+      className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+      onClick={() => setExpanded(v => (v === id ? null : id))}
+      title={expanded === id ? "Restore" : `Expand ${title}`}
+      data-testid={`attr-expand-${id}`}
+    >
+      {expanded === id ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+    </button>
+  );
+  const divider = (idx: number) => (
+    <div
+      className="h-[9px] -my-[3px] relative z-10 cursor-row-resize group flex items-center justify-center"
+      onMouseDown={e => startDividerDrag(idx, e)}
+      data-testid={`attr-divider-${idx}`}
+    >
+      <div className="h-[3px] w-16 rounded bg-border/60 group-hover:bg-primary/60" />
+    </div>
+  );
+  const sectionCls = (id: "cum" | "roll" | "share", base: string) =>
+    expanded === id ? "p-3 flex-1 min-h-0 flex flex-col" : base;
   return (
     <div className="flex h-full">
       {/* Charts */}
@@ -699,42 +781,53 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
           )}
         </div>
         {/* Cumulative chart */}
-        <div className="p-3 border-b border-border">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] font-semibold">Cumulative Decomposition (anchored at window start)</div>
-            <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Price</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimates</span>
+        {(expanded === null || expanded === "cum") && (
+          <div className={sectionCls("cum", "p-3 border-b border-border")}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] font-semibold">Cumulative Decomposition (anchored at window start)</div>
+              <div className="flex items-center gap-3 text-[10px]">
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Price</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimates</span>
+                {expandBtn("cum", "Cumulative")}
+              </div>
             </div>
+            <CumulativeChart data={cumPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[0]} fill={expanded === "cum"} showAxisLabels={showAxisLabels} />
           </div>
-          <CumulativeChart data={cumPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
-        </div>
+        )}
+        {expanded === null && divider(0)}
         {/* Rolling chart */}
-        <div className="p-3">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] font-semibold">Rolling {rollingDays}-{freqUnit} Contribution (stacked)</div>
-            <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-sky-400/70" /> Δln(Multiple)</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-amber-400/70" /> Δln(Estimate)</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Δln(Price)</span>
+        {(expanded === null || expanded === "roll") && (
+          <div className={sectionCls("roll", "p-3")}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] font-semibold">Rolling {rollingDays}-{freqUnit} Contribution (stacked)</div>
+              <div className="flex items-center gap-3 text-[10px]">
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-sky-400/70" /> Δln(Multiple)</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 bg-amber-400/70" /> Δln(Estimate)</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-foreground" /> Total Δln(Price)</span>
+                {expandBtn("roll", "Rolling")}
+              </div>
             </div>
+            <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[1]} fill={expanded === "roll"} showAxisLabels={showAxisLabels} />
           </div>
-          <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
-        </div>
+        )}
+        {expanded === null && divider(1)}
         {/* Share-of-move chart */}
-        <div className="p-3 border-t border-border">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[11px] font-semibold" title="Over each trailing window: |Δln M| / (|Δln M| + |Δln E|). The two lines sum to 100%.">
-              Share of Rolling {rollingDays}-{freqUnit} Move (% multiple vs % estimates)
+        {(expanded === null || expanded === "share") && (
+          <div className={sectionCls("share", "p-3 border-t border-border")}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] font-semibold" title="Over each trailing window: |Δln M| / (|Δln M| + |Δln E|). The two lines sum to 100%.">
+                Share of Rolling {rollingDays}-{freqUnit} Move (% multiple vs % estimates)
+              </div>
+              <div className="flex items-center gap-3 text-[10px]">
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple share %</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimate share %</span>
+                {expandBtn("share", "Share of move")}
+              </div>
             </div>
-            <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" /> Multiple share %</span>
-              <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" /> Estimate share %</span>
-            </div>
+            <ShareChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[2]} fill={expanded === "share"} showAxisLabels={showAxisLabels} />
           </div>
-          <ShareChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} />
-        </div>
+        )}
       </div>
     </div>
   );
@@ -850,6 +943,17 @@ export default function Attribution() {
   // Earnings-date vertical lines on the single-ticker charts (Charts-tab style)
   const [showEarnings, setShowEarnings] = useState(false);
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
+  const [showBacktest, setShowBacktest] = useState(false);
+  // Axis "Labels" toggle (same behavior as the Charts-tab toolbar button).
+  const [showAxisLabels, setShowAxisLabels] = useState(() => {
+    try { return localStorage.getItem("reit-viz:attr-axis-labels") !== "0"; } catch { return true; }
+  });
+  const toggleAxisLabels = useCallback(() => {
+    setShowAxisLabels(v => {
+      try { localStorage.setItem("reit-viz:attr-axis-labels", v ? "0" : "1"); } catch {}
+      return !v;
+    });
+  }, []);
 
   useEffect(() => {
     if (!showEarnings || !activeTicker) {
@@ -1184,6 +1288,31 @@ export default function Attribution() {
               <Megaphone className="w-3 h-3 mr-1" /> Earnings
             </Button>
           )}
+          {mode === "single" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={`h-7 px-2 text-[10px] ${showAxisLabels ? "" : "text-muted-foreground/50"}`}
+              onClick={toggleAxisLabels}
+              data-testid="attr-toggle-labels"
+              title={showAxisLabels ? "Hide series name + current-value labels on the price axes" : "Show series name + current-value labels on the price axes"}
+            >
+              {showAxisLabels ? <Tag className="w-3 h-3 mr-1" /> : <EyeOff className="w-3 h-3 mr-1" />} Labels
+            </Button>
+          )}
+          {mode === "single" && (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setShowBacktest(true)}
+              disabled={!alignedView}
+              data-testid="attr-backtest-open"
+              title="Historical forward returns conditioned on the current est-vs-multiple attribution state"
+            >
+              <FlaskConical className="w-3 h-3 mr-1" /> Backtest
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleExport} className="h-7 px-2 text-[10px]">
             <Download className="w-3 h-3 mr-1" /> CSV
           </Button>
@@ -1216,6 +1345,7 @@ export default function Attribution() {
             rollingDays={rollingDays}
             loadingSingle={loadingSingle}
             earningsDates={showEarnings ? earningsDates : []}
+            showAxisLabels={showAxisLabels}
           />
         ) : mode === "compare" ? (
           <AttributionCompare
@@ -1309,6 +1439,16 @@ export default function Attribution() {
           </div>
         )}
       </div>
+      {showBacktest && alignedView && (
+        <AttributionBacktestModal
+          aligned={alignedView}
+          symbolLabel={activeTickerLabel}
+          basisLabel={getBasisDef(resolvedBasis, basisPeriod).label}
+          rollingDays={rollingDays}
+          freqUnit={attrFreq === "weekly" ? "week" : "day"}
+          onClose={() => setShowBacktest(false)}
+        />
+      )}
     </div>
   );
 }
