@@ -69,6 +69,12 @@ export function weeklyDownsample(
     return { dates: [], closes: [], adjCloses: [], highs: [], lows: [], opens: [], volumes: [], dailyIndexMap: [] };
   }
 
+  // "daily" is a passthrough: callers that branch on frequency pass it here
+  // expecting unchanged bars (weekly bucketing here silently shrank the arrays).
+  if (mode === "daily") {
+    return { dates, closes, adjCloses, highs, lows, opens, volumes, dailyIndexMap: dates.map((_, i) => i) };
+  }
+
   const n = dates.length;
   const wDates: string[] = [];
   const wCloses: number[] = [];

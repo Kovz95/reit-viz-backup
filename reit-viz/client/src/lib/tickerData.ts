@@ -77,6 +77,16 @@ async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
 
   const enc = encodeURIComponent(ticker);
   const p = (async () => {
+    // Session-persistent cache first (TTL managed inside priceCacheIDB)
+    try {
+      const { idbGetFresh } = await import("@/lib/priceCacheIDB");
+      const cached = (await idbGetFresh(`td:${ticker}`)) as RawTicker | null;
+      if (cached && Array.isArray(cached.dates) && cached.dates.length > 0) {
+        _cache.set(ticker, cached);
+        _inFlight.delete(ticker);
+        return cached;
+      }
+    } catch { /* fall through to network */ }
     const data =
       (await tryFetchJson(`/data/tickers/${enc}.json`)) ??
       (await tryFetchJson(`/api/ticker/${enc}`));
@@ -86,6 +96,9 @@ async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
         dates: Array.isArray(data.dates) ? data.dates : [],
         metrics: data.metrics && typeof data.metrics === "object" ? data.metrics : {},
       };
+      if (result.dates.length > 0) {
+        void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`td:${ticker}`, result)).catch(() => {});
+      }
     }
     _cache.set(ticker, result);
     _inFlight.delete(ticker);

@@ -140,6 +140,7 @@ export function injectTickerData(symbol: string, data: RawTickerData) {
 }
 export function clearTickerDataCache() {
   tickerDataCache.clear();
+  void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
 }
 /** Clear ALL caches so next getTickers/getDates/getEvents re-fetches from API */
 export function clearAllCaches() {
@@ -147,6 +148,7 @@ export function clearAllCaches() {
   datesCache = null;
   eventsCache = null;
   tickerDataCache.clear();
+  void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
 }
 /** Returns the current in-memory ticker list (for immediate reads after injection) */
 export function getTickersCacheSync(): TickerMeta[] | null {
@@ -567,6 +569,16 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
   const fetchPromise = (async (): Promise<RawTickerData> => {
     await acquireFetchSlot();
     try {
+      // Session-persistent cache: reuse a recent payload (TTL inside the module)
+      try {
+        const { idbGetFresh } = await import("@/lib/priceCacheIDB");
+        const cached = await idbGetFresh(`ds:${key}`);
+        if (cached && typeof cached === "object" && Object.keys(cached as object).length > 0) {
+          tickerDataCache.set(key, cached as RawTickerData);
+          return cached as RawTickerData;
+        }
+      } catch { /* IDB unavailable — network path below */ }
+
       // Try API first (returns {dates, metrics} with decoded flat arrays)
       try {
         const { API_BASE } = await import("@/lib/queryClient");
@@ -575,6 +587,9 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
           const apiData = await resp.json() as { dates: string[]; metrics: Record<string, (number | null)[]> };
           const tupleData = flatToTuples(apiData.metrics);
           tickerDataCache.set(key, tupleData);
+          if (Object.keys(tupleData).length > 0) {
+            void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`ds:${key}`, tupleData)).catch(() => {});
+          }
           return tupleData;
         }
       } catch (_) {

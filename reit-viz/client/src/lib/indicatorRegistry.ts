@@ -230,6 +230,7 @@ const CCI: IndicatorDef = {
   label: "CCI",
   category: "Oscillators",
   renderTarget: "pane",
+  multiInstanceParam: "period",
   params: [{ key: "period", label: "Period", default: 20, min: 2, max: 200 }],
   colorKeys: ["cci_line", "cci_ref"],
   renderPane: (ctx, bars, p) => {
@@ -255,6 +256,7 @@ const WILLIAMS_R: IndicatorDef = {
   label: "Williams %R",
   category: "Oscillators",
   renderTarget: "pane",
+  multiInstanceParam: "period",
   params: [{ key: "period", label: "Period", default: 14, min: 2, max: 100 }],
   colorKeys: ["williamsr_line", "williamsr_ref"],
   renderPane: (ctx, bars, p) => {
@@ -877,6 +879,7 @@ const ZSCORE: IndicatorDef = {
   category: "Quant",
   renderTarget: "pane",
   worksOnCloseOnly: true,
+  multiInstanceParam: "window",
   params: [{ key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
   colorKeys: ["zscore_line", "zscore_ref"],
   renderPane: simpleLinePane(
@@ -893,6 +896,7 @@ const PCTRANK: IndicatorDef = {
   category: "Quant",
   renderTarget: "pane",
   worksOnCloseOnly: true,
+  multiInstanceParam: "window",
   params: [{ key: "window", label: "Window", default: 252, min: 20, max: 2520, defaultByFrequency: { weekly: 52, monthly: 36 } }],
   colorKeys: ["pctrank_line", "pctrank_ref"],
   renderPane: simpleLinePane(
@@ -909,6 +913,7 @@ const REALIZED_VOL: IndicatorDef = {
   category: "Quant",
   renderTarget: "pane",
   worksOnCloseOnly: true,
+  multiInstanceParam: "window",
   params: [{ key: "window", label: "Window", default: 21, min: 5, max: 504, defaultByFrequency: { weekly: 13, monthly: 12 } }],
   colorKeys: ["realizedvol_line"],
   renderPane: (ctx, bars, p) => {
@@ -1017,6 +1022,7 @@ const EFF_RATIO: IndicatorDef = {
   category: "Quant",
   renderTarget: "pane",
   worksOnCloseOnly: true,
+  multiInstanceParam: "period",
   params: [{ key: "period", label: "Period", default: 20, min: 2, max: 200 }],
   colorKeys: ["effratio_line", "effratio_ref"],
   renderPane: simpleLinePane(
