@@ -1,0 +1,1421 @@
+// PerfFamily — Event Lab port of pages/Performance.tsx (2026-07-28).
+// Faithful copy except the Event Returns view, which now computes rows
+// client-side via dataService.getEventReturns (the server feed returned
+// eventCount 0 for every kind and carried no median).
+import { useState, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAppContext } from "@/lib/appContext";
+import { useWorkspaceState } from "@/lib/workspaceState";
+import { getDefaultFilters, serializeFilters, deserializeFilters } from "@/lib/filterHelpers";
+import { filterPerformanceData } from "@/lib/filterPerformanceData";
+import { fetchPerfData } from "@/lib/fetchPerfData";
+import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
+import { fetchSeasonalPatterns } from "@/lib/fetchSeasonalPatterns";
+import { MONTHLY_LABELS } from "@/lib/monthlyLabels";
+import {
+  getEventReturns,
+  EVENT_WINDOWS_PRE,
+  EVENT_WINDOWS_POST,
+  EVENT_WINDOW_LABELS,
+  eventHasPreWindows,
+  type EventType,
+} from "@/lib/dataService";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import DateInput from "@/components/DateInput";
+import { Download } from "lucide-react";
+import { TrendingDown } from "@/lib/trending-down";
+import { ArrowUpDown } from "@/lib/arrow-up-down";
+import { SortAsc, SortDesc } from "lucide-react";
+import ClassificationFilters from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { useBaskets, type Basket } from "@/lib/useBaskets";
+import { getBasketOhlc } from "@/lib/basketOhlc";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface SeasonalWindow {
+  startMMDD: string;
+  endMMDD: string;
+  startLabel: string;
+  endLabel: string;
+  avgReturn: number;
+  winRate: number;
+  years: number;
+  tStat: number;
+  calendarDays?: number;
+  medianReturn?: number;
+}
+
+interface SeasonalPatternRow {
+  ticker: string;
+  name: string;
+  yearsOfData: number;
+  bullish: SeasonalWindow[];
+  bearish: SeasonalWindow[];
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const LOOKAHEAD_OPTIONS = [
+  { label: "2 weeks", days: 14 },
+  { label: "30 days", days: 30 },
+  { label: "60 days", days: 60 },
+  { label: "90 days", days: 90 },
+];
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  earnings: "Post-Earnings",
+  ex_div: "Post-Ex-Div",
+  CPI: "CPI",
+  NFP: "NFP",
+  FOMC: "FOMC",
+  GDP: "GDP",
+};
+
+const PERIOD_COLUMNS = ["1W", "1M", "3M", "6M", "12M"];
+const QUARTER_COLUMNS = ["Q1", "Q2", "Q3", "Q4"];
+
+// ─── Basket composite rows ────────────────────────────────────────────────────
+// Baskets appear as synthetic rows in the periods / seasonality / monthly
+// views, computed from the equal-weight composite (getBasketOhlc bars).
+
+interface BasketBar { date: string; close: number }
+
+function isoSubtractDays(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** First bar index with date >= iso (or -1). */
+function firstBarAtOrAfter(bars: BasketBar[], iso: string): number {
+  let lo = 0, hi = bars.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars[mid].date >= iso) { ans = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  return ans;
+}
+
+function barReturn(bars: BasketBar[], fromIdx: number, toIdx: number): number | null {
+  if (fromIdx < 0 || toIdx <= fromIdx || toIdx >= bars.length) return null;
+  const a = bars[fromIdx].close, b = bars[toIdx].close;
+  return a > 0 && b > 0 ? (b / a - 1) * 100 : null;
+}
+
+/** Periods + seasonality row for a basket composite. */
+function basketPerfRow(basket: Basket, bars: BasketBar[], customStart?: string, customEnd?: string): any {
+  const row: any = {
+    ticker: basket.name,
+    name: `Basket · ${basket.tickers.length} members`,
+    isBasket: true,
+    economy: "", sector: "", subsector: "", industryGroup: "", industry: "", subindustry: "",
+    "1W": null, "1M": null, "3M": null, "6M": null, "12M": null,
+    custom: null, Q1: null, Q2: null, Q3: null, Q4: null, lastClose: null,
+  };
+  if (bars.length < 2) return row;
+  const lastIdx = bars.length - 1;
+  const lastDate = bars[lastIdx].date;
+  const periodOffsets: Record<string, number> = { "1W": 7, "1M": 30, "3M": 91, "6M": 182, "12M": 365 };
+  // Intra-period excursion (highest/lowest close touched vs the period start).
+  const excursion = (fromIdx: number, toIdx: number): { max: number; min: number } | null => {
+    if (fromIdx < 0 || toIdx <= fromIdx || toIdx >= bars.length) return null;
+    const base = bars[fromIdx].close;
+    if (!(base > 0)) return null;
+    let max = -Infinity, min = Infinity;
+    for (let k = fromIdx + 1; k <= toIdx; k++) {
+      const r = (bars[k].close / base - 1) * 100;
+      if (r > max) max = r;
+      if (r < min) min = r;
+    }
+    return max === -Infinity ? null : { max, min };
+  };
+  for (const [key, days] of Object.entries(periodOffsets)) {
+    const fromIdx = firstBarAtOrAfter(bars, isoSubtractDays(lastDate, days));
+    row[key] = barReturn(bars, fromIdx, lastIdx);
+    const exc = excursion(fromIdx, lastIdx);
+    row[`${key}Max`] = exc ? exc.max : null;
+    row[`${key}Min`] = exc ? exc.min : null;
+  }
+  if (customStart && customEnd) {
+    const fromIdx = firstBarAtOrAfter(bars, customStart);
+    let toIdx = firstBarAtOrAfter(bars, customEnd);
+    if (toIdx < 0) toIdx = lastIdx;
+    else if (bars[toIdx].date > customEnd) toIdx--;
+    row.custom = barReturn(bars, fromIdx, toIdx);
+    const exc = excursion(fromIdx, toIdx);
+    row.customMax = exc ? exc.max : null;
+    row.customMin = exc ? exc.min : null;
+  }
+  // Average return per calendar quarter across years
+  const qReturns: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [] };
+  let i = 0;
+  while (i < bars.length) {
+    const y = bars[i].date.slice(0, 4);
+    const q = Math.floor((Number(bars[i].date.slice(5, 7)) - 1) / 3) + 1;
+    let j = i;
+    while (j + 1 < bars.length &&
+      bars[j + 1].date.slice(0, 4) === y &&
+      Math.floor((Number(bars[j + 1].date.slice(5, 7)) - 1) / 3) + 1 === q) j++;
+    const ret = barReturn(bars, i, j);
+    if (ret !== null) qReturns[q].push(ret);
+    i = j + 1;
+  }
+  for (const q of [1, 2, 3, 4]) {
+    const arr = qReturns[q];
+    if (arr.length) row[`Q${q}`] = arr.reduce((s, v) => s + v, 0) / arr.length;
+  }
+  return row;
+}
+
+/** Monthly-seasonality row for a basket composite (avg return per calendar month). */
+function basketMonthlyRow(basket: Basket, bars: BasketBar[], touchPct = 3): any {
+  const row: any = { ticker: basket.name, name: `Basket · ${basket.tickers.length} members`, isBasket: true, yearsOfData: 0 };
+  for (const m of MONTHLY_LABELS) row[m] = null;
+  if (bars.length < 2) return row;
+  const byMonth: Record<number, number[]> = {};
+  const maxByMonth: Record<number, number[]> = {};
+  const years = new Set<string>();
+  let i = 0;
+  while (i < bars.length) {
+    const ym = bars[i].date.slice(0, 7);
+    let j = i;
+    while (j + 1 < bars.length && bars[j + 1].date.slice(0, 7) === ym) j++;
+    const ret = barReturn(bars, i, j);
+    if (ret !== null) {
+      const m = Number(ym.slice(5, 7)) - 1;
+      (byMonth[m] ??= []).push(ret);
+      // Intra-month peak vs the month's first bar.
+      let hi = -Infinity;
+      for (let k = i + 1; k <= j; k++) {
+        const r = (bars[k].close / bars[i].close - 1) * 100;
+        if (r > hi) hi = r;
+      }
+      if (hi !== -Infinity) (maxByMonth[m] ??= []).push(hi);
+      years.add(ym.slice(0, 4));
+    }
+    i = j + 1;
+  }
+  MONTHLY_LABELS.forEach((label: string, m: number) => {
+    const arr = byMonth[m];
+    if (arr?.length) {
+      row[label] = arr.reduce((s, v) => s + v, 0) / arr.length;
+      row[`${label}Win`] = (arr.filter((v) => v > 0).length / arr.length) * 100;
+    }
+    const mx = maxByMonth[m];
+    if (mx?.length) {
+      row[`${label}Hit`] = (mx.filter((v) => v >= touchPct).length / mx.length) * 100;
+    }
+  });
+  row.yearsOfData = years.size;
+  return row;
+}
+
+/** Seasonal-pattern row for a basket composite — same candidate-window grid as
+ *  the server route (1st/15th starts × min/mid/max durations, ranked by t-stat). */
+function basketSeasonalRow(basket: Basket, bars: BasketBar[], minDays: number, maxDays: number): SeasonalPatternRow {
+  const row: any = { ticker: basket.name, name: `Basket · ${basket.tickers.length} members`, isBasket: true, yearsOfData: 0, bullish: [], bearish: [] };
+  if (bars.length < 30) return row;
+  const years: number[] = [];
+  {
+    const ySet = new Set<number>();
+    for (const b of bars) ySet.add(parseInt(b.date.slice(0, 4)));
+    years.push(...[...ySet].sort());
+  }
+  row.yearsOfData = years.length;
+  const MIN_YEARS = 5;
+  if (years.length < MIN_YEARS) return row;
+
+  const MONTHS_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const labelOf = (iso: string) => `${MONTHS_ABBR[parseInt(iso.slice(5, 7)) - 1]} ${parseInt(iso.slice(8, 10))}`;
+  const starts: string[] = [];
+  for (let m = 1; m <= 12; m++) {
+    starts.push(`${String(m).padStart(2, "0")}-01`, `${String(m).padStart(2, "0")}-15`);
+  }
+  const durations = [minDays, Math.round((minDays + maxDays) / 2), maxDays].filter((v, i, arr) => arr.indexOf(v) === i);
+  const median = (a: number[]) => {
+    const s = [...a].sort((x, y) => x - y);
+    const m = s.length;
+    return m % 2 ? s[(m - 1) / 2] : (s[m / 2 - 1] + s[m / 2]) / 2;
+  };
+
+  const windows: SeasonalWindow[] = [];
+  for (const sMMDD of starts) {
+    for (const dur of durations) {
+      const rets: number[] = [];
+      let startD = "", endD = "";
+      for (const y of years) {
+        const sDate = `${y}-${sMMDD}`;
+        const eDate = isoSubtractDays(sDate, -dur);
+        const si = firstBarAtOrAfter(bars, sDate);
+        const ei = firstBarAtOrAfter(bars, eDate);
+        if (si < 0 || ei < 0 || ei <= si) continue;
+        // Guard: the located bars must still be near the target window (a
+        // basket whose history starts mid-range would otherwise fabricate returns).
+        if (bars[si].date > isoSubtractDays(sDate, -7)) continue;
+        const r = barReturn(bars, si, ei);
+        if (r === null) continue;
+        rets.push(r);
+        if (!startD) { startD = sDate; endD = eDate; }
+      }
+      if (rets.length < MIN_YEARS) continue;
+      const mean = rets.reduce((s, v) => s + v, 0) / rets.length;
+      const variance = rets.reduce((s, v) => s + (v - mean) ** 2, 0) / Math.max(1, rets.length - 1);
+      const std = Math.sqrt(variance);
+      windows.push({
+        startLabel: labelOf(startD), endLabel: labelOf(endD),
+        startMMDD: sMMDD, endMMDD: endD.slice(5),
+        calendarDays: dur, avgReturn: mean, medianReturn: median(rets),
+        winRate: (rets.filter((v) => v > 0).length / rets.length) * 100,
+        years: rets.length,
+        tStat: std === 0 ? 0 : mean / (std / Math.sqrt(rets.length)),
+      });
+    }
+  }
+  const byT = [...windows].sort((a, b) => b.tStat - a.tStat);
+  row.bullish = byT.filter((w) => w.avgReturn > 0).slice(0, 5);
+  row.bearish = byT.filter((w) => w.avgReturn < 0).sort((a, b) => a.tStat - b.tStat).slice(0, 5);
+  return row;
+}
+
+// ─── Parse MM/DD from string ──────────────────────────────────────────────────
+
+function parseMMDD(mmdd: string, ref: Date): Date {
+  const [month, day] = mmdd.split("-").map(Number);
+  const year = ref.getFullYear();
+  return new Date(year, month - 1, day);
+}
+
+function daysDiff(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+interface WindowCheckResult {
+  daysUntilStart: number;
+  daysUntilEnd: number;
+  isActive: boolean;
+}
+
+function checkWindowRelevance(
+  window: SeasonalWindow,
+  today: Date,
+  lookaheadDays: number
+): WindowCheckResult | null {
+  const year = today.getFullYear();
+  let start = parseMMDD(window.startMMDD, today);
+  let end = parseMMDD(window.endMMDD, today);
+
+  if (end <= start) {
+    // Wraps year boundary
+    const nextYearEnd = new Date(year + 1, end.getMonth(), end.getDate());
+    const daysUntilEndNextYear = daysDiff(today, nextYearEnd);
+    const daysUntilStart = daysDiff(today, start);
+    const prevYearStart = new Date(year - 1, start.getMonth(), start.getDate());
+    const daysUntilStartPrev = daysDiff(today, prevYearStart);
+    const daysUntilEndCurr = daysDiff(today, end);
+
+    if (daysUntilEndCurr >= -7 && daysUntilStartPrev <= lookaheadDays) {
+      const isActive = daysUntilStartPrev <= 0 && daysUntilEndCurr >= 0;
+      if (daysUntilEndCurr < -7 || (!isActive && daysUntilStartPrev > lookaheadDays)) return null;
+      return { daysUntilStart: daysUntilStartPrev, daysUntilEnd: daysUntilEndCurr, isActive };
+    }
+    const isActiveCurr = daysUntilStart <= 0 && daysUntilEndNextYear >= 0;
+    if (daysUntilEndNextYear < -7 || (!isActiveCurr && daysUntilStart > lookaheadDays)) return null;
+    return { daysUntilStart, daysUntilEnd: daysUntilEndNextYear, isActive: isActiveCurr };
+  }
+
+  const daysUntilStart = daysDiff(today, start);
+  const daysUntilEnd = daysDiff(today, end);
+  const isActive = daysUntilStart <= 0 && daysUntilEnd >= 0;
+  if (daysUntilEnd < -7 || (!isActive && daysUntilStart > lookaheadDays)) return null;
+  return { daysUntilStart, daysUntilEnd, isActive };
+}
+
+// ─── Upcoming Windows Panel ───────────────────────────────────────────────────
+
+function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
+  const [lookaheadDays, setLookaheadDays] = useState(30);
+  const [expanded, setExpanded] = useState(false);
+  const [dirFilter, setDirFilter] = useState<"all" | "bullish" | "bearish">("all");
+
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
+
+  const windows = useMemo(() => {
+    const results: any[] = [];
+    for (const row of data) {
+      for (const w of row.bullish) {
+        const check = checkWindowRelevance(w, today, lookaheadDays);
+        if (check) results.push({ ticker: row.ticker, name: row.name, window: w, direction: "bullish", ...check });
+      }
+      for (const w of row.bearish) {
+        const check = checkWindowRelevance(w, today, lookaheadDays);
+        if (check) results.push({ ticker: row.ticker, name: row.name, window: w, direction: "bearish", ...check });
+      }
+    }
+    const sorted = results.sort((a, b) =>
+      a.isActive && !b.isActive ? -1 : !a.isActive && b.isActive ? 1 : a.daysUntilStart - b.daysUntilStart
+    );
+    return dirFilter !== "all" ? sorted.filter((r) => r.direction === dirFilter) : sorted;
+  }, [data, today, lookaheadDays, dirFilter]);
+
+  const activeCount = windows.filter((w) => w.isActive).length;
+  const upcomingCount = windows.filter((w) => !w.isActive).length;
+
+  return (
+    <div className="border-b border-border bg-card/50">
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-accent/20 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {/* Calendar icon placeholder */}
+        <span className="w-3.5 h-3.5 text-blue-400">📅</span>
+        <span className="text-xs font-medium text-foreground">Upcoming Windows</span>
+        {activeCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-medium">
+            {activeCount} active now
+          </span>
+        )}
+        {upcomingCount > 0 && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-medium">
+            {upcomingCount} upcoming
+          </span>
+        )}
+        {windows.length === 0 && (
+          <span className="text-[10px] text-muted-foreground">None in range</span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          {expanded ? (
+            <span className="w-3.5 h-3.5 text-muted-foreground">▲</span>
+          ) : (
+            <span className="w-3.5 h-3.5 text-muted-foreground">▼</span>
+          )}
+        </div>
+      </div>
+
+      {!expanded && (
+        <div className="px-3 pb-2">
+          <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex items-center bg-muted rounded p-0.5">
+              {LOOKAHEAD_OPTIONS.map((opt) => (
+                <button
+                  key={opt.days}
+                  className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                    lookaheadDays === opt.days
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setLookaheadDays(opt.days)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center bg-muted rounded p-0.5">
+              {(["all", "bullish", "bearish"] as const).map((d) => (
+                <button
+                  key={d}
+                  className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                    dirFilter === d
+                      ? d === "bullish"
+                        ? "bg-emerald-600/30 text-emerald-400 shadow-sm"
+                        : d === "bearish"
+                        ? "bg-red-600/30 text-red-400 shadow-sm"
+                        : "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setDirFilter(d)}
+                >
+                  {d === "all" ? "All" : d === "bullish" ? "Bullish" : "Bearish"}
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] text-muted-foreground ml-auto">
+              {windows.length} window{windows.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          {windows.length > 0 ? (
+            <div className="max-h-[220px] overflow-y-auto rounded border border-border/50">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-card border-b border-border/50">
+                  <tr>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Status</th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-14">Ticker</th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Dir</th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Window</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-14">Starts</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Avg</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Win%</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-8">N</th>
+                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">t-stat</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {windows.map((row, idx) => (
+                    <tr
+                      key={`${row.ticker}-${row.direction}-${row.window.startMMDD}-${row.window.endMMDD}-${idx}`}
+                      className={`border-b border-border/20 hover:bg-accent/30 transition-colors ${row.isActive ? "bg-amber-500/5" : ""}`}
+                    >
+                      <td className="px-2 py-1">
+                        {row.isActive ? (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                            Live
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">Soon</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 font-mono font-semibold">{row.ticker}</td>
+                      <td className="px-2 py-1">
+                        {row.direction === "bullish" ? (
+                          <span className="w-3 h-3 text-emerald-400">▲</span>
+                        ) : (
+                          <TrendingDown className="w-3 h-3 text-red-400" />
+                        )}
+                      </td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <span className={row.direction === "bullish" ? "text-emerald-400 font-medium" : "text-red-400 font-medium"}>
+                          {row.window.startLabel}
+                        </span>
+                        <span className="text-muted-foreground mx-0.5">→</span>
+                        <span className={row.direction === "bullish" ? "text-emerald-400 font-medium" : "text-red-400 font-medium"}>
+                          {row.window.endLabel}
+                        </span>
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono tabular-nums">
+                        {row.isActive ? (
+                          <span className="text-amber-400">{row.daysUntilEnd}d left</span>
+                        ) : row.daysUntilEnd < 0 ? (
+                          <span className="text-muted-foreground">Ended {Math.abs(row.daysUntilEnd)}d ago</span>
+                        ) : (
+                          <span className="text-blue-400">In {row.daysUntilStart}d</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        <span className={`font-mono tabular-nums ${row.window.avgReturn > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                          {row.window.avgReturn > 0 ? "+" : ""}{row.window.avgReturn.toFixed(2)}%
+                        </span>
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground">
+                        {row.window.winRate.toFixed(0)}%
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
+                        {row.window.years}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
+                        {row.window.tStat.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-3 text-[11px] text-muted-foreground">
+              No seasonal windows starting within {lookaheadDays} days
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Cell helpers ─────────────────────────────────────────────────────────────
+
+function ReturnCell({ value, suffix = "%" }: { value: number | null; suffix?: string }) {
+  if (value === null) return <span className="text-muted-foreground">-</span>;
+  const colorClass = value > 0 ? "text-emerald-500" : value < 0 ? "text-red-500" : "text-foreground";
+  return (
+    <span className={`font-mono text-xs tabular-nums ${colorClass}`}>
+      {value > 0 ? "+" : ""}{value.toFixed(2)}{suffix}
+    </span>
+  );
+}
+
+/** Win-rate cell: 0–100%, colored by distance from a coin flip. */
+function WinRateCell({ value }: { value: number | null }) {
+  if (value === null) return <span className="text-muted-foreground">-</span>;
+  const edge = (value - 50) / 50; // -1..1
+  const intensity = Math.min(1, Math.abs(edge) * 1.6) * 0.25;
+  const bg = edge > 0 ? `rgba(34, 197, 94, ${intensity})` : edge < 0 ? `rgba(239, 68, 68, ${intensity})` : "transparent";
+  const colorClass = value >= 65 ? "text-emerald-400" : value <= 35 ? "text-red-400" : "text-foreground";
+  return (
+    <span className={`font-mono text-xs tabular-nums ${colorClass} px-1.5 py-0.5 rounded`} style={{ backgroundColor: bg }}>
+      {Math.round(value)}%
+    </span>
+  );
+}
+
+function HeatCell({ value }: { value: number | null }) {
+  if (value === null) return <span className="text-muted-foreground">-</span>;
+  const clamped = Math.max(-5, Math.min(5, value)) / 5;
+  const intensity = Math.abs(clamped) * 0.25;
+  const bg =
+    clamped > 0
+      ? `rgba(34, 197, 94, ${intensity})`
+      : clamped < 0
+      ? `rgba(239, 68, 68, ${intensity})`
+      : "transparent";
+  const colorClass = value > 0 ? "text-emerald-400" : value < 0 ? "text-red-400" : "text-foreground";
+  return (
+    <span
+      className={`font-mono text-xs tabular-nums ${colorClass} px-1.5 py-0.5 rounded`}
+      style={{ backgroundColor: bg }}
+    >
+      {value > 0 ? "+" : ""}{value.toFixed(2)}%
+    </span>
+  );
+}
+
+// ─── Sort icon ────────────────────────────────────────────────────────────────
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export default function PerfFamily() {
+  const { universeTickers } = useAppContext();
+  const basketScope = useBasketScope("reit-viz:basket-scope:performance");
+
+  const [viewMode, setViewMode] = useState("periods");
+  const [filters, setFilters] = useState(getDefaultFilters);
+  const [manualTickers, setManualTickers] = useState(new Set<string>());
+  const [searchText, setSearchText] = useState("");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [sortKey, setSortKey] = useState("12M");
+  const [sortAsc, setSortAsc] = useState(false);
+  const [eventType, setEventType] = useState("earnings");
+  const [eventStat, setEventStat] = useState("avg");
+  const [seasonalMinDays, setSeasonalMinDays] = useState(30);
+  const [seasonalMaxDays, setSeasonalMaxDays] = useState(180);
+  const [showBaskets, setShowBaskets] = useState(false);
+  const { baskets } = useBaskets();
+  // Monthly view statistic: avg return / win rate (% of years positive) /
+  // return relative to the subindustry peer mean (seasonal alpha) / hit rate
+  // of touching +X% at ANY point intra-month (not just where the month ends).
+  const [monthlyStat, setMonthlyStat] = useState<"avg" | "win" | "rel" | "hit">("avg");
+  const [touchPct, setTouchPct] = useState("3");
+  // Periods view statistic: period-end return / highest / lowest point
+  // touched within the period vs its start ("did it hit X% intra-period?").
+  const [periodStat, setPeriodStat] = useState<"end" | "max" | "min">("end");
+
+  // ── Workspace state ──
+  const serializeState = useCallback(
+    () => ({
+      viewMode,
+      filters: serializeFilters(filters),
+      manualTickers: [...manualTickers],
+      customStart,
+      customEnd,
+      sortKey,
+      sortAsc,
+      eventType,
+      eventStat,
+      seasonalMinDays,
+      seasonalMaxDays,
+      showBaskets,
+      monthlyStat,
+      periodStat,
+      touchPct,
+    }),
+    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat, periodStat, touchPct]
+  );
+
+  const hydrateState = useCallback((state: any) => {
+    if (state.viewMode !== undefined) setViewMode(state.viewMode);
+    if (state.filters !== undefined) setFilters(deserializeFilters(state.filters));
+    if (state.manualTickers !== undefined) setManualTickers(new Set(state.manualTickers));
+    if (state.customStart !== undefined) setCustomStart(state.customStart);
+    if (state.customEnd !== undefined) setCustomEnd(state.customEnd);
+    if (state.sortKey !== undefined) setSortKey(state.sortKey);
+    if (state.sortAsc !== undefined) setSortAsc(state.sortAsc);
+    if (state.eventType !== undefined) setEventType(state.eventType);
+    if (state.eventStat !== undefined) setEventStat(state.eventStat);
+    if (state.seasonalMinDays !== undefined) setSeasonalMinDays(state.seasonalMinDays);
+    if (state.seasonalMaxDays !== undefined) setSeasonalMaxDays(state.seasonalMaxDays);
+    if (state.showBaskets !== undefined) setShowBaskets(state.showBaskets);
+    if (state.monthlyStat !== undefined) setMonthlyStat(state.monthlyStat);
+    if (state.periodStat !== undefined) setPeriodStat(state.periodStat);
+    if (state.touchPct !== undefined) setTouchPct(state.touchPct);
+  }, []);
+
+  useWorkspaceState("performance", serializeState, hydrateState);
+
+  // ── Data queries ──
+  const { data: perfData, isLoading: perfLoading } = useQuery({
+    queryKey: ["/perf-data", customStart, customEnd],
+    queryFn: () => fetchPerfData(customStart || undefined, customEnd || undefined),
+  });
+  const touchNum = Math.max(0.5, parseFloat(touchPct) || 3);
+  const { data: monthlyData, isLoading: monthlyLoading } = useQuery<any[]>({
+    queryKey: ["/monthly-seasonality", touchNum],
+    queryFn: () => fetchMonthlySeasonality(touchNum),
+    enabled: viewMode === "monthly",
+  });
+  const { data: eventData, isLoading: eventLoading } = useQuery({
+    queryKey: ["/event-returns-local", eventType],
+    queryFn: () => getEventReturns(eventType as EventType),
+    enabled: viewMode === "events",
+  });
+  const { data: seasonalData, isLoading: seasonalLoading } = useQuery({
+    queryKey: ["/seasonal-patterns", seasonalMinDays, seasonalMaxDays],
+    queryFn: () => fetchSeasonalPatterns(5, seasonalMinDays, seasonalMaxDays),
+    enabled: viewMode === "seasonal-patterns",
+  });
+
+  // Basket composite rows (periods/seasonality + monthly views)
+  const basketsKey = useMemo(
+    () => baskets.map((b) => `${b.id}:${b.tickers.join(",")}`).join("|"),
+    [baskets]
+  );
+  const { data: basketRowData } = useQuery({
+    queryKey: ["/perf-basket-rows", basketsKey, customStart, customEnd, seasonalMinDays, seasonalMaxDays, touchNum],
+    enabled: showBaskets && baskets.length > 0,
+    queryFn: async () => {
+      const perf: any[] = [];
+      const monthly: any[] = [];
+      const seasonal: any[] = [];
+      for (const b of baskets) {
+        if (!b.tickers?.length) continue;
+        try {
+          const ohlc = await getBasketOhlc(b);
+          if (!ohlc || !ohlc.closes.length) continue;
+          const bars: BasketBar[] = ohlc.priceDates.map((d: string, i: number) => ({ date: d, close: ohlc.closes[i] }));
+          perf.push(basketPerfRow(b, bars, customStart || undefined, customEnd || undefined));
+          monthly.push(basketMonthlyRow(b, bars, touchNum));
+          seasonal.push(basketSeasonalRow(b, bars, seasonalMinDays, seasonalMaxDays));
+        } catch { /* skip basket */ }
+      }
+      return { perf, monthly, seasonal };
+    },
+  });
+
+  const isLoading =
+    viewMode === "periods" || viewMode === "seasonality"
+      ? perfLoading
+      : viewMode === "monthly"
+      ? monthlyLoading
+      : viewMode === "seasonal-patterns"
+      ? seasonalLoading
+      : eventLoading;
+
+  // ── Filtered & sorted rows ──
+  // Base (pre-filter) pool for the current view — feeds Country/Exchange options.
+  const geoBasePool = useMemo<any[]>(() => {
+    if (viewMode === "periods" || viewMode === "seasonality") return perfData || [];
+    if (viewMode === "monthly") return monthlyData || [];
+    if (viewMode === "seasonal-patterns") return seasonalData || [];
+    return eventData || [];
+  }, [perfData, monthlyData, seasonalData, eventData, viewMode]);
+  const geo = useGeoFilter(geoBasePool, "perf-geo");
+
+  const displayRows = useMemo(() => {
+    let rows: any[] = [];
+    if (viewMode === "periods" || viewMode === "seasonality") rows = perfData || [];
+    else if (viewMode === "monthly") rows = monthlyData || [];
+    else if (viewMode === "seasonal-patterns") rows = seasonalData || [];
+    else rows = eventData || [];
+
+    if (universeTickers) {
+      rows = rows.filter((r: any) => universeTickers.has(r.ticker));
+    }
+
+    if (basketScope.members) {
+      rows = rows.filter((r: any) => basketScope.inScope(r.ticker));
+    }
+
+    // Basket composite rows: bypass universe/classification/geo filters
+    // (baskets aren't tickers), but respect the free-text search.
+    let basketExtras: any[] = [];
+    if (showBaskets && basketRowData) {
+      if (viewMode === "periods" || viewMode === "seasonality") basketExtras = basketRowData.perf;
+      else if (viewMode === "monthly") basketExtras = basketRowData.monthly;
+      else if (viewMode === "seasonal-patterns") basketExtras = basketRowData.seasonal ?? [];
+      const q = searchText.trim().toLowerCase();
+      if (q) {
+        basketExtras = basketExtras.filter(
+          (r: any) => r.ticker.toLowerCase().includes(q) || (r.name || "").toLowerCase().includes(q)
+        );
+      }
+    }
+
+    return [...geo.filterByGeo(filterPerformanceData(rows, filters, searchText, manualTickers)), ...basketExtras].sort(
+      (a: any, b: any) => {
+        let av: any, bv: any;
+        if (viewMode === "events" && sortKey.startsWith("w_")) {
+          const windowId = parseInt(sortKey.replace("w_", ""));
+          av = a[eventStat]?.[windowId] ?? null;
+          bv = b[eventStat]?.[windowId] ?? null;
+        } else if (viewMode === "monthly" && monthlyStat !== "avg" && (MONTHLY_LABELS as string[]).includes(sortKey)) {
+          // Month columns sort by the statistic currently displayed.
+          const suffix = monthlyStat === "win" ? "Win" : monthlyStat === "hit" ? "Hit" : "Rel";
+          av = a[sortKey + suffix] ?? null;
+          bv = b[sortKey + suffix] ?? null;
+        } else if (viewMode === "periods" && periodStat !== "end" && (PERIOD_COLUMNS.includes(sortKey) || sortKey === "custom")) {
+          // Period columns sort by the displayed excursion statistic.
+          const suffix = periodStat === "max" ? "Max" : "Min";
+          av = a[sortKey + suffix] ?? null;
+          bv = b[sortKey + suffix] ?? null;
+        } else {
+          av = a[sortKey];
+          bv = b[sortKey];
+        }
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        if (typeof av === "string") return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+        return sortAsc ? av - bv : bv - av;
+      }
+    );
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, monthlyStat, periodStat]);
+
+  const handleSort = useCallback(
+    (col: string) => {
+      if (sortKey === col) setSortAsc(!sortAsc);
+      else { setSortKey(col); setSortAsc(false); }
+    },
+    [sortKey, sortAsc]
+  );
+
+  // ── CSV export ──
+  const handleExportCsv = useCallback(() => {
+    if (!displayRows.length) return;
+    let colKeys: string[];
+    let colLabels: string[];
+
+    if (viewMode === "periods") {
+      colKeys = [
+        "ticker", "name", "lastClose",
+        ...PERIOD_COLUMNS,
+        ...PERIOD_COLUMNS.map((c) => `${c}Max`),
+        ...PERIOD_COLUMNS.map((c) => `${c}Min`),
+        ...(customStart && customEnd ? ["custom", "customMax", "customMin"] : []),
+      ];
+      colLabels = colKeys.map((k) =>
+        k === "lastClose" ? "Last Close" : k.startsWith("custom") ? `${k.replace("custom", "Custom ")}(${customStart} to ${customEnd})` : k
+      );
+    } else if (viewMode === "seasonality") {
+      colKeys = ["ticker", "name", "lastClose", ...QUARTER_COLUMNS];
+      colLabels = colKeys.map((k) => (k === "lastClose" ? "Last Close" : `Avg ${k}`));
+    } else if (viewMode === "monthly") {
+      colKeys = [
+        "ticker", "name",
+        ...MONTHLY_LABELS.map((m: string) => m),
+        ...MONTHLY_LABELS.map((m: string) => `${m}Win`),
+        ...MONTHLY_LABELS.map((m: string) => `${m}Rel`),
+        ...MONTHLY_LABELS.map((m: string) => `${m}Hit`),
+        "yearsOfData",
+      ];
+      colLabels = [
+        "ticker", "name",
+        ...MONTHLY_LABELS.map((m: string) => `${m} Avg %`),
+        ...MONTHLY_LABELS.map((m: string) => `${m} Win %`),
+        ...MONTHLY_LABELS.map((m: string) => `${m} vs Subind %`),
+        ...MONTHLY_LABELS.map((m: string) => `${m} Hit ≥${touchPct}% %yrs`),
+        "yearsOfData",
+      ];
+    } else if (viewMode === "seasonal-patterns") {
+      const lines = [
+        ["Ticker", "Name", "Years", "Type", "Window Start", "Window End", "Days", "Avg Return %", "Median Return %", "Win Rate %", "N", "t-stat"].join(","),
+      ];
+      for (const row of displayRows) {
+        const r = row as SeasonalPatternRow;
+        for (const w of r.bullish) {
+          lines.push([r.ticker, `"${r.name}"`, r.yearsOfData, "Bullish", w.startLabel, w.endLabel, w.calendarDays ?? "", w.avgReturn.toFixed(4), w.medianReturn?.toFixed(4) ?? "", w.winRate.toFixed(1), w.years, w.tStat.toFixed(2)].join(","));
+        }
+        for (const w of r.bearish) {
+          lines.push([r.ticker, `"${r.name}"`, r.yearsOfData, "Bearish", w.startLabel, w.endLabel, w.calendarDays ?? "", w.avgReturn.toFixed(4), w.medianReturn?.toFixed(4) ?? "", w.winRate.toFixed(1), w.years, w.tStat.toFixed(2)].join(","));
+        }
+      }
+      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `seasonal_patterns_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    } else {
+      const windowCols = eventHasPreWindows(eventType as EventType) ? [...EVENT_WINDOWS_PRE, ...EVENT_WINDOWS_POST] : [...EVENT_WINDOWS_POST];
+      colKeys = ["ticker", "name", "eventCount", ...windowCols.map((w) => `${EVENT_WINDOW_LABELS[w]} Avg`), ...windowCols.map((w) => `${EVENT_WINDOW_LABELS[w]} WinRate`)];
+      colLabels = colKeys;
+    }
+
+    const lines = [colLabels.join(",")];
+    for (const row of displayRows) {
+      if (viewMode === "events") {
+        const windowCols = eventHasPreWindows(eventType as EventType) ? [...EVENT_WINDOWS_PRE, ...EVENT_WINDOWS_POST] : [...EVENT_WINDOWS_POST];
+        lines.push([
+          row.ticker,
+          `"${row.name}"`,
+          row.eventCount,
+          ...windowCols.map((w) => row.avg?.[w]?.toFixed(4) ?? ""),
+          ...windowCols.map((w) => row.winRate?.[w]?.toFixed(1) ?? ""),
+        ].join(","));
+      } else {
+        lines.push(colKeys.map((k) => {
+          const v = row[k];
+          return v == null ? "" : typeof v === "number" ? v.toFixed(4) : `"${String(v).replace(/"/g, '""')}"`;
+        }).join(","));
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `performance_${viewMode}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [displayRows, viewMode, customStart, customEnd, eventType, touchPct]);
+
+  // ── Sort icon component ──
+  const SortIcon = ({ col }: { col: string }) =>
+    sortKey !== col ? (
+      <ArrowUpDown className="w-3 h-3 opacity-40" />
+    ) : sortAsc ? (
+      <SortAsc className="w-3 h-3" />
+    ) : (
+      <SortDesc className="w-3 h-3" />
+    );
+
+  const ColHeader = ({
+    col,
+    label,
+    className,
+  }: {
+    col: string;
+    label: string;
+    className?: string;
+  }) => (
+    <th
+      className={`px-2 py-1.5 text-xs font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap ${className || ""}`}
+      onClick={() => handleSort(col)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        <SortIcon col={col} />
+      </div>
+    </th>
+  );
+
+  const VIEW_TABS = [
+    { key: "periods", label: "Periods" },
+    { key: "seasonality", label: "Quarterly" },
+    { key: "monthly", label: "Monthly" },
+    { key: "events", label: "Event Returns" },
+    { key: "seasonal-patterns", label: "Seasonal Patterns" },
+  ];
+
+  const totalRowCount =
+    (viewMode === "periods" || viewMode === "seasonality"
+      ? perfData
+      : viewMode === "monthly"
+      ? monthlyData
+      : viewMode === "seasonal-patterns"
+      ? seasonalData
+      : eventData)?.length ?? 0;
+
+  return (
+    <div className="flex flex-col h-full" data-testid="performance-page">
+      {/* ── Header ── */}
+      <div className="flex flex-col gap-1.5 px-3 py-1.5 border-b border-border bg-card flex-shrink-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* View tabs */}
+          <div className="flex items-center bg-muted rounded p-0.5">
+            {VIEW_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                  viewMode === tab.key
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => {
+                  setViewMode(tab.key);
+                  setSortKey(
+                    tab.key === "monthly"
+                      ? "Jan"
+                      : tab.key === "events"
+                      ? "w_21"
+                      : tab.key === "seasonality"
+                      ? "Q1"
+                      : tab.key === "seasonal-patterns"
+                      ? "ticker"
+                      : "12M"
+                  );
+                }}
+                data-testid={`view-${tab.key}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Period statistic toggle */}
+          {viewMode === "periods" && (
+            <div className="flex items-center bg-muted rounded p-0.5">
+              {([
+                { key: "end", label: "End %", title: "Return from period start to period end" },
+                { key: "max", label: "Max %", title: "Highest point TOUCHED within the period vs its start — did it hit +X% at some point, even if it faded?" },
+                { key: "min", label: "Min %", title: "Lowest point touched within the period vs its start — worst drawdown from the period start" },
+              ] as const).map((s) => (
+                <button
+                  key={s.key}
+                  title={s.title}
+                  className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                    periodStat === s.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setPeriodStat(s.key)}
+                  data-testid={`period-stat-${s.key}`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Custom date range (periods) */}
+          {viewMode === "periods" && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Custom:</span>
+              <DateInput
+                value={customStart}
+                onChange={setCustomStart}
+                className="h-6 w-28 text-[11px]"
+                data-testid="custom-start"
+              />
+              <span className="text-[11px] text-muted-foreground">to</span>
+              <DateInput
+                value={customEnd}
+                onChange={setCustomEnd}
+                className="h-6 w-28 text-[11px]"
+                data-testid="custom-end"
+              />
+            </div>
+          )}
+
+          {/* Monthly statistic toggle */}
+          {viewMode === "monthly" && (
+            <div className="flex items-center gap-1.5">
+              <div className="flex items-center bg-muted rounded p-0.5">
+                {([
+                  { key: "avg", label: "Avg %", title: "Average return per calendar month" },
+                  { key: "win", label: "Win %", title: "Share of years the month closed positive — consistency check on the average" },
+                  { key: "rel", label: "vs Subind", title: "Average return minus the same-month subindustry peer mean — the seasonal alpha a long/short trade captures" },
+                  { key: "hit", label: `Hit ≥%`, title: "Share of years the month TOUCHED the threshold at ANY point intra-month (vs the prior month-end close) — not just where the month ended. Set the threshold in the box." },
+                ] as const).map((s) => (
+                  <button
+                    key={s.key}
+                    title={s.title}
+                    className={`px-2.5 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      monthlyStat === s.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setMonthlyStat(s.key)}
+                    data-testid={`monthly-stat-${s.key}`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              {monthlyStat === "hit" && (
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    value={touchPct}
+                    onChange={(e) => setTouchPct(e.target.value)}
+                    className="h-6 w-14 text-[11px] text-center"
+                    title="Intra-month touch threshold (%)"
+                    data-testid="monthly-touch-pct"
+                  />
+                  <span className="text-[11px] text-muted-foreground">%</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Seasonal pattern window range */}
+          {viewMode === "seasonal-patterns" && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Window:</span>
+              <Input
+                type="number"
+                min={5}
+                max={365}
+                value={seasonalMinDays}
+                onChange={(e) => setSeasonalMinDays(Math.max(5, parseInt(e.target.value) || 5))}
+                className="h-6 w-16 text-[11px] text-center"
+                data-testid="seasonal-min-days"
+              />
+              <span className="text-[11px] text-muted-foreground">to</span>
+              <Input
+                type="number"
+                min={5}
+                max={365}
+                value={seasonalMaxDays}
+                onChange={(e) => setSeasonalMaxDays(Math.max(5, parseInt(e.target.value) || 180))}
+                className="h-6 w-16 text-[11px] text-center"
+                data-testid="seasonal-max-days"
+              />
+              <span className="text-[11px] text-muted-foreground">days</span>
+            </div>
+          )}
+
+          {/* Event controls */}
+          {viewMode === "events" && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center bg-muted rounded p-0.5">
+                {["earnings", "ex_div"].map((t) => (
+                  <button
+                    key={t}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      eventType === t
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setEventType(t)}
+                    data-testid={`event-${t}`}
+                  >
+                    {EVENT_TYPE_LABELS[t]}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center bg-muted rounded p-0.5">
+                {/* Macro event types from MACRO_EVENT_TYPES constant */}
+                {["CPI", "NFP", "FOMC", "GDP"].map((t) => (
+                  <button
+                    key={t}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      eventType === t
+                        ? "bg-blue-600 text-white shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setEventType(t)}
+                    data-testid={`event-${t}`}
+                  >
+                    {EVENT_TYPE_LABELS[t]}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center bg-muted rounded p-0.5">
+                {(["avg", "median", "winRate"] as const).map((stat) => (
+                  <button
+                    key={stat}
+                    className={`px-2 py-0.5 text-[11px] font-medium rounded transition-colors ${
+                      eventStat === stat
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                    onClick={() => setEventStat(stat)}
+                    data-testid={`event-stat-${stat}`}
+                  >
+                    {stat === "avg" ? "Avg Return" : stat === "median" ? "Median" : "Win Rate"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Basket scope + CSV export */}
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              variant={showBaskets ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => setShowBaskets((v) => !v)}
+              data-testid="perf-show-baskets"
+              title="Show each basket as a composite row (periods, quarterly, monthly, and seasonal-pattern views)"
+            >
+              Baskets{showBaskets && baskets.length > 0 ? ` (${baskets.length})` : ""}
+            </Button>
+            <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              onClick={handleExportCsv}
+              data-testid="export-csv"
+            >
+              <Download className="w-3 h-3 mr-1" />
+              CSV
+            </Button>
+          </div>
+        </div>
+
+        {/* Classification filter */}
+        <ClassificationFilters
+          filters={filters}
+          onFiltersChange={setFilters}
+          search={searchText}
+          onSearchChange={setSearchText}
+          manualTickers={manualTickers}
+          onManualTickersChange={setManualTickers}
+          filteredCount={displayRows.length}
+          totalCount={totalRowCount}
+          testIdPrefix="perf"
+          extraFilters={geo.geoFilterUI}
+        />
+      </div>
+
+      {/* ── Content ── */}
+      <div className="flex-1 overflow-auto">
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+            {viewMode === "seasonal-patterns"
+              ? "Detecting seasonal patterns (this may take a moment)..."
+              : "Loading..."}
+          </div>
+        ) : viewMode === "seasonal-patterns" ? (
+          <>
+            <UpcomingWindowsPanel data={displayRows as SeasonalPatternRow[]} />
+            <table className="w-full text-xs" data-testid="seasonal-patterns-table">
+              <thead className="sticky top-0 bg-card border-b border-border z-10">
+                <tr>
+                  <th className="px-2 py-1.5 text-left text-xs font-medium text-muted-foreground w-16">Ticker</th>
+                  <th className="px-2 py-1.5 text-left text-xs font-medium text-muted-foreground w-44">Name</th>
+                  <th className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground w-10">Yrs</th>
+                  <th className="px-2 py-1.5 text-left text-xs font-medium text-emerald-500" colSpan={7}>Top Bullish Windows</th>
+                  <th className="px-2 py-1.5 text-left text-xs font-medium text-red-500" colSpan={7}>Top Bearish Windows</th>
+                </tr>
+                <tr className="border-b border-border/30">
+                  <th colSpan={3} />
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal">Window</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Days</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Avg</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Med</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Win%</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">N</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">t-stat</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal">Window</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Days</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Avg</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Med</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Win%</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">N</th>
+                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">t-stat</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(displayRows as SeasonalPatternRow[]).map((row, rowIdx) => {
+                  const maxLen = Math.max(row.bullish.length, row.bearish.length, 1);
+                  return Array.from({ length: maxLen }, (_, r) => (
+                    <tr
+                      key={`${row.ticker}-${r}`}
+                      className={`border-b border-border/20 hover:bg-accent/30 transition-colors ${rowIdx % 2 === 0 ? "" : "bg-muted/10"}`}
+                      data-testid={r === 0 ? `perf-row-${row.ticker}` : undefined}
+                    >
+                      {r === 0 && (
+                        <>
+                          <td className={`px-2 py-1 font-mono font-semibold text-xs ${(row as any).isBasket ? "text-amber-300" : ""}`} rowSpan={maxLen}>{row.ticker}</td>
+                          <td className="px-2 py-1 text-xs text-muted-foreground truncate max-w-[180px]" rowSpan={maxLen} title={row.name}>{row.name}</td>
+                          <td className="px-2 py-1 text-center font-mono text-xs text-muted-foreground" rowSpan={maxLen}>{row.yearsOfData}</td>
+                        </>
+                      )}
+                      {row.bullish[r] ? (
+                        <>
+                          <td className="px-1.5 py-1 text-xs whitespace-nowrap">
+                            <span className="text-emerald-400 font-medium">{row.bullish[r].startLabel}</span>
+                            <span className="text-muted-foreground mx-0.5">→</span>
+                            <span className="text-emerald-400 font-medium">{row.bullish[r].endLabel}</span>
+                          </td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bullish[r].calendarDays ?? "—"}</td>
+                          <td className="px-1.5 py-1 text-right"><HeatCell value={row.bullish[r].avgReturn} /></td>
+                          <td className="px-1.5 py-1 text-right"><HeatCell value={row.bullish[r].medianReturn ?? null} /></td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-foreground">{row.bullish[r].winRate.toFixed(0)}%</td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bullish[r].years}</td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bullish[r].tStat.toFixed(2)}</td>
+                        </>
+                      ) : (
+                        <td colSpan={7} />
+                      )}
+                      {row.bearish[r] ? (
+                        <>
+                          <td className="px-1.5 py-1 text-xs whitespace-nowrap">
+                            <span className="text-red-400 font-medium">{row.bearish[r].startLabel}</span>
+                            <span className="text-muted-foreground mx-0.5">→</span>
+                            <span className="text-red-400 font-medium">{row.bearish[r].endLabel}</span>
+                          </td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bearish[r].calendarDays ?? "—"}</td>
+                          <td className="px-1.5 py-1 text-right"><HeatCell value={row.bearish[r].avgReturn} /></td>
+                          <td className="px-1.5 py-1 text-right"><HeatCell value={row.bearish[r].medianReturn ?? null} /></td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-foreground">{row.bearish[r].winRate.toFixed(0)}%</td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bearish[r].years}</td>
+                          <td className="px-1.5 py-1 text-right font-mono text-xs tabular-nums text-muted-foreground">{row.bearish[r].tStat.toFixed(2)}</td>
+                        </>
+                      ) : (
+                        <td colSpan={7} />
+                      )}
+                    </tr>
+                  ));
+                })}
+                {displayRows.length === 0 && !isLoading && (
+                  <tr>
+                    <td colSpan={17} className="text-center py-8 text-muted-foreground">
+                      No tickers match the current filters
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <table className="w-full text-xs" data-testid="performance-table">
+            <thead className="sticky top-0 bg-card border-b border-border z-10">
+              <tr>
+                <ColHeader col="ticker" label="Ticker" className="text-left sticky left-0 bg-card z-20" />
+                <ColHeader col="name" label="Name" className="text-left" />
+                {viewMode === "periods" && (
+                  <>
+                    <ColHeader col="lastClose" label="Last Close" className="text-right" />
+                    {PERIOD_COLUMNS.map((col) => (
+                      <ColHeader key={col} col={col} label={col} className="text-right" />
+                    ))}
+                    {customStart && customEnd && (
+                      <ColHeader col="custom" label="Custom" className="text-right" />
+                    )}
+                  </>
+                )}
+                {viewMode === "seasonality" && (
+                  <>
+                    <ColHeader col="lastClose" label="Last Close" className="text-right" />
+                    {QUARTER_COLUMNS.map((col) => (
+                      <ColHeader key={col} col={col} label={`Avg ${col}`} className="text-right" />
+                    ))}
+                  </>
+                )}
+                {viewMode === "monthly" && (
+                  <>
+                    {MONTHLY_LABELS.map((col: string, mi: number) => (
+                      <ColHeader
+                        key={col}
+                        col={col}
+                        label={col}
+                        className={`text-right ${mi === new Date().getMonth() ? "!text-primary" : ""}`}
+                      />
+                    ))}
+                    <ColHeader col="yearsOfData" label="Years" className="text-right" />
+                  </>
+                )}
+                {viewMode === "events" && (
+                  <>
+                    <ColHeader col="eventCount" label="Events" className="text-right" />
+                    {eventHasPreWindows(eventType as EventType) && (
+                      <>
+                        {EVENT_WINDOWS_PRE.map((w: number) => (
+                          <ColHeader key={w} col={`w_${w}`} label={EVENT_WINDOW_LABELS[w]} className="text-right" />
+                        ))}
+                        <th className="px-0.5 py-1.5 w-[1px] bg-border/50" />
+                      </>
+                    )}
+                    {EVENT_WINDOWS_POST.map((w: number) => (
+                      <ColHeader key={w} col={`w_${w}`} label={EVENT_WINDOW_LABELS[w]} className="text-right" />
+                    ))}
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((row: any, idx: number) => (
+                <tr
+                  key={row.ticker}
+                  className={`border-b border-border/50 hover:bg-accent/50 transition-colors ${idx % 2 === 0 ? "" : "bg-muted/20"}`}
+                  data-testid={`perf-row-${row.ticker}`}
+                >
+                  <td className={`px-2 py-1.5 font-mono font-semibold text-xs sticky left-0 bg-inherit ${row.isBasket ? "text-amber-300" : ""}`}>{row.ticker}</td>
+                  <td className="px-2 py-1.5 text-xs text-muted-foreground max-w-[200px] truncate" title={row.name}>{row.name}</td>
+                  {viewMode === "periods" && (
+                    <>
+                      <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums">
+                        {row.lastClose !== null ? `$${row.lastClose.toFixed(2)}` : "-"}
+                      </td>
+                      {PERIOD_COLUMNS.map((col) => (
+                        <td key={col} className="px-2 py-1.5 text-right">
+                          <ReturnCell value={periodStat === "end" ? row[col] : row[`${col}${periodStat === "max" ? "Max" : "Min"}`] ?? null} />
+                        </td>
+                      ))}
+                      {customStart && customEnd && (
+                        <td className="px-2 py-1.5 text-right">
+                          <ReturnCell value={periodStat === "end" ? row.custom : row[`custom${periodStat === "max" ? "Max" : "Min"}`] ?? null} />
+                        </td>
+                      )}
+                    </>
+                  )}
+                  {viewMode === "seasonality" && (
+                    <>
+                      <td className="px-2 py-1.5 text-right font-mono text-xs tabular-nums">
+                        {row.lastClose !== null ? `$${row.lastClose.toFixed(2)}` : "-"}
+                      </td>
+                      {QUARTER_COLUMNS.map((col) => (
+                        <td key={col} className="px-2 py-1.5 text-right">
+                          <HeatCell value={row[col]} />
+                        </td>
+                      ))}
+                    </>
+                  )}
+                  {viewMode === "monthly" && (
+                    <>
+                      {MONTHLY_LABELS.map((col: string, mi: number) => (
+                        <td key={col} className={`px-2 py-1.5 text-right ${mi === new Date().getMonth() ? "bg-primary/5" : ""}`}>
+                          {monthlyStat === "win" || monthlyStat === "hit" ? (
+                            <WinRateCell value={row[`${col}${monthlyStat === "win" ? "Win" : "Hit"}`] ?? null} />
+                          ) : (
+                            <HeatCell value={monthlyStat === "rel" ? row[`${col}Rel`] ?? null : row[col]} />
+                          )}
+                        </td>
+                      ))}
+                      <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground tabular-nums">
+                        {row.yearsOfData}
+                      </td>
+                    </>
+                  )}
+                  {viewMode === "events" && (
+                    <>
+                      <td className="px-2 py-1.5 text-right font-mono text-xs text-muted-foreground tabular-nums">{row.eventCount}</td>
+                      {eventHasPreWindows(eventType as EventType) && (
+                        <>
+                          {EVENT_WINDOWS_PRE.map((w: number) => {
+                            const val = row[eventStat]?.[w] ?? null;
+                            return (
+                              <td key={w} className="px-2 py-1.5 text-right">
+                                {eventStat === "winRate" ? <ReturnCell value={val} suffix="%" /> : <HeatCell value={val} />}
+                              </td>
+                            );
+                          })}
+                          <td className="px-0 py-1.5 w-[1px] bg-border/50" />
+                        </>
+                      )}
+                      {EVENT_WINDOWS_POST.map((w: number) => {
+                        const val = row[eventStat]?.[w] ?? null;
+                        return (
+                          <td key={w} className="px-2 py-1.5 text-right">
+                            {eventStat === "winRate" ? <ReturnCell value={val} suffix="%" /> : <HeatCell value={val} />}
+                          </td>
+                        );
+                      })}
+                    </>
+                  )}
+                </tr>
+              ))}
+              {displayRows.length === 0 && !isLoading && (
+                <tr>
+                  <td colSpan={20} className="text-center py-8 text-muted-foreground">
+                    No tickers match the current filters
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}

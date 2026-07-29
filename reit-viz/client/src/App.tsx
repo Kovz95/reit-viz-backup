@@ -73,6 +73,7 @@ const ValuationRerateResidence = lazy(() => import("@/pages/ValuationRerateResid
 const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
 const Heatmap = lazy(() => import("@/pages/Heatmap"));
 const Performance = lazy(() => import("@/pages/Performance"));
+const EventLab = lazy(() => import("@/pages/eventlab/EventLab"));
 const EarningsCalendar = lazy(() => import("@/pages/EarningsCalendar"));
 const IdeaJournal = lazy(() => import("@/pages/IdeaJournal"));
 const RidgeRanker = lazy(() => import("@/pages/RidgeRanker"));
@@ -305,6 +306,7 @@ function NavBar() {
     },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
+    { path: "/event-lab", label: "Event Lab", icon: Activity, universeControlled: true },
     { path: "/journal", label: "Journal", icon: Star },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
     { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
@@ -600,6 +602,7 @@ const PAGES = [
   { path: "/valuation", label: "Valuation" },
   { path: "/spread", label: "Div Spread" },
   { path: "/performance", label: "Performance" },
+  { path: "/event-lab", label: "Event Lab" },
   { path: "/earnings-calendar", label: "Earnings Calendar" },
   { path: "/journal", label: "Idea Journal" },
   { path: "/ranker", label: "Ridge Ranker" },
@@ -734,6 +737,7 @@ function AppShell() {
               <Route path="/spread" component={DividendSpread} />
               <Route path="/heatmap" component={Heatmap} />
               <Route path="/performance" component={Performance} />
+              <Route path="/event-lab">{() => <EventLab />}</Route>
               <Route path="/earnings-calendar" component={EarningsCalendar} />
               <Route path="/journal" component={IdeaJournal} />
               <Route path="/ranker" component={RidgeRanker} />
