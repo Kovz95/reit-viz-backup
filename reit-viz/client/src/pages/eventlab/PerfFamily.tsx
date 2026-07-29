@@ -9,6 +9,7 @@ import { useWorkspaceState } from "@/lib/workspaceState";
 import { getDefaultFilters, serializeFilters, deserializeFilters } from "@/lib/filterHelpers";
 import { filterPerformanceData } from "@/lib/filterPerformanceData";
 import { fetchPerfData } from "@/lib/fetchPerfData";
+import { getMetricSeries } from "@/lib/dataService";
 import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
 import { fetchSeasonalPatterns } from "@/lib/fetchSeasonalPatterns";
 import { MONTHLY_LABELS } from "@/lib/monthlyLabels";
@@ -598,6 +599,15 @@ export default function PerfFamily() {
   const [seasonalMinDays, setSeasonalMinDays] = useState(30);
   const [seasonalMaxDays, setSeasonalMaxDays] = useState(180);
   const [showBaskets, setShowBaskets] = useState(false);
+  // User-defined pair rows ("A/B") — computed like basket composites but on
+  // the A/B close ratio, so every view shows the SPREAD's behavior.
+  const [pairDefs, setPairDefs] = useState<string[]>([]);
+  const addPairDef = useCallback((raw: string) => {
+    const m = raw.trim().toUpperCase().match(/^([A-Z0-9.\-]{1,12})\s*\/\s*([A-Z0-9.\-]{1,12})$/);
+    if (!m || m[1] === m[2]) return;
+    const key = `${m[1]}/${m[2]}`;
+    setPairDefs((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  }, []);
   // Group rows by one of the six classification levels (main-table views).
   const [groupBy, setGroupBy] = useState<string>("none");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -633,13 +643,14 @@ export default function PerfFamily() {
       seasonalMinDays,
       seasonalMaxDays,
       showBaskets,
+      pairDefs,
       groupBy,
       collapsedGroups: [...collapsedGroups],
       monthlyStat,
       periodStat,
       touchPct,
     }),
-    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat, periodStat, touchPct, groupBy, collapsedGroups]
+    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, pairDefs, monthlyStat, periodStat, touchPct, groupBy, collapsedGroups]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -655,6 +666,7 @@ export default function PerfFamily() {
     if (state.seasonalMinDays !== undefined) setSeasonalMinDays(state.seasonalMinDays);
     if (state.seasonalMaxDays !== undefined) setSeasonalMaxDays(state.seasonalMaxDays);
     if (state.showBaskets !== undefined) setShowBaskets(state.showBaskets);
+    if (Array.isArray(state.pairDefs)) setPairDefs(state.pairDefs.filter((p: any) => typeof p === "string"));
     if (state.groupBy !== undefined) setGroupBy(state.groupBy);
     if (state.collapsedGroups !== undefined) setCollapsedGroups(new Set(state.collapsedGroups));
     if (state.monthlyStat !== undefined) setMonthlyStat(state.monthlyStat);
@@ -723,6 +735,52 @@ export default function PerfFamily() {
     },
   });
 
+  // Pair ratio rows — same row builders as baskets, fed the A/B close ratio.
+  // Legs resolve from the workbook, falling back to the Yahoo/FMP proxy for
+  // external symbols.
+  const { data: pairRowData, isFetching: pairsComputing } = useQuery({
+    queryKey: ["/perf-pair-rows", pairDefs.join("|"), customStart, customEnd, seasonalMinDays, seasonalMaxDays, touchNum],
+    enabled: pairDefs.length > 0,
+    queryFn: async () => {
+      const legSeries = async (sym: string): Promise<Array<{ time: string; value: number }>> => {
+        try {
+          const s = await getMetricSeries(sym, "close");
+          if (s.length) return s;
+        } catch { /* fall through */ }
+        try {
+          const resp = await fetch(`/api/yahoo-prices/${encodeURIComponent(sym)}`);
+          if (!resp.ok) return [];
+          const j = await resp.json();
+          const closes: number[] = (j.adjCloses?.length ? j.adjCloses : j.closes) ?? [];
+          return (j.dates ?? []).map((d: string, i: number) => ({ time: d, value: closes[i] })).filter((p: any) => Number.isFinite(p.value));
+        } catch { return []; }
+      };
+      const perf: any[] = [];
+      const monthly: any[] = [];
+      const seasonal: any[] = [];
+      for (const def of pairDefs) {
+        const [a, b] = def.split("/");
+        try {
+          const [sa, sb] = await Promise.all([legSeries(a), legSeries(b)]);
+          if (!sa.length || !sb.length) continue;
+          const mb = new Map(sb.map((p) => [p.time, p.value]));
+          const bars: BasketBar[] = [];
+          for (const p of sa) {
+            const v = mb.get(p.time);
+            if (v != null && v > 0 && p.value > 0) bars.push({ date: p.time, close: p.value / v });
+          }
+          if (bars.length < 30) continue;
+          const pseudo: any = { id: `PAIR:${def}`, name: def, tickers: [a, b] };
+          const brand = (row: any) => row && Object.assign(row, { name: "Pair · ratio", isPair: true });
+          perf.push(brand(basketPerfRow(pseudo, bars, customStart || undefined, customEnd || undefined)));
+          monthly.push(brand(basketMonthlyRow(pseudo, bars, touchNum)));
+          seasonal.push(brand(basketSeasonalRow(pseudo, bars, seasonalMinDays, seasonalMaxDays)));
+        } catch { /* skip pair */ }
+      }
+      return { perf: perf.filter(Boolean), monthly: monthly.filter(Boolean), seasonal: seasonal.filter(Boolean) };
+    },
+  });
+
   const isLoading =
     viewMode === "periods" || viewMode === "seasonality"
       ? perfLoading
@@ -764,6 +822,13 @@ export default function PerfFamily() {
       if (viewMode === "periods" || viewMode === "seasonality") basketExtras = basketRowData.perf;
       else if (viewMode === "monthly") basketExtras = basketRowData.monthly;
       else if (viewMode === "seasonal-patterns") basketExtras = basketRowData.seasonal ?? [];
+    }
+    if (pairDefs.length && pairRowData) {
+      if (viewMode === "periods" || viewMode === "seasonality") basketExtras = [...basketExtras, ...pairRowData.perf];
+      else if (viewMode === "monthly") basketExtras = [...basketExtras, ...pairRowData.monthly];
+      else if (viewMode === "seasonal-patterns") basketExtras = [...basketExtras, ...(pairRowData.seasonal ?? [])];
+    }
+    {
       const q = searchText.trim().toLowerCase();
       if (q) {
         basketExtras = basketExtras.filter(
@@ -800,7 +865,7 @@ export default function PerfFamily() {
         return sortAsc ? av - bv : bv - av;
       }
     );
-  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, monthlyStat, periodStat]);
+  }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, pairDefs, pairRowData, monthlyStat, periodStat]);
 
   // Classification lookup for rows whose feed omits those fields (monthly
   // rows carry only ticker + month stats) — join from the periods feed.
@@ -1211,6 +1276,28 @@ export default function PerfFamily() {
               {basketsComputing && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
               Baskets{showBaskets && baskets.length > 0 ? ` (${basketRowData ? baskets.length : "…"})` : ""}
             </Button>
+            {/* Pair ratio rows: type A/B, Enter to add; chips remove */}
+            <div className="flex items-center gap-1">
+              <Input
+                placeholder="Pair A/B"
+                className="h-6 w-[110px] text-[11px]"
+                data-testid="perf-pair-input"
+                title="Add a pair ratio row (e.g. WELL/VTR) — every view then shows the spread's stats. External Yahoo symbols work as legs."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    addPairDef((e.target as HTMLInputElement).value);
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }}
+              />
+              {pairsComputing && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
+              {pairDefs.map((p) => (
+                <span key={p} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 text-[10px] font-mono" data-testid={`perf-pair-chip-${p.replace("/", "-")}`}>
+                  {p}
+                  <button className="hover:text-foreground" onClick={() => setPairDefs((prev) => prev.filter((x) => x !== p))} title="Remove pair">×</button>
+                </span>
+              ))}
+            </div>
             <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
             <Button
               variant="outline"

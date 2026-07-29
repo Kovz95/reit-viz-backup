@@ -196,6 +196,9 @@ async function fetchYahooPrices(ticker: string): Promise<{ dates: string[]; clos
   };
 }
 
+// Custom pair rows: "A/B" of Yahoo symbols (uppercased before validation).
+const PAIR_INPUT_RE = /^[A-Z0-9.\-]{1,12}\/[A-Z0-9.\-]{1,12}$/;
+
 // ---------------------------------------------------------------------------
 // Math helpers
 // ---------------------------------------------------------------------------
@@ -794,6 +797,47 @@ export default function SigmaFamily({ onOpenStudy }: {
     customHistoryCache.current.delete(tk);
   }, []);
 
+  // Custom pairs — "A/B" close-ratio rows. Both legs fetched via
+  // /api/yahoo-prices, inner-joined on date, ratio piped through the exact same
+  // σ/percentile math as any other row. Live + Period modes only (earnings mode
+  // needs workbook earnings-date events, which a ratio doesn't have).
+  const [customPairs, setCustomPairs] = React.useState<string[]>(() => {
+    try {
+      const s = localStorage.getItem("sigma-custom-pairs-v1");
+      if (s) {
+        const p = JSON.parse(s);
+        if (Array.isArray(p)) return p.filter((t): t is string => typeof t === "string" && !!t);
+      }
+    } catch {}
+    return [];
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("sigma-custom-pairs-v1", JSON.stringify(customPairs)); } catch {}
+  }, [customPairs]);
+  // Leg histories cached separately from customHistoryCache so removing a
+  // custom ticker never evicts a pair leg (and vice versa).
+  const pairLegHistoryCache = React.useRef<Map<string, { dates: string[]; closes: number[] }>>(new Map());
+  const [customPairInput, setCustomPairInput] = React.useState("");
+  const addCustomPair = React.useCallback(() => {
+    const raw = customPairInput.trim().toUpperCase();
+    if (!raw) return;
+    if (!PAIR_INPUT_RE.test(raw)) {
+      setCustomTickerError(`Invalid pair "${raw}" — use A/B (e.g. XLE/SPY)`);
+      return;
+    }
+    const [legA, legB] = raw.split("/");
+    if (legA === legB) {
+      setCustomTickerError("Pair legs must differ");
+      return;
+    }
+    setCustomTickerError(null);
+    setCustomPairs((prev) => (prev.includes(raw) ? prev : [...prev, raw]));
+    setCustomPairInput("");
+  }, [customPairInput]);
+  const removeCustomPair = React.useCallback((p: string) => {
+    setCustomPairs((prev) => prev.filter((x) => x !== p));
+  }, []);
+
   // Per-ticker distribution: selected ticker + its own lookback (persisted)
   const [selectedTicker, setSelectedTicker] = React.useState<string | null>(() => {
     try { return localStorage.getItem("sigma-selected-ticker-v1") || null; } catch { return null; }
@@ -1027,6 +1071,82 @@ export default function SigmaFamily({ onOpenStudy }: {
             }
           }),
       );
+      // Custom pairs: fetch both Yahoo legs, inner-join on date, and feed the
+      // A/B close ratio through the exact same math as any other row.
+      await Promise.all(
+        customPairs
+          .filter((p, i, a) => p && !have.has(p) && a.indexOf(p) === i)
+          .map(async (pair) => {
+            const [legA, legB] = pair.split("/");
+            if (!legA || !legB) { failed.push(pair); return; }
+            try {
+              const [histA, histB] = await Promise.all(
+                [legA, legB].map(async (leg) => {
+                  let h = pairLegHistoryCache.current.get(leg);
+                  if (!h) {
+                    h = await fetchYahooPrices(leg);
+                    pairLegHistoryCache.current.set(leg, h);
+                  }
+                  return h;
+                }),
+              );
+              const closeByDateB = new Map<string, number>();
+              (histB.dates || []).forEach((d, i) => {
+                const c = histB.closes?.[i];
+                if (c != null && Number.isFinite(c) && c !== 0) closeByDateB.set(d, c);
+              });
+              const joinedDates: string[] = [];
+              const ratio: number[] = [];
+              (histA.dates || []).forEach((d, i) => {
+                const ca = histA.closes?.[i];
+                const cb = closeByDateB.get(d);
+                if (ca != null && Number.isFinite(ca) && cb != null) {
+                  joinedDates.push(d);
+                  ratio.push(ca / cb);
+                }
+              });
+              let closes = ratio.slice(-minBars);
+              const dates = joinedDates.slice(-minBars);
+              if (closes.length < 2) { failed.push(pair); return; }
+              if (effFreq !== "daily") {
+                closes = weeklyDownsamplePrices(closes, dates, effFreq).prices;
+              }
+              const { sigmaDaily, sigmaEwmaDaily, hvWindow } = computeVolAndDistribution(
+                closes,
+                closes.length - 1,
+                lookbackDays,
+                horizonN,
+              );
+              rows.push({
+                ticker: pair,
+                name: "Pair ratio",
+                sector: "Pair",
+                subindustry: "",
+                closes,
+                last: null,
+                previousClose: null,
+                quoteTime: null,
+                marketState: null,
+                dollarChange: null,
+                pctChange: null,
+                logReturnToday: null,
+                logReturnN: null,
+                pctChangeN: null,
+                sigmaDaily,
+                sigmaAnnualized: sigmaDaily != null ? sigmaDaily * effAnnFactor : null,
+                sigmaEwmaDaily,
+                sigmaEwmaAnnualized: sigmaEwmaDaily != null ? sigmaEwmaDaily * effAnnFactor : null,
+                hvWindow,
+                sigmaMove: null,
+                sigmaMoveEwma: null,
+                percentile: null,
+                percentileN: 0,
+              });
+            } catch {
+              failed.push(pair);
+            }
+          }),
+      );
       if (failed.length) setCustomTickerError(`No price history for: ${failed.join(", ")}`);
       rows.sort((a, b) => a.ticker.localeCompare(b.ticker));
       needQuoteRefreshRef.current = true;
@@ -1036,7 +1156,7 @@ export default function SigmaFamily({ onOpenStudy }: {
     } finally {
       setLoadingHistory(false);
     }
-  }, [tickerList, customTickers, lookbackDays, horizonN, distLookback, isPeriodMode, isEarningsMode, periodWindow, freq]);
+  }, [tickerList, customTickers, customPairs, lookbackDays, horizonN, distLookback, isPeriodMode, isEarningsMode, periodWindow, freq]);
 
   React.useEffect(() => {
     loadHistoricalData();
@@ -1050,12 +1170,46 @@ export default function SigmaFamily({ onOpenStudy }: {
     setFetchingQuotes(true);
     setGlobalError(null);
     try {
-      const symbols = liveRows.map((r) => r.ticker);
+      // Pair rows ("A/B") can't be quoted directly — request the two legs and
+      // synthesize the pair quote (last = lastA/lastB, prev = prevA/prevB).
+      const pairRowTickers = liveRows.map((r) => r.ticker).filter((t) => t.includes("/"));
+      const symbolSet = new Set<string>();
+      for (const r of liveRows) {
+        if (r.ticker.includes("/")) {
+          for (const leg of r.ticker.split("/")) if (leg) symbolSet.add(leg);
+        } else {
+          symbolSet.add(r.ticker);
+        }
+      }
+      const symbols = Array.from(symbolSet);
       const resp = await apiRequest("POST", "/api/quotes/live", { symbols });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const quoteMap = new Map<string, any>();
       for (const q of data.quotes) quoteMap.set(q.symbol, q);
+      // Inject synthetic pair quotes; if either leg lacks a usable quote the
+      // pair row simply stays history-only (same as custom tickers w/o quotes).
+      for (const pair of pairRowTickers) {
+        const [legA, legB] = pair.split("/");
+        const qa = quoteMap.get(legA);
+        const qb = quoteMap.get(legB);
+        if (!qa || !qb) continue;
+        const last =
+          qa.last != null && qb.last != null && qb.last !== 0 ? qa.last / qb.last : null;
+        const previousClose =
+          qa.previousClose != null && qb.previousClose != null && qb.previousClose !== 0
+            ? qa.previousClose / qb.previousClose
+            : null;
+        if (last == null && previousClose == null) continue;
+        quoteMap.set(pair, {
+          symbol: pair,
+          last,
+          previousClose,
+          regularMarketTime: qa.regularMarketTime ?? qb.regularMarketTime ?? null,
+          marketState: qa.marketState ?? qb.marketState ?? null,
+          error: qa.error || qb.error || undefined,
+        });
+      }
       const firstWithState = data.quotes.find((q: any) => q.marketState);
       if (firstWithState?.marketState) setMarketState(firstWithState.marketState);
       const sqrtN = Math.sqrt(Math.max(1, horizonN));
@@ -1532,8 +1686,10 @@ export default function SigmaFamily({ onOpenStudy }: {
     // User-added custom tickers always show — they were pinned explicitly and
     // have no workbook classification for the filters to act on.
     for (const t of customTickers) set.add(t.toUpperCase());
+    // Same for user-added pair-ratio rows ("A/B", stored uppercased).
+    for (const p of customPairs) set.add(p);
     return set;
-  }, [tickerList, classFilters, manualTickers, geo.filterByGeo, customTickers]);
+  }, [tickerList, classFilters, manualTickers, geo.filterByGeo, customTickers, customPairs]);
 
   // Period-mode rows: most-recent trailing-window return in σ units, from the
   // historical closes already loaded for the live rows (no live quotes needed).
@@ -2119,6 +2275,40 @@ export default function SigmaFamily({ onOpenStudy }: {
               {customTickerError && (
                 <span className="text-[10px] text-red-400" data-testid="custom-ticker-error">{customTickerError}</span>
               )}
+            </div>
+          )}
+
+          {/* Add pair ratio (A/B — both legs Yahoo symbols, σ on the ratio series) */}
+          {!isEarningsMode && (
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={customPairInput}
+                onChange={(e) => { setCustomPairInput(e.target.value); setCustomTickerError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") addCustomPair(); }}
+                placeholder="Pair A/B"
+                title="Add an A/B close-ratio row (e.g. XLE/SPY) — both legs fetched from Yahoo, σ computed on the ratio series (Live & Period modes). Enter to add."
+                className="h-7 px-2 text-[11px] font-mono bg-background border border-border rounded w-[110px] focus:outline-none focus:border-amber-500/60"
+                data-testid="sigma-pair-input"
+              />
+              {customPairs.map((p) => (
+                <span
+                  key={p}
+                  className="inline-flex items-center gap-0.5 h-6 pl-1.5 pr-0.5 text-[10px] font-mono bg-amber-500/10 border border-amber-500/30 rounded"
+                  data-testid={`sigma-pair-chip-${p.replace("/", "-")}`}
+                >
+                  {p}
+                  <button
+                    type="button"
+                    onClick={() => removeCustomPair(p)}
+                    className="p-0.5 text-muted-foreground hover:text-foreground rounded"
+                    aria-label={`Remove ${p}`}
+                    data-testid={`btn-remove-pair-${p.replace("/", "-")}`}
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
 
@@ -2771,7 +2961,8 @@ export default function SigmaFamily({ onOpenStudy }: {
                       </td>
                       {onOpenStudy && (
                         <td className="px-1 py-1.5 text-center">
-                          {row.sigmaMove != null && (
+                          {/* Pair rows ("A/B") get no study button — the study preset expects a single symbol. */}
+                          {row.sigmaMove != null && !row.ticker.includes("/") && (
                             <button
                               className="p-0.5 rounded text-muted-foreground/60 hover:text-primary hover:bg-accent"
                               onClick={(e) => {
