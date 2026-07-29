@@ -500,43 +500,71 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [showAllSingleEvents, setShowAllSingleEvents] = useState(false);
 
+  // Symbols the user typed in manually (any Yahoo/FMP symbol) — exempt from
+  // the not-in-universe reset below, like BASKET: tickers.
+  const customSymbolsRef = useRef<Set<string>>(new Set());
+  const applyCustomSymbol = useCallback((raw: string, target: "a" | "b") => {
+    const sym = raw.trim().toUpperCase();
+    if (!sym || !/^[A-Z0-9.\-^=]{1,12}$/.test(sym)) return;
+    customSymbolsRef.current.add(sym);
+    if (target === "a") setTicker(sym);
+    else setTickerB(sym);
+  }, []);
+
   useEffect(() => {
     if (!ticker && filteredTickers.length) setTicker(filteredTickers[0].ticker);
-    // BASKET: synthetic tickers are valid single-mode subjects but never appear
-    // in filteredTickers — don't reset them (the old page did, which made
-    // basket selection self-revert immediately).
-    if (ticker && !isBasketTicker(ticker) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === ticker))
+    // BASKET: synthetic tickers and manually-entered external symbols are valid
+    // subjects but never appear in filteredTickers — don't reset them.
+    if (ticker && !isBasketTicker(ticker) && !customSymbolsRef.current.has(ticker) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === ticker))
       setTicker(filteredTickers[0].ticker);
   }, [filteredTickers, ticker]);
 
   useEffect(() => {
     if (!tickerB && filteredTickers.length >= 2) setTickerB(filteredTickers[1].ticker);
-    if (tickerB && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === tickerB))
+    if (tickerB && !customSymbolsRef.current.has(tickerB) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === tickerB))
       setTickerB(filteredTickers.find((t: any) => t.ticker !== ticker)?.ticker ?? "");
   }, [filteredTickers, tickerB, ticker]);
 
-  // Single ticker query (raw prices + calendar dates when a calendar condition exists)
+  // Load any symbol's daily series: workbook data on the global axis when the
+  // symbol is in the workbook (or a BASKET:), else the server's Yahoo/FMP
+  // price proxy (self-contained axis; adj closes + opens, so every condition
+  // type works — earnings/ex-div dates only exist for workbook tickers).
+  const loadAnySeries = useCallback(async (symbol: string): Promise<{ dates: string[]; closes: (number | null)[]; opens: (number | null)[]; external: boolean } | null> => {
+    try {
+      const raw = await getTickerRaw(symbol);
+      const closes = extractColumn(raw, "close", dates.length);
+      if (closes.length) return { dates, closes, opens: extractColumn(raw, "open", dates.length), external: false };
+    } catch { /* fall through to the proxy */ }
+    try {
+      const resp = await fetch(`/api/yahoo-prices/${encodeURIComponent(symbol)}`);
+      if (!resp.ok) return null;
+      const j = await resp.json();
+      const closes: number[] = (j.adjCloses?.length ? j.adjCloses : j.closes) ?? [];
+      if (!j.dates?.length || !closes.length) return null;
+      return { dates: j.dates, closes, opens: j.opens ?? [], external: true };
+    } catch { return null; }
+  }, [dates]);
+
+  // Single ticker query (series + calendar dates when a calendar condition exists)
   const { data: singleData, isFetching: loadingSingle } = useQuery({
     queryKey: ["ticker-raw-sf", runConfig?.symbol, runConfig?.nonce],
     queryFn: async () => {
       if (!runConfig || runConfig.mode !== "single") return null;
-      const [raw, calendar] = await Promise.all([
-        getTickerRaw(runConfig.symbol),
+      const [series, calendar] = await Promise.all([
+        loadAnySeries(runConfig.symbol),
         needsCalendar(runConfig.conditions) ? fetchCalendarDates(runConfig.symbol) : Promise.resolve(null),
       ]);
-      return { raw, calendar };
+      return { series, calendar };
     },
-    enabled: !!runConfig && runConfig.mode === "single",
+    enabled: !!runConfig && runConfig.mode === "single" && dates.length > 0,
   });
 
   const singleResult = useMemo(() => {
-    if (!runConfig || runConfig.mode !== "single" || !singleData?.raw || !dates.length) return null;
-    const close = extractColumn(singleData.raw, "close", dates.length);
-    const open = extractColumn(singleData.raw, "open", dates.length);
-    if (!close.length) return null;
-    const bundle: EventBundle = { dates, closes: close, opens: open };
+    if (!runConfig || runConfig.mode !== "single" || !singleData?.series) return null;
+    const s = singleData.series;
+    const bundle: EventBundle = { dates: s.dates, closes: s.closes, opens: s.opens };
     return computeStudy(bundle, runConfig.conditions, runConfig.combinator, singleData.calendar);
-  }, [runConfig, singleData, dates]);
+  }, [runConfig, singleData]);
 
   // Pairs query (calendar dates come from symbol A when a calendar condition exists)
   const { data: pairsData, isFetching: loadingPairs } = useQuery({
@@ -544,31 +572,46 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     queryFn: async () => {
       if (!runConfig || runConfig.mode !== "pairs" || !runConfig.symbolB) return null;
       const [a, b, calendar] = await Promise.all([
-        getTickerRaw(runConfig.symbol),
-        getTickerRaw(runConfig.symbolB),
+        loadAnySeries(runConfig.symbol),
+        loadAnySeries(runConfig.symbolB),
         needsCalendar(runConfig.conditions) ? fetchCalendarDates(runConfig.symbol) : Promise.resolve(null),
       ]);
       return { a, b, calendar };
     },
-    enabled: !!runConfig && runConfig.mode === "pairs" && !!runConfig.symbolB,
+    enabled: !!runConfig && runConfig.mode === "pairs" && !!runConfig.symbolB && dates.length > 0,
   });
 
   const pairsResult = useMemo(() => {
-    if (!runConfig || runConfig.mode !== "pairs" || !pairsData || !dates.length) return null;
-    const closeA = extractColumn(pairsData.a, "close", dates.length);
-    const closeB = extractColumn(pairsData.b, "close", dates.length);
-    const openA = extractColumn(pairsData.a, "open", dates.length);
-    const openB = extractColumn(pairsData.b, "open", dates.length);
-    if (!closeA.length || !closeB.length) return null;
-    const n = Math.min(closeA.length, closeB.length);
-    const ratioClose: (number | null)[] = new Array(n), ratioOpen: (number | null)[] = new Array(n);
-    for (let i = 0; i < n; i++) {
-      const a = closeA[i], b = closeB[i];
-      ratioClose[i] = (a != null && b != null && b > 0) ? a / b : null;
-      const oa = openA[i], ob = openB[i];
-      ratioOpen[i] = (oa != null && ob != null && ob > 0) ? oa / ob : null;
+    if (!runConfig || runConfig.mode !== "pairs" || !pairsData?.a || !pairsData?.b) return null;
+    const A = pairsData.a, B = pairsData.b;
+    let bundle: EventBundle;
+    if (!A.external && !B.external) {
+      // Both workbook legs share the global axis — keep the original
+      // index-aligned ratio path (exact parity with the old page).
+      const n = Math.min(A.closes.length, B.closes.length);
+      const ratioClose: (number | null)[] = new Array(n), ratioOpen: (number | null)[] = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const a = A.closes[i], b = B.closes[i];
+        ratioClose[i] = (a != null && b != null && b > 0) ? a / b : null;
+        const oa = A.opens[i], ob = B.opens[i];
+        ratioOpen[i] = (oa != null && ob != null && ob > 0) ? oa / ob : null;
+      }
+      bundle = { dates, closes: ratioClose, opens: ratioOpen };
+    } else {
+      // Mixed/external legs live on different axes — inner-join on dates.
+      const idxB = new Map(B.dates.map((d, i) => [d, i]));
+      const dts: string[] = [], ratioClose: (number | null)[] = [], ratioOpen: (number | null)[] = [];
+      for (let i = 0; i < A.dates.length; i++) {
+        const j = idxB.get(A.dates[i]);
+        if (j === undefined) continue;
+        const a = A.closes[i], b = B.closes[j];
+        dts.push(A.dates[i]);
+        ratioClose.push(a != null && b != null && b > 0 ? a / b : null);
+        const oa = A.opens[i], ob = B.opens[j];
+        ratioOpen.push(oa != null && ob != null && ob > 0 ? oa / ob : null);
+      }
+      bundle = { dates: dts, closes: ratioClose, opens: ratioOpen };
     }
-    const bundle: EventBundle = { dates, closes: ratioClose, opens: ratioOpen };
     return computeStudy(bundle, runConfig.conditions, runConfig.combinator, pairsData.calendar);
   }, [runConfig, pairsData, dates]);
 
@@ -798,12 +841,29 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
               <>
                 <div className={`flex flex-col gap-1 min-w-[280px] ${isBasketTicker(ticker) ? "opacity-40 pointer-events-none" : ""}`}>
                   <Label className="text-xs text-muted-foreground">Ticker</Label>
-                  <Select value={isBasketTicker(ticker) ? "" : ticker} onValueChange={setTicker}>
-                    <SelectTrigger data-testid="select-ticker" className="h-8"><SelectValue placeholder="Pick ticker" /></SelectTrigger>
+                  <Select value={isBasketTicker(ticker) || customSymbolsRef.current.has(ticker) ? "" : ticker} onValueChange={setTicker}>
+                    <SelectTrigger data-testid="select-ticker" className="h-8">
+                      <SelectValue placeholder={customSymbolsRef.current.has(ticker) ? `${ticker} (external)` : "Pick ticker"} />
+                    </SelectTrigger>
                     <SelectContent className="max-h-80">
                       {filteredTickers.map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="flex flex-col gap-1 w-[130px]">
+                  <Label className="text-xs text-muted-foreground">Any symbol</Label>
+                  <Input
+                    placeholder="e.g. AAPL"
+                    className="h-8"
+                    data-testid="input-custom-symbol"
+                    title="Study any Yahoo/FMP symbol (press Enter). Technical + macro/month/window conditions work; earnings/ex-div dates exist only for workbook tickers."
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        applyCustomSymbol((e.target as HTMLInputElement).value, "a");
+                        (e.target as HTMLInputElement).value = "";
+                      }
+                    }}
+                  />
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label className="text-xs text-muted-foreground">Basket</Label>
@@ -816,21 +876,47 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
               <>
                 <div className="flex flex-col gap-1 min-w-[240px]">
                   <Label className="text-xs text-muted-foreground">Ticker A (long)</Label>
-                  <Select value={ticker} onValueChange={setTicker}>
-                    <SelectTrigger data-testid="select-ticker-a" className="h-8"><SelectValue placeholder="Pick A" /></SelectTrigger>
+                  <Select value={customSymbolsRef.current.has(ticker) ? "" : ticker} onValueChange={setTicker}>
+                    <SelectTrigger data-testid="select-ticker-a" className="h-8">
+                      <SelectValue placeholder={customSymbolsRef.current.has(ticker) ? `${ticker} (external)` : "Pick A"} />
+                    </SelectTrigger>
                     <SelectContent className="max-h-80">
                       {filteredTickers.map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  <Input
+                    placeholder="Any symbol (Enter)"
+                    className="h-7 text-xs"
+                    data-testid="input-custom-symbol-a"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        applyCustomSymbol((e.target as HTMLInputElement).value, "a");
+                        (e.target as HTMLInputElement).value = "";
+                      }
+                    }}
+                  />
                 </div>
                 <div className="flex flex-col gap-1 min-w-[240px]">
                   <Label className="text-xs text-muted-foreground">Ticker B (short)</Label>
-                  <Select value={tickerB} onValueChange={setTickerB}>
-                    <SelectTrigger data-testid="select-ticker-b" className="h-8"><SelectValue placeholder="Pick B" /></SelectTrigger>
+                  <Select value={customSymbolsRef.current.has(tickerB) ? "" : tickerB} onValueChange={setTickerB}>
+                    <SelectTrigger data-testid="select-ticker-b" className="h-8">
+                      <SelectValue placeholder={customSymbolsRef.current.has(tickerB) ? `${tickerB} (external)` : "Pick B"} />
+                    </SelectTrigger>
                     <SelectContent className="max-h-80">
                       {filteredTickers.filter((t: any) => t.ticker !== ticker).map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
+                  <Input
+                    placeholder="Any symbol (Enter)"
+                    className="h-7 text-xs"
+                    data-testid="input-custom-symbol-b"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        applyCustomSymbol((e.target as HTMLInputElement).value, "b");
+                        (e.target as HTMLInputElement).value = "";
+                      }
+                    }}
+                  />
                 </div>
               </>
             )}
@@ -1180,18 +1266,33 @@ function MoveInspector({ symbol, displaySymbol, tickerName, sigmaWindow, sigmaBa
   sigmaWindow: number; sigmaBasis: SigmaBasis; dates: string[];
 }) {
   const disp = displaySymbol || symbol;
-  const { data: raw } = useQuery({
-    queryKey: ["ticker-raw-inspect", symbol],
-    queryFn: async () => symbol ? getTickerRaw(symbol) : null,
-    enabled: !!symbol,
+  // Workbook first; Yahoo/FMP proxy fallback for external symbols.
+  const { data: series } = useQuery({
+    queryKey: ["ticker-series-inspect", symbol],
+    queryFn: async () => {
+      if (!symbol) return null;
+      try {
+        const raw = await getTickerRaw(symbol);
+        const closes = extractColumn(raw, "close", dates.length);
+        if (closes.length) return { dates, closes, opens: extractColumn(raw, "open", dates.length) };
+      } catch { /* fall through */ }
+      try {
+        const resp = await fetch(`/api/yahoo-prices/${encodeURIComponent(symbol)}`);
+        if (!resp.ok) return null;
+        const j = await resp.json();
+        const closes: number[] = (j.adjCloses?.length ? j.adjCloses : j.closes) ?? [];
+        if (!j.dates?.length || !closes.length) return null;
+        return { dates: j.dates as string[], closes: closes as (number | null)[], opens: (j.opens ?? []) as (number | null)[] };
+      } catch { return null; }
+    },
+    enabled: !!symbol && dates.length > 0,
   });
   const [customMove, setCustomMove] = useState("");
   const [customSigma, setCustomSigma] = useState("");
 
   const info = useMemo(() => {
-    if (!raw || !dates.length) return null;
-    const close = extractColumn(raw, "close", dates.length);
-    const open = extractColumn(raw, "open", dates.length);
+    if (!series) return null;
+    const { dates, closes: close, opens: open } = series;
     if (!close.length) return null;
     let lastIdx = -1;
     for (let i = close.length - 1; i >= 1; i--) {
@@ -1215,7 +1316,7 @@ function MoveInspector({ symbol, displaySymbol, tickerName, sigmaWindow, sigmaBa
       refCtx: lastInspect ?? gapInspect ?? customInspect ?? null,
       window,
     };
-  }, [raw, dates, sigmaWindow, sigmaBasis, customMove]);
+  }, [series, sigmaWindow, sigmaBasis, customMove]);
 
   return (
     <Card>
