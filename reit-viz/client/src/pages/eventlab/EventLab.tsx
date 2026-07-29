@@ -12,13 +12,14 @@ import { CalendarRange, FlaskConical, Activity } from "lucide-react";
 
 const PerfFamily = lazy(() => import("./PerfFamily"));
 const StudyFamily = lazy(() => import("./StudyFamily"));
+const SigmaFamily = lazy(() => import("./SigmaFamily"));
 
 export type EventLabFamily = "performance" | "study" | "sigma";
 
 const FAMILY_TABS: Array<{ id: EventLabFamily; label: string; icon: typeof Activity; ready: boolean }> = [
   { id: "performance", label: "Performance", icon: CalendarRange, ready: true },
   { id: "study", label: "Event Study", icon: FlaskConical, ready: true },
-  { id: "sigma", label: "Sigma", icon: Activity, ready: false },
+  { id: "sigma", label: "Sigma", icon: Activity, ready: true },
 ];
 
 export default function EventLab({ initialFamily }: { initialFamily?: EventLabFamily }) {
@@ -60,6 +61,7 @@ export default function EventLab({ initialFamily }: { initialFamily?: EventLabFa
         <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading…</div>}>
           {active === "performance" && <PerfFamily />}
           {active === "study" && <StudyFamily />}
+          {active === "sigma" && <SigmaFamily />}
         </Suspense>
       </div>
     </div>
