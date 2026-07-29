@@ -95,7 +95,7 @@ export interface AttrBacktestResult {
   samples: AttrBtSample[];
 }
 
-function summarize(vals: number[], minN: number): AttrStateStats | null {
+export function summarizeForwardStats(vals: number[], minN: number): AttrStateStats | null {
   const n = vals.length;
   if (n < minN) return null;
   const sorted = [...vals].sort((a, b) => a - b);
@@ -109,7 +109,7 @@ function summarize(vals: number[], minN: number): AttrStateStats | null {
   };
 }
 
-function pearson(xs: number[], ys: number[]): number | null {
+export function pearsonCorr(xs: number[], ys: number[]): number | null {
   const n = xs.length;
   if (n < 8) return null;
   const mx = xs.reduce((s, v) => s + v, 0) / n, my = ys.reduce((s, v) => s + v, 0) / n;
@@ -152,7 +152,7 @@ export function runAttributionVerdictBacktest(aligned: AlignedData, params: Attr
   for (const st of ATTR_STATES) {
     states[st] = {};
     for (const h of horizons) {
-      states[st][h] = summarize(
+      states[st][h] = summarizeForwardStats(
         samples.filter(s => s.state === st).map(s => s.fwd[h]).filter((v): v is number => v != null),
         minN,
       );
@@ -162,8 +162,8 @@ export function runAttributionVerdictBacktest(aligned: AlignedData, params: Attr
   const revFollowCorr: Record<number, { r: number; n: number } | null> = {};
   for (const h of horizons) {
     const pairs = samples.filter(s => s.fwd[h] != null);
-    baseline[h] = summarize(pairs.map(s => s.fwd[h] as number), minN);
-    const r = pearson(pairs.map(s => s.est), pairs.map(s => s.fwd[h] as number));
+    baseline[h] = summarizeForwardStats(pairs.map(s => s.fwd[h] as number), minN);
+    const r = pearsonCorr(pairs.map(s => s.est), pairs.map(s => s.fwd[h] as number));
     revFollowCorr[h] = r == null ? null : { r, n: pairs.length };
   }
 

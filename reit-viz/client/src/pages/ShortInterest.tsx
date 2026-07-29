@@ -1,7 +1,9 @@
 // Reconstructed from recovered-bundle/ShortInterest-CduJ1tqP.js on 2026-06-11
 
 import { useState, useMemo, useCallback } from "react";
+import { useLocation } from "wouter";
 import { useUniverse } from "@/lib/universeContext";
+import SIBacktestModal from "@/components/SIBacktestModal";
 import { emptyClassFilters, serializeClassFilters, deserializeClassFilters } from "@/lib/dataService";
 import { usePageState } from "@/lib/pageState";
 import { useQuery } from "@tanstack/react-query";
@@ -20,6 +22,7 @@ import {
   ChevronDown,
   Download,
   ArrowUpDown,
+  FlaskConical,
 } from "lucide-react";
 
 interface SICell {
@@ -88,6 +91,19 @@ function SIBar({ value, max }: { value: number | null; max: number }) {
   );
 }
 
+/** SI percentile vs own trailing history — extremes colored. */
+function PctileCell({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-muted-foreground/50">-</span>;
+  const colorClass = value >= 90 ? "text-red-400" : value >= 70 ? "text-amber-400" : value <= 10 ? "text-emerald-400" : "text-foreground";
+  return <span className={`font-mono text-xs tabular-nums ${colorClass}`}>{value.toFixed(0)}</span>;
+}
+
+function ZCell({ value }: { value: number | null }) {
+  if (value == null) return <span className="text-muted-foreground/50">-</span>;
+  const colorClass = value >= 2 ? "text-red-400" : value <= -2 ? "text-emerald-400" : Math.abs(value) >= 1 ? "text-amber-400/90" : "text-foreground";
+  return <span className={`font-mono text-xs tabular-nums ${colorClass}`}>{value >= 0 ? "+" : ""}{value.toFixed(1)}</span>;
+}
+
 function DeltaIcon({ value }: { value: number | null }) {
   if (value === null) return <Minus className="w-3 h-3 text-muted-foreground" />;
   if (value > 0.1) return <TrendingUp className="w-3 h-3 text-red-400" />;
@@ -105,6 +121,12 @@ interface SIRow {
   industry: string;
   subindustry: string;
   siPct: number | null;
+  /** Percentile of current SI within the name's own trailing 3Y history. */
+  pctile3Y: number | null;
+  /** Z-score of current SI vs the trailing 3Y mean/std. */
+  z3Y: number | null;
+  /** SI minus the subsector median SI (pp) — peer-relative crowding. */
+  exSub: number | null;
   delta1W: number | null;
   delta1M: number | null;
   delta3M: number | null;
@@ -117,7 +139,21 @@ type SortKey = keyof SIRow;
 export default function ShortInterest() {
   const { universeTickers } = useUniverse();
   const basketScope = useBasketScope("reit-viz:basket-scope:short-interest");
+  const [, navigate] = useLocation();
   const [viewMode, setViewMode] = useState<"table" | "movers">("table");
+  const [backtestRow, setBacktestRow] = useState<{ ticker: string; name: string } | null>(null);
+
+  // Row click → Charts with price + Short Interest% (with rolling median/p10/
+  // p90 bands) via the metric-agnostic Re-Rating hand-off Dashboard drains.
+  const openOnCharts = useCallback((ticker: string) => {
+    try {
+      sessionStorage.setItem(
+        "reit-viz:rerate-to-charts",
+        JSON.stringify({ ticker, metricKey: "Short Interest%", lookbackDays: 756 }),
+      );
+    } catch {}
+    navigate("/");
+  }, [navigate]);
   const [classFilters, setClassFilters] = useState(() => emptyClassFilters());
   const [search, setSearch] = useState("");
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
@@ -175,28 +211,40 @@ export default function ShortInterest() {
     },
   });
 
-  const { data: sparklineData } = useQuery({
+  // One fetch per ticker feeds BOTH the 1Y sparkline and the own-history
+  // context stats (trailing-3Y percentile + z-score of the latest reading).
+  const { data: siHistory } = useQuery({
     queryKey: ["/si-sparklines"],
     queryFn: async () => {
       if (!siTickers) return {};
-      const result: Record<string, number[]> = {};
-      const dates = await getDates();
+      const result: Record<string, { spark: number[]; pctile3Y: number | null; z3Y: number | null }> = {};
+      await getDates();
       for (let i = 0; i < (siTickers as any[]).length; i += 20) {
         const chunk = (siTickers as any[]).slice(i, i + 20);
         await Promise.all(
           chunk.map(async (t: any) => {
             try {
               const series = await getMetricSeries(t.ticker, "Short Interest%");
-              if (series && series.length > 0) {
-                const values: number[] = [];
-                const startIdx = Math.max(0, series.length - 260);
-                for (let j = startIdx; j < series.length; j += 5) {
-                  const pt = series[j];
-                  if (pt && pt.value !== null && pt.value !== undefined) {
-                    values.push(pt.value);
-                  }
-                }
-                if (values.length > 1) result[t.ticker] = values;
+              if (!series || series.length === 0) return;
+              const spark: number[] = [];
+              const sparkStart = Math.max(0, series.length - 260);
+              for (let j = sparkStart; j < series.length; j += 5) {
+                const pt = series[j];
+                if (pt && pt.value !== null && pt.value !== undefined) spark.push(pt.value);
+              }
+              // Trailing-3Y window of finite values for percentile / z.
+              const all = series.map((p: any) => p.value).filter((v: any) => Number.isFinite(v)) as number[];
+              const win = all.slice(Math.max(0, all.length - 756));
+              let pctile3Y: number | null = null, z3Y: number | null = null;
+              if (win.length >= 60) {
+                const cur = win[win.length - 1];
+                pctile3Y = (win.filter((v) => v <= cur).length / win.length) * 100;
+                const mean = win.reduce((a, b) => a + b, 0) / win.length;
+                const std = Math.sqrt(win.reduce((a, b) => a + (b - mean) ** 2, 0) / (win.length - 1));
+                z3Y = std > 1e-9 ? (cur - mean) / std : null;
+              }
+              if (spark.length > 1 || pctile3Y !== null) {
+                result[t.ticker] = { spark, pctile3Y, z3Y };
               }
             } catch {}
           })
@@ -209,23 +257,49 @@ export default function ShortInterest() {
 
   const allRows: SIRow[] = useMemo(() => {
     if (!siTickers || !siMetrics) return [];
-    return (siTickers as any[]).map((t: any) => ({
-      ticker: t.ticker,
-      name: t.name,
-      economy: t.economy || "",
-      sector: t.sector || "",
-      subsector: t.subsector || "",
-      industryGroup: t.industryGroup || "",
-      industry: t.industry || "",
-      subindustry: t.subindustry || "",
-      siPct: siMetrics.siPct[t.ticker] ?? null,
-      delta1W: siMetrics.d1W[t.ticker] ?? null,
-      delta1M: siMetrics.d1M[t.ticker] ?? null,
-      delta3M: siMetrics.d3M[t.ticker] ?? null,
-      delta6M: siMetrics.d6M[t.ticker] ?? null,
-      sparkline: sparklineData?.[t.ticker] || [],
-    }));
-  }, [siTickers, siMetrics, sparklineData]);
+    // Subsector median SI across the FULL roster (≥3 names with data) so the
+    // peer-relative column doesn't shift as filters change.
+    const bySub = new Map<string, number[]>();
+    for (const t of siTickers as any[]) {
+      const v = siMetrics.siPct[t.ticker];
+      const sub = t.subsector || "";
+      if (!sub || v == null || !Number.isFinite(v)) continue;
+      const arr = bySub.get(sub) ?? [];
+      arr.push(v);
+      bySub.set(sub, arr);
+    }
+    const subMedian = new Map<string, number>();
+    for (const [sub, vals] of bySub) {
+      if (vals.length < 3) continue;
+      const s = [...vals].sort((a, b) => a - b);
+      const m = s.length >> 1;
+      subMedian.set(sub, s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
+    }
+    return (siTickers as any[]).map((t: any) => {
+      const siPct = siMetrics.siPct[t.ticker] ?? null;
+      const med = subMedian.get(t.subsector || "");
+      const hist = siHistory?.[t.ticker];
+      return {
+        ticker: t.ticker,
+        name: t.name,
+        economy: t.economy || "",
+        sector: t.sector || "",
+        subsector: t.subsector || "",
+        industryGroup: t.industryGroup || "",
+        industry: t.industry || "",
+        subindustry: t.subindustry || "",
+        siPct,
+        pctile3Y: hist?.pctile3Y ?? null,
+        z3Y: hist?.z3Y ?? null,
+        exSub: siPct != null && med !== undefined ? siPct - med : null,
+        delta1W: siMetrics.d1W[t.ticker] ?? null,
+        delta1M: siMetrics.d1M[t.ticker] ?? null,
+        delta3M: siMetrics.d3M[t.ticker] ?? null,
+        delta6M: siMetrics.d6M[t.ticker] ?? null,
+        sparkline: hist?.spark || [],
+      };
+    });
+  }, [siTickers, siMetrics, siHistory]);
 
   const geo = useGeoFilter(allRows, "si-geo");
 
@@ -297,11 +371,14 @@ export default function ShortInterest() {
     );
 
   const handleExportCsv = useCallback(() => {
-    const headers = ["Ticker", "Name", "SI%", "Δ 1W (pp)", "Δ 1M (pp)", "Δ 3M (pp)", "Δ 6M (pp)"];
+    const headers = ["Ticker", "Name", "SI%", "%ile 3Y", "z 3Y", "vs Subsector (pp)", "Δ 1W (pp)", "Δ 1M (pp)", "Δ 3M (pp)", "Δ 6M (pp)"];
     const rows = filteredRows.map((r) => [
       r.ticker,
       `"${r.name}"`,
       r.siPct?.toFixed(2) ?? "",
+      r.pctile3Y?.toFixed(0) ?? "",
+      r.z3Y?.toFixed(2) ?? "",
+      r.exSub?.toFixed(2) ?? "",
       r.delta1W?.toFixed(2) ?? "",
       r.delta1M?.toFixed(2) ?? "",
       r.delta3M?.toFixed(2) ?? "",
@@ -401,18 +478,22 @@ export default function ShortInterest() {
         <div className="flex-1 overflow-auto">
           <table
             className="text-xs"
-            style={{ tableLayout: "fixed", width: "880px" }}
+            style={{ tableLayout: "fixed", width: "1150px" }}
           >
             <colgroup>
               <col style={{ width: "56px" }} />
               <col style={{ width: "230px" }} />
               <col style={{ width: "146px" }} />
+              <col style={{ width: "64px" }} />
+              <col style={{ width: "56px" }} />
+              <col style={{ width: "78px" }} />
               <col style={{ width: "88px" }} />
               <col style={{ width: "24px" }} />
               <col style={{ width: "82px" }} />
               <col style={{ width: "82px" }} />
               <col style={{ width: "82px" }} />
-              <col style={{ width: "90px" }} />
+              <col style={{ width: "82px" }} />
+              <col style={{ width: "40px" }} />
             </colgroup>
             <thead className="sticky top-0 z-10 bg-card border-b border-border">
               <tr>
@@ -438,6 +519,33 @@ export default function ShortInterest() {
                     onClick={() => handleSort("siPct")}
                   >
                     SI % <SortIcon col="siPct" />
+                  </button>
+                </th>
+                <th className="text-right px-2 py-1.5 whitespace-nowrap">
+                  <button
+                    className="inline-flex items-center justify-end text-muted-foreground font-medium hover:text-foreground"
+                    onClick={() => handleSort("pctile3Y")}
+                    title="Percentile of the current SI within the name's own trailing 3Y history (100 = most shorted it has been)"
+                  >
+                    %ile 3Y <SortIcon col="pctile3Y" />
+                  </button>
+                </th>
+                <th className="text-right px-2 py-1.5 whitespace-nowrap">
+                  <button
+                    className="inline-flex items-center justify-end text-muted-foreground font-medium hover:text-foreground"
+                    onClick={() => handleSort("z3Y")}
+                    title="Z-score of the current SI vs the trailing 3Y mean/std"
+                  >
+                    z 3Y <SortIcon col="z3Y" />
+                  </button>
+                </th>
+                <th className="text-right px-2 py-1.5 whitespace-nowrap">
+                  <button
+                    className="inline-flex items-center justify-end text-muted-foreground font-medium hover:text-foreground"
+                    onClick={() => handleSort("exSub")}
+                    title="SI minus the subsector median SI (pp) — peer-relative crowding"
+                  >
+                    vs Sub <SortIcon col="exSub" />
                   </button>
                 </th>
                 <th className="text-center px-2 py-1.5 whitespace-nowrap">
@@ -478,14 +586,17 @@ export default function ShortInterest() {
                     Δ 6M <SortIcon col="delta6M" />
                   </button>
                 </th>
+                <th className="px-1 py-1.5" />
               </tr>
             </thead>
             <tbody>
               {filteredRows.map((row) => (
                 <tr
                   key={row.ticker}
-                  className="border-b border-border/20 hover:bg-accent/30 transition-colors"
+                  className="border-b border-border/20 hover:bg-accent/30 transition-colors cursor-pointer"
                   data-testid={`si-row-${row.ticker}`}
+                  onClick={() => openOnCharts(row.ticker)}
+                  title="Open on Charts: price + Short Interest"
                 >
                   <td className="px-2 py-1 font-mono font-bold text-primary whitespace-nowrap">
                     {row.ticker}
@@ -495,6 +606,15 @@ export default function ShortInterest() {
                   </td>
                   <td className="px-2 py-1 whitespace-nowrap">
                     <SIBar value={row.siPct} max={maxSI} />
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    <PctileCell value={row.pctile3Y} />
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    <ZCell value={row.z3Y} />
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    <SIValue value={row.exSub} format="pp" />
                   </td>
                   <td className="px-2 py-1 text-center whitespace-nowrap">
                     <Sparkline data={row.sparkline} />
@@ -514,6 +634,16 @@ export default function ShortInterest() {
                   <td className="px-2 py-1 text-right">
                     <SIValue value={row.delta6M} format="pp" />
                   </td>
+                  <td className="px-1 py-1 text-center">
+                    <button
+                      className="p-0.5 rounded text-muted-foreground/60 hover:text-primary hover:bg-accent"
+                      onClick={(e) => { e.stopPropagation(); setBacktestRow({ ticker: row.ticker, name: row.name }); }}
+                      title="Backtest: forward returns conditioned on this name's SI state"
+                      data-testid={`si-bt-open-${row.ticker}`}
+                    >
+                      <FlaskConical className="w-3 h-3" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -531,8 +661,10 @@ export default function ShortInterest() {
                 {topIncreasers.map((row, idx) => (
                   <div
                     key={row.ticker}
-                    className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-accent/30"
+                    className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-accent/30 cursor-pointer"
                     data-testid={`si-mover-up-${row.ticker}`}
+                    onClick={() => openOnCharts(row.ticker)}
+                    title="Open on Charts: price + Short Interest"
                   >
                     <span className="text-muted-foreground/60 font-mono w-5 text-right">
                       {idx + 1}
@@ -559,8 +691,10 @@ export default function ShortInterest() {
                 {topDecreasers.map((row, idx) => (
                   <div
                     key={row.ticker}
-                    className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-accent/30"
+                    className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-accent/30 cursor-pointer"
                     data-testid={`si-mover-down-${row.ticker}`}
+                    onClick={() => openOnCharts(row.ticker)}
+                    title="Open on Charts: price + Short Interest"
                   >
                     <span className="text-muted-foreground/60 font-mono w-5 text-right">
                       {idx + 1}
@@ -580,6 +714,13 @@ export default function ShortInterest() {
             </div>
           </div>
         </div>
+      )}
+      {backtestRow && (
+        <SIBacktestModal
+          ticker={backtestRow.ticker}
+          name={backtestRow.name}
+          onClose={() => setBacktestRow(null)}
+        />
       )}
     </div>
   );
