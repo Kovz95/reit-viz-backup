@@ -236,7 +236,7 @@ function ConditionEditor({ cond, onChange, onRemove, canRemove }: {
         </div>
       )}
       <div className="flex flex-col gap-1 w-[80px]">
-        <Label className="text-xs text-muted-foreground">±bars</Label>
+        <Label className="text-xs text-muted-foreground">≤bars prior</Label>
         <Input type="number" step="1" min="0" value={cond.withinBars}
           onChange={e => set("withinBars", Math.max(0, parseInt(e.target.value) || 0))} className="h-8"
           data-testid="input-within-bars"
@@ -430,7 +430,8 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
                 <tbody>
                   {(showAllSingleEvents ? result.events : result.events.slice(-200)).slice().reverse().map((ev, i) => {
                     const firstCond = run.conditions[0];
-                    const isSigmaOrGap = firstCond && (firstCond.type === "sigma" || firstCond.type === "gap");
+                    // Calendar trigger values are the event day's % move.
+                    const isSigmaOrGap = firstCond && (firstCond.type === "sigma" || firstCond.type === "gap" || isCalendarType(firstCond.type));
                     return (
                       <tr key={`${ev.date}-${i}`} className="border-b border-border/50 hover:bg-muted/30">
                         <td className="py-1 pr-3">{ev.date}</td>
@@ -491,7 +492,10 @@ export default function StudyFamily() {
 
   useEffect(() => {
     if (!ticker && filteredTickers.length) setTicker(filteredTickers[0].ticker);
-    if (ticker && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === ticker))
+    // BASKET: synthetic tickers are valid single-mode subjects but never appear
+    // in filteredTickers — don't reset them (the old page did, which made
+    // basket selection self-revert immediately).
+    if (ticker && !isBasketTicker(ticker) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === ticker))
       setTicker(filteredTickers[0].ticker);
   }, [filteredTickers, ticker]);
 
@@ -578,7 +582,9 @@ export default function StudyFamily() {
           ]);
           const close = extractColumn(raw, "close", dates.length);
           const open = extractColumn(raw, "open", dates.length);
-          if (!close.length) { setCrossProgress(p => p ? { ...p, done: p.done + 1 } : null); continue; }
+          // No manual progress bump here — the finally below increments once
+          // per ticker (the old page double-counted no-data tickers).
+          if (!close.length) continue;
           const bundle: EventBundle = { dates, closes: close, opens: open };
           const res = computeStudy(bundle, cfg.conditions, cfg.combinator, calendar);
           results.push({ ticker: t.ticker, name: t.name, events: res.events.length, stats: res.stats, baseline: res.baseline, eventRows: res.events });
@@ -714,8 +720,12 @@ export default function StudyFamily() {
     else { setSortKey(col); setSortDir(col === "ticker" || col === "name" ? "asc" : "desc"); }
   };
 
-  const isLoadingSingle = !!runConfig && runConfig.mode === "single" && (loadingSingle || !singleResult);
-  const isLoadingPairs = !!runConfig && runConfig.mode === "pairs" && (loadingPairs || !pairsResult);
+  // Distinguish "still fetching/computing" from "fetched but no usable close
+  // data" — the old page's `|| !result` spun forever on dataless payloads.
+  const isLoadingSingle = !!runConfig && runConfig.mode === "single" && (loadingSingle || (!singleResult && singleData == null));
+  const noDataSingle = !!runConfig && runConfig.mode === "single" && !loadingSingle && singleData != null && !singleResult;
+  const isLoadingPairs = !!runConfig && runConfig.mode === "pairs" && (loadingPairs || (!pairsResult && pairsData == null));
+  const noDataPairs = !!runConfig && runConfig.mode === "pairs" && !loadingPairs && pairsData != null && !pairsResult;
   const canRun = !(mode === "single" && !ticker) && !(mode === "pairs" && (!ticker || !tickerB || ticker === tickerB))
     && !(mode === "cross" && filteredTickers.length === 0);
 
@@ -902,6 +912,12 @@ export default function StudyFamily() {
         </div>
       )}
 
+      {noDataSingle && (
+        <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
+          No price data for this symbol.
+        </div>
+      )}
+
       {runConfig?.mode === "single" && singleResult && (
         <ResultStats run={runConfig} result={singleResult} triggerSummary={triggerSummary}
           showAllSingleEvents={showAllSingleEvents} setShowAllSingleEvents={setShowAllSingleEvents} />
@@ -910,6 +926,12 @@ export default function StudyFamily() {
       {runConfig?.mode === "pairs" && isLoadingPairs && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
           Computing pair event study…
+        </div>
+      )}
+
+      {noDataPairs && (
+        <div className="flex flex-1 items-center justify-center text-muted-foreground text-sm">
+          No overlapping price data for this pair.
         </div>
       )}
 
@@ -1022,7 +1044,7 @@ export default function StudyFamily() {
                       const isExpanded = expandedTicker === row.ticker;
                       const hasEvents = row.events > 0;
                       const firstCond = runConfig.conditions[0];
-                      const isSigmaOrGap = firstCond && (firstCond.type === "sigma" || firstCond.type === "gap");
+                      const isSigmaOrGap = firstCond && (firstCond.type === "sigma" || firstCond.type === "gap" || isCalendarType(firstCond.type));
                       return (
                         <React.Fragment key={row.ticker}>
                           <tr className="border-b border-border/50 hover:bg-muted/30" data-testid={`row-ticker-${row.ticker}`}>

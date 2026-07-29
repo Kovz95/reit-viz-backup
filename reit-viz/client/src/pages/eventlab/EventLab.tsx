@@ -28,7 +28,10 @@ export default function EventLab({ initialFamily }: { initialFamily?: EventLabFa
   // the prop is present so /performance etc. always land where they promise.
   const pinnedRef = useRef(initialFamily != null);
 
-  const serialize = useCallback(() => ({ family }), [family]);
+  // While alias-pinned (user hasn't clicked a family tab), don't overwrite the
+  // workspace-saved family — visiting /performance shouldn't change what
+  // /event-lab restores to.
+  const serialize = useCallback(() => (pinnedRef.current ? {} : { family }), [family]);
   const restore = useCallback((s: any) => {
     if (!pinnedRef.current && s?.family && FAMILY_TABS.some((t) => t.id === s.family && t.ready)) {
       setFamily(s.family);

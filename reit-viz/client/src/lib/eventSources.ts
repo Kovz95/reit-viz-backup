@@ -42,7 +42,8 @@ export interface StudyCondition {
   month: number;
   /** "MM-DD" anchors for type "window": fires on the first bar at/after startMMDD each year. */
   startMMDD: string;
-  /** Smear: condition counts as firing at bar i if its raw mask fired in [i-withinBars, i]. */
+  /** Backward smear: condition counts as firing at bar i if its raw mask
+   *  fired in [i-withinBars, i] (i.e. up to N bars EARLIER — one-sided). */
   withinBars: number;
 }
 
@@ -69,7 +70,7 @@ const CAL_LABELS: Record<CalendarEventType, string> = {
 };
 
 export function studyConditionLabel(c: StudyCondition): string {
-  const within = c.withinBars > 0 ? ` (±${c.withinBars}b)` : "";
+  const within = c.withinBars > 0 ? ` (≤${c.withinBars}b prior)` : "";
   if (c.type === "sigma") {
     const dir = c.sigmaDirection === "either" ? "±" : c.sigmaDirection === "up" ? "+" : "−";
     const basis = c.sigmaBasis === "full" ? "full hist" : `${c.sigmaWindow}d`;
@@ -136,7 +137,12 @@ export function datesToBarIndices(eventDates: string[], barDates: string[]): num
   let j = 0;
   let last = -1;
   const sorted = [...eventDates].sort();
+  const first = barDates[0];
   for (const d of sorted) {
+    // Dates before the series start are dropped, not collapsed onto bar 0 —
+    // otherwise a smeared condition manufactures phantom events at the start
+    // of a short-history ticker.
+    if (first !== undefined && d < first) continue;
     while (j < barDates.length && barDates[j] < d) j++;
     if (j >= barDates.length) break;
     if (j !== last) { out.push(j); last = j; }
