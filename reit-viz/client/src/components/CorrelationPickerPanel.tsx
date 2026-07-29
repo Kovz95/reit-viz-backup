@@ -1,6 +1,10 @@
 /**
  * Correlation picker panel — select any two ticker+metric combos from the full
- * universe and plot rolling Pearson correlation to a chart pane.
+ * universe and plot rolling Pearson correlation to a chart pane. Each leg can
+ * also be a COMPUTED attribution component ("Attr: …" pseudo-metrics): the
+ * trailing-window est-vs-multiple decomposition from lib/attribution, e.g.
+ * correlate a ticker's rolling multiple-share % against its own price rate
+ * (Attr: Total Δ) or any stored metric.
  */
 import { useState, useMemo, useCallback } from "react";
 
@@ -25,6 +29,10 @@ import {
   alignSeries, computeRollingCorrelation, nextDerivedColor,
 } from "@/lib/pairMath";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
+import {
+  BASIS_FAMILIES, BASIS_PERIODS, loadBasisAlignedAny, buildRollingPath,
+  type BasisMode, type BasisPeriod,
+} from "@/lib/attribution";
 
 // Curated metrics that should always be offered even if absent from the data.
 const METRIC_OPTIONS_BASE = [
@@ -39,6 +47,18 @@ const METRIC_OPTIONS_BASE = [
   "Short Interest%",
   "1Y Price Chg%", "6M Price Chg%", "3M Price Chg%", "1M Price Chg%",
 ];
+
+// Computed attribution pseudo-metrics: the trailing attr-window decomposition
+// (Δln P = Δln M + Δln E, log-%) rolled over time. "Total Δ" IS the rolling
+// price rate; shares are |mult| / (|mult| + |est|) in percent.
+const ATTR_METRICS = [
+  "Attr: Multiple Δ",
+  "Attr: Estimate Δ",
+  "Attr: Total Δ (price rate)",
+  "Attr: Multiple share %",
+  "Attr: Estimate share %",
+];
+const isAttrMetric = (m: string) => m.startsWith("Attr: ");
 
 interface CorrelationPickerPanelProps {
   tickerList: TickerMeta[];
@@ -59,33 +79,74 @@ export default function CorrelationPickerPanel({
   const [loading, setLoading] = useState(false);
   const [popA, setPopA] = useState(false);
   const [popB, setPopB] = useState(false);
+  // Attribution-leg settings (shared by both legs when either uses an Attr metric)
+  const [attrWin, setAttrWin] = useState(63);
+  const [attrBasis, setAttrBasis] = useState<BasisMode>("auto");
+  const [attrPeriod, setAttrPeriod] = useState<BasisPeriod>("FY2");
 
   // Union curated metrics + everything the loaded universe exposes + derived,
-  // grouped by category for the picker.
+  // grouped by category for the picker. Attribution pseudo-metrics lead.
   const metricGroups = useMemo(() => {
     const s = new Set<string>([...METRIC_OPTIONS_BASE, ...DERIVED_METRICS]);
     for (const t of tickerList) for (const m of t.metrics || []) s.add(m);
-    return groupMetricsByCategory([...s]);
+    return [{ category: "Attribution (computed)", metrics: ATTR_METRICS }, ...groupMetricsByCategory([...s])];
   }, [tickerList]);
 
-  const canPlot = tickerA && tickerB && tickerA !== tickerB;
+  const anyAttr = isAttrMetric(metricA) || isAttrMetric(metricB);
+  // Same ticker is fine as long as the two series differ (e.g. WELL multiple
+  // share % vs WELL price rate).
+  const canPlot = tickerA && tickerB && (tickerA !== tickerB || metricA !== metricB);
+
+  const loadLeg = useCallback(async (ticker: string, metric: string): Promise<Array<{ time: string; value: number }> | null> => {
+    if (!isAttrMetric(metric)) return getMetricSeries(ticker, metric);
+    const res = await loadBasisAlignedAny(ticker, attrBasis, attrPeriod);
+    if (!res) return null;
+    const path = buildRollingPath(res.aligned, 0, attrWin);
+    return path.map((p) => {
+      let v: number;
+      if (metric === "Attr: Multiple Δ") v = p.mult;
+      else if (metric === "Attr: Estimate Δ") v = p.est;
+      else if (metric === "Attr: Total Δ (price rate)") v = p.total;
+      else {
+        const denom = Math.abs(p.mult) + Math.abs(p.est);
+        const multShare = denom > 1e-12 ? (Math.abs(p.mult) / denom) * 100 : 50;
+        v = metric === "Attr: Multiple share %" ? multShare : 100 - multShare;
+      }
+      return { time: p.date, value: v };
+    });
+  }, [attrBasis, attrPeriod, attrWin]);
 
   const handlePlot = useCallback(async () => {
     if (!canPlot) return;
     setLoading(true);
     try {
       const [dataA, dataB] = await Promise.all([
-        getMetricSeries(tickerA, metricA),
-        getMetricSeries(tickerB, metricB),
+        loadLeg(tickerA, metricA),
+        loadLeg(tickerB, metricB),
       ]);
       if (!dataA?.length || !dataB?.length) return;
-      const aligned = alignSeries(dataA, dataB);
+      // Attribution deltas are signed — alignSeries drops values ≤ 0, which
+      // would silently discard every negative reading, so attr legs use a
+      // finite-only inner join instead.
+      let aligned;
+      if (anyAttr) {
+        const mapB = new Map(dataB.map((d) => [d.time, d.value]));
+        aligned = dataA.flatMap((d) => {
+          const b = mapB.get(d.time);
+          return b !== undefined && Number.isFinite(b) && Number.isFinite(d.value)
+            ? [{ time: d.time, a: d.value, b }] : [];
+        });
+      } else {
+        aligned = alignSeries(dataA, dataB);
+      }
       if (aligned.length < win) return;
       const corrData = computeRollingCorrelation(aligned, win);
       if (!corrData.length) return;
 
-      const labelA = metricA === "close" ? tickerA : `${tickerA} ${metricA}`;
-      const labelB = metricB === "close" ? tickerB : `${tickerB} ${metricB}`;
+      const legLabel = (t: string, m: string) =>
+        m === "close" ? t : `${t} ${m}${isAttrMetric(m) ? ` ${attrWin}d` : ""}`;
+      const labelA = legLabel(tickerA, metricA);
+      const labelB = legLabel(tickerB, metricB);
       const series: PlottedSeries = {
         id: `corr:${tickerA}:${metricA}:${tickerB}:${metricB}:${Date.now()}`,
         ticker: "CORR",
@@ -104,7 +165,7 @@ export default function CorrelationPickerPanel({
     } finally {
       setLoading(false);
     }
-  }, [canPlot, tickerA, metricA, tickerB, metricB, win, plotMode, onPlot]);
+  }, [canPlot, tickerA, metricA, tickerB, metricB, win, plotMode, onPlot, loadLeg, anyAttr, attrWin]);
 
   return (
     <ResizableSidebar storageKey="charts-correlation-picker-width" defaultWidth={280}>
@@ -150,6 +211,48 @@ export default function CorrelationPickerPanel({
             <MetricPicker value={metricB} onChange={setMetricB} groups={metricGroups} />
           </div>
         </div>
+
+        {/* Attribution-leg settings */}
+        {anyAttr && (
+          <div className="space-y-1 rounded border border-border/60 bg-background/40 p-2">
+            <Label className="text-[11px] font-semibold">Attribution legs</Label>
+            <div className="flex gap-1 items-center flex-wrap">
+              <span className="text-[10px] text-muted-foreground">Window</span>
+              <Input
+                type="number"
+                value={attrWin}
+                onChange={(e) => setAttrWin(parseInt(e.target.value) || 63)}
+                className="h-7 text-xs bg-background w-14"
+                data-testid="corrpick-attr-win"
+              />
+              <Select value={attrBasis} onValueChange={(v) => setAttrBasis(v as BasisMode)}>
+                <SelectTrigger className="h-7 text-xs flex-1 min-w-[70px]" data-testid="corrpick-attr-basis">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto" className="text-xs">Auto</SelectItem>
+                  {BASIS_FAMILIES.map((f) => (
+                    <SelectItem key={f} value={f} className="text-xs">{f}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={attrPeriod} onValueChange={(v) => setAttrPeriod(v as BasisPeriod)}>
+                <SelectTrigger className="h-7 text-xs w-[62px]" data-testid="corrpick-attr-period">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BASIS_PERIODS.map((p) => (
+                    <SelectItem key={p} value={p} className="text-xs">{p}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              "Attr" legs are computed: trailing-window Δln decomposition (signed log-%) or share-of-move %.
+              "Total Δ" is the rolling price rate over the same window.
+            </p>
+          </div>
+        )}
 
         {/* Rolling window */}
         <div className="space-y-1">
