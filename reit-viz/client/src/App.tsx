@@ -72,7 +72,6 @@ const Distributions = lazy(() => import("@/pages/Distributions"));
 const ValuationRerateResidence = lazy(() => import("@/pages/ValuationRerateResidence"));
 const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
 const Heatmap = lazy(() => import("@/pages/Heatmap"));
-const Performance = lazy(() => import("@/pages/Performance"));
 const EventLab = lazy(() => import("@/pages/eventlab/EventLab"));
 const EarningsCalendar = lazy(() => import("@/pages/EarningsCalendar"));
 const IdeaJournal = lazy(() => import("@/pages/IdeaJournal"));
@@ -99,8 +98,6 @@ const DualMAOptimizer = lazy(() => import("@/pages/DualMAOptimizer"));
 const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
 const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
 const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
-const PriceAction = lazy(() => import("@/pages/PriceAction"));
-const SigmaMove = lazy(() => import("@/pages/SigmaMove"));
 const Attribution = lazy(() => import("@/pages/Attribution"));
 const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
 const MTFSetups = lazy(() => import("@/pages/MTFSetups"));
@@ -305,15 +302,12 @@ function NavBar() {
       ],
     },
     { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
-    { path: "/performance", label: "Performance", icon: Activity, universeControlled: true },
     { path: "/event-lab", label: "Event Lab", icon: Activity, universeControlled: true },
     { path: "/journal", label: "Journal", icon: Star },
     { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
     { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
     { path: "/optimizers", label: "Optimizers", icon: Crosshair, universeControlled: true },
-    { path: "/price-action", label: "Price Action", icon: Activity, universeControlled: true },
-    { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
     { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
     { path: "/similar-setups", label: "Similar Setups", icon: Filter },
     { path: "/mtf-setups", label: "MTF Setups", icon: Layers },
@@ -736,8 +730,10 @@ function AppShell() {
               <Route path="/val-residence" component={ValuationRerateResidence} />
               <Route path="/spread" component={DividendSpread} />
               <Route path="/heatmap" component={Heatmap} />
-              <Route path="/performance" component={Performance} />
+              {/* Event Lab + aliases for the three retired tabs (bookmarks,
+                  NUM_NAV digits, and palette entries keep working). */}
               <Route path="/event-lab">{() => <EventLab />}</Route>
+              <Route path="/performance">{() => <EventLab initialFamily="performance" />}</Route>
               <Route path="/earnings-calendar" component={EarningsCalendar} />
               <Route path="/journal" component={IdeaJournal} />
               <Route path="/ranker" component={RidgeRanker} />
@@ -765,8 +761,8 @@ function AppShell() {
               <Route path="/tva-optimizer" component={TVAOptimizer} />
               <Route path="/levels" component={LevelsAndTrendlines} />
               <Route path="/auto-trendline-backtest" component={AutoTrendlineBacktest} />
-              <Route path="/price-action" component={PriceAction} />
-              <Route path="/sigma-move" component={SigmaMove} />
+              <Route path="/price-action">{() => <EventLab initialFamily="study" />}</Route>
+              <Route path="/sigma-move">{() => <EventLab initialFamily="sigma" />}</Route>
               <Route path="/attribution" component={Attribution} />
               <Route path="/similar-setups" component={SimilarSetups} />
               <Route path="/mtf-setups" component={MTFSetups} />
