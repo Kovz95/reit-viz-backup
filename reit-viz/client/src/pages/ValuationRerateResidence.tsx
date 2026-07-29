@@ -128,6 +128,16 @@ export default function ValuationRerateResidence() {
   const [search, setSearch] = useState("");
   const [pairMode, setPairMode] = usePersistedState("reit-viz:vrr:pairMode", false);
   const [pairBasis, setPairBasis] = usePersistedState<PairBasis>("reit-viz:vrr:pairBasis", "price");
+  // User-pinned pair rows ("A/B") shown alongside single-ticker rows: per
+  // selected metric, the A÷B ratio of the two names' MULTIPLES runs through the
+  // same rerate/residence math, with forward returns on the A/B PRICE ratio.
+  const [customPairs, setCustomPairs] = usePersistedState<string[]>("reit-viz:rerate-pairs", []);
+  const addCustomPair = (raw: string) => {
+    const m = raw.trim().toUpperCase().match(/^([A-Z0-9.\-]{1,12})\s*\/\s*([A-Z0-9.\-]{1,12})$/);
+    if (!m || m[1] === m[2]) return;
+    const key = `${m[1]}/${m[2]}`;
+    setCustomPairs((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  };
   const [classFilters, setClassFilters] = usePersistedState<Record<string, string>>("reit-viz:vrr:classFilters", DEFAULT_CLASS_FILTERS);
   const setClassFilter = (key: string, value: string) => {
     const idx = CLASS_FILTER_DEFS.findIndex((d) => d.key === key);
@@ -284,6 +294,51 @@ export default function ValuationRerateResidence() {
     enabled: pairMode && pairLegs.length >= 2 && (pairBasis === "price" || !!pairMetricKey),
   });
 
+  // User-pinned pair rows (single mode): multiple-ratio series judged against
+  // its own history, forward returns conditioned on the price ratio. A pair ×
+  // metric where either leg lacks the metric is skipped quietly.
+  const customPairsSig = customPairs.join("|");
+  const { data: customPairRows = [] } = useQuery({
+    queryKey: ["vrr-custom-pairs", metricsSig, basis, lookbackDays, pctMove, customPairsSig, tickerKey],
+    queryFn: async () => {
+      const out: MultiRow[] = [];
+      for (const pairKey of customPairs) {
+        const [a, b] = pairKey.split("/");
+        const [closeA, closeB] = await Promise.all([
+          getMetricSeries(a, "close").catch(() => []),
+          getMetricSeries(b, "close").catch(() => []),
+        ]);
+        const priceRatio = ratioSeries(closeA, closeB);
+        if (priceRatio.length < 30) continue;
+        const A = tickers.find((t) => t.ticker === a), B = tickers.find((t) => t.ticker === b);
+        const meta: TickerMetaLite = {
+          ticker: pairKey, name: `${A?.name ?? a} / ${B?.name ?? b}`,
+          economy: A?.economy ?? "", sector: A?.sector ?? "", subsector: A?.subsector ?? "",
+          industryGroup: A?.industryGroup ?? "", industry: A?.industry ?? "", subindustry: A?.subindustry ?? "",
+          legA: a, legB: b,
+        };
+        const byMetric: Record<string, Cell> = {};
+        for (const mk of metricKeys) {
+          const m = getRerateMetric(mk);
+          const [sA, sB] = await Promise.all([
+            getMetricSeries(a, mk).catch(() => []),
+            getMetricSeries(b, mk).catch(() => []),
+          ]);
+          if (!sA.length || !sB.length) continue;
+          const mulRatio = ratioSeries(sA, sB);
+          if (mulRatio.length < 30) continue;
+          // Same orientation as the underlying metric: for direct multiples a
+          // LOW ratio = A cheap vs B; for yields the reading inverts with it.
+          const cell = computeCell(meta, mulRatio, priceRatio, m);
+          if (cell) byMetric[mk] = cell;
+        }
+        if (Object.keys(byMetric).length) out.push({ meta, byMetric });
+      }
+      return out;
+    },
+    enabled: !pairMode && customPairs.length > 0 && metricKeys.length > 0,
+  });
+
   const rows = pairMode ? pairRows : singleRows;
   const isLoading = pairMode ? pairLoading : singleLoading;
 
@@ -336,10 +391,11 @@ export default function ValuationRerateResidence() {
     const q = search.trim().toUpperCase();
     let r = pairMode
       ? rows.slice()
-      : rows.filter((x) =>
+      // Pinned pair rows bypass the universe filters (they're explicit picks).
+      : [...customPairRows, ...rows.filter((x) =>
           CLASS_FILTER_DEFS.every((d) => classFilters[d.key] === "all" || (x.meta as any)[d.key] === classFilters[d.key])
           && geo.matchesGeo(x.meta.ticker)
-          && basketScope.inScope(x.meta.ticker));
+          && basketScope.inScope(x.meta.ticker))];
     if (q) r = r.filter((x) => x.meta.ticker.includes(q) || x.meta.name.toUpperCase().includes(q));
     r = [...r].sort((a, b) => {
       if (FWD_COLS.has(sortCol)) {
@@ -352,7 +408,7 @@ export default function ValuationRerateResidence() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return r;
-  }, [rows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo, basketScope.members, pairMode]);
+  }, [rows, customPairRows, search, sortCol, effSortMetric, sortDir, horizon, classFilters, geo.matchesGeo, basketScope.members, pairMode]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -484,22 +540,26 @@ export default function ValuationRerateResidence() {
     );
   };
 
-  const renderRow = (row: MultiRow) => (
-    <tr key={row.meta.ticker} className="border-b border-border/40 hover:bg-muted/30">
+  const renderRow = (row: MultiRow) => {
+    const isPairRow = !!(row.meta.legA && row.meta.legB);
+    return (
+    <tr key={row.meta.ticker} className="border-b border-border/40 hover:bg-muted/30" data-testid={isPairRow && !pairMode ? `rerate-pair-row-${row.meta.ticker.replace("/", "-")}` : undefined}>
       <td className={`px-1 py-1 text-center ${STICKY0}`}>
         <button type="button"
-          onClick={() => pairMode && row.meta.legA && row.meta.legB ? navigateToPairs(row.meta.legA, row.meta.legB) : openInCharts(row.meta.ticker)}
-          title={pairMode ? `Open ${row.meta.ticker} in Pairs` : `Chart ${row.meta.ticker} — ${effSortMetric} with percentile, z-score & reward:risk over time`}
+          onClick={() => isPairRow ? navigateToPairs(row.meta.legA!, row.meta.legB!) : openInCharts(row.meta.ticker)}
+          title={isPairRow ? `Open ${row.meta.ticker} in Pairs` : `Chart ${row.meta.ticker} — ${effSortMetric} with percentile, z-score & reward:risk over time`}
           className="text-muted-foreground hover:text-foreground">
           <LineChart className="w-3.5 h-3.5" />
         </button>
       </td>
-      <td className={`px-2 py-1 text-left font-semibold ${STICKY1}`} title={`${row.meta.name} · ${row.meta.sector}`}>{row.meta.ticker}</td>
+      <td className={isPairRow && !pairMode ? `px-2 py-1 text-left font-semibold ${STICKY1} text-purple-300` : `px-2 py-1 text-left font-semibold ${STICKY1}`}
+        title={isPairRow && !pairMode ? `${row.meta.name} · A/B multiple ratio (fwd returns on the price ratio)` : `${row.meta.name} · ${row.meta.sector}`}>{row.meta.ticker}</td>
       {effMetricKeys.map((mk, i) => (
         <Fragment key={mk}>{renderMetricCells(row.meta, row.byMetric[mk], effMetrics[i])}</Fragment>
       ))}
     </tr>
-  );
+    );
+  };
 
   return (
     <div className="flex flex-col h-full overflow-hidden" data-testid="vrr-page">
@@ -535,6 +595,27 @@ export default function ValuationRerateResidence() {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">{pairMode ? "Metric (for ratio)" : "Metrics"}</div>
           <RerateMetricPicker selected={metricKeys} onChange={setMetrics} />
         </div>
+        {!pairMode && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Pairs</div>
+            <div className="flex items-center gap-1 flex-wrap min-h-7">
+              <Input placeholder="Pair A/B" data-testid="rerate-pair-input" className="h-7 w-24 text-xs"
+                title="Pin a relative-value pair row (e.g. WELL/VTR): each selected metric's A÷B multiple ratio runs through the same rerate/residence stats, with forward returns on the A/B price ratio."
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    addCustomPair((e.target as HTMLInputElement).value);
+                    (e.target as HTMLInputElement).value = "";
+                  }
+                }} />
+              {customPairs.map((p) => (
+                <span key={p} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 text-[10px] font-mono" data-testid={`rerate-pair-chip-${p.replace("/", "-")}`}>
+                  {p}
+                  <button className="hover:text-foreground" onClick={() => setCustomPairs((prev) => prev.filter((x) => x !== p))} title="Remove pair">×</button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Columns</div>
           <div className="flex rounded border border-border/40 overflow-hidden h-7">
@@ -689,13 +770,18 @@ export default function ValuationRerateResidence() {
                 <div>
                   <div className="text-sm font-semibold">{detail.meta.ticker} <span className="text-muted-foreground font-normal">· {detail.meta.name}</span></div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
-                    {m.label} · {basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding history"}{res ? ` · ${res.n.toLocaleString()} obs` : ""}
+                    {m.label}{detail.meta.legA && !pairMode ? <span className="text-purple-300/80"> (A/B ratio · fwd = price ratio)</span> : null} · {basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding history"}{res ? ` · ${res.n.toLocaleString()} obs` : ""}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {!pairMode && (
+                  {!pairMode && !detail.meta.legA && (
                     <button onClick={() => openInCharts(detail.meta.ticker)} className="text-[11px] px-2 py-1 rounded bg-muted hover:bg-muted/70 flex items-center gap-1" title="Open in Charts">
                       <LineChart className="w-3 h-3" /> Chart
+                    </button>
+                  )}
+                  {!pairMode && detail.meta.legA && detail.meta.legB && (
+                    <button onClick={() => navigateToPairs(detail.meta.legA!, detail.meta.legB!)} className="text-[11px] px-2 py-1 rounded bg-muted hover:bg-muted/70 flex items-center gap-1" title="Open in Pairs">
+                      <LineChart className="w-3 h-3" /> Pairs
                     </button>
                   )}
                   <button onClick={() => setDetail(null)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>

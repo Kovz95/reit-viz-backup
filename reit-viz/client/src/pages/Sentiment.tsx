@@ -5,16 +5,18 @@
 // matching family pinned.
 import { lazy, Suspense, useCallback, useRef, useState } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
-import { Target, Star } from "lucide-react";
+import { Target, Star, ArrowLeftRight } from "lucide-react";
 
 const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
 const Ratings = lazy(() => import("@/pages/Ratings"));
+const SentimentPairs = lazy(() => import("@/pages/SentimentPairs"));
 
-export type SentimentFamily = "si" | "ratings";
+export type SentimentFamily = "si" | "ratings" | "pairs";
 
 const FAMILY_TABS: Array<{ id: SentimentFamily; label: string; icon: typeof Target }> = [
   { id: "si", label: "Short Interest", icon: Target },
   { id: "ratings", label: "Ratings", icon: Star },
+  { id: "pairs", label: "Pair Gaps", icon: ArrowLeftRight },
 ];
 
 export default function Sentiment({ initialFamily }: { initialFamily?: SentimentFamily }) {
@@ -50,6 +52,7 @@ export default function Sentiment({ initialFamily }: { initialFamily?: Sentiment
         <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading…</div>}>
           {family === "si" && <ShortInterest />}
           {family === "ratings" && <Ratings />}
+          {family === "pairs" && <SentimentPairs />}
         </Suspense>
       </div>
     </div>

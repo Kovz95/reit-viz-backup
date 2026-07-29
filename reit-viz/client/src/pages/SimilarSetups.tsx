@@ -255,9 +255,34 @@ function alignBenchToTarget(
 // Price loading helpers
 // ---------------------------------------------------------------------------
 
+// Fetch one leg of a typed pair the same way the page fetches a single
+// ticker (OHLCV endpoint first, close-only fallback). Only dates+closes are
+// kept — ratio "high/low" built from per-leg highs/lows is not a real
+// extreme of the spread (leg extremes happen at different times), so the
+// ratio series is close-only by construction.
+async function loadLegCloseSeries(
+  ticker: string
+): Promise<{ times: string[]; closes: number[] } | null> {
+  try {
+    const ohlcv = await fetchOhlcSeries(ticker);
+    if (ohlcv.dates.length) return { times: ohlcv.dates, closes: ohlcv.closes };
+  } catch {}
+  try {
+    const pts = await fetchCloseSeries(ticker);
+    if (pts.length) {
+      return {
+        times: pts.map((p: { time: string }) => p.time),
+        closes: pts.map((p: { close: number }) => p.close),
+      };
+    }
+  } catch {}
+  return null;
+}
+
 async function loadTargetSeries(params: {
   mode: string;
   singleTicker: string;
+  typedPair: string;
   basketSymbol: string;
   basket: Basket | null;
   industryTickers: string[];
@@ -265,7 +290,45 @@ async function loadTargetSeries(params: {
   pairA: string;
   pairB: string;
 }): Promise<PriceSeries | null> {
-  const { mode, singleTicker, basketSymbol, basket, industryTickers, industryLabel, pairA, pairB } = params;
+  const { mode, singleTicker, typedPair, basketSymbol, basket, industryTickers, industryLabel, pairA, pairB } = params;
+
+  if (mode === "single" && typedPair) {
+    const [legTickerA, legTickerB] = typedPair.split("/");
+    if (!legTickerA || !legTickerB || legTickerA === legTickerB) return null;
+    const [legA, legB] = await Promise.all([
+      loadLegCloseSeries(legTickerA),
+      loadLegCloseSeries(legTickerB),
+    ]);
+    if (!legA || !legB) return null;
+    // Inner-join the two legs on date, then ratio close = closeA / closeB.
+    const bByDate = new Map<string, number>();
+    for (let k = 0; k < legB.times.length; k++) {
+      const v = legB.closes[k];
+      if (Number.isFinite(v) && v > 0) bByDate.set(legB.times[k], v);
+    }
+    const times: string[] = [];
+    const closes: number[] = [];
+    for (let k = 0; k < legA.times.length; k++) {
+      const ca = legA.closes[k];
+      if (!Number.isFinite(ca) || !(ca > 0)) continue;
+      const cb = bByDate.get(legA.times[k]);
+      if (cb === undefined) continue;
+      times.push(legA.times[k]);
+      closes.push(ca / cb);
+    }
+    if (closes.length === 0) return null;
+    return {
+      times,
+      closes,
+      highs: closes.slice(),
+      lows: closes.slice(),
+      opens: closes.slice(),
+      volumes: new Array(closes.length).fill(0),
+      label: `${legTickerA} / ${legTickerB}`,
+      hasVolume: false,
+      hasOHLC: false,
+    };
+  }
 
   if (mode === "single") {
     if (!singleTicker) return null;
@@ -1240,6 +1303,39 @@ export default function SimilarSetups() {
   })();
   const [singleTicker, setSingleTicker] = React.useState(initialTicker);
 
+  // Typed pair subject ("A/B") — an alternative subject entered next to the
+  // single-ticker picker. Non-empty typedPair takes precedence over
+  // singleTicker; picking from the ticker list clears it.
+  const [typedPair, setTypedPair] = React.useState("");
+  const [pairInputText, setPairInputText] = React.useState("");
+  const [pairInputError, setPairInputError] = React.useState<string | null>(null);
+
+  const clearTypedPair = () => {
+    setTypedPair("");
+    setPairInputText("");
+    setPairInputError(null);
+  };
+
+  const applyTypedPair = () => {
+    const raw = pairInputText.trim().toUpperCase();
+    if (!raw) {
+      clearTypedPair();
+      return;
+    }
+    const m = /^([A-Z0-9.\-]{1,12})\/([A-Z0-9.\-]{1,12})$/.exec(raw);
+    if (!m) {
+      setPairInputError("Format: A/B (e.g. VNQ/IYR)");
+      return;
+    }
+    if (m[1] === m[2]) {
+      setPairInputError("Legs must differ");
+      return;
+    }
+    setPairInputError(null);
+    setPairInputText(raw);
+    setTypedPair(`${m[1]}/${m[2]}`);
+  };
+
   // Basket
   const [basketSymbol, setBasketSymbol] = React.useState("");
 
@@ -1383,7 +1479,8 @@ export default function SimilarSetups() {
 
   // Target price series (for single/basket/industry/pair)
   const targetKey = React.useMemo(() => {
-    if (mode === "single") return `single|${singleTicker}`;
+    if (mode === "single")
+      return typedPair ? `singlePair|${typedPair}` : `single|${singleTicker}`;
     if (mode === "basket") return `basket|${basketSymbol}`;
     if (mode === "industry") {
       const sorted = [...industryTickers].sort().join(",");
@@ -1392,7 +1489,7 @@ export default function SimilarSetups() {
     if (mode === "pair") return `pair|${pairA}|${pairB}`;
     if (mode === "pairCombo") return `pairCombo|${pairA}|${pairB}`;
     return "";
-  }, [mode, singleTicker, basketSymbol, industryTickers, pairA, pairB]);
+  }, [mode, singleTicker, typedPair, basketSymbol, industryTickers, pairA, pairB]);
 
   const [priceSeries, setPriceSeries] = React.useState<PriceSeries | null>(null);
   const [seriesLoading, setSeriesLoading] = React.useState(false);
@@ -1420,6 +1517,7 @@ export default function SimilarSetups() {
         const series = await loadTargetSeries({
           mode,
           singleTicker,
+          typedPair,
           basketSymbol,
           basket: basketId ? baskets.find((b) => b.id === basketId) ?? null : null,
           industryTickers,
@@ -1825,12 +1923,54 @@ export default function SimilarSetups() {
         <span className="w-px h-5 bg-border" />
 
         {mode === "single" && (
-          <div className="flex items-center gap-2 min-w-[280px]">
+          <div className="flex items-center gap-2 min-w-[280px] flex-wrap">
             <UnifiedTickerPicker
               tickers={workbookTickers}
               value={singleTicker}
-              onChange={setSingleTicker}
+              onChange={(t: string) => {
+                setSingleTicker(t);
+                clearTypedPair();
+              }}
             />
+            <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-wider">
+              or
+            </span>
+            <input
+              type="text"
+              value={pairInputText}
+              placeholder="Pair A/B"
+              onChange={(e) => {
+                setPairInputText(e.target.value);
+                if (pairInputError) setPairInputError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyTypedPair();
+              }}
+              className="text-[11px] font-mono px-2 py-1 w-[130px] bg-background border border-border rounded text-foreground placeholder:text-muted-foreground/50"
+              data-testid="similar-pair-input"
+              title="Type a pair ratio subject as A/B (e.g. VNQ/IYR) and press Enter. Forward returns become spread returns. Picking a ticker from the list goes back to single mode."
+            />
+            {typedPair && (
+              <span
+                className="flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/15 text-amber-300"
+                data-testid="similar-pair-badge"
+              >
+                PAIR {typedPair}
+                <button
+                  onClick={clearTypedPair}
+                  className="text-amber-300/70 hover:text-amber-200"
+                  data-testid="similar-pair-clear"
+                  title="Clear pair — back to single ticker"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+            {pairInputError && (
+              <span className="text-[10px] font-mono text-red-400">
+                {pairInputError}
+              </span>
+            )}
           </div>
         )}
 

@@ -165,6 +165,65 @@ async function loadSpreadData(treasuryId: string, lookback: number): Promise<Spr
   return results;
 }
 
+// A vs B mode: dividend-yield differential between two tickers (same "Dividend
+// Yield" metric + multiplier as the treasury path), inner-joined per date, fed
+// through the identical computeStats / computeHistPctile pipeline.
+async function loadPairSpreadData(tickerA: string, tickerB: string, lookback: number): Promise<SpreadRow | { missing: string[] } | null> {
+  const [datesList, dataA, dataB] = await Promise.all([
+    fetchGlobalDatesList(),
+    fetchTickerData(tickerA),
+    fetchTickerData(tickerB),
+  ]);
+  const seriesA = dataA["Dividend Yield"];
+  const seriesB = dataB["Dividend Yield"];
+  if (!seriesA || !seriesB) {
+    return { missing: [...(!seriesA ? [tickerA] : []), ...(!seriesB ? [tickerB] : [])] };
+  }
+  const multiplier = getDividendYieldMultiplier("Dividend Yield");
+  const yieldB = new Map<number, number>();
+  for (const [idx, val] of seriesB) {
+    if (Number.isFinite(val)) yieldB.set(idx, val * multiplier);
+  }
+  const spreadSeries: { time: string; value: number }[] = [];
+  let lastA: number | null = null;
+  let lastB: number | null = null;
+  for (const [idx, val] of seriesA) {
+    if (idx >= datesList.length) continue;
+    if (!Number.isFinite(val)) continue;
+    const vb = yieldB.get(idx);
+    if (vb === undefined) continue;
+    const va = val * multiplier;
+    lastA = va;
+    lastB = vb;
+    spreadSeries.push({ time: datesList[idx], value: +(va - vb).toFixed(4) });
+  }
+  if (spreadSeries.length === 0) return null;
+  const sliced = (lookback >= spreadSeries.length ? spreadSeries : spreadSeries.slice(-lookback)).map(s => s.value);
+  const { mean, std } = computeStats(sliced);
+  const current = spreadSeries[spreadSeries.length - 1].value;
+  const zScore = std > 0 ? (current - mean) / std : null;
+  const histPctile = computeHistPctile(sliced, current);
+  return {
+    ticker: `${tickerA} − ${tickerB}`,
+    name: "Dividend yield differential",
+    economy: "",
+    sector: "",
+    subsector: "",
+    industryGroup: "",
+    industry: "",
+    subindustry: "",
+    divYield: lastA,
+    treasuryRate: lastB,
+    spread: current,
+    mean,
+    std,
+    zScore,
+    histPctile,
+    spreadSeries,
+    sparkValues: sliced.slice(-200),
+  };
+}
+
 interface SparklineCanvasProps {
   values: number[];
   mean: number | null;
@@ -273,10 +332,15 @@ function pctileClass(p: number | null): string {
 interface SpreadDetailProps {
   row: SpreadRow;
   treasuryLabel: string;
-  onBack: () => void;
+  /** Overrides the "Dividend Yield − {treasury} Spread" caption (used by A vs B mode). */
+  spreadLabel?: string;
+  /** Overrides the export filename label (used by A vs B mode). */
+  exportLabel?: string;
+  /** When omitted, the Back button is hidden (A vs B mode renders inline, no table to go back to). */
+  onBack?: () => void;
 }
 
-function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
+function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: SpreadDetailProps) {
   const [logScale, setLogScale] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
@@ -382,19 +446,21 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
   return (
     <div className="flex flex-col h-full" data-testid="spread-detail">
       <div className="flex items-center gap-3 px-3 py-2 border-b border-border bg-card">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-[11px] gap-1"
-          onClick={onBack}
-          data-testid="spread-back-btn"
-        >
-          <ChevronLeft className="w-3 h-3" /> Back
-        </Button>
+        {onBack && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[11px] gap-1"
+            onClick={onBack}
+            data-testid="spread-back-btn"
+          >
+            <ChevronLeft className="w-3 h-3" /> Back
+          </Button>
+        )}
         <span className="font-mono font-bold text-sm text-primary">{row.ticker}</span>
         <span className="text-xs text-muted-foreground">{row.name}</span>
         <span className="text-xs text-muted-foreground">—</span>
-        <span className="text-xs text-foreground">Dividend Yield − {treasuryLabel} Spread</span>
+        <span className="text-xs text-foreground">{spreadLabel ?? `Dividend Yield − ${treasuryLabel} Spread`}</span>
         <div className="flex-1" />
         <div className="flex items-center gap-3 text-[11px] font-mono">
           <span>
@@ -419,7 +485,7 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
         <GridProminenceToggle />
         <ExportMenu
           getChart={() => chartRef.current}
-          label={`DivSpread_${row.ticker}_vs_${treasuryLabel}`}
+          label={exportLabel ?? `DivSpread_${row.ticker}_vs_${treasuryLabel}`}
         />
       </div>
       <div ref={containerRef} className="flex-1 min-h-0" />
@@ -429,6 +495,9 @@ function SpreadDetail({ row, treasuryLabel, onBack }: SpreadDetailProps) {
 
 export default function DividendSpread() {
   const { universeTickers } = useAppContext();
+  const [mode, setMode] = useState<"treasury" | "pair">("treasury");
+  const [pairA, setPairA] = useState("");
+  const [pairB, setPairB] = useState("");
   const [treasuryId, setTreasuryId] = useState("DGS10");
   const [lookback, setLookback] = useState(1260);
   const [sortCol, setSortCol] = useState("spread");
@@ -443,6 +512,9 @@ export default function DividendSpread() {
 
   const getState = useCallback(
     () => ({
+      mode,
+      pairA,
+      pairB,
       treasuryId,
       lookback,
       sortCol,
@@ -452,10 +524,13 @@ export default function DividendSpread() {
       manualTickers: [...manualTickers],
       selectedTicker,
     }),
-    [treasuryId, lookback, sortCol, sortDir, search, classFilters, manualTickers, selectedTicker]
+    [mode, pairA, pairB, treasuryId, lookback, sortCol, sortDir, search, classFilters, manualTickers, selectedTicker]
   );
 
   const setState = useCallback((s: any) => {
+    if (s.mode === "treasury" || s.mode === "pair") setMode(s.mode);
+    if (s.pairA !== undefined) setPairA(s.pairA);
+    if (s.pairB !== undefined) setPairB(s.pairB);
     if (s.treasuryId !== undefined) setTreasuryId(s.treasuryId);
     if (s.lookback !== undefined) setLookback(s.lookback);
     if (s.sortCol !== undefined) setSortCol(s.sortCol);
@@ -471,6 +546,48 @@ export default function DividendSpread() {
   const { data: allRows = [], isLoading } = useQuery({
     queryKey: ["dividend-spread", treasuryId, lookback],
     queryFn: () => loadSpreadData(treasuryId, lookback),
+    enabled: mode === "treasury",
+  });
+
+  // ── A vs B mode ──────────────────────────────────────────────────────────
+  const { data: pairTickerMeta = [] } = useQuery({
+    queryKey: ["dividend-spread-ticker-list"],
+    queryFn: fetchWorkbookTickers,
+    enabled: mode === "pair",
+  });
+
+  const pairTickerOptions = useMemo(() => {
+    let list = pairTickerMeta;
+    if (universeTickers) list = list.filter(t => universeTickers.has(t.ticker));
+    return [...list].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  }, [pairTickerMeta, universeTickers]);
+
+  // Default A = the app's active ticker (?ticker= — set by navigateToTicker) if
+  // it's in the universe, else the first ticker; default B = another ticker.
+  // Only fills empty slots so restored workspace selections are never clobbered.
+  useEffect(() => {
+    if (mode !== "pair" || pairTickerOptions.length === 0) return;
+    const names = pairTickerOptions.map(t => t.ticker);
+    setPairA(prev => {
+      if (prev) return prev;
+      const urlTicker = new URLSearchParams(window.location.search).get("ticker")?.toUpperCase();
+      return urlTicker && names.includes(urlTicker) ? urlTicker : names[0];
+    });
+  }, [mode, pairTickerOptions]);
+
+  useEffect(() => {
+    if (mode !== "pair" || pairTickerOptions.length === 0 || !pairA) return;
+    setPairB(prev => {
+      if (prev && prev !== pairA) return prev;
+      return pairTickerOptions.map(t => t.ticker).find(n => n !== pairA) ?? "";
+    });
+  }, [mode, pairTickerOptions, pairA]);
+
+  const pairReady = mode === "pair" && !!pairA && !!pairB && pairA !== pairB;
+  const { data: pairRow = null, isLoading: pairLoading } = useQuery({
+    queryKey: ["dividend-spread-pair", pairA, pairB, lookback],
+    queryFn: () => loadPairSpreadData(pairA, pairB, lookback),
+    enabled: pairReady,
   });
 
   const geo = useGeoFilter(allRows, "spread-geo");
@@ -562,7 +679,7 @@ export default function DividendSpread() {
     </th>
   );
 
-  if (detailRow) {
+  if (detailRow && mode === "treasury") {
     return (
       <SpreadDetail
         row={detailRow}
@@ -575,17 +692,67 @@ export default function DividendSpread() {
   return (
     <div className="flex flex-col h-full bg-background" data-testid="dividend-spread-page">
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-wrap">
-        <span className="text-xs font-semibold text-muted-foreground">Rate</span>
-        <Select value={treasuryId} onValueChange={setTreasuryId}>
-          <SelectTrigger className="h-6 text-[11px] w-auto min-w-[150px]" data-testid="spread-rate-select">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {TREASURY_OPTIONS.map(t => (
-              <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-0.5 rounded border border-border p-0.5">
+          <Button
+            variant={mode === "treasury" ? "default" : "ghost"}
+            size="sm"
+            className="h-5 px-2 text-[10px]"
+            onClick={() => setMode("treasury")}
+            data-testid="spread-mode-treasury"
+          >
+            vs Treasury
+          </Button>
+          <Button
+            variant={mode === "pair" ? "default" : "ghost"}
+            size="sm"
+            className="h-5 px-2 text-[10px]"
+            onClick={() => setMode("pair")}
+            data-testid="spread-mode-pair"
+          >
+            A vs B
+          </Button>
+        </div>
+        <div className="h-5 w-px bg-border mx-1" />
+        {mode === "treasury" ? (
+          <>
+            <span className="text-xs font-semibold text-muted-foreground">Rate</span>
+            <Select value={treasuryId} onValueChange={setTreasuryId}>
+              <SelectTrigger className="h-6 text-[11px] w-auto min-w-[150px]" data-testid="spread-rate-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TREASURY_OPTIONS.map(t => (
+                  <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        ) : (
+          <>
+            <span className="text-xs font-semibold text-muted-foreground">A</span>
+            <Select value={pairA} onValueChange={setPairA}>
+              <SelectTrigger className="h-6 text-[11px] w-[110px]" data-testid="spread-ticker-a">
+                <SelectValue placeholder="Ticker A" />
+              </SelectTrigger>
+              <SelectContent>
+                {pairTickerOptions.map(t => (
+                  <SelectItem key={t.ticker} value={t.ticker}>{t.ticker}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-xs font-semibold text-muted-foreground">B</span>
+            <Select value={pairB} onValueChange={setPairB}>
+              <SelectTrigger className="h-6 text-[11px] w-[110px]" data-testid="spread-ticker-b">
+                <SelectValue placeholder="Ticker B" />
+              </SelectTrigger>
+              <SelectContent>
+                {pairTickerOptions.map(t => (
+                  <SelectItem key={t.ticker} value={t.ticker}>{t.ticker}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
+        )}
         <div className="h-5 w-px bg-border mx-1" />
         <span className="text-xs font-semibold text-muted-foreground">Lookback</span>
         <Select value={String(lookback)} onValueChange={v => setLookback(parseInt(v))}>
@@ -598,6 +765,8 @@ export default function DividendSpread() {
             ))}
           </SelectContent>
         </Select>
+        {mode === "treasury" && (
+          <>
         <div className="h-5 w-px bg-border mx-1" />
         <span className="text-xs font-semibold text-muted-foreground">Basket</span>
         <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-[150px]" />
@@ -628,7 +797,38 @@ export default function DividendSpread() {
           <Download className="w-3 h-3" />
           CSV
         </Button>
+          </>
+        )}
       </div>
+      {mode === "pair" ? (
+        <div className="flex-1 min-h-0 flex flex-col" data-testid="spread-pair-panel">
+          {!pairReady ? (
+            <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+              {pairA && pairB && pairA === pairB
+                ? "Pick two different tickers to compare."
+                : "Pick tickers A and B to compare their dividend-yield spread."}
+            </div>
+          ) : pairLoading ? (
+            <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+              Computing {pairA} − {pairB} yield spread...
+            </div>
+          ) : pairRow && !("missing" in pairRow) ? (
+            <SpreadDetail
+              row={pairRow}
+              treasuryLabel={treasuryLabel}
+              spreadLabel={`${pairA} − ${pairB} yield spread (pp)`}
+              exportLabel={`DivSpread_${pairA}_vs_${pairB}`}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+              {pairRow && "missing" in pairRow
+                ? `No dividend-yield history for ${pairRow.missing.join(" or ")} — pick a different ${pairRow.missing.includes(pairA) ? "A" : "B"} leg.`
+                : `No overlapping dividend-yield history for ${pairA} and ${pairB}.`}
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       <div className="flex items-center gap-1.5 px-3 py-1 border-b border-border/50 flex-wrap">
         <ClassificationFilters
           filters={classFilters}
@@ -732,6 +932,8 @@ export default function DividendSpread() {
           </table>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }
