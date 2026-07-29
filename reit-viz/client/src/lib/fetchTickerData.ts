@@ -1,5 +1,5 @@
 // fetchTickerData: returns per-ticker fundamentals + price as a sparse-pair map.
-// Used in DividendSpread.tsx, ROCAnalysis.tsx, ValuationRegime.tsx — consumers read
+// Used in DividendSpread.tsx, ValuationRegime.tsx — consumers read
 // metrics as top-level keys of [index, value] pairs (e.g. data.close, data["FFO LTM"]).
 //
 // The live backend has no /api/ticker-data route; data comes from

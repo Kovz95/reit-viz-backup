@@ -99,7 +99,6 @@ const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
 const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
 const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
 const PriceAction = lazy(() => import("@/pages/PriceAction"));
-const ROCAnalysis = lazy(() => import("@/pages/ROCAnalysis"));
 const SigmaMove = lazy(() => import("@/pages/SigmaMove"));
 const Attribution = lazy(() => import("@/pages/Attribution"));
 const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
@@ -312,7 +311,6 @@ function NavBar() {
     { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
     { path: "/optimizers", label: "Optimizers", icon: Crosshair, universeControlled: true },
     { path: "/price-action", label: "Price Action", icon: Activity, universeControlled: true },
-    { path: "/roc-analysis", label: "ROC Deciles", icon: Crosshair, universeControlled: true },
     { path: "/sigma-move", label: "Sigma Snapshot", icon: Activity, universeControlled: true },
     { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
     { path: "/similar-setups", label: "Similar Setups", icon: Filter },
@@ -632,7 +630,6 @@ const PAGES = [
   { path: "/levels", label: "Levels & Trendlines" },
   { path: "/auto-trendline-backtest", label: "Auto Trendline Backtest" },
   { path: "/price-action", label: "Price Action" },
-  { path: "/roc-analysis", label: "ROC Deciles" },
   { path: "/sigma-move", label: "Sigma Snapshot" },
   { path: "/attribution", label: "Attribution" },
   { path: "/premium-discount", label: "Premium / Discount" },
@@ -765,7 +762,6 @@ function AppShell() {
               <Route path="/levels" component={LevelsAndTrendlines} />
               <Route path="/auto-trendline-backtest" component={AutoTrendlineBacktest} />
               <Route path="/price-action" component={PriceAction} />
-              <Route path="/roc-analysis" component={ROCAnalysis} />
               <Route path="/sigma-move" component={SigmaMove} />
               <Route path="/attribution" component={Attribution} />
               <Route path="/similar-setups" component={SimilarSetups} />
