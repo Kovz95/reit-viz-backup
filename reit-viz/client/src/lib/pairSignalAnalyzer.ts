@@ -122,6 +122,7 @@ export interface PairSignalRawResult {
   currentRatio: number;
   currentSignals: Array<{ signal: SignalTypePair; value: number | null }>;
   buckets: Record<SignalTypePair, BucketRow[]>;
+  analogs: Record<SignalTypePair, SignalAnalogResult | null>;
   bestNow: {
     signal: SignalTypePair;
     bucket: BucketRow;
@@ -339,6 +340,109 @@ function computeBuckets(
     rows.push(row);
   }
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Analog episodes: nearest historical neighbors of today's signal value
+// ---------------------------------------------------------------------------
+
+export interface AnalogStats {
+  n: number;
+  median: number;
+  mean: number;
+  hitRate: number;
+  p25: number;
+  p75: number;
+}
+
+export interface SignalAnalogResult {
+  todayValue: number;
+  /** Mean-reversion direction implied by today's value: true = expect ratio up */
+  isLong: boolean;
+  matches: Array<{ date: string; value: number; fwd5d: number | null; fwd20d: number | null; fwd60d: number | null }>;
+  h5d: AnalogStats | null;
+  h20d: AnalogStats | null;
+  h60d: AnalogStats | null;
+  totalCandidates: number;
+  droppedByGap: number;
+}
+
+/**
+ * Find the topN historical bars whose signal value is closest to today's,
+ * enforcing a minimum spacing between accepted matches and excluding the most
+ * recent `excludeLast` bars, then summarize forward % returns of `closePrices`
+ * at 5/20/60 bars. hitRate follows the same mean-reversion convention as the
+ * bucket table (today's value above `reversionMid` → a hit is a negative
+ * forward return, below → positive).
+ */
+export function computeSignalAnalogs(
+  dates: string[],
+  signalValues: (number | null)[],
+  closePrices: number[],
+  opts?: { topN?: number; minGap?: number; excludeLast?: number; reversionMid?: number }
+): SignalAnalogResult | null {
+  const n = Math.min(dates.length, signalValues.length, closePrices.length);
+  const topN = opts?.topN ?? 20;
+  const minGap = opts?.minGap ?? 21;
+  const excludeLast = opts?.excludeLast ?? 60;
+  const reversionMid = opts?.reversionMid ?? 0;
+  if (n < 120) return null;
+  const todayValue = signalValues[n - 1];
+  if (todayValue == null || !isFinite(todayValue)) return null;
+  const isLong = todayValue < reversionMid;
+
+  const maxIdx = n - 1 - excludeLast;
+  const candidates: Array<{ idx: number; dist: number }> = [];
+  for (let i = 0; i < maxIdx; i++) {
+    const v = signalValues[i];
+    if (v == null || !isFinite(v) || closePrices[i] <= 0) continue;
+    candidates.push({ idx: i, dist: Math.abs(v - todayValue) });
+  }
+  if (candidates.length < 8) return null;
+  candidates.sort((a, b) => a.dist - b.dist);
+
+  const accepted: number[] = [];
+  let droppedByGap = 0;
+  for (const c of candidates) {
+    if (accepted.length >= topN) break;
+    if (accepted.some((idx) => Math.abs(idx - c.idx) < minGap)) { droppedByGap++; continue; }
+    accepted.push(c.idx);
+  }
+  if (accepted.length < 5) return null;
+  accepted.sort((a, b) => a - b);
+
+  const fwd = (idx: number, days: number): number | null => {
+    if (idx + days >= n || closePrices[idx] <= 0) return null;
+    return (closePrices[idx + days] - closePrices[idx]) / closePrices[idx] * 100;
+  };
+  const matches = accepted.map((idx) => ({
+    date: dates[idx],
+    value: signalValues[idx] as number,
+    fwd5d: fwd(idx, 5),
+    fwd20d: fwd(idx, 20),
+    fwd60d: fwd(idx, 60),
+  }));
+
+  const summarize = (vals: Array<number | null>): AnalogStats | null => {
+    const v = vals.filter((x): x is number => x != null && isFinite(x));
+    if (v.length < 5) return null;
+    const sorted = [...v].sort((a, b) => a - b);
+    const pct = (f: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(f * (sorted.length - 1))))];
+    const mean = v.reduce((s, x) => s + x, 0) / v.length;
+    const hits = v.filter((x) => (isLong ? x >= 0 : x < 0)).length;
+    return { n: v.length, median: pct(0.5), mean, hitRate: (hits / v.length) * 100, p25: pct(0.25), p75: pct(0.75) };
+  };
+
+  return {
+    todayValue,
+    isLong,
+    matches,
+    h5d: summarize(matches.map((m) => m.fwd5d)),
+    h20d: summarize(matches.map((m) => m.fwd20d)),
+    h60d: summarize(matches.map((m) => m.fwd60d)),
+    totalCandidates: candidates.length,
+    droppedByGap,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +730,13 @@ export function analyzePairRaw(
     pct:      pctBuckets,
   };
 
+  const analogs: Record<SignalTypePair, SignalAnalogResult | null> = {
+    raw_z:    computeSignalAnalogs(dates, rawZ, ratio),
+    ols_z:    computeSignalAnalogs(dates, olsZFull, ratio),
+    spread_z: computeSignalAnalogs(dates, spreadZ, ratio),
+    pct:      computeSignalAnalogs(dates, pct, ratio, { reversionMid: 50 }),
+  };
+
   // Find best signal
   let bestNow: PairSignalRawResult["bestNow"] = null;
   let bestQ = -Infinity;
@@ -672,6 +783,7 @@ export function analyzePairRaw(
     currentA, currentB, currentRatio,
     currentSignals,
     buckets,
+    analogs,
     bestNow,
     halfLifeDays: computeHalfLife(rawZ),
   };

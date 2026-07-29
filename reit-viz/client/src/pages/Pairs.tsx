@@ -506,6 +506,66 @@ function SignalAnalyzerChart({
           horizon (size × edge × sample reliability).  Highlighted row = bucket the pair is currently sitting in.  Sample:{" "}
           {analysis.firstDate} → {analysis.lastDate} ({analysis.n.toLocaleString()} days).
         </div>
+        {(() => {
+          const an = (analysis as any).analogs?.[activeSignal];
+          if (!an) return null;
+          const horizons: Array<[string, any]> = [["5d", an.h5d], ["20d", an.h20d], ["60d", an.h60d]];
+          return (
+            <div className="rounded-md border border-border/40 bg-card/30 p-3 space-y-2" data-testid={`analog-panel-${activeSignal}`}>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-cyan-300">Analog episodes</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {an.matches.length} closest historical matches to today's {signalLabel(activeSignal)} ({signalValueFormat(activeSignal, an.todayValue)})
+                  · min 21d apart · last 60d excluded{an.droppedByGap ? ` · ${an.droppedByGap} dropped by spacing` : ""}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {horizons.map(([hz, s]) => (
+                  <div key={hz} className="bg-card/40 border border-border/30 rounded px-2 py-1.5" data-testid={`analog-h${hz}`}>
+                    <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">Forward {hz}</div>
+                    {s ? (
+                      <>
+                        <div className="text-[12px] font-mono">
+                          <span className={s.median > 0 ? "text-emerald-400" : s.median < 0 ? "text-rose-400" : "text-muted-foreground"}>
+                            {fmtSignalPct(s.median)}
+                          </span>
+                          <span className="text-muted-foreground text-[10px]"> median · </span>
+                          <span className={hitColorClass(s.hitRate)}>{s.hitRate.toFixed(0)}%</span>
+                          <span className="text-muted-foreground text-[10px]"> reverted</span>
+                        </div>
+                        <div className="text-[9px] font-mono text-muted-foreground/80">
+                          p25 {fmtSignalPct(s.p25)} · p75 {fmtSignalPct(s.p75)} · n={s.n}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">too few matches</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {an.matches.map((m: any) => (
+                  <span
+                    key={m.date}
+                    className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+                      m.fwd20d == null ? "border-border/30 text-muted-foreground/60"
+                        : (an.isLong ? m.fwd20d >= 0 : m.fwd20d < 0)
+                        ? "border-emerald-500/30 text-emerald-300/90 bg-emerald-500/5"
+                        : "border-rose-500/30 text-rose-300/90 bg-rose-500/5"
+                    }`}
+                    title={`${signalLabel(activeSignal)} ${signalValueFormat(activeSignal, m.value)} · fwd 20d ${fmtSignalPct(m.fwd20d)}`}
+                  >
+                    {m.date}
+                  </span>
+                ))}
+              </div>
+              <div className="text-[9.5px] text-muted-foreground/70 leading-snug">
+                Forward % change in the {tickerA}/{tickerB} ratio after each matched date. "Reverted" = moved in the
+                mean-reversion direction implied by today's reading ({an.isLong ? "ratio up" : "ratio down"}). Chip color = 20d outcome.
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

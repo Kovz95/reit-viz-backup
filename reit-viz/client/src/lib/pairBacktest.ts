@@ -4,6 +4,7 @@
 // |z| ≤ exitZ or after maxHold bars. All stats are in spread-return % (long
 // the cheap leg, short the rich one, hedge-weighted).
 import { computeKalmanHedge } from "./adaptiveModels";
+import { computeSignalAnalogs, type SignalAnalogResult } from "./pairSignalAnalyzer";
 
 export interface PairBtParams {
   window: number;   // rolling z window (bars)
@@ -84,6 +85,40 @@ function spreadSeries(la: number[], lb: number[], hedge: PairBtParams["hedge"], 
   return s;
 }
 
+/** Rolling z of the spread over `window` LAGGED bars (stats exclude today). */
+function spreadZSeries(spread: number[], window: number): number[] {
+  const n = spread.length;
+  const z = new Array<number>(n).fill(NaN);
+  for (let i = window + 1; i < n; i++) {
+    let m = 0, cnt = 0;
+    for (let k = i - window; k < i; k++) if (Number.isFinite(spread[k])) { m += spread[k]; cnt++; }
+    if (cnt < window * 0.8) continue;
+    m /= cnt;
+    let v = 0;
+    for (let k = i - window; k < i; k++) if (Number.isFinite(spread[k])) v += (spread[k] - m) ** 2;
+    const sd = Math.sqrt(v / Math.max(1, cnt - 1));
+    if (sd > 0 && Number.isFinite(spread[i])) z[i] = (spread[i] - m) / sd;
+  }
+  return z;
+}
+
+/**
+ * Analog episodes for the pair: nearest historical bars to TODAY's spread z,
+ * with forward % moves of the A/B ratio. Complements the trade backtest —
+ * no entry/exit rules, just "what followed similar readings".
+ */
+export function runPairAnalogs(aCloses: TV[], bCloses: TV[], params: PairBtParams): SignalAnalogResult | null {
+  const { times, a, b } = alignCloses(aCloses, bCloses);
+  const n = times.length;
+  if (n < params.window * 2 + 10) return null;
+  const la = a.map(Math.log);
+  const lb = b.map(Math.log);
+  const spread = spreadSeries(la, lb, params.hedge, params.window);
+  const z = spreadZSeries(spread, params.window);
+  const ratio = a.map((v, i) => v / b[i]);
+  return computeSignalAnalogs(times, z.map((v) => (Number.isFinite(v) ? v : null)), ratio);
+}
+
 export function runPairBacktest(aCloses: TV[], bCloses: TV[], params: PairBtParams): PairBtResult | null {
   const { times, a, b } = alignCloses(aCloses, bCloses);
   const n = times.length;
@@ -91,19 +126,7 @@ export function runPairBacktest(aCloses: TV[], bCloses: TV[], params: PairBtPara
   const la = a.map(Math.log);
   const lb = b.map(Math.log);
   const spread = spreadSeries(la, lb, params.hedge, params.window);
-
-  // Rolling z of the spread over `window` LAGGED bars (stats exclude today).
-  const z = new Array<number>(n).fill(NaN);
-  for (let i = params.window + 1; i < n; i++) {
-    let m = 0, cnt = 0;
-    for (let k = i - params.window; k < i; k++) if (Number.isFinite(spread[k])) { m += spread[k]; cnt++; }
-    if (cnt < params.window * 0.8) continue;
-    m /= cnt;
-    let v = 0;
-    for (let k = i - params.window; k < i; k++) if (Number.isFinite(spread[k])) v += (spread[k] - m) ** 2;
-    const sd = Math.sqrt(v / Math.max(1, cnt - 1));
-    if (sd > 0 && Number.isFinite(spread[i])) z[i] = (spread[i] - m) / sd;
-  }
+  const z = spreadZSeries(spread, params.window);
 
   const trades: PairBtTrade[] = [];
   let i = 0;

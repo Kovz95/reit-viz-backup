@@ -4,7 +4,8 @@ import { X, FlaskConical, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getMetricSeries } from "@/lib/dataService";
-import { runPairBacktest, DEFAULT_BT_PARAMS, type PairBtParams, type PairBtResult } from "@/lib/pairBacktest";
+import { runPairBacktest, runPairAnalogs, DEFAULT_BT_PARAMS, type PairBtParams, type PairBtResult } from "@/lib/pairBacktest";
+import type { SignalAnalogResult } from "@/lib/pairSignalAnalyzer";
 
 export default function PairBacktestModal({ a, b, onClose }: { a: string; b: string; onClose: () => void }) {
   const [params, setParams] = useState<PairBtParams>(DEFAULT_BT_PARAMS);
@@ -22,6 +23,11 @@ export default function PairBacktestModal({ a, b, onClose }: { a: string; b: str
   const result: PairBtResult | null = useMemo(() => {
     if (!closes) return null;
     try { return runPairBacktest(closes.a, closes.b, params); } catch { return null; }
+  }, [closes, params]);
+
+  const analogs: SignalAnalogResult | null = useMemo(() => {
+    if (!closes) return null;
+    try { return runPairAnalogs(closes.a, closes.b, params); } catch { return null; }
   }, [closes, params]);
 
   const setP = (key: keyof PairBtParams, v: number | string) =>
@@ -114,6 +120,47 @@ export default function PairBacktestModal({ a, b, onClose }: { a: string; b: str
                 </div>
               ))}
             </div>
+            {analogs && (
+              <div className="rounded border border-border/60 bg-background/60 px-2.5 py-2 space-y-1.5" data-testid="bt-analogs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Analogs to today's z ({analogs.todayValue >= 0 ? "+" : ""}{analogs.todayValue.toFixed(2)})</span>
+                  <span className="text-[9.5px] text-muted-foreground">
+                    {analogs.matches.length} closest historical readings · fwd % move of {a}/{b} ratio · revert = {analogs.isLong ? "ratio up" : "ratio down"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-4 flex-wrap text-[10px] font-mono">
+                  {([["5d", analogs.h5d], ["20d", analogs.h20d], ["60d", analogs.h60d]] as const).map(([hz, s]) => (
+                    <span key={hz}>
+                      <span className="text-muted-foreground uppercase">{hz} </span>
+                      {s ? (
+                        <>
+                          <span className={s.median >= 0 ? "text-emerald-400" : "text-red-400"}>{s.median >= 0 ? "+" : ""}{s.median.toFixed(2)}%</span>
+                          <span className="text-muted-foreground"> med · revert {s.hitRate.toFixed(0)}% · n={s.n}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {analogs.matches.map((m) => (
+                    <span
+                      key={m.date}
+                      className={`text-[9px] font-mono px-1 py-0.5 rounded border ${
+                        m.fwd20d == null ? "border-border/40 text-muted-foreground/60"
+                          : (analogs.isLong ? m.fwd20d >= 0 : m.fwd20d < 0)
+                          ? "border-emerald-500/30 text-emerald-300/90"
+                          : "border-rose-500/30 text-rose-300/90"
+                      }`}
+                      title={`z ${m.value >= 0 ? "+" : ""}${m.value.toFixed(2)} · fwd 20d ${m.fwd20d == null ? "—" : `${m.fwd20d >= 0 ? "+" : ""}${m.fwd20d.toFixed(2)}%`}`}
+                    >
+                      {m.date}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {result.n === 0 ? (
               <div className="text-xs text-muted-foreground text-center py-4">No trades at these thresholds — loosen entry z or extend max hold.</div>
             ) : (
