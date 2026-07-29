@@ -140,6 +140,23 @@ const COLOR_TOTAL = "#e5e7eb";
 const COLOR_MULT = "#38bdf8";
 const COLOR_EST = "#fbbf24";
 
+// Fired by the header Auto-size button; SinglePanel resets chart heights and
+// every chart refits its time scale (same pattern as reit-viz-reset-subcharts).
+const ATTR_AUTOSIZE_EVENT = "reit-viz-attr-autosize";
+
+/** Refit the chart's time scale when the Auto-size button fires. */
+function useAutosizeRefit(chartRef: { current: IChartApi | null }) {
+  useEffect(() => {
+    // Double-rAF so the height reset has rendered before the refit.
+    const onFit = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+      try { chartRef.current?.timeScale().fitContent(); } catch {}
+    }));
+    window.addEventListener(ATTR_AUTOSIZE_EVENT, onFit);
+    return () => window.removeEventListener(ATTR_AUTOSIZE_EVENT, onFit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
+
 // ── Utility functions ─────────────────────────────────────────────────────────
 
 function parseDate(dateStr: string): { year: number; month: number; day: number } {
@@ -279,6 +296,7 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
+  useAutosizeRefit(chartRef);
 
   // Axis-label visibility (data dep so it re-applies after chart re-creation).
   useEffect(() => {
@@ -384,6 +402,7 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
+  useAutosizeRefit(chartRef);
 
   useEffect(() => {
     for (const s of [multSeriesRef.current, estSeriesRef.current, totalSeriesRef.current]) {
@@ -497,6 +516,7 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height =
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(multSeriesRef, earningsDates, [data, gridColor]);
+  useAutosizeRefit(chartRef);
 
   useEffect(() => {
     for (const s of [multSeriesRef.current, estSeriesRef.current]) {
@@ -688,6 +708,17 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
   const [expanded, setExpanded] = useState<"cum" | "roll" | "share" | null>(null);
   const heightsRef = useRef(heights);
   heightsRef.current = heights;
+  // Auto-size: restore default heights + un-maximize (charts refit themselves
+  // via useAutosizeRefit on the same event).
+  useEffect(() => {
+    const onAutosize = () => {
+      setHeights(DEFAULT_CHART_HEIGHTS);
+      setExpanded(null);
+      try { localStorage.setItem(CHART_HEIGHTS_KEY, JSON.stringify(DEFAULT_CHART_HEIGHTS)); } catch {}
+    };
+    window.addEventListener(ATTR_AUTOSIZE_EVENT, onAutosize);
+    return () => window.removeEventListener(ATTR_AUTOSIZE_EVENT, onAutosize);
+  }, []);
   const startDividerDrag = useCallback((idx: number, e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -1298,6 +1329,18 @@ export default function Attribution() {
               title={showAxisLabels ? "Hide series name + current-value labels on the price axes" : "Show series name + current-value labels on the price axes"}
             >
               {showAxisLabels ? <Tag className="w-3 h-3 mr-1" /> : <EyeOff className="w-3 h-3 mr-1" />} Labels
+            </Button>
+          )}
+          {mode === "single" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => window.dispatchEvent(new CustomEvent(ATTR_AUTOSIZE_EVENT))}
+              data-testid="attr-autosize"
+              title="Reset all chart sizes to defaults and refit their time scales"
+            >
+              <Maximize2 className="w-3 h-3 mr-1" /> Auto-size
             </Button>
           )}
           {mode === "single" && (
