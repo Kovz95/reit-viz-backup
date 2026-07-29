@@ -75,10 +75,9 @@ const Heatmap = lazy(() => import("@/pages/Heatmap"));
 const EventLab = lazy(() => import("@/pages/eventlab/EventLab"));
 const EarningsCalendar = lazy(() => import("@/pages/EarningsCalendar"));
 const RidgeRanker = lazy(() => import("@/pages/RidgeRanker"));
-const ShortInterest = lazy(() => import("@/pages/ShortInterest"));
+const Sentiment = lazy(() => import("@/pages/Sentiment"));
 const PairRatios = lazy(() => import("@/pages/PairRatios"));
 const Screener = lazy(() => import("@/pages/Screener"));
-const Ratings = lazy(() => import("@/pages/Ratings"));
 const AllOptimizers = lazy(() => import("@/pages/AllOptimizers"));
 const AllScreeners = lazy(() => import("@/pages/AllScreeners"));
 const GapFillScreener = lazy(() => import("@/pages/GapFillScreener"));
@@ -98,8 +97,7 @@ const TVAOptimizer = lazy(() => import("@/pages/TVAOptimizer"));
 const LevelsAndTrendlines = lazy(() => import("@/pages/LevelsAndTrendlines"));
 const AutoTrendlineBacktest = lazy(() => import("@/pages/AutoTrendlineBacktest"));
 const Attribution = lazy(() => import("@/pages/Attribution"));
-const SimilarSetups = lazy(() => import("@/pages/SimilarSetups"));
-const MTFSetups = lazy(() => import("@/pages/MTFSetups"));
+const Setups = lazy(() => import("@/pages/Setups"));
 const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
 const UniversalScreener = lazy(() => import("@/pages/UniversalScreener"));
@@ -298,17 +296,15 @@ function NavBar() {
         { path: "/premium-discount", label: "Premium / Discount", icon: Percent },
         { path: "/distributions", label: "Distributions", icon: BarChart3 },
         { path: "/val-rerate", label: "Re-Rate + Residence", icon: Percent },
+        { path: "/attribution", label: "Attribution", icon: Activity },
+        { path: "/spread", label: "Div Spread", icon: Percent },
       ],
     },
-    { path: "/spread", label: "Div Spread", icon: Percent, universeControlled: true },
     { path: "/event-lab", label: "Event Lab", icon: Activity, universeControlled: true },
-    { path: "/short-interest", label: "Short Interest", icon: Target, universeControlled: true },
+    { path: "/sentiment", label: "Sentiment", icon: Target, universeControlled: true },
     { path: "/screeners", label: "Screeners", icon: Filter, universeControlled: true },
-    { path: "/ratings", label: "Ratings", icon: Star, universeControlled: true },
     { path: "/optimizers", label: "Optimizers", icon: Crosshair, universeControlled: true },
-    { path: "/attribution", label: "Attribution", icon: Activity, universeControlled: true },
-    { path: "/similar-setups", label: "Similar Setups", icon: Filter },
-    { path: "/mtf-setups", label: "MTF Setups", icon: Layers },
+    { path: "/setups", label: "Setups", icon: Layers },
     { path: "/data", label: "Data", icon: Table2 },
   ];
 
@@ -597,6 +593,7 @@ const PAGES = [
   { path: "/event-lab", label: "Event Lab" },
   { path: "/earnings-calendar", label: "Earnings Calendar" },
   { path: "/ranker", label: "Ridge Ranker" },
+  { path: "/sentiment", label: "Sentiment" },
   { path: "/short-interest", label: "Short Interest" },
   { path: "/pair-ratios", label: "Pair Ratios" },
   { path: "/screeners", label: "All Screeners" },
@@ -631,6 +628,7 @@ const PAGES = [
   { path: "/pattern-screener", label: "Pattern Screener" },
   { path: "/distributions", label: "Distributions" },
   { path: "/val-rerate", label: "Valuation Re-Rate + Residence" },
+  { path: "/setups", label: "Setups" },
   { path: "/similar-setups", label: "Similar Setups" },
   { path: "/mtf-setups", label: "MTF Setups" },
   { path: "/setups-screener", label: "Setups Screener" },
@@ -733,12 +731,13 @@ function AppShell() {
               <Route path="/performance">{() => <EventLab initialFamily="performance" />}</Route>
               <Route path="/earnings-calendar" component={EarningsCalendar} />
               <Route path="/ranker" component={RidgeRanker} />
-              <Route path="/short-interest" component={ShortInterest} />
+              <Route path="/sentiment">{() => <Sentiment />}</Route>
+              <Route path="/short-interest">{() => <Sentiment initialFamily="si" />}</Route>
               <Route path="/screeners" component={AllScreeners} />
               <Route path="/universal-screener" component={UniversalScreener} />
               <Route path="/gap-fill" component={GapFillScreener} />
               <Route path="/screener" component={Screener} />
-              <Route path="/ratings" component={Ratings} />
+              <Route path="/ratings">{() => <Sentiment initialFamily="ratings" />}</Route>
               <Route path="/setups-screener" component={SetupsScreener} />
               <Route path="/pattern-screener" component={PatternScreener} />
               <Route path="/optimizers" component={AllOptimizers} />
@@ -760,8 +759,9 @@ function AppShell() {
               <Route path="/price-action">{() => <EventLab initialFamily="study" />}</Route>
               <Route path="/sigma-move">{() => <EventLab initialFamily="sigma" />}</Route>
               <Route path="/attribution" component={Attribution} />
-              <Route path="/similar-setups" component={SimilarSetups} />
-              <Route path="/mtf-setups" component={MTFSetups} />
+              <Route path="/setups">{() => <Setups />}</Route>
+              <Route path="/similar-setups">{() => <Setups initialFamily="similar" />}</Route>
+              <Route path="/mtf-setups">{() => <Setups initialFamily="mtf" />}</Route>
               <Route path="/data" component={DataExplorer} />
               <Route path="/pca" component={PCA} />
               <Route component={NotFound} />
