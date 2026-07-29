@@ -67,7 +67,6 @@ const Correlation = lazy(() => import("@/pages/Correlation"));
 const Valuation = lazy(() => import("@/pages/Valuation"));
 const ValuationRegime = lazy(() => import("@/pages/ValuationRegime"));
 const PremiumDiscount = lazy(() => import("@/pages/PremiumDiscount"));
-const PremiumDiscountScreener = lazy(() => import("@/pages/PremiumDiscountScreener"));
 const Distributions = lazy(() => import("@/pages/Distributions"));
 const ValuationRerateResidence = lazy(() => import("@/pages/ValuationRerateResidence"));
 const DividendSpread = lazy(() => import("@/pages/DividendSpread"));
@@ -262,6 +261,8 @@ function NavBar() {
         { path: "/relative-strength", label: "Relative Strength", icon: TrendingUp },
         { path: "/correlation", label: "Correlation", icon: Link2 },
         { path: "/ranker", label: "Ridge Ranker", icon: ListOrdered },
+        { path: "/heatmap", label: "Heatmap", icon: Grid3X3 },
+        { path: "/pca", label: "PCA", icon: ScatterChart },
       ],
     },
     {
@@ -718,7 +719,9 @@ function AppShell() {
               <Route path="/valuation" component={Valuation} />
               <Route path="/val-regime" component={ValuationRegime} />
               <Route path="/premium-discount" component={PremiumDiscount} />
-              <Route path="/pd-screener" component={PremiumDiscountScreener} />
+              {/* P/D Screener lives inside the Screeners hub (same component);
+                  the old standalone route aliases there. */}
+              <Route path="/pd-screener" component={AllScreeners} />
               <Route path="/distributions" component={Distributions} />
               <Route path="/val-rerate" component={ValuationRerateResidence} />
               {/* Old Residence bookmarks land on the merged page */}
