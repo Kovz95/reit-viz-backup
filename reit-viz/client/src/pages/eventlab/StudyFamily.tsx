@@ -20,6 +20,7 @@ import { getTickerRaw } from "@/lib/dataService";
 import { emitChartSignals } from "@/lib/chartBridge";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
+import { getBasketOhlc } from "@/lib/basketOhlc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -521,7 +522,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
 
   useEffect(() => {
     if (!tickerB && filteredTickers.length >= 2) setTickerB(filteredTickers[1].ticker);
-    if (tickerB && !customSymbolsRef.current.has(tickerB) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === tickerB))
+    if (tickerB && !isBasketTicker(tickerB) && !customSymbolsRef.current.has(tickerB) && filteredTickers.length && !filteredTickers.find((t: any) => t.ticker === tickerB))
       setTickerB(filteredTickers.find((t: any) => t.ticker !== ticker)?.ticker ?? "");
   }, [filteredTickers, tickerB, ticker]);
 
@@ -530,6 +531,16 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   // price proxy (self-contained axis; adj closes + opens, so every condition
   // type works — earnings/ex-div dates only exist for workbook tickers).
   const loadAnySeries = useCallback(async (symbol: string): Promise<{ dates: string[]; closes: (number | null)[]; opens: (number | null)[]; external: boolean } | null> => {
+    // BASKET: synthetic legs — equal/scheme-weighted composite closes from the
+    // basket OHLC endpoint (close-only, own axis: gap conditions yield 0 hits).
+    if (isBasketTicker(symbol)) {
+      const id = symbol.slice("BASKET:".length);
+      const basket = (baskets as any[]).find((b) => b.id === id);
+      if (!basket) return null;
+      const ohlc = await getBasketOhlc(basket).catch(() => null);
+      if (!ohlc?.closes?.length) return null;
+      return { dates: ohlc.priceDates, closes: ohlc.closes, opens: [], external: true };
+    }
     try {
       const raw = await getTickerRaw(symbol);
       const closes = extractColumn(raw, "close", dates.length);
@@ -543,7 +554,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       if (!j.dates?.length || !closes.length) return null;
       return { dates: j.dates, closes, opens: j.opens ?? [], external: true };
     } catch { return null; }
-  }, [dates]);
+  }, [dates, baskets]);
 
   // Single ticker query (series + calendar dates when a calendar condition exists)
   const { data: singleData, isFetching: loadingSingle } = useQuery({
@@ -895,6 +906,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                       }
                     }}
                   />
+                  <BasketTickerPill activeTicker={ticker} onSelectTicker={setTicker} fallbackTicker={filteredTickers[0]?.ticker ?? null} />
                 </div>
                 <div className="flex flex-col gap-1 min-w-[240px]">
                   <Label className="text-xs text-muted-foreground">Ticker B (short)</Label>
@@ -917,6 +929,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                       }
                     }}
                   />
+                  <BasketTickerPill activeTicker={tickerB} onSelectTicker={setTickerB} fallbackTicker={filteredTickers[1]?.ticker ?? null} />
                 </div>
               </>
             )}
