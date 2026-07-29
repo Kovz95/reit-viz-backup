@@ -8,6 +8,9 @@ import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import { registerChatRoute } from "./chatRoute";
+// Bundled into the server build (esbuild inlines JSON) — the deploy ships only
+// dist/, so macro dates must ride inside the bundle, not as a loose file.
+import macroEventsJson from "./macro-events.json";
 import { realignTickerFiles, rleDecode, rleEncode, type RleArray } from "./realign";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
@@ -1560,11 +1563,7 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/events", (_req, res) => {
     try {
       const events = readJSON(path.join(DATA_DIR, "events.json"));
-      if (!events.__macro__) {
-        try {
-          events.__macro__ = readJSON(path.join(process.cwd(), "server", "macro-events.json"));
-        } catch { /* macro file missing — serve as-is */ }
-      }
+      if (!events.__macro__) events.__macro__ = macroEventsJson;
       res.json(events);
     } catch (e) {
       res.status(500).json({ error: "Failed to load events" });
