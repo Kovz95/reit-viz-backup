@@ -20,6 +20,7 @@ import {
   ChevronUp as ChevronUpIcon,
   ChevronDown as ChevronDownIcon,
   ArrowUpDown,
+  FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ClassificationFilters, {
@@ -655,7 +656,10 @@ function SigmaHistogram({
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function SigmaFamily() {
+export default function SigmaFamily({ onOpenStudy }: {
+  /** Open a preconfigured, auto-run Event Study for this row's move (wired by the Event Lab shell). */
+  onOpenStudy?: (p: { ticker: string; sigma: number; direction: "up" | "down" | "either"; sigmaWindow: number }) => void;
+}) {
   const { filteredTickersList: tickerList } = useAppContext();
   const { setLastQuoteFetchedAt } = useAppStatus();
 
@@ -2621,6 +2625,7 @@ export default function SigmaFamily() {
                   <SortableHeaderLive label="σ Move (EWMA)" k="sigmaMoveEwma" sort={liveSort} onClick={toggleLiveSort} align="right" />
                   <SortableHeaderLive label="|σ|" k="absSigmaMove" sort={liveSort} onClick={toggleLiveSort} align="right" />
                   <SortableHeaderLive label="Pctile" k="percentile" sort={liveSort} onClick={toggleLiveSort} align="right" />
+                  {onOpenStudy && <th className="px-1 py-1.5 w-8" />}
                 </tr>
               </thead>
               <tbody>
@@ -2764,6 +2769,28 @@ export default function SigmaFamily() {
                       >
                         {formatPercentile(row.percentile)}
                       </td>
+                      {onOpenStudy && (
+                        <td className="px-1 py-1.5 text-center">
+                          {row.sigmaMove != null && (
+                            <button
+                              className="p-0.5 rounded text-muted-foreground/60 hover:text-primary hover:bg-accent"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenStudy({
+                                  ticker: row.ticker,
+                                  sigma: Math.max(1, Math.floor(Math.abs(row.sigmaMove ?? 0) * 10) / 10),
+                                  direction: (row.pctChange ?? 0) >= 0 ? "up" : "down",
+                                  sigmaWindow: lookbackDays,
+                                });
+                              }}
+                              title={`Event study: what happened after ${Math.abs(row.sigmaMove ?? 0).toFixed(1)}σ ${(row.pctChange ?? 0) >= 0 ? "up" : "down"} moves in ${row.ticker}?`}
+                              data-testid={`sigma-study-${row.ticker}`}
+                            >
+                              <FlaskConical className="w-3 h-3" />
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

@@ -4,7 +4,7 @@
 // month / yearly-window) plus a per-condition ±bars smear.
 // Deliberate deviations from PriceAction: dead chat event bus removed,
 // duplicated math replaced by lib imports, calendar condition support added.
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createLucideIcon } from "lucide-react";
@@ -460,7 +460,17 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-export default function StudyFamily() {
+/** Preset hand-off from sibling families (e.g. Sigma row → "how has this name
+ *  behaved after moves like today's?"). A new nonce applies + auto-runs. */
+export interface StudyPreset {
+  ticker: string;
+  sigma: number;
+  direction: "up" | "down" | "either";
+  sigmaWindow: number;
+  nonce: number;
+}
+
+export default function StudyFamily({ preset }: { preset?: StudyPreset | null }) {
   const { data: allTickers = [] } = useQuery({ queryKey: ["/api/tickers"], queryFn: () => getTickers() });
   const { data: dates = [] } = useQuery({ queryKey: ["/api/dates"], queryFn: () => getDates() });
   const { universeTickers, isFiltered, filteredCount, totalCount } = useUniverse();
@@ -597,6 +607,32 @@ export default function StudyFamily() {
     setCrossResults(results);
     setIsCrossRunning(false);
   }, [dates]);
+
+  // Apply an incoming preset: reflect it in the builder UI AND run directly
+  // with a locally-built config (state updates are async — building the config
+  // here avoids racing the setters).
+  const appliedPresetNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!preset || preset.nonce === appliedPresetNonce.current) return;
+    appliedPresetNonce.current = preset.nonce;
+    const cond: StudyCondition = {
+      ...newStudyCondition("sigma"),
+      sigma: preset.sigma,
+      sigmaDirection: preset.direction,
+      sigmaWindow: preset.sigmaWindow,
+      sigmaBasis: "rolling",
+    };
+    setMode("single");
+    setTicker(preset.ticker);
+    setConditions([cond]);
+    setRunConfig({
+      mode: "single", symbol: preset.ticker, symbolB: undefined,
+      tickers: filteredTickers.map((t: any) => ({ ticker: t.ticker, name: t.name })),
+      conditions: [{ ...cond }],
+      combinator: "AND", nonce: preset.nonce,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset]);
 
   const handleRun = useCallback(() => {
     if (mode === "single" && !ticker) return;

@@ -9,6 +9,7 @@
 import { lazy, Suspense, useCallback, useRef, useState } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { CalendarRange, FlaskConical, Activity } from "lucide-react";
+import type { StudyPreset } from "./StudyFamily";
 
 const PerfFamily = lazy(() => import("./PerfFamily"));
 const StudyFamily = lazy(() => import("./StudyFamily"));
@@ -24,6 +25,13 @@ const FAMILY_TABS: Array<{ id: EventLabFamily; label: string; icon: typeof Activ
 
 export default function EventLab({ initialFamily }: { initialFamily?: EventLabFamily }) {
   const [family, setFamily] = useState<EventLabFamily>(initialFamily ?? "performance");
+  // Cross-family hand-off: Sigma rows open a preconfigured, auto-run study.
+  const [studyPreset, setStudyPreset] = useState<StudyPreset | null>(null);
+  const openStudy = useCallback((p: Omit<StudyPreset, "nonce">) => {
+    setStudyPreset({ ...p, nonce: Date.now() });
+    pinnedRef.current = false;
+    setFamily("study");
+  }, []);
   // Alias routes pin the family: skip the workspace restore for `family` when
   // the prop is present so /performance etc. always land where they promise.
   const pinnedRef = useRef(initialFamily != null);
@@ -63,8 +71,8 @@ export default function EventLab({ initialFamily }: { initialFamily?: EventLabFa
       <div className="flex-1 min-h-0">
         <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading…</div>}>
           {active === "performance" && <PerfFamily />}
-          {active === "study" && <StudyFamily />}
-          {active === "sigma" && <SigmaFamily />}
+          {active === "study" && <StudyFamily preset={studyPreset} />}
+          {active === "sigma" && <SigmaFamily onOpenStudy={openStudy} />}
         </Suspense>
       </div>
     </div>
