@@ -33,7 +33,8 @@ import { Download } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { TrendingUp } from "lucide-react";
 import { TrendingDown } from "lucide-react";
-import { X, Calendar } from "lucide-react";
+import { X, Calendar, Maximize2, Minimize2, CandlestickChart } from "lucide-react";
+import { useLocation } from "wouter";
 const XIcon = X;
 import { useUniverseDefaults } from "@/lib/universeDefaults";
 import { useUniverse } from "@/lib/universeContext";
@@ -202,6 +203,9 @@ export default function PremiumDiscount() {
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
   const [compareMode, setCompareMode] = useState<"peer" | "ticker" | "group" | "basket">("peer");
   const [peerTicker, setPeerTicker] = useState("");
+  const [, navigate] = useLocation();
+  // One chart takes over the whole chart grid (session-only, not persisted).
+  const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
   const [peerValueOverride, setPeerValueOverride] = useState("");
   const [groupADim, setGroupADim] = useState("subindustry");
   const [groupAValue, setGroupAValue] = useState("");
@@ -1934,6 +1938,38 @@ export default function PremiumDiscount() {
   const fmtPP = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}pp`;
   const fmtPct2 = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 
+  // Maximize: one chart takes over the whole grid; others (and the right
+  // column) hide via display so chart instances stay alive and the shared
+  // ResizeObserver re-fits them on toggle. A maximized chart whose visibility
+  // chip gets toggled off no longer counts — otherwise the whole grid blanks.
+  const maxActive = maximizedChart !== null && visibleCharts.has(maximizedChart);
+  const chartShown = (id: string) => visibleCharts.has(id) && (!maxActive || maximizedChart === id);
+  const maxBtn = (id: string) => (
+    <button
+      className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent flex-shrink-0"
+      onClick={() => setMaximizedChart((v) => (v === id ? null : id))}
+      title={maximizedChart === id ? "Restore layout" : "Maximize this chart"}
+      data-testid={`pd-max-${id}`}
+    >
+      {maximizedChart === id ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+    </button>
+  );
+
+  // Jump to the Charts tab: ticker-vs-ticker pairings open as an A/B ratio
+  // (pair-remap hand-off); all other compare modes open the target with its
+  // valuation-multiple pane (metric-agnostic rerate hand-off).
+  const openInCharts = () => {
+    if (!target) return;
+    try {
+      if (compareMode === "ticker" && peerTicker) {
+        sessionStorage.setItem("reit-viz:pair-remap-to-charts", `${target}/${peerTicker}`);
+      } else {
+        sessionStorage.setItem("reit-viz:rerate-to-charts", JSON.stringify({ ticker: target, metricKey: valMetric, lookbackDays: 756 }));
+      }
+    } catch {}
+    navigate("/");
+  };
+
   return (
     <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* ── Header ── */}
@@ -2148,6 +2184,17 @@ export default function PremiumDiscount() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={openInCharts}
+              disabled={!target}
+              className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-40"
+              data-testid="pd-open-charts"
+              title={compareMode === "ticker" && peerTicker
+                ? `Open ${target}/${peerTicker} as a ratio on the Charts tab`
+                : `Open ${target || "target"} on the Charts tab with its ${valMetric} pane`}
+            >
+              <CandlestickChart className="w-3.5 h-3.5" /> Charts
+            </button>
             <button onClick={() => setShowEarnings(!showEarnings)} className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border rounded ${showEarnings ? "border-amber-500 bg-amber-500/10 text-amber-400" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`} data-testid="toggle-earnings" title="Toggle earnings date markers">
               <Calendar className="w-3.5 h-3.5" /> Earnings
             </button>
@@ -2436,45 +2483,48 @@ export default function PremiumDiscount() {
       {/* ── Main chart area ── */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-5 gap-px bg-border min-h-0 overflow-hidden">
         {/* Left column: time-series charts */}
-        <div className="lg:col-span-3 flex flex-col gap-px bg-border min-h-0">
+        <div className={`${maxActive ? "lg:col-span-5" : "lg:col-span-3"} flex flex-col gap-px bg-border min-h-0`}>
           {/* Premium chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("premium") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("premium") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">Premium / Discount (%)</span>
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? premiumMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`} color="text-amber-300" testId="hover-premium" />
                 <span className="text-foreground">{valMetric}</span>
+                {maxBtn("premium")}
               </div>
             </div>
             <div ref={premiumContainerRef} className="flex-1 min-h-0" data-testid="chart-premium" />
           </div>
 
           {/* Growth chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("growth") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("growth") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">Growth Differential (pp)</span>
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? growthMap2.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}pp`} color="text-sky-300" testId="hover-growth" />
                 <span className="text-foreground">{growthMetric}</span>
+                {maxBtn("growth")}
               </div>
             </div>
             <div ref={growthContainerRef} className="flex-1 min-h-0" data-testid="chart-growth" />
           </div>
 
           {/* Ratio chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("ratio") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("ratio") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">Premium ÷ Growth Diff (ratio)</span>
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? ratioMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}×`} color="text-violet-300" testId="hover-ratio" />
                 <span className="text-purple-300" title="Dropped when |Δg| < 0.5pp or |ratio| > 50">{ratioSeries.length} pts</span>
+                {maxBtn("ratio")}
               </div>
             </div>
             <div ref={ratioContainerRef} className="flex-1 min-h-0" data-testid="chart-ratio" />
           </div>
 
           {/* Rolling Corr chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("rollCorr") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("rollCorr") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-3">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap flex items-center gap-2">
                 <span>Rolling Corr</span>
@@ -2513,13 +2563,14 @@ export default function PremiumDiscount() {
                   <span className="text-muted-foreground">Peak: —</span>
                 )}
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? rollCorrMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`} color="text-teal-300" testId="hover-rollcorr" />
+                {maxBtn("rollCorr")}
               </div>
             </div>
             <div ref={rollCorrContainerRef} className="flex-1 min-h-0" data-testid="chart-roll-corr" />
           </div>
 
           {/* Rel Return chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("relReturn") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("relReturn") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                 Rel Return (pp) <span className="text-muted-foreground/60 normal-case tracking-normal">{anchorDate ? `vs anchor: ${anchorDate}${pinDate ? " (pin)" : " · set Pin Date to move"}` : "— no aligned close data"}</span>
@@ -2533,6 +2584,7 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A vs peer median" : compareMode === "ticker" ? `A vs ${peerTicker || "—"}` : `${groupALabel} vs ${groupBLabel}`}
                   </span>
                 )}
+                {maxBtn("relReturn")}
               </div>
             </div>
             <div className="flex-1 min-h-0 relative">
@@ -2546,7 +2598,7 @@ export default function PremiumDiscount() {
           </div>
 
           {/* Rel Ratio chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("relRatio") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("relRatio") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                 Rel Strength (×, log) <span className="text-muted-foreground/60 normal-case tracking-normal">{anchorDate ? `vs anchor: ${anchorDate}${pinDate ? " (pin)" : " · set Pin Date to move"}` : "— no aligned close data"}</span>
@@ -2560,6 +2612,7 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A / peer median" : compareMode === "ticker" ? `A / ${peerTicker || "—"}` : `${groupALabel} / ${groupBLabel}`}
                   </span>
                 )}
+                {maxBtn("relRatio")}
               </div>
             </div>
             <div className="flex-1 min-h-0 relative">
@@ -2573,7 +2626,7 @@ export default function PremiumDiscount() {
           </div>
 
           {/* Raw Ratio chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("rawRatio") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("rawRatio") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                 A / B Ratio (×, log) <span className="text-muted-foreground/60 normal-case tracking-normal">raw price ratio — no anchor</span>
@@ -2587,13 +2640,14 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A / peer median" : compareMode === "ticker" ? `A / ${peerTicker || "—"}` : `${groupALabel} / ${groupBLabel}`}
                   </span>
                 )}
+                {maxBtn("rawRatio")}
               </div>
             </div>
             <div ref={rawRatioContainerRef} className="flex-1 min-h-0" data-testid="chart-raw-ratio" />
           </div>
 
           {/* RV Verdict history chart */}
-          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: visibleCharts.has("rvVerdictTs") ? undefined : "none" }}>
+          <div className="flex flex-col bg-card flex-1 min-h-0" style={{ display: chartShown("rvVerdictTs") ? undefined : "none" }}>
             <div className="px-3 py-1.5 border-b border-border flex items-center justify-between gap-2">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                 RV Verdict (history){" "}
@@ -2616,6 +2670,7 @@ export default function PremiumDiscount() {
                     </span>
                   );
                 })()}
+                {maxBtn("rvVerdictTs")}
               </div>
             </div>
             <div ref={rvVerdictContainerRef} className="flex-1 min-h-0" data-testid="chart-rv-verdict" />
@@ -2623,7 +2678,7 @@ export default function PremiumDiscount() {
         </div>
 
         {/* Right col: scatter plot */}
-        <div className="flex flex-col bg-card min-h-0 lg:col-span-2">
+        <div className="flex flex-col bg-card min-h-0 lg:col-span-2" style={{ display: maxActive ? "none" : undefined }}>
           <div className="px-3 py-1.5 border-b border-border flex items-center justify-between">
             <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
               Growth × Premium (history)
