@@ -6,7 +6,6 @@ import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { useSeasonalNow, SeasonalChip } from "@/lib/seasonalNow";
 import { useValuationNow, useCrowdingNow, ValuationChip, CrowdingChip } from "@/lib/rowChips";
 import { useEarningsNow, EarningsChip } from "@/lib/earningsNow";
-import { addJournalEntry } from "@/lib/ideaJournal";
 import { getMetricSeries } from "@/lib/dataService";
 import PairBacktestModal from "@/components/PairBacktestModal";
 import { hrpCluster } from "@/lib/hrp";
@@ -1096,21 +1095,7 @@ function DislocationScanPanel({
   const valuation = useValuationNow(resultCount > 0, chipTickers);
   const crowding = useCrowdingNow(resultCount > 0, chipTickers);
   const earnings = useEarningsNow(resultCount > 0);
-  // Pin a scan row into the Idea Journal: evidence text + entry closes frozen now.
-  const [journaled, setJournaled] = useState<Set<string>>(new Set());
   const [btPair, setBtPair] = useState<{ a: string; b: string } | null>(null);
-  const pinRowToJournal = useCallback(async (key: string, source: string, tickers: string[], direction: string, snapshot: string) => {
-    const entryCloses: Record<string, number> = {};
-    await Promise.all(tickers.map(async (tk) => {
-      try {
-        const s = await getMetricSeries(tk, "close");
-        const last = [...s].reverse().find((p) => Number.isFinite(p.value));
-        if (last) entryCloses[tk] = last.value;
-      } catch { /* leave missing */ }
-    }));
-    await addJournalEntry({ source, tickers, direction, thesis: "", snapshot, entryCloses });
-    setJournaled((prev) => new Set(prev).add(key));
-  }, []);
 
   const legChips = (t: string) => (
     <>
@@ -1512,29 +1497,6 @@ function DislocationScanPanel({
                             onClick={() => onPin(r.a, r.b)}
                           >
                             <Pin className="w-2.5 h-2.5" />Pair
-                          </button>
-                          <button
-                            data-testid={`disloc-journal-${i}`}
-                            className={`px-1.5 py-0.5 text-[9px] border rounded transition-colors ${
-                              journaled.has(`${r.a}-${r.b}`)
-                                ? "border-emerald-500/50 text-emerald-400"
-                                : "border-border/40 text-muted-foreground hover:bg-primary/20 hover:border-primary/50 hover:text-primary"
-                            }`}
-                            title="Pin this idea to the Journal (evidence + entry prices frozen now)"
-                            onClick={() => {
-                              const m = /LONG\s+([\w.\-]+)\s*\/\s*SHORT\s+([\w.\-]+)/i.exec(r.suggestion || "");
-                              const tickers = m ? [m[1], m[2]] : [r.a, r.b];
-                              const direction = m ? `LONG ${m[1]} / SHORT ${m[2]}` : `${r.a} × ${r.b}`;
-                              void pinRowToJournal(
-                                `${r.a}-${r.b}`,
-                                `disloc:${r.kind}`,
-                                tickers,
-                                direction,
-                                `${r.kind} · hist ρ ${r.histCorr.toFixed(2)} · z gap ${r.zGap.toFixed(1)} · spread z ${r.spreadZ != null ? r.spreadZ.toFixed(1) : "—"} · MR ${r.spreadMR ? `✓ ${r.spreadHalfLife}d` : "✗"} · leg z ${r.legZA?.toFixed(1) ?? "—"}/${r.legZB?.toFixed(1) ?? "—"}\n${r.suggestion}`,
-                              );
-                            }}
-                          >
-                            {journaled.has(`${r.a}-${r.b}`) ? "✓ Journaled" : "Journal"}
                           </button>
                           <button
                             data-testid={`disloc-bt-${i}`}

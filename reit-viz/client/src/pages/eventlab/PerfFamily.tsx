@@ -23,7 +23,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import DateInput from "@/components/DateInput";
-import { Download } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TrendingDown } from "@/lib/trending-down";
 import { ArrowUpDown } from "@/lib/arrow-up-down";
 import { SortAsc, SortDesc } from "lucide-react";
@@ -597,6 +598,16 @@ export default function PerfFamily() {
   const [seasonalMinDays, setSeasonalMinDays] = useState(30);
   const [seasonalMaxDays, setSeasonalMaxDays] = useState(180);
   const [showBaskets, setShowBaskets] = useState(false);
+  // Group rows by one of the six classification levels (main-table views).
+  const [groupBy, setGroupBy] = useState<string>("none");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (label: string) =>
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
   const { baskets } = useBaskets();
   // Monthly view statistic: avg return / win rate (% of years positive) /
   // return relative to the subindustry peer mean (seasonal alpha) / hit rate
@@ -622,11 +633,13 @@ export default function PerfFamily() {
       seasonalMinDays,
       seasonalMaxDays,
       showBaskets,
+      groupBy,
+      collapsedGroups: [...collapsedGroups],
       monthlyStat,
       periodStat,
       touchPct,
     }),
-    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat, periodStat, touchPct]
+    [viewMode, filters, manualTickers, customStart, customEnd, sortKey, sortAsc, eventType, eventStat, seasonalMinDays, seasonalMaxDays, showBaskets, monthlyStat, periodStat, touchPct, groupBy, collapsedGroups]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -642,6 +655,8 @@ export default function PerfFamily() {
     if (state.seasonalMinDays !== undefined) setSeasonalMinDays(state.seasonalMinDays);
     if (state.seasonalMaxDays !== undefined) setSeasonalMaxDays(state.seasonalMaxDays);
     if (state.showBaskets !== undefined) setShowBaskets(state.showBaskets);
+    if (state.groupBy !== undefined) setGroupBy(state.groupBy);
+    if (state.collapsedGroups !== undefined) setCollapsedGroups(new Set(state.collapsedGroups));
     if (state.monthlyStat !== undefined) setMonthlyStat(state.monthlyStat);
     if (state.periodStat !== undefined) setPeriodStat(state.periodStat);
     if (state.touchPct !== undefined) setTouchPct(state.touchPct);
@@ -676,24 +691,34 @@ export default function PerfFamily() {
     () => baskets.map((b) => `${b.id}:${b.tickers.join(",")}`).join("|"),
     [baskets]
   );
-  const { data: basketRowData } = useQuery({
+  const { data: basketRowData, isFetching: basketsComputing } = useQuery({
     queryKey: ["/perf-basket-rows", basketsKey, customStart, customEnd, seasonalMinDays, seasonalMaxDays, touchNum],
     enabled: showBaskets && baskets.length > 0,
     queryFn: async () => {
       const perf: any[] = [];
       const monthly: any[] = [];
       const seasonal: any[] = [];
-      for (const b of baskets) {
-        if (!b.tickers?.length) continue;
-        try {
-          const ohlc = await getBasketOhlc(b);
-          if (!ohlc || !ohlc.closes.length) continue;
-          const bars: BasketBar[] = ohlc.priceDates.map((d: string, i: number) => ({ date: d, close: ohlc.closes[i] }));
-          perf.push(basketPerfRow(b, bars, customStart || undefined, customEnd || undefined));
-          monthly.push(basketMonthlyRow(b, bars, touchNum));
-          seasonal.push(basketSeasonalRow(b, bars, seasonalMinDays, seasonalMaxDays));
-        } catch { /* skip basket */ }
+      // Concurrency 6 — the serial loop took ~90s over 40+ auto-baskets, which
+      // read as "the button does nothing". Row order doesn't matter (merged
+      // rows are re-sorted with the rest of the table).
+      const list = baskets.filter((b) => b.tickers?.length);
+      let next = 0;
+      async function worker() {
+        for (;;) {
+          const idx = next++;
+          if (idx >= list.length) return;
+          const b = list[idx];
+          try {
+            const ohlc = await getBasketOhlc(b);
+            if (!ohlc || !ohlc.closes.length) continue;
+            const bars: BasketBar[] = ohlc.priceDates.map((d: string, i: number) => ({ date: d, close: ohlc.closes[i] }));
+            perf.push(basketPerfRow(b, bars, customStart || undefined, customEnd || undefined));
+            monthly.push(basketMonthlyRow(b, bars, touchNum));
+            seasonal.push(basketSeasonalRow(b, bars, seasonalMinDays, seasonalMaxDays));
+          } catch { /* skip basket */ }
+        }
       }
+      await Promise.all(Array.from({ length: 6 }, () => worker()));
       return { perf, monthly, seasonal };
     },
   });
@@ -776,6 +801,35 @@ export default function PerfFamily() {
       }
     );
   }, [perfData, monthlyData, eventData, seasonalData, viewMode, filters, searchText, manualTickers, sortKey, sortAsc, universeTickers, basketScope.members, eventStat, geo.filterByGeo, showBaskets, basketRowData, monthlyStat, periodStat]);
+
+  // Classification lookup for rows whose feed omits those fields (monthly
+  // rows carry only ticker + month stats) — join from the periods feed.
+  const classByTicker = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const r of perfData ?? []) m.set(r.ticker, r);
+    return m;
+  }, [perfData]);
+
+  // Grouped render list for the main table (periods/quarterly/monthly/events).
+  // Groups appear in order of their best row under the current sort; rows stay
+  // sorted within groups; baskets group under "Baskets".
+  const renderItems = useMemo(() => {
+    const grpActive = groupBy !== "none" && viewMode !== "seasonal-patterns";
+    if (!grpActive) return displayRows.map((row: any) => ({ type: "row" as const, row }));
+    const map = new Map<string, any[]>();
+    for (const row of displayRows) {
+      const cls = (row as any)[groupBy] ?? classByTicker.get(row.ticker)?.[groupBy];
+      const key = row.isBasket ? "Baskets" : (cls || "Other");
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    const items: any[] = [];
+    for (const [label, rows] of map) {
+      items.push({ type: "group", label, count: rows.length });
+      if (!collapsedGroups.has(label)) for (const row of rows) items.push({ type: "row", row });
+    }
+    return items;
+  }, [displayRows, groupBy, viewMode, collapsedGroups, classByTicker]);
 
   const handleSort = useCallback(
     (col: string) => {
@@ -1127,6 +1181,25 @@ export default function PerfFamily() {
 
           {/* Basket scope + CSV export */}
           <div className="ml-auto flex items-center gap-1.5">
+            {viewMode !== "seasonal-patterns" && (
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-muted-foreground">Group:</span>
+                <Select value={groupBy} onValueChange={setGroupBy}>
+                  <SelectTrigger className="h-6 text-[11px] w-auto min-w-[120px]" data-testid="perf-group-by">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="economy">Economy</SelectItem>
+                    <SelectItem value="sector">Sector</SelectItem>
+                    <SelectItem value="subsector">Subsector</SelectItem>
+                    <SelectItem value="industryGroup">Industry Group</SelectItem>
+                    <SelectItem value="industry">Industry</SelectItem>
+                    <SelectItem value="subindustry">Sub-Industry</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <Button
               variant={showBaskets ? "default" : "outline"}
               size="sm"
@@ -1135,7 +1208,8 @@ export default function PerfFamily() {
               data-testid="perf-show-baskets"
               title="Show each basket as a composite row (periods, quarterly, monthly, and seasonal-pattern views)"
             >
-              Baskets{showBaskets && baskets.length > 0 ? ` (${baskets.length})` : ""}
+              {basketsComputing && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+              Baskets{showBaskets && baskets.length > 0 ? ` (${basketRowData ? baskets.length : "…"})` : ""}
             </Button>
             <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
             <Button
@@ -1324,7 +1398,22 @@ export default function PerfFamily() {
               </tr>
             </thead>
             <tbody>
-              {displayRows.map((row: any, idx: number) => (
+              {renderItems.map((item: any, idx: number) => {
+                if (item.type === "group") return (
+                  <tr
+                    key={`grp-${item.label}`}
+                    className="bg-muted/50 cursor-pointer hover:bg-muted/70 transition-colors"
+                    onClick={() => toggleGroup(item.label)}
+                    data-testid={`perf-group-${item.label}`}
+                  >
+                    <td colSpan={99} className="px-2 py-1 text-[11px] font-semibold">
+                      <span className="text-muted-foreground text-[10px] mr-1.5">{collapsedGroups.has(item.label) ? "▶" : "▼"}</span>
+                      {item.label} <span className="text-[10px] font-normal text-muted-foreground">({item.count})</span>
+                    </td>
+                  </tr>
+                );
+                const row = item.row;
+                return (
                 <tr
                   key={row.ticker}
                   className={`border-b border-border/50 hover:bg-accent/50 transition-colors ${idx % 2 === 0 ? "" : "bg-muted/20"}`}
@@ -1404,7 +1493,8 @@ export default function PerfFamily() {
                     </>
                   )}
                 </tr>
-              ))}
+                );
+              })}
               {displayRows.length === 0 && !isLoading && (
                 <tr>
                   <td colSpan={20} className="text-center py-8 text-muted-foreground">
