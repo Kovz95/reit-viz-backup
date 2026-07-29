@@ -238,7 +238,12 @@ export default function ShortInterest() {
               let pctile3Y: number | null = null, z3Y: number | null = null;
               if (win.length >= 60) {
                 const cur = win[win.length - 1];
-                pctile3Y = (win.filter((v) => v <= cur).length / win.length) * 100;
+                // Midrank percentile: SI is step-held between exchange reports,
+                // so ties are pervasive — counting equals fully would read a
+                // flat series as "100th percentile". Midrank reads it as 50.
+                let below = 0, equal = 0;
+                for (const v of win) { if (v < cur) below++; else if (v === cur) equal++; }
+                pctile3Y = ((below + 0.5 * equal) / win.length) * 100;
                 const mean = win.reduce((a, b) => a + b, 0) / win.length;
                 const std = Math.sqrt(win.reduce((a, b) => a + (b - mean) ** 2, 0) / (win.length - 1));
                 z3Y = std > 1e-9 ? (cur - mean) / std : null;
@@ -257,8 +262,10 @@ export default function ShortInterest() {
 
   const allRows: SIRow[] = useMemo(() => {
     if (!siTickers || !siMetrics) return [];
-    // Subsector median SI across the FULL roster (≥3 names with data) so the
-    // peer-relative column doesn't shift as filters change.
+    // Subsector SI values across the FULL roster (so the peer-relative column
+    // doesn't shift as filters change). Each row compares against the median
+    // of its peers EXCLUDING itself (self-inclusion compresses small groups
+    // toward zero — same lesson as the premium/discount peer aggregate).
     const bySub = new Map<string, number[]>();
     for (const t of siTickers as any[]) {
       const v = siMetrics.siPct[t.ticker];
@@ -268,16 +275,20 @@ export default function ShortInterest() {
       arr.push(v);
       bySub.set(sub, arr);
     }
-    const subMedian = new Map<string, number>();
-    for (const [sub, vals] of bySub) {
-      if (vals.length < 3) continue;
-      const s = [...vals].sort((a, b) => a - b);
-      const m = s.length >> 1;
-      subMedian.set(sub, s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
-    }
+    const peerMedian = (sub: string, own: number): number | undefined => {
+      const vals = bySub.get(sub);
+      if (!vals) return undefined;
+      const others = [...vals];
+      const i = others.indexOf(own);
+      if (i >= 0) others.splice(i, 1);
+      if (others.length < 2) return undefined;
+      others.sort((a, b) => a - b);
+      const m = others.length >> 1;
+      return others.length % 2 ? others[m] : (others[m - 1] + others[m]) / 2;
+    };
     return (siTickers as any[]).map((t: any) => {
       const siPct = siMetrics.siPct[t.ticker] ?? null;
-      const med = subMedian.get(t.subsector || "");
+      const med = siPct != null ? peerMedian(t.subsector || "", siPct) : undefined;
       const hist = siHistory?.[t.ticker];
       return {
         ticker: t.ticker,
@@ -478,7 +489,7 @@ export default function ShortInterest() {
         <div className="flex-1 overflow-auto">
           <table
             className="text-xs"
-            style={{ tableLayout: "fixed", width: "1150px" }}
+            style={{ tableLayout: "fixed", width: "1110px" }}
           >
             <colgroup>
               <col style={{ width: "56px" }} />

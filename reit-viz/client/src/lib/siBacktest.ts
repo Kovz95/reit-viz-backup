@@ -19,7 +19,7 @@ export const SI_STATE_LABELS: Record<SIState, { label: string; thesis: string }>
   "high-falling": { label: "High & falling", thesis: "covering from a crowded short — squeeze-fuel thesis (long)" },
   "low-rising":   { label: "Low & rising",   thesis: "fresh shorts building from a clean base — early-bear thesis" },
   "low-falling":  { label: "Low & falling",  thesis: "shorts abandoning an unshorted name — no prior; data decides" },
-  "mid":          { label: "Mid-range",      thesis: "no extreme; baseline behavior" },
+  "mid":          { label: "Mid / flat",     thesis: "no percentile extreme, or flat trend at one — baseline" },
 };
 
 export interface SIBtParams {
