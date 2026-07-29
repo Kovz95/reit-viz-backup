@@ -996,6 +996,106 @@ export default function PremiumDiscount() {
     return { premGivenGrowth: pGivenG, growthGivenPrem: gGivenP, impliedPrem, premGap, impliedGrowth, growthGap, label, score, rationale };
   }, [premiumSeries, growthSeries, summaryStats, rvBand]);
 
+  // Walk-forward backtest of the RV verdict: at each sampled historical date the
+  // verdict is recomputed from data available up to that date only, then paired
+  // with the realized forward 252-bar relative return (target vs comparison).
+  const rvBacktest = useMemo(() => {
+    if (premiumSeries.length < 120 || growthSeries.length < 120) return null;
+    if (closesA.length < 60 || closesB.length < 60) return null;
+    const gMap = new Map<string, number>();
+    for (const pt of growthSeries) if (Number.isFinite(pt.value)) gMap.set(pt.time, pt.value);
+    const times: string[] = [];
+    const premArr: number[] = [];
+    const growthArr: number[] = [];
+    for (const pt of premiumSeries) {
+      const gv = gMap.get(pt.time);
+      if (gv !== undefined && Number.isFinite(pt.value) && Number.isFinite(gv)) {
+        times.push(pt.time); premArr.push(pt.value); growthArr.push(gv);
+      }
+    }
+    const count = times.length;
+    if (count < 120) return null;
+
+    // aligned closes for forward returns
+    const bMap = new Map<string, number>();
+    for (const pt of closesB) if (Number.isFinite(pt.value) && pt.value > 0) bMap.set(pt.time, pt.value);
+    const cTimes: string[] = []; const cA: number[] = []; const cB: number[] = [];
+    const cIdxByTime = new Map<string, number>();
+    for (const pt of closesA) {
+      if (!Number.isFinite(pt.value) || pt.value <= 0) continue;
+      const bv = bMap.get(pt.time);
+      if (bv == null) continue;
+      cIdxByTime.set(pt.time, cTimes.length);
+      cTimes.push(pt.time); cA.push(pt.value); cB.push(bv);
+    }
+    if (cTimes.length < 300) return null;
+
+    const HORIZON = 252;
+    const STEP = 5;
+    const verdictAt = (i: number, sumP: number, sumG: number, sumP2: number, sumG2: number): string | null => {
+      const meanP = sumP / i, meanG = sumG / i;
+      const stdP = Math.sqrt(Math.max(0, sumP2 / i - meanP * meanP));
+      const stdG = Math.sqrt(Math.max(0, sumG2 / i - meanG * meanG));
+      if (stdP <= 0 || stdG <= 0) return null;
+      const pctile = (condOnGrowth: boolean, condValue: number, condStd: number, targetValue: number): number | null => {
+        let mult = deferredRvBand;
+        for (let iter = 0; iter < 5; iter++) {
+          const lo = condValue - mult * condStd, hi = condValue + mult * condStd;
+          let found = 0, below = 0;
+          for (let k = 0; k < i; k++) {
+            const cv = condOnGrowth ? growthArr[k] : premArr[k];
+            if (cv >= lo && cv <= hi) {
+              found++;
+              const tv = condOnGrowth ? premArr[k] : growthArr[k];
+              if (tv < targetValue) below++;
+            }
+          }
+          if (found >= 20) return found > 1 ? (below / (found - 1)) * 100 : 50;
+          mult *= 1.4;
+        }
+        return null;
+      };
+      const pGivenG = pctile(true, growthArr[i], stdG, premArr[i]);
+      const gGivenP = pctile(false, premArr[i], stdP, growthArr[i]);
+      let scoreP = 0, scoreG = 0;
+      if (pGivenG != null) scoreP = pGivenG <= 25 ? 1 : pGivenG >= 75 ? -1 : 0;
+      if (gGivenP != null) scoreG = gGivenP >= 75 ? 1 : gGivenP <= 25 ? -1 : 0;
+      if ((scoreP === 1 && scoreG >= 0) || (scoreG === 1 && scoreP >= 0)) return "Attractive";
+      if ((scoreP === -1 && scoreG <= 0) || (scoreG === -1 && scoreP <= 0)) return "Expensive";
+      return "Neutral";
+    };
+
+    const samples: Record<string, number[]> = { Attractive: [], Neutral: [], Expensive: [] };
+    let sumP = 0, sumG = 0, sumP2 = 0, sumG2 = 0;
+    for (let i = 0; i < count; i++) {
+      if (i >= 60 && i % STEP === 0) {
+        const ci = cIdxByTime.get(times[i]);
+        if (ci != null && ci + HORIZON < cTimes.length) {
+          const label = verdictAt(i, sumP, sumG, sumP2, sumG2);
+          if (label) {
+            const fwd = (cA[ci + HORIZON] / cA[ci] - cB[ci + HORIZON] / cB[ci]) * 100;
+            if (Number.isFinite(fwd)) samples[label].push(fwd);
+          }
+        }
+      }
+      sumP += premArr[i]; sumG += growthArr[i];
+      sumP2 += premArr[i] * premArr[i]; sumG2 += growthArr[i] * growthArr[i];
+    }
+
+    const summarize = (vals: number[], wantPositive: boolean) => {
+      if (vals.length < 8) return null;
+      const sorted = [...vals].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      const hits = vals.filter((v) => (wantPositive ? v > 0 : v < 0)).length;
+      return { n: vals.length, median, hitRate: (hits / vals.length) * 100 };
+    };
+    const attractive = summarize(samples.Attractive, true);
+    const neutral = summarize(samples.Neutral, true);
+    const expensive = summarize(samples.Expensive, false);
+    if (!attractive && !neutral && !expensive) return null;
+    return { attractive, neutral, expensive, horizonDays: HORIZON, stepDays: STEP };
+  }, [premiumSeries, growthSeries, closesA, closesB, deferredRvBand]);
+
   // Similar setups analysis
   const similarAnalysis = useMemo(() => {
     if (premiumSeries.length < 60 || growthSeries.length < 60 || closesA.length < 60 || closesB.length < 60) return null;
@@ -2150,6 +2250,22 @@ export default function PremiumDiscount() {
                 </select>
               </div>
             </div>
+            {rvBacktest && (
+              <div className="px-3 pb-2 flex items-center gap-x-4 gap-y-1 flex-wrap text-[10px] font-mono" data-testid="rv-backtest">
+                <span className="text-muted-foreground/60 uppercase tracking-wider">Verdict track record</span>
+                {([
+                  ["Attractive", rvBacktest.attractive, "text-emerald-300", "hit"],
+                  ["Neutral", rvBacktest.neutral, "text-amber-300/90", "pos"],
+                  ["Expensive", rvBacktest.expensive, "text-rose-300", "hit"],
+                ] as const).map(([lbl, s, cls, hitWord]) => (
+                  <span key={lbl} className={s ? "" : "opacity-40"} data-testid={`rv-backtest-${lbl.toLowerCase()}`}>
+                    <span className={cls}>{lbl}</span>{" "}
+                    {s ? <span className="text-foreground/90">med {fmtPP(s.median)} · {hitWord} {s.hitRate.toFixed(0)}% · n={s.n}</span> : <span className="text-muted-foreground">too few samples</span>}
+                  </span>
+                ))}
+                <span className="text-muted-foreground/50">fwd 1Y (252bd) rel return vs comparison · verdict recomputed walk-forward, sampled every 5bd</span>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border border-t border-border">
               {/* Premium given growth */}
               <div className="px-3 py-2 bg-card/60" data-testid="rv-prem-given-growth">
