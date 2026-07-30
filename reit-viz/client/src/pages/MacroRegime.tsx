@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import { createChart, ColorType, CrosshairMode, AreaSeries, LineSeries } from "lightweight-charts";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
+import { PANE_HANDLERS, PANE_TIME_SCALE } from "@/lib/chartView";
 import { useAppContext } from "@/lib/appContext";
 import { fetchMacroSeriesBatch } from "@/lib/macroStatic";
 import { fetchMetricSeries } from "@/lib/queryClient";
@@ -730,6 +731,12 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<{ bands: ISeriesApi<"Area">[]; growth?: ISeriesApi<"Line">; inflation?: ISeriesApi<"Line"> }>({ bands: [] });
   const gridColor = useGridColor("rgba(148,163,184,0.08)");
+  // View preservation across the theme-driven recreate below and the shading toggle
+  // that only re-runs the draw effect (see the two effects). Without this, a theme
+  // flip or a coarse/granular toggle snapped pan/zoom back to full range.
+  const savedRangeRef = useRef<ReturnType<ReturnType<IChartApi["timeScale"]>["getVisibleLogicalRange"]> | null>(null);
+  const dataFpRef = useRef<string | null>(null);
+  const recreatedRef = useRef(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -745,11 +752,14 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "rgba(148,163,184,0.2)" },
-      timeScale: { borderColor: "rgba(148,163,184,0.2)", rightOffset: 5 },
+      timeScale: { borderColor: "rgba(148,163,184,0.2)", ...PANE_TIME_SCALE },
+      ...PANE_HANDLERS,
       autoSize: true,
     });
     chartRef.current = chart;
+    recreatedRef.current = true; // tell the draw effect to restore the saved view
     return () => {
+      try { const r = chart.timeScale().getVisibleLogicalRange(); if (r) savedRangeRef.current = r; } catch {}
       chart.remove();
       chartRef.current = null;
       seriesRef.current = { bands: [] };
@@ -825,7 +835,25 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
       { time: classifications[classifications.length - 1].month, value: bounds.hi },
     ] as never);
     seriesRef.current.bands.push(scaleSeries as unknown as ISeriesApi<"Area">);
-    chart.timeScale().fitContent();
+
+    // Reframe only when the underlying classifications change. A shading toggle
+    // (coarse/granular) re-runs this effect without changing the line data, and a
+    // theme flip recreated the chart above — in both cases keep the user's view.
+    const last = classifications[classifications.length - 1];
+    const fp = `${classifications.length}:${last?.month ?? ""}:${last?.growthYoY ?? ""}:${last?.inflationYoY ?? ""}`;
+    const dataChanged = fp !== dataFpRef.current;
+    dataFpRef.current = fp;
+    if (recreatedRef.current) {
+      recreatedRef.current = false;
+      if (!dataChanged && savedRangeRef.current) {
+        try { chart.timeScale().setVisibleLogicalRange(savedRangeRef.current); }
+        catch { chart.timeScale().fitContent(); }
+      } else {
+        chart.timeScale().fitContent();
+      }
+    } else if (dataChanged) {
+      chart.timeScale().fitContent();
+    } // else: same chart + same data (shading toggle) → leave view untouched
   }, [classifications, episodes, granularEpisodes, shading, gridColor]);
 
   return (

@@ -16,6 +16,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createChart, ColorType, CrosshairMode, LineSeries, LineStyle } from "lightweight-charts";
 import type { IChartApi } from "lightweight-charts";
+import { makeViewPreserver } from "@/lib/chartView";
 import { X, RefreshCw, Users, Grid as GridIcon, Rows3, ScatterChart as ScatterIcon, LineChart as LineChartIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
@@ -313,6 +314,10 @@ export default function AttributionCompare({
 function OverlayView({ entries, metric }: { entries: CompareEntry[]; metric: OverlayMetric }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
+  // Preserve pan/zoom across the recreate this effect does on metric/theme changes.
+  // Fingerprint on the entry set + span (NOT the metric-dependent values) so flipping
+  // the overlay metric keeps the current view; only a company/data change reframes.
+  const viewRef = useRef(makeViewPreserver());
   const [hover, setHover] = useState<{ x: number; y: number; date: string; vals: { name: string; color: string; v: number }[] } | null>(null);
 
   useEffect(() => {
@@ -373,7 +378,8 @@ function OverlayView({ entries, metric }: { entries: CompareEntry[]; metric: Ove
           ? `${(t as any).year}-${String((t as any).month).padStart(2, "0")}-${String((t as any).day).padStart(2, "0")}` : String(t);
         setHover({ x: param.point.x, y: param.point.y, date: dateStr, vals });
       });
-      chart.timeScale().fitContent();
+      const fp = entries.map(e => `${e.sym}:${e.cum.length}:${e.roll.length}`).join("|");
+      viewRef.current.applyView(chart, fp);
       ro = new ResizeObserver(es => {
         const { width, height } = es[0].contentRect;
         if (chart && width > 0 && height > 0) chart.applyOptions({ width, height });
@@ -381,7 +387,7 @@ function OverlayView({ entries, metric }: { entries: CompareEntry[]; metric: Ove
       ro.observe(el);
     };
     init();
-    return () => { ro?.disconnect(); chart?.remove(); };
+    return () => { ro?.disconnect(); if (chart) viewRef.current.capture(chart); chart?.remove(); };
   }, [entries, metric, gridColor]);
 
   return (

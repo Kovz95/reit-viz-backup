@@ -11,6 +11,7 @@ import {
   LineStyle,
 } from "lightweight-charts";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
+import { makeSplitViewPreserver } from "@/lib/chartView";
 import { Download, RefreshCw, Info, SortAsc, SortDesc, Megaphone, FlaskConical, Tag, EyeOff, Maximize2, Minimize2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { setSeriesAxisLabels } from "@/components/ChartPane";
@@ -229,6 +230,7 @@ interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spa
 function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, height = 280, fill = false, showAxisLabels = true }: CumulativeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const viewRef = useRef(makeSplitViewPreserver());
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -245,6 +247,7 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
       const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
       chartRef.current = chart;
+      viewRef.current.markRecreated();
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
       spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       estSeriesRef.current = chart.addSeries(LineSeries, { color: COLOR_EST, lineWidth: 2, title: "Estimates", priceFormat: pf, lastValueVisible: true, priceLineVisible: false });
@@ -275,6 +278,7 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
       const c = chartRef.current;
       if ((c as any)?.__ro) (c as any).__ro.disconnect();
       detachSyncRef.current?.(); detachSyncRef.current = null;
+      if (chartRef.current) viewRef.current.capture(chartRef.current);
       chartRef.current?.remove();
       chartRef.current = null; totalSeriesRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; spacerSeriesRef.current = null;
     };
@@ -292,7 +296,8 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
     totalSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.total })));
     multSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.mult })));
     estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est })));
-    chartRef.current.timeScale().fitContent();
+    // Reframe only on a real data change; a theme recreate restores the prior view.
+    viewRef.current.applyView(chartRef.current, `${data.length}:${data[data.length - 1]?.date ?? ""}`);
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
@@ -336,6 +341,7 @@ interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; sp
 function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height = 260, fill = false, showAxisLabels = true }: RollingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const viewRef = useRef(makeSplitViewPreserver());
   const multSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const totalSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -352,6 +358,7 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
       const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
       chartRef.current = chart;
+      viewRef.current.markRecreated();
       const pf = { type: "price" as const, precision: 2, minMove: 0.01 };
       spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       multSeriesRef.current = chart.addSeries(HistogramSeries, { color: COLOR_MULT + "b3", title: "Δln(Multiple)", priceFormat: pf, base: 0, priceLineVisible: false, lastValueVisible: true });
@@ -381,6 +388,7 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
       const c = chartRef.current;
       if ((c as any)?.__ro) (c as any).__ro.disconnect();
       detachSyncRef.current?.(); detachSyncRef.current = null;
+      if (chartRef.current) viewRef.current.capture(chartRef.current);
       chartRef.current?.remove();
       chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; totalSeriesRef.current = null; spacerSeriesRef.current = null;
     };
@@ -398,7 +406,8 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
     multSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.mult, color: p.mult >= 0 ? COLOR_MULT + "b3" : "#0ea5e9b3" })));
     estSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.est, color: p.est >= 0 ? COLOR_EST + "b3" : "#d97706b3" })));
     totalSeriesRef.current.setData(deduped.map(p => ({ time: p.date.slice(0, 10), value: p.total })));
-    chartRef.current.timeScale().fitContent();
+    // Reframe only on a real data change; a theme recreate restores the prior view.
+    viewRef.current.applyView(chartRef.current, `${data.length}:${data[data.length - 1]?.date ?? ""}`);
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(totalSeriesRef, earningsDates, [data, gridColor]);
@@ -443,6 +452,7 @@ interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spac
 function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height = 200, fill = false, showAxisLabels = true }: ShareChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const viewRef = useRef(makeSplitViewPreserver());
   const multSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const estSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const midSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -459,6 +469,7 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height =
       if (rect.width === 0 || rect.height === 0) { requestAnimationFrame(init); return; }
       const chart = createChart(el, { ...CHART_OPTIONS_BASE, grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } }, width: rect.width, height: rect.height });
       chartRef.current = chart;
+      viewRef.current.markRecreated();
       const pf = { type: "price" as const, precision: 0, minMove: 1 };
       spacerSeriesRef.current = chart.addSeries(LineSeries, { color: "transparent", priceScaleId: "attr-spacer", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       midSeriesRef.current = chart.addSeries(LineSeries, { color: "rgba(255,255,255,0.18)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -487,6 +498,7 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height =
       const c = chartRef.current;
       if ((c as any)?.__ro) (c as any).__ro.disconnect();
       detachSyncRef.current?.(); detachSyncRef.current = null;
+      if (chartRef.current) viewRef.current.capture(chartRef.current);
       chartRef.current?.remove();
       chartRef.current = null; multSeriesRef.current = null; estSeriesRef.current = null; midSeriesRef.current = null; spacerSeriesRef.current = null;
     };
@@ -512,7 +524,8 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height =
       { time: shares[0].time, value: 50 },
       { time: shares[shares.length - 1].time, value: 50 },
     ]);
-    chartRef.current.timeScale().fitContent();
+    // Reframe only on a real data change; a theme recreate restores the prior view.
+    viewRef.current.applyView(chartRef.current, `${data.length}:${data[data.length - 1]?.date ?? ""}`);
   }, [data, spacerTimes, gridColor]);
 
   useEarningsLines(multSeriesRef, earningsDates, [data, gridColor]);

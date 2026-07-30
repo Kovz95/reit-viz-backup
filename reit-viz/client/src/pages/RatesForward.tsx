@@ -9,6 +9,7 @@ import {
   BaselineSeries,
 } from "lightweight-charts";
 import type { IChartApi } from "lightweight-charts";
+import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import { fetchFredSeries } from "@/lib/macroStatic";
 import { TrendingDown, TrendingUp, Activity } from "lucide-react";
 import { useGridColor } from "@/lib/gridPref";
@@ -224,7 +225,8 @@ function makeChartOptions(gridColor: string) {
     grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderVisible: false },
-    timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false },
+    timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, ...PANE_TIME_SCALE },
+    ...PANE_HANDLERS,
     autoSize: false,
   };
 }
@@ -265,6 +267,11 @@ export default function RatesForward() {
   const twoYearChartRef = useRef<IChartApi | null>(null);
   const tenDecompChartRef = useRef<IChartApi | null>(null);
   const twoTenChartRef = useRef<IChartApi | null>(null);
+  // Preserve pan/zoom across the theme-driven recreate each chart effect does.
+  const scoreView = useRef(makeViewPreserver());
+  const twoYearView = useRef(makeViewPreserver());
+  const tenDecompView = useRef(makeViewPreserver());
+  const twoTenView = useRef(makeViewPreserver());
 
   useEffect(() => {
     let cancelled = false;
@@ -430,7 +437,7 @@ export default function RatesForward() {
     const el = scoreHistoryRef.current;
     const chart = createChart(el, {
       ...makeChartOptions(gridColor), width: el.clientWidth, height: 280,
-      timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, fixLeftEdge: false, fixRightEdge: false },
+      timeScale: { borderVisible: false, timeVisible: false, secondsVisible: false, fixLeftEdge: false, fixRightEdge: false, ...PANE_TIME_SCALE },
       leftPriceScale: { visible: true, borderVisible: false },
       rightPriceScale: { visible: true, borderVisible: false },
     });
@@ -455,11 +462,11 @@ export default function RatesForward() {
     scoreSeries.createPriceLine({ price: 0, color: "rgba(161, 161, 170, 0.4)", lineStyle: 0, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -20, color: "rgba(244, 63, 94, 0.35)", lineStyle: 3, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -50, color: "rgba(244, 63, 94, 0.6)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "−50 Suppressed" });
-    chart.timeScale().fitContent();
+    scoreView.current.applyView(chart, seriesFingerprint(weeklyScoreHistory, vnqSeries));
     scoreChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (scoreHistoryRef.current) chart.applyOptions({ width: scoreHistoryRef.current.clientWidth }); });
     ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); scoreChartRef.current = null; };
+    return () => { ro.disconnect(); scoreView.current.capture(chart); chart.remove(); scoreChartRef.current = null; };
   }, [weeklyScoreHistory, vnqSeries, gridColor]);
 
   // Chart: 2Y Treasury
@@ -469,11 +476,11 @@ export default function RatesForward() {
     const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(LineSeries, { color: "#3b82f6", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(allSeries["DGS2"].map(p => ({ time: p.time, value: p.value })));
-    chart.timeScale().fitContent();
+    twoYearView.current.applyView(chart, seriesFingerprint(allSeries["DGS2"]));
     twoYearChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (twoYearRef.current) chart.applyOptions({ width: twoYearRef.current.clientWidth }); });
     ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); twoYearChartRef.current = null; };
+    return () => { ro.disconnect(); twoYearView.current.capture(chart); chart.remove(); twoYearChartRef.current = null; };
   }, [allSeries, gridColor]);
 
   // Chart: 10Y Decomp
@@ -487,11 +494,11 @@ export default function RatesForward() {
       .setData(combined.map(p => ({ time: p.time, value: p.exp })));
     chart.addSeries(LineSeries, { color: "#f59e0b", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(combined.map(p => ({ time: p.time, value: p.total })));
-    chart.timeScale().fitContent();
+    tenDecompView.current.applyView(chart, seriesFingerprint(expSeries, tpSeries));
     tenDecompChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (tenDecompRef.current) chart.applyOptions({ width: tenDecompRef.current.clientWidth }); });
     ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); tenDecompChartRef.current = null; };
+    return () => { ro.disconnect(); tenDecompView.current.capture(chart); chart.remove(); tenDecompChartRef.current = null; };
   }, [expSeries, tpSeries, gridColor]);
 
   // Chart: 2s10s
@@ -501,11 +508,11 @@ export default function RatesForward() {
     const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(AreaSeries, { lineColor: "#10b981", topColor: "rgba(16, 185, 129, 0.35)", bottomColor: "rgba(239, 68, 68, 0.20)", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(twoTenSpread.map(p => ({ time: p.time, value: p.value })));
-    chart.timeScale().fitContent();
+    twoTenView.current.applyView(chart, seriesFingerprint(twoTenSpread));
     twoTenChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (twoTenRef.current) chart.applyOptions({ width: twoTenRef.current.clientWidth }); });
     ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); twoTenChartRef.current = null; };
+    return () => { ro.disconnect(); twoTenView.current.capture(chart); chart.remove(); twoTenChartRef.current = null; };
   }, [twoTenSpread, gridColor]);
 
   // Canvas: Forward curve

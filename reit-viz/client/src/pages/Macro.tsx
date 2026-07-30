@@ -12,6 +12,7 @@ import {
   PriceScaleMode,
 } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -105,9 +106,9 @@ const CHART_OPTIONS = {
   timeScale: {
     borderColor: "rgba(255,255,255,0.1)",
     timeVisible: false,
+    ...PANE_TIME_SCALE,
   },
-  handleScroll: true,
-  handleScale: true,
+  ...PANE_HANDLERS,
 };
 
 // ── Color palette for series ──
@@ -190,6 +191,8 @@ function MacroPane({
   const effectiveFlexHeight = useFlexHeight || isMaximized;
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // Preserve pan/zoom across the recreate this effect does on indicator/chart-type/theme changes.
+  const viewRef = useRef(makeViewPreserver());
   const indicatorSeriesRef = useRef<ISeriesApi<any>[]>([]);
   const [logScale, setLogScale] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
@@ -756,7 +759,9 @@ function MacroPane({
       }
     };
     chart.subscribeCrosshairMove(crosshairCb);
-    chart.timeScale().fitContent();
+    // Reframe only when the underlying series actually change; otherwise restore the
+    // user's view so indicator/chart-type/theme toggles don't snap back to full range.
+    viewRef.current.applyView(chart, seriesFingerprint(...resolvedSeries.map((s) => s.data)));
 
     const ro = new ResizeObserver(() => {
       if (chartRef.current && el) {
@@ -770,6 +775,7 @@ function MacroPane({
 
     return () => {
       ro.disconnect();
+      viewRef.current.capture(chart);
       try { chart.unsubscribeCrosshairMove(crosshairCb); } catch {}
       onCrosshairMove(pane.id, null);
       onUnregisterChart(pane.id);

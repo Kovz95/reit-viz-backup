@@ -16,6 +16,7 @@ import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createChart, ColorType, CrosshairMode, LineSeries } from "lightweight-charts";
 import type { Time, LineWidth } from "lightweight-charts";
+import { makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -314,6 +315,9 @@ function FactorTimeSeries({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridColor = useGridColor("rgba(255,255,255,0.04)");
+  // Preserve the pan position across the recreate this effect does on theme changes.
+  // (Zoom stays disabled by design — see CHART_OPTIONS handleScale: false.)
+  const viewRef = useRef(makeViewPreserver());
 
   useEffect(() => {
     const el = containerRef.current;
@@ -335,7 +339,7 @@ function FactorTimeSeries({
       });
       line.setData(s.data.map((d) => ({ time: d.time as Time, value: d.value })));
     }
-    chart.timeScale().fitContent();
+    viewRef.current.applyView(chart, seriesFingerprint(...series.map((s) => s.data)));
 
     const ro = new ResizeObserver(() => {
       chart.applyOptions({ width: el.clientWidth, height: el.clientHeight || 240 });
@@ -343,6 +347,7 @@ function FactorTimeSeries({
     ro.observe(el);
     return () => {
       ro.disconnect();
+      viewRef.current.capture(chart);
       chart.remove();
     };
   }, [series, gridColor]);

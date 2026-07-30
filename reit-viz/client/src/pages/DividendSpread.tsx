@@ -5,6 +5,7 @@ import { makeDefaultFilters, serializeFilters, deserializeFilters } from "@/lib/
 import { useWorkspaceState } from "@/lib/useWorkspaceState";
 import { useQuery } from "@tanstack/react-query";
 import { createChart, ColorType, LineSeries, PriceScaleMode, CrosshairMode } from "lightweight-charts";
+import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import { ChevronLeft, TrendingUp, TrendingDown, Download, ExternalLink, ArrowUpDown, Zap } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -345,6 +346,8 @@ function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const gridColor = useGridColor("rgba(255,255,255,0.03)");
+  // Preserve pan/zoom across the recreate this effect does on row/theme changes.
+  const viewRef = useRef(makeViewPreserver());
 
   useEffect(() => {
     const el = containerRef.current;
@@ -369,7 +372,8 @@ function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: 
         horzLine: { color: "rgba(255,255,255,0.15)", width: 1 },
       },
       rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: false },
+      timeScale: { borderVisible: false, timeVisible: false, ...PANE_TIME_SCALE },
+      ...PANE_HANDLERS,
     });
     chartRef.current = chart;
     chart.addSeries(LineSeries, {
@@ -420,7 +424,7 @@ function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: 
       }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! - 2 * row.std! })));
     }
 
-    chart.timeScale().fitContent();
+    viewRef.current.applyView(chart, seriesFingerprint(row.spreadSeries));
     const handleResize = () => {
       if (el) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
     };
@@ -428,6 +432,7 @@ function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: 
     resizeObserver.observe(el);
     return () => {
       resizeObserver.disconnect();
+      viewRef.current.capture(chart);
       chart.remove();
     };
   }, [row, gridColor]);

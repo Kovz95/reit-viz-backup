@@ -32,6 +32,7 @@ import {
   ColorType,
   LineSeries,
 } from "lightweight-charts";
+import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -226,9 +227,9 @@ const CHART_OPTIONS = {
   timeScale: {
     borderColor: "rgba(255,255,255,0.08)",
     timeVisible: false,
+    ...PANE_TIME_SCALE,
   },
-  handleScroll: true,
-  handleScale: true,
+  ...PANE_HANDLERS,
 };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +249,9 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
   const seriesRef = useRef<any[]>([]);
   const isSyncingRef = useRef(false);
   const gridColor = useGridColor("rgba(255,255,255,0.03)");
+  // Preserve pan/zoom across the recreate this effect does on data/theme changes.
+  const ratioView = useRef(makeViewPreserver());
+  const zView = useRef(makeViewPreserver());
 
   useEffect(() => {
     const ratioEl = ratioRef.current;
@@ -348,7 +352,9 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
       });
     });
 
-    charts.forEach((c) => c.timeScale().fitContent());
+    // Reframe only when the underlying series change; theme toggles keep the view.
+    ratioView.current.applyView(chart1, seriesFingerprint(ratioSeries));
+    zView.current.applyView(chart2, seriesFingerprint(zScoreSeries));
 
     const resizeObserver = new ResizeObserver(() => {
       if (ratioEl.clientWidth > 0) chart1.applyOptions({ width: ratioEl.clientWidth });
@@ -359,6 +365,8 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
 
     return () => {
       resizeObserver.disconnect();
+      try { ratioView.current.capture(chart1); } catch {}
+      try { zView.current.capture(chart2); } catch {}
       charts.forEach((c) => {
         try { c.remove(); } catch {}
       });
