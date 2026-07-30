@@ -24,8 +24,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X } from "lucide-react";
 import {
-  LOOKBACKS, getRerateMetric, buildRerateRow,
-  type RerateRow, type RerateMetric, type CriticalLevel,
+  LOOKBACKS, getRerateMetric, buildRerateRow, computeCriticalLevels,
+  type RerateRow, type RerateMetric, type CriticalLevel, type CriticalLevels,
 } from "@/lib/valuationRerate";
 import {
   buildResidence, RESIDENCE_BAND_LABELS, type ResidenceResult, type PctBasis,
@@ -66,7 +66,7 @@ type TickerMetaLite = {
 };
 // One table row per ticker; per metric it carries BOTH stat families computed
 // from the same series (either may be null on thin history).
-type Cell = { rr: RerateRow | null; res: ResidenceResult | null };
+type Cell = { rr: RerateRow | null; res: ResidenceResult | null; trailing?: number[] };
 type MultiRow = { meta: TickerMetaLite; byMetric: Record<string, Cell> };
 
 // ── formatting / color helpers ─────────────────────────────────────────────
@@ -164,6 +164,16 @@ export default function ValuationRerateResidence() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [detail, setDetail] = useState<{ meta: TickerMetaLite; cell: Cell; metric: RerateMetric } | null>(null);
 
+  // Critical levels for the open detail row — reuse the table's precomputed value in
+  // Critical mode, else compute on demand so the modal shows them in % Move mode too.
+  const detailCritical: CriticalLevels | null = useMemo(() => {
+    if (!detail) return null;
+    const { rr, trailing } = detail.cell;
+    if (rr?.critical) return rr.critical;
+    if (rr && trailing) return computeCriticalLevels(trailing.filter(Number.isFinite), rr.m0, detail.metric);
+    return null;
+  }, [detail]);
+
   // At least one section stays on.
   const toggleSection = (which: "rerate" | "residence") => {
     if (which === "rerate") setShowRerate(showRerate && showResidence ? false : true);
@@ -226,7 +236,9 @@ export default function ValuationRerateResidence() {
     const trailing = basis === "expanding" || lookbackDays >= vals.length ? vals : vals.slice(-lookbackDays);
     const rr = buildRerateRow(meta, trailing, pctMove, metric, { critical: criticalMode });
     if (!rr && !res) return null;
-    return { rr, res };
+    // Keep the series so the detail modal can show critical levels on demand even
+    // when the table is in % Move mode (rr.critical is only precomputed in Critical).
+    return { rr, res, trailing };
   };
 
   const metricsSig = metricKeys.join("|");
@@ -854,6 +866,31 @@ export default function ValuationRerateResidence() {
                     <div><div className="text-[10px] text-muted-foreground">↑ Rich end ({fmtVal(m.lowIsCheap ? rr.stats.p90 : rr.stats.p10)})</div><div className={`font-mono text-sm ${moveColor(rr.toRich)}`}>{fmtMove(rr.toRich)}</div></div>
                     <div><div className="text-[10px] text-muted-foreground">↓ Cheap end ({fmtVal(m.lowIsCheap ? rr.stats.p10 : rr.stats.p90)})</div><div className={`font-mono text-sm ${moveColor(rr.toCheap)}`}>{fmtMove(rr.toCheap)}</div></div>
                     <div><div className="text-[10px] text-muted-foreground">Reward : Risk</div><div className="font-mono text-sm">{Number.isFinite(rrOf(rr)) ? rrOf(rr).toFixed(2) : "—"}</div></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Nearest critical levels (support / resistance on the metric's own history) */}
+              {(detailCritical?.support || detailCritical?.resistance) && (
+                <div className="px-4 pb-3">
+                  <div className="text-[10px] uppercase text-muted-foreground mb-1">Nearest critical levels (implied % move to reach)</div>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">↓ Support{detailCritical?.support ? ` · ${detailCritical.support.label}` : ""}</div>
+                      {detailCritical?.support
+                        ? <div className={`font-mono text-sm ${moveColor(detailCritical.support.move)}`}>{fmtMove(detailCritical.support.move)} <span className="text-[10px] text-muted-foreground">@ {fmtVal(detailCritical.support.price)} · rich {fmtPct(detailCritical.support.rich)}%</span></div>
+                        : <div className="font-mono text-sm text-muted-foreground">none below</div>}
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">↑ Resistance{detailCritical?.resistance ? ` · ${detailCritical.resistance.label}` : ""}</div>
+                      {detailCritical?.resistance
+                        ? <div className={`font-mono text-sm ${moveColor(detailCritical.resistance.move)}`}>{fmtMove(detailCritical.resistance.move)} <span className="text-[10px] text-muted-foreground">@ {fmtVal(detailCritical.resistance.price)} · rich {fmtPct(detailCritical.resistance.rich)}%</span></div>
+                        : <div className="font-mono text-sm text-muted-foreground">none above</div>}
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Reward : Risk</div>
+                      <div className="font-mono text-sm">{detailCritical?.support && detailCritical?.resistance && Math.abs(detailCritical.support.move) > 1e-6 ? (Math.abs(detailCritical.resistance.move) / Math.abs(detailCritical.support.move)).toFixed(2) : "—"}</div>
+                    </div>
                   </div>
                 </div>
               )}
