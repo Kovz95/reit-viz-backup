@@ -65,7 +65,6 @@ const RatesForward = lazy(() => import("@/pages/RatesForward"));
 const YieldCorrelation = lazy(() => import("@/pages/YieldCorrelation"));
 const Correlation = lazy(() => import("@/pages/Correlation"));
 const Valuation = lazy(() => import("@/pages/Valuation"));
-const ValuationRegime = lazy(() => import("@/pages/ValuationRegime"));
 const PremiumDiscount = lazy(() => import("@/pages/PremiumDiscount"));
 const Distributions = lazy(() => import("@/pages/Distributions"));
 const ValuationRerateResidence = lazy(() => import("@/pages/ValuationRerateResidence"));
@@ -293,7 +292,6 @@ function NavBar() {
       universeControlled: true,
       group: [
         { path: "/valuation", label: "Valuation", icon: Gauge },
-        { path: "/val-regime", label: "Val Regime", icon: Layers },
         { path: "/premium-discount", label: "Premium / Discount", icon: Percent },
         { path: "/distributions", label: "Distributions", icon: BarChart3 },
         { path: "/val-rerate", label: "Re-Rate + Residence", icon: Percent },
@@ -606,7 +604,6 @@ const PAGES = [
   { path: "/optimizers", label: "All Optimizers" },
   { path: "/z-optimizer", label: "Z Optimizer" },
   { path: "/pair-optimizer", label: "Pair Opt" },
-  { path: "/val-regime", label: "Val Regime" },
   { path: "/momentum", label: "Momentum" },
   { path: "/ma-crossover", label: "MA Crossover" },
   { path: "/roc-optimizer", label: "ROC Optimizer" },
@@ -717,7 +714,6 @@ function AppShell() {
               <Route path="/yield-correlation" component={YieldCorrelation} />
               <Route path="/correlation" component={Correlation} />
               <Route path="/valuation" component={Valuation} />
-              <Route path="/val-regime" component={ValuationRegime} />
               <Route path="/premium-discount" component={PremiumDiscount} />
               {/* P/D Screener lives inside the Screeners hub (same component);
                   the old standalone route aliases there. */}

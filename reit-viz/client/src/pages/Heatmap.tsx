@@ -84,6 +84,11 @@ const COLUMNS: ColDef[] = [
 
 const ALL_METRICS = COLUMNS.map(c => c.metric);
 
+// Columns that fold into the "Conviction" composite — the valuation lenses where
+// cheap = attractive. Each name's conviction = mean attractiveness z across these
+// (orientation-adjusted so + = cheap/long), so a high score = cheap on EVERYTHING.
+const CONVICTION_KEYS = ["pffo_fy2", "paffo_fy2", "pe_fy2", "eveb_fy2", "ffo_yield", "div_yield", "imp_cap_rate"];
+
 // Metrics that are computed from deltas on the client side (SI Δ) — no trailing history available
 const COMPUTED_METRICS = new Set(["SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M"]);
 
@@ -193,6 +198,10 @@ interface HeatmapRow extends ClassifiedBase {
   values: Record<string, number | null>;
   zScores: Record<string, number | null>;
   percentiles: Record<string, number | null>;
+  /** composite cheap-on-everything score (mean attractiveness z over CONVICTION_KEYS) */
+  conviction: number | null;
+  /** strongest single-metric dislocation (max |z| across columns) — for the filter */
+  maxAbsZ: number;
 }
 
 // ── Classification grouping levels ──
@@ -237,6 +246,10 @@ export default function Heatmap() {
   const [reference, setReference] = useState<Reference>("peers");
   const [displayMode, setDisplayMode] = useState<DisplayMode>("raw");
   const [groupBy, setGroupBy] = useState<GroupLevel>("subindustry");
+  // Peer z scope: vs the classification group (default) or the whole universe.
+  const [peerScope, setPeerScope] = useState<"group" | "universe">("group");
+  // Dislocation filter: hide rows whose strongest |z| is below this (0 = off).
+  const [minZ, setMinZ] = useState(0);
   const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const [trailingDays, setTrailingDays] = useState(250);
@@ -251,8 +264,8 @@ export default function Heatmap() {
     groupBy,
     classFilters: serializeClassFilters(classFilters),
     manualTickers: [...manualTickers],
-    trailingDays,
-  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays]);
+    trailingDays, peerScope, minZ,
+  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays, peerScope, minZ]);
 
   const restoreHeatmap = useCallback((state: any) => {
     // Whitelist: the render branches are "matrix" and "metrics", so an unknown value
@@ -271,6 +284,8 @@ export default function Heatmap() {
     if (state.classFilters !== undefined) setClassFilters(deserializeClassFilters(state.classFilters));
     if (state.manualTickers !== undefined) setManualTickers(new Set(state.manualTickers));
     if (state.trailingDays !== undefined) setTrailingDays(state.trailingDays);
+    if (state.peerScope === "group" || state.peerScope === "universe") setPeerScope(state.peerScope);
+    if (typeof state.minZ === "number") setMinZ(state.minZ);
   }, []);
 
   useWorkspaceTab("heatmap", serializeHeatmap, restoreHeatmap);
@@ -327,6 +342,8 @@ export default function Heatmap() {
       values: t.values,
       zScores: {},
       percentiles: {},
+      conviction: null,
+      maxAbsZ: 0,
     }));
   }, [snapshot]);
 
@@ -364,19 +381,35 @@ export default function Heatmap() {
           });
         };
 
-        if (groups) {
+        if (groups && peerScope === "group") {
           for (const [, groupRows] of groups) {
             computeForGroup(groupRows);
           }
         } else {
-          // No grouping — compute over full universe
+          // No grouping, or "vs Universe" scope — compare across the full universe.
           computeForGroup(rows);
         }
       }
     }
 
+    // Composite conviction + strongest dislocation per row (from the z's just set).
+    for (const r of rows) {
+      let sum = 0, cnt = 0, maxAbs = 0;
+      for (const col of COLUMNS) {
+        const z = r.zScores[col.key];
+        if (z === null || z === undefined) continue;
+        if (Math.abs(z) > maxAbs) maxAbs = Math.abs(z);
+        if (CONVICTION_KEYS.includes(col.key)) {
+          sum += (col.lowerIsGreen !== false ? -z : z); // + = cheap/attractive
+          cnt++;
+        }
+      }
+      r.conviction = cnt >= 2 ? sum / cnt : null;
+      r.maxAbsZ = maxAbs;
+    }
+
     return [...rows];
-  }, [rows, reference, trailingMap, groupBy]);
+  }, [rows, reference, trailingMap, groupBy, peerScope]);
 
   const geo = useGeoFilter(enrichedRows, "heatmap-geo");
 
@@ -385,11 +418,21 @@ export default function Heatmap() {
     let base = enrichedRows;
     if (universeTickers) base = base.filter(r => universeTickers.has(r.ticker));
     if (basketScope.members) base = base.filter(r => basketScope.inScope(r.ticker));
-    return geo.filterByGeo(applyClassFilters(base, classFilters, search, manualTickers));
-  }, [enrichedRows, classFilters, search, manualTickers, universeTickers, basketScope.members, geo.filterByGeo]);
+    let out = geo.filterByGeo(applyClassFilters(base, classFilters, search, manualTickers));
+    // Dislocation filter: keep only names with a strong enough single-metric signal.
+    if (minZ > 0) out = out.filter(r => r.maxAbsZ >= minZ);
+    return out;
+  }, [enrichedRows, classFilters, search, manualTickers, universeTickers, basketScope.members, geo.filterByGeo, minZ]);
 
   // Sort
   const sorted = useMemo(() => {
+    if (sortCol === "conviction") {
+      const miss = sortDir === "asc" ? Infinity : -Infinity;
+      return [...filtered].sort((a, b) => {
+        const va = a.conviction ?? miss, vb = b.conviction ?? miss;
+        return sortDir === "asc" ? va - vb : vb - va;
+      });
+    }
     const colDef = COLUMNS.find(c => c.key === sortCol);
     if (!colDef) return filtered;
     return [...filtered].sort((a, b) => {
@@ -561,12 +604,34 @@ export default function Heatmap() {
     }
   }, [customDaysInput]);
 
-  // CSV export
+  // Drill-through to the Charts tab for a name+metric (same hand-off Re-Rate/SI use).
+  const openInCharts = useCallback((ticker: string, metric: string) => {
+    try {
+      sessionStorage.setItem("reit-viz:rerate-to-charts", JSON.stringify({ ticker, metricKey: metric, lookbackDays: trailingDays }));
+    } catch {}
+    window.location.hash = "#/";
+  }, [trailingDays]);
+
+  // CSV export — the metrics table, or the pair-matrix grid when in matrix mode.
   const exportCSV = useCallback(() => {
+    const dl = (csv: string, name: string) => {
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+    };
+    const today = new Date().toISOString().slice(0, 10);
+    if (viewMode === "matrix" && matrixData) {
+      const header = ["A\\B", ...matrixData.tickers].join(",");
+      const lines = matrixData.rows.map(row =>
+        [row.ticker, ...row.cells.map(c => (c.diag ? "" : (c.text ?? "").replace(/,/g, "")))].join(","));
+      dl([header, ...lines].join("\n"), `relval_matrix_${displayMode}_${today}.csv`);
+      return;
+    }
     const groupLabel = groupBy !== "none" ? GROUP_LEVELS.find(g => g.value === groupBy)?.label || "Group" : "Subindustry";
     const refLabel = reference === "peers" ? "Peers" : `${trailingDays}d Hist`;
     const modeLabel = displayMode === "zscore" ? ` (Z vs ${refLabel})` : displayMode === "percentile" ? ` (Pctile vs ${refLabel})` : "";
-    const header = ["Ticker", "Name", groupLabel, ...COLUMNS.map(c => c.label + modeLabel)].join(",");
+    const header = ["Ticker", "Name", groupLabel, "Conviction", ...COLUMNS.map(c => c.label + modeLabel)].join(",");
     const lines = sorted.map(r => {
       const groupVal = groupBy !== "none" ? ((r as any)[groupBy] || "Other") : r.subindustry;
       const vals = COLUMNS.map(c => {
@@ -580,17 +645,10 @@ export default function Heatmap() {
         const v = r.values[c.metric];
         return v !== null && v !== undefined ? v.toFixed(c.decimals ?? 1) : "";
       });
-      return [r.ticker, `"${r.name}"`, `"${groupVal}"`, ...vals].join(",");
+      return [r.ticker, `"${r.name}"`, `"${groupVal}"`, r.conviction != null ? r.conviction.toFixed(2) : "", ...vals].join(",");
     });
-    const csv = [header, ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `relval_${displayMode}_${reference}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [sorted, displayMode, reference, groupBy, trailingDays]);
+    dl([header, ...lines].join("\n"), `relval_${displayMode}_${reference}_${today}.csv`);
+  }, [sorted, displayMode, reference, groupBy, trailingDays, viewMode, matrixData]);
 
   // ── Render helpers ──
   const SortIcon = ({ colKey }: { colKey: string }) => {
@@ -622,6 +680,13 @@ export default function Heatmap() {
       <td className="px-2 py-1 text-[10px] text-muted-foreground whitespace-nowrap sticky left-[200px] bg-background z-10">
         {groupBy === "subindustry" || groupBy === "none" ? shortSubindustry(r.subindustry) : (r as any)[groupBy] || "Other"}
       </td>
+      <td
+        className="px-2 py-1 text-right font-mono text-[11px] tabular-nums whitespace-nowrap sticky left-[300px] z-10 border-r border-border/40"
+        style={{ backgroundColor: r.conviction != null ? zColor(r.conviction, false) : "transparent" }}
+        title={`Conviction: mean cheap-z across valuation metrics (+ = cheap on everything, ${reference === "peers" ? (peerScope === "universe" ? "vs universe" : "vs group") : "vs history"})`}
+      >
+        {r.conviction != null ? (r.conviction >= 0 ? "+" : "") + r.conviction.toFixed(2) : "—"}
+      </td>
       {COLUMNS.map(col => {
         const v = r.values[col.metric];
         const bg = getCellBg(r, col);
@@ -647,9 +712,10 @@ export default function Heatmap() {
         return (
           <td
             key={col.key}
-            className="px-2 py-1 text-right font-mono text-[11px] tabular-nums whitespace-nowrap"
+            className="px-2 py-1 text-right font-mono text-[11px] tabular-nums whitespace-nowrap cursor-pointer"
             style={{ backgroundColor: bg }}
-            title={tooltip}
+            title={`${tooltip}${tooltip ? " · " : ""}click → Charts`}
+            onClick={() => openInCharts(r.ticker, col.metric)}
           >
             {cellText}
           </td>
@@ -660,7 +726,7 @@ export default function Heatmap() {
 
   const renderGroupHeader = (label: string, count: number) => (
     <tr key={`header-${label}`} className="bg-card/50">
-      <td colSpan={3 + COLUMNS.length} className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+      <td colSpan={4 + COLUMNS.length} className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
         {label} <span className="font-normal ml-1 opacity-60">({count})</span>
       </td>
     </tr>
@@ -722,6 +788,40 @@ export default function Heatmap() {
             <SelectItem value="history">vs History</SelectItem>
           </SelectContent>
         </Select>
+
+        {/* Peer scope: within the classification group, or vs the whole universe */}
+        {reference === "peers" && (
+          <div className="flex rounded border border-border overflow-hidden">
+            {([["group", "Group"], ["universe", "Universe"]] as const).map(([s, label]) => (
+              <button
+                key={s}
+                onClick={() => setPeerScope(s)}
+                className={`h-6 px-2 text-[11px] ${peerScope === s ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+                data-testid={`heatmap-peerscope-${s}`}
+                title={s === "universe" ? "z vs the whole universe" : "z vs each name's classification group"}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Dislocation filter: only show names with a strong single-metric signal */}
+        <div className="flex items-center gap-1" title="Hide names whose strongest |z| is below this">
+          <span className="text-[10px] text-muted-foreground">|z|≥</span>
+          <div className="flex rounded border border-border overflow-hidden">
+            {[0, 1, 1.5, 2].map(v => (
+              <button
+                key={v}
+                onClick={() => setMinZ(v)}
+                className={`h-6 px-1.5 text-[11px] ${minZ === v ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+                data-testid={`heatmap-minz-${v}`}
+              >
+                {v === 0 ? "off" : v}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Display: what to show and how to color */}
         <Select value={displayMode} onValueChange={v => setDisplayMode(v as DisplayMode)}>
@@ -923,6 +1023,14 @@ export default function Heatmap() {
                 </th>
                 <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-[200px] bg-card z-30 w-[100px]">
                   {groupBy !== "none" ? GROUP_LEVELS.find(g => g.value === groupBy)?.label || "Group" : "Subindustry"}
+                </th>
+                <th
+                  className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap sticky left-[300px] bg-card z-30 border-r border-border/40"
+                  onClick={() => toggleSort("conviction")}
+                  title="Conviction — mean cheap-z across valuation metrics (cheap on everything)"
+                  data-testid="heatmap-sort-conviction"
+                >
+                  <div className="flex items-center justify-end gap-1">Conv<SortIcon colKey="conviction" /></div>
                 </th>
                 {COLUMNS.map(col => (
                   <th
