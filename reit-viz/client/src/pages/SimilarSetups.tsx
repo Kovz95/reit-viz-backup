@@ -276,6 +276,22 @@ async function loadLegCloseSeries(
       };
     }
   } catch {}
+  // Non-workbook symbols (ETFs like VNQ/IYR, indices) aren't in /api/ticker;
+  // fall back to the server Yahoo price cache the same way loadSpySeries and
+  // the pair-picker's yahooPairsRatio do, so typed pairs match that reach.
+  try {
+    const res = await fetch(`/api/yahoo-prices/${encodeURIComponent(ticker)}`);
+    if (res.ok) {
+      const data = await res.json();
+      const closes: number[] =
+        Array.isArray(data?.adjCloses) && data.adjCloses.length
+          ? data.adjCloses
+          : data?.closes;
+      if (Array.isArray(data?.dates) && Array.isArray(closes) && closes.length) {
+        return { times: data.dates, closes };
+      }
+    }
+  } catch {}
   return null;
 }
 
