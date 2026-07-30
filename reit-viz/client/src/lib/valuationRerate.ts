@@ -7,6 +7,9 @@
 // cheap/rich extremes of the stock's own history). Comparing those across names
 // surfaces relative return potential for long/short.
 
+import { detectSRLevels } from "@/lib/srLevels";
+import type { SRLevel } from "@/lib/srLevels";
+
 export type MultipleDir = "direct" | "inverse";
 // "direct"  = price in the numerator (P/FFO, P/E, EV/EBITDA…): price up → multiple up.
 // "inverse" = price in the denominator (yields, cap rate): price up → metric down.
@@ -215,6 +218,84 @@ export interface RerateRow extends RerateClassification {
   toCheap: number;
   /** implied % move to the RICH extreme of its history (typically upside) */
   toRich: number;
+  /** critical-level analysis: nearest support (downside) & resistance (upside)
+   *  detected on the metric's OWN history — populated only when requested. */
+  critical?: CriticalLevels;
+}
+
+/** A support/resistance level of the metric's own series, expressed for re-rate. */
+export interface CriticalLevel {
+  /** the level value, on the metric's own scale */
+  price: number;
+  /** implied % price move to re-rate to this level (same convention as toMedian) */
+  move: number;
+  /** oriented richness percentile at this level (0 = cheapest, 100 = richest) */
+  rich: number;
+  /** short human label: "S/R", "SMA 200", "Fib 0.618", "52wk H"/"52wk L" */
+  label: string;
+  type: string;
+}
+
+export interface CriticalLevels {
+  /** nearest level a DOWNWARD price move would reach (null if none below) */
+  support: CriticalLevel | null;
+  /** nearest level an UPWARD price move would reach (null if none above) */
+  resistance: CriticalLevel | null;
+}
+
+const srLabel = (l: SRLevel): string =>
+  l.type === "ma" ? `${l.maType ?? "MA"} ${l.maPeriod ?? ""}`.trim()
+  : l.type === "fib" ? `Fib ${l.fibLevel ?? ""}`.trim()
+  : "S/R";
+
+/**
+ * Detect critical levels on a metric's OWN history and split them into the nearest
+ * support (reached by a downward price move) and resistance (upward), each with the
+ * implied re-rate move and richness. Direction is decided by the implied PRICE move
+ * (via impliedMoveToMultiple), so it is correct for inverse metrics (yields) too —
+ * a lower yield is a HIGHER price, i.e. resistance, not support.
+ *
+ * The metric series is fed as close=high=low (it has no intraday range). MA detection
+ * is deliberately trimmed (SMA/EMA @ 50/200) so a full table of tickers stays snappy.
+ */
+export function computeCriticalLevels(finite: number[], m0: number, metric: RerateMetric): CriticalLevels {
+  const none: CriticalLevels = { support: null, resistance: null };
+  if (finite.length < 30 || !(m0 > 0)) return none;
+
+  // Ascending synthetic daily axis (level PRICES don't depend on it; it only feeds
+  // the engine's recency score, which nearest-selection ignores).
+  const base = Date.parse("2000-01-01");
+  const dates = finite.map((_, i) => new Date(base + i * 86400000).toISOString().slice(0, 10));
+  let levels: SRLevel[] = [];
+  try {
+    levels = detectSRLevels(
+      { closes: finite, highs: finite, lows: finite, dates },
+      { maTypes: ["SMA", "EMA"], maPeriods: [50, 200] },
+    );
+  } catch { levels = []; }
+
+  const cands: { price: number; label: string; type: string }[] = levels.map((l) => ({
+    price: l.price, label: srLabel(l), type: l.type,
+  }));
+  // Always offer the 52-week (≈252-bar) high/low too.
+  const last252 = finite.slice(-252).filter((x) => Number.isFinite(x));
+  if (last252.length) {
+    cands.push({ price: Math.max(...last252), label: "52wk H", type: "52wk" });
+    cands.push({ price: Math.min(...last252), label: "52wk L", type: "52wk" });
+  }
+
+  const toLevel = (c: { price: number; label: string; type: string }): CriticalLevel | null => {
+    const move = saneMove(impliedMoveToMultiple(m0, c.price, metric.dir));
+    if (!Number.isFinite(move)) return null;
+    const raw = percentileRank(c.price, finite);
+    return { price: c.price, move, rich: metric.lowIsCheap ? raw : 100 - raw, label: c.label, type: c.type };
+  };
+  const scored = cands.map(toLevel).filter((x): x is CriticalLevel => x !== null && Math.abs(x.move) > 1e-6);
+
+  // support = smallest downward move (closest below); resistance = smallest upward move.
+  const support = scored.filter((x) => x.move < 0).sort((a, b) => b.move - a.move)[0] ?? null;
+  const resistance = scored.filter((x) => x.move > 0).sort((a, b) => a.move - b.move)[0] ?? null;
+  return { support, resistance };
 }
 
 // Implied moves beyond ±10,000% (100×) carry no decision value and are almost
@@ -231,6 +312,7 @@ export function buildRerateRow(
   trailing: number[],
   pctMove: number,
   metric: RerateMetric,
+  opts?: { critical?: boolean },
 ): RerateRow | null {
   const finite = trailing.filter((x) => Number.isFinite(x));
   if (finite.length < 6) return null;
@@ -274,5 +356,6 @@ export function buildRerateRow(
     toMedian: positiveScale ? saneMove(impliedMoveToMultiple(m0, stats.median, metric.dir)) : NaN,
     toCheap: positiveScale ? saneMove(impliedMoveToMultiple(m0, cheapTarget, metric.dir)) : NaN,
     toRich: positiveScale ? saneMove(impliedMoveToMultiple(m0, richTarget, metric.dir)) : NaN,
+    critical: opts?.critical && positiveScale ? computeCriticalLevels(finite, m0, metric) : undefined,
   };
 }

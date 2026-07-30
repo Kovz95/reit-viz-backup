@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X } from "lucide-react";
 import {
   LOOKBACKS, getRerateMetric, buildRerateRow,
-  type RerateRow, type RerateMetric,
+  type RerateRow, type RerateMetric, type CriticalLevel,
 } from "@/lib/valuationRerate";
 import {
   buildResidence, RESIDENCE_BAND_LABELS, type ResidenceResult, type PctBasis,
@@ -89,6 +89,14 @@ const richOf = (pctile: number, lowIsCheap: boolean): number =>
 const rrOf = (rr: RerateRow | null): number =>
   rr && Math.abs(rr.toCheap) > 0 && Number.isFinite(rr.toRich) ? rr.toRich / Math.abs(rr.toCheap) : NaN;
 
+// Critical-mode reward:risk = upside room to resistance ÷ downside room to support.
+const critRatio = (rr: RerateRow | null): number => {
+  const s = rr?.critical?.support?.move, r = rr?.critical?.resistance?.move;
+  return s !== undefined && r !== undefined && Math.abs(s) > 1e-6 && Number.isFinite(r) ? Math.abs(r) / Math.abs(s) : NaN;
+};
+const critTitle = (lvl: CriticalLevel | null | undefined, side: string): string =>
+  lvl ? `${side}: ${lvl.label} @ ${fmtVal(lvl.price)} · ${fmtMove(lvl.move)} away · rich ${fmtPct(lvl.rich)}%` : `No ${side.toLowerCase()} level detected`;
+
 const MIN_TAIL_N = 60;
 const BAND_COLORS = ["#34d399", "#6ee7b7", "#fcd34d", "#fbbf24", "#f87171", "#ef4444"];
 function OccupancyBar({ residence, wide = false }: { residence: number[]; wide?: boolean }) {
@@ -119,6 +127,10 @@ export default function ValuationRerateResidence() {
   // View-defining controls persist across reloads.
   const [metricKeys, setMetricKeys] = usePersistedState<string[]>("reit-viz:vrr:metricKeys", ["P/FFO FY2"]);
   const [pctMove, setPctMove] = usePersistedState("reit-viz:vrr:pctMove", 20);
+  // Scenario anchor: a fixed % move, or the nearest critical levels (support /
+  // resistance) detected on each metric's own history.
+  const [levelMode, setLevelMode] = usePersistedState<"percent" | "critical">("reit-viz:vrr:levelMode", "percent");
+  const criticalMode = levelMode === "critical";
   const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:vrr:lookbackDays", 1260);
   const [basis, setBasis] = usePersistedState<PctBasis>("reit-viz:vrr:basis", "trailing");
   const [horizon, setHorizon] = usePersistedState("reit-viz:vrr:horizon", 63);
@@ -212,14 +224,14 @@ export default function ValuationRerateResidence() {
     // Match the residence basis: expanding judges vs ALL history, trailing vs
     // the window — so Rich% and the re-rate stats share one reference frame.
     const trailing = basis === "expanding" || lookbackDays >= vals.length ? vals : vals.slice(-lookbackDays);
-    const rr = buildRerateRow(meta, trailing, pctMove, metric);
+    const rr = buildRerateRow(meta, trailing, pctMove, metric, { critical: criticalMode });
     if (!rr && !res) return null;
     return { rr, res };
   };
 
   const metricsSig = metricKeys.join("|");
   const { data: singleRows = [], isLoading: singleLoading } = useQuery({
-    queryKey: ["vrr-single", metricsSig, basis, lookbackDays, pctMove, tickerKey],
+    queryKey: ["vrr-single", metricsSig, basis, lookbackDays, pctMove, levelMode, tickerKey],
     queryFn: async () => {
       const out: MultiRow[] = [];
       const batchSize = 12;
@@ -261,7 +273,7 @@ export default function ValuationRerateResidence() {
   const pairLegKey = useMemo(() => pairLegs.map((t) => t.ticker).join(","), [pairLegs]);
 
   const { data: pairRows = [], isLoading: pairLoading } = useQuery({
-    queryKey: ["vrr-pairs", pairBasis, pairMetricKey, basis, lookbackDays, pctMove, pairLegKey],
+    queryKey: ["vrr-pairs", pairBasis, pairMetricKey, basis, lookbackDays, pctMove, levelMode, pairLegKey],
     queryFn: async () => {
       const seriesKey = pairBasis === "price" ? "close" : pairMetricKey;
       const seriesByTicker = new Map<string, { time: string; value: number }[]>();
@@ -299,7 +311,7 @@ export default function ValuationRerateResidence() {
   // metric where either leg lacks the metric is skipped quietly.
   const customPairsSig = customPairs.join("|");
   const { data: customPairRows = [] } = useQuery({
-    queryKey: ["vrr-custom-pairs", metricsSig, basis, lookbackDays, pctMove, customPairsSig, tickerKey],
+    queryKey: ["vrr-custom-pairs", metricsSig, basis, lookbackDays, pctMove, levelMode, customPairsSig, tickerKey],
     queryFn: async () => {
       const out: MultiRow[] = [];
       for (const pairKey of customPairs) {
@@ -365,9 +377,9 @@ export default function ValuationRerateResidence() {
       case "m0": v = c.rr?.m0 ?? c.res?.m0 ?? NaN; break;
       case "rich": v = cellRich(c, m); break;
       case "z": v = c.rr?.nowZ ?? NaN; break;
-      case "proForma": v = c.rr?.proForma ?? NaN; break;
-      case "pfRich": v = cellPfRich(c, m); break;
-      case "seen": v = c.res?.proFormaFreqRicher ?? NaN; break;
+      case "proForma": v = criticalMode ? (c.rr?.critical?.support?.move ?? NaN) : (c.rr?.proForma ?? NaN); break;
+      case "pfRich": v = criticalMode ? (c.rr?.critical?.resistance?.move ?? NaN) : cellPfRich(c, m); break;
+      case "seen": v = criticalMode ? critRatio(c.rr) : (c.res?.proFormaFreqRicher ?? NaN); break;
       case "toMedian": v = c.rr?.toMedian ?? NaN; break;
       case "toRich": v = c.rr?.toRich ?? NaN; break;
       case "toCheap": v = c.rr?.toCheap ?? NaN; break;
@@ -446,9 +458,19 @@ export default function ValuationRerateResidence() {
       <Th col="m0" label="Now" title="Current value" metricKey={m.key} sep />
       <Th col="rich" label="Rich%" title="Richness percentile vs own history (100 = most expensive, 0 = cheapest; orientation-aware)" metricKey={m.key} />
       <Th col="z" label="z" title="Current z-score vs history" metricKey={m.key} />
-      <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma value after a ${fmtMove(pctMove)} move (price move for valuation multiples)`} metricKey={m.key} />
-      <Th col="pfRich" label="Rich%" title="Pro-forma richness percentile (ATH = never been this rich)" metricKey={m.key} />
-      <Th col="seen" label="Seen%" title="% of history at least as rich as the pro-forma level (low = rare)" metricKey={m.key} />
+      {criticalMode ? (
+        <>
+          <Th col="proForma" label="↓Supp" title="Implied % move to the nearest SUPPORT level (downside room) detected on this metric's own history" metricKey={m.key} />
+          <Th col="pfRich" label="↑Res" title="Implied % move to the nearest RESISTANCE level (upside room) detected on this metric's own history" metricKey={m.key} />
+          <Th col="seen" label="S↔R" title="Reward:risk to the nearest levels = upside room to resistance ÷ downside room to support" metricKey={m.key} />
+        </>
+      ) : (
+        <>
+          <Th col="proForma" label={`@${fmtMove(pctMove)}`} title={`Pro-forma value after a ${fmtMove(pctMove)} move (price move for valuation multiples)`} metricKey={m.key} />
+          <Th col="pfRich" label="Rich%" title="Pro-forma richness percentile (ATH = never been this rich)" metricKey={m.key} />
+          <Th col="seen" label="Seen%" title="% of history at least as rich as the pro-forma level (low = rare)" metricKey={m.key} />
+        </>
+      )}
       {/* Re-rate room */}
       {showRerate && (
         <>
@@ -507,11 +529,21 @@ export default function ValuationRerateResidence() {
         <td onClick={onCell} className={`${cls} border-l border-border/60`}>{fmtVal(rr?.m0 ?? res?.m0)}</td>
         <td onClick={onCell} className={`${cls} ${richColor(rich)}`}>{fmtPct(rich)}</td>
         <td onClick={onCell} className={`${cls} text-muted-foreground`}>{fmtZ(rr?.nowZ)}</td>
-        <td onClick={onCell} className={cls}>{fmtVal(rr?.proForma)}</td>
-        <td onClick={onCell} className={`${cls} ${richColor(pfRich)}`}>
-          {fmtPct(pfRich)}{res?.proFormaUnprecedented && <span className="ml-1 text-[9px] text-red-400 font-bold">ATH</span>}
-        </td>
-        <td onClick={onCell} className={`${cls} text-muted-foreground`}>{fmtPct(res?.proFormaFreqRicher)}</td>
+        {criticalMode ? (
+          <>
+            <td onClick={onCell} className={`${cls} ${moveColor(rr?.critical?.support?.move)}`} title={critTitle(rr?.critical?.support, "Support")}>{fmtMove(rr?.critical?.support?.move)}</td>
+            <td onClick={onCell} className={`${cls} ${moveColor(rr?.critical?.resistance?.move)}`} title={critTitle(rr?.critical?.resistance, "Resistance")}>{fmtMove(rr?.critical?.resistance?.move)}</td>
+            <td onClick={onCell} className={`${cls} text-muted-foreground`}>{Number.isFinite(critRatio(rr)) ? critRatio(rr).toFixed(2) : "—"}</td>
+          </>
+        ) : (
+          <>
+            <td onClick={onCell} className={cls}>{fmtVal(rr?.proForma)}</td>
+            <td onClick={onCell} className={`${cls} ${richColor(pfRich)}`}>
+              {fmtPct(pfRich)}{res?.proFormaUnprecedented && <span className="ml-1 text-[9px] text-red-400 font-bold">ATH</span>}
+            </td>
+            <td onClick={onCell} className={`${cls} text-muted-foreground`}>{fmtPct(res?.proFormaFreqRicher)}</td>
+          </>
+        )}
         {showRerate && (
           <>
             <td onClick={onCell} className={`${cls} border-l border-border/60 ${moveColor(rr?.toMedian)}`}>{fmtMove(rr?.toMedian)}</td>
@@ -631,10 +663,27 @@ export default function ValuationRerateResidence() {
             </button>
           </div>
         </div>
-        <div title="For valuation multiples this is a PRICE move (the metric re-rates with it). For any other metric, read it as a move in the metric itself.">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Move %</div>
-          <Input type="number" value={pctMove} onChange={(e) => setPctMove(Number(e.target.value))} className="h-7 w-20 text-xs" step={5} />
+        <div title="Anchor the scenario on a fixed % move, or on the nearest critical levels (support/resistance, MAs, Fibonacci, 52wk high/low) detected on each metric's own history.">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Anchor</div>
+          <div className="inline-flex h-7 rounded border border-border overflow-hidden">
+            <button
+              className={`px-2 text-xs ${!criticalMode ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+              onClick={() => setLevelMode("percent")}
+              data-testid="vrr-anchor-percent"
+            >% Move</button>
+            <button
+              className={`px-2 text-xs ${criticalMode ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+              onClick={() => setLevelMode("critical")}
+              data-testid="vrr-anchor-critical"
+            >Critical</button>
+          </div>
         </div>
+        {!criticalMode && (
+          <div title="For valuation multiples this is a PRICE move (the metric re-rates with it). For any other metric, read it as a move in the metric itself.">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Move %</div>
+            <Input type="number" value={pctMove} onChange={(e) => setPctMove(Number(e.target.value))} className="h-7 w-20 text-xs" step={5} data-testid="vrr-pctmove" />
+          </div>
+        )}
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Basis</div>
           <Select value={basis} onValueChange={(v) => setBasis(v as PctBasis)}>
