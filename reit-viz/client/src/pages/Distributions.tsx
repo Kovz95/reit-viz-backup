@@ -399,9 +399,9 @@ function fmtPct(v: number): string {
   return Number.isFinite(v) ? `${(v * 100).toFixed(0)}%` : "—";
 }
 
-interface SmallCardProps { r: DistResult; }
+interface SmallCardProps { r: DistResult; onOpen?: (t: string) => void; }
 
-function SmallCard({ r }: SmallCardProps) {
+function SmallCard({ r, onOpen }: SmallCardProps) {
   const maxCount = Math.max(1, ...r.hist);
   const svgW = 212;
   const svgH = 92;
@@ -415,7 +415,11 @@ function SmallCard({ r }: SmallCardProps) {
   const fmtC = isRet ? fmtRetPct : fmtVal;
   const tail = r.tail;
   return (
-    <div className="border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors">
+    <div
+      onClick={() => onOpen?.(r.ticker)}
+      title={onOpen ? `Open ${r.ticker} in Charts` : undefined}
+      className={`border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors ${onOpen ? "cursor-pointer" : ""}`}
+    >
       <div className="flex items-baseline justify-between mb-1">
         <div className="flex items-baseline gap-1.5">
           <span className="font-mono font-bold text-xs text-foreground">{r.ticker}</span>
@@ -457,15 +461,15 @@ function SmallCard({ r }: SmallCardProps) {
   );
 }
 
-interface SmallMultiplesViewProps { results: DistResult[]; }
+interface SmallMultiplesViewProps { results: DistResult[]; onOpen?: (t: string) => void; }
 
-function SmallMultiplesView({ results }: SmallMultiplesViewProps) {
+function SmallMultiplesView({ results, onOpen }: SmallMultiplesViewProps) {
   return (
     <div
       className="grid gap-2 p-2"
       style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
     >
-      {results.map(r => <SmallCard key={r.ticker} r={r} />)}
+      {results.map(r => <SmallCard key={r.ticker} r={r} onOpen={onOpen} />)}
     </div>
   );
 }
@@ -477,9 +481,10 @@ interface OverlayViewProps {
   metric: string;
   lowIsCheap: boolean;
   isReturn: boolean;
+  onOpen?: (t: string) => void;
 }
 
-function OverlayView({ results, hoverTicker, setHoverTicker, metric, lowIsCheap, isReturn }: OverlayViewProps) {
+function OverlayView({ results, hoverTicker, setHoverTicker, metric, lowIsCheap, isReturn, onOpen }: OverlayViewProps) {
   const scored = useMemo<ScoredName[]>(() =>
     results.map(r => ({ ticker: r.ticker, value: r.current, z: r.z, pct: r.percentile, richZ: lowIsCheap ? r.z : -r.z })),
     [results, lowIsCheap]);
@@ -575,7 +580,7 @@ function OverlayView({ results, hoverTicker, setHoverTicker, metric, lowIsCheap,
         <div className="px-1 py-0.5 text-foreground/40 uppercase tracking-wide text-[10px]">
           Shortlist (vs own history)
         </div>
-        <LongsShorts scored={scored} lowIsCheap={lowIsCheap} isReturn={isReturn} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} n={18} />
+        <LongsShorts scored={scored} lowIsCheap={lowIsCheap} isReturn={isReturn} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} onOpen={onOpen} n={18} />
       </div>
     </div>
   );
@@ -680,12 +685,12 @@ function BoxView({ results, metric }: BoxViewProps) {
 
 // Ranked long/short shortlist, orientation-aware. `richZ` high = rich = short
 // candidate; low = cheap = long candidate. Hovering a name highlights it in the plot.
-interface ScoredName { ticker: string; value: number; z: number; pct: number; richZ: number; }
+interface ScoredName { ticker: string; value: number; z: number; pct: number; richZ: number; grouped?: boolean; }
 function LongsShorts({
-  scored, lowIsCheap, isReturn, hoverTicker, setHoverTicker, n = 15,
+  scored, lowIsCheap, isReturn, hoverTicker, setHoverTicker, onOpen, n = 15,
 }: {
   scored: ScoredName[]; lowIsCheap: boolean; isReturn: boolean;
-  hoverTicker: string | null; setHoverTicker: (t: string | null) => void; n?: number;
+  hoverTicker: string | null; setHoverTicker: (t: string | null) => void; onOpen?: (t: string) => void; n?: number;
 }) {
   const asc = useMemo(() => [...scored].sort((a, b) => a.richZ - b.richZ), [scored]);
   const longs = asc.slice(0, n);                    // lowest richZ = cheapest
@@ -698,10 +703,12 @@ function LongsShorts({
           key={r.ticker}
           onMouseEnter={() => setHoverTicker(r.ticker)}
           onMouseLeave={() => setHoverTicker(null)}
-          className={`flex items-center gap-1.5 px-1 py-0.5 rounded cursor-default ${hoverTicker === r.ticker ? "bg-accent/40" : "hover:bg-accent/20"}`}
+          onClick={() => onOpen?.(r.ticker)}
+          title={onOpen ? `Open ${r.ticker} in Charts` : undefined}
+          className={`flex items-center gap-1.5 px-1 py-0.5 rounded ${onOpen ? "cursor-pointer" : "cursor-default"} ${hoverTicker === r.ticker ? "bg-accent/40" : "hover:bg-accent/20"}`}
         >
           <span className="w-1.5 h-1.5 rounded-sm flex-shrink-0" style={{ backgroundColor: tickerColor(r.ticker, 1) }} />
-          <span className="text-foreground/85 truncate">{r.ticker}</span>
+          <span className="text-foreground/85 truncate">{r.ticker}{r.grouped ? <span className="text-foreground/30 text-[9px]">·grp</span> : null}</span>
           <span className={`ml-auto tabular-nums ${zClass(r.z)}`}>{(r.z >= 0 ? "+" : "") + r.z.toFixed(2)}</span>
           <span className="text-foreground/35 tabular-nums w-8 text-right">{fmtPct(r.pct)}</span>
         </div>
@@ -721,10 +728,10 @@ function LongsShorts({
 // Cross-sectional peer view: one histogram of every name's current value today,
 // each name marked as a tick coloured by cheap(green)/rich(red), + longs/shorts.
 function PeerView({
-  peer, metric, hoverTicker, setHoverTicker,
+  peer, metric, hoverTicker, setHoverTicker, onOpen,
 }: {
   peer: { cross: DistResult; scored: ScoredName[]; lowIsCheap: boolean; isReturn: boolean };
-  metric: string; hoverTicker: string | null; setHoverTicker: (t: string | null) => void;
+  metric: string; hoverTicker: string | null; setHoverTicker: (t: string | null) => void; onOpen?: (t: string) => void;
 }) {
   const r = peer.cross;
   const lo = r.binEdges[0], hi = r.binEdges[r.binEdges.length - 1];
@@ -755,7 +762,7 @@ function PeerView({
             const dim = hoverTicker !== null && !isHover;
             const col = s.richZ > 0.5 ? "rgb(248,113,113)" : s.richZ < -0.5 ? "rgb(52,211,153)" : "rgba(160,170,190,0.7)";
             return (
-              <g key={s.ticker} onMouseEnter={() => setHoverTicker(s.ticker)} onMouseLeave={() => setHoverTicker(null)} style={{ cursor: "default" }}>
+              <g key={s.ticker} onMouseEnter={() => setHoverTicker(s.ticker)} onMouseLeave={() => setHoverTicker(null)} onClick={() => onOpen?.(s.ticker)} style={{ cursor: onOpen ? "pointer" : "default" }}>
                 <line x1={toX(s.value)} x2={toX(s.value)} y1={T + plotH} y2={T + plotH - (isHover ? plotH : 14)} stroke={col} strokeWidth={isHover ? 2 : 1} opacity={dim ? 0.15 : isHover ? 1 : 0.8} />
                 {isHover && <text x={toX(s.value)} y={T + 10} fontSize={11} textAnchor="middle" fill={col} fontFamily="ui-monospace, monospace">{s.ticker} · z {s.z.toFixed(2)} · {fmtPct(s.pct)}</text>}
               </g>
@@ -769,8 +776,36 @@ function PeerView({
       </div>
       <div className="w-[280px] border-l border-border/40 bg-card/20 overflow-y-auto p-1">
         <div className="px-1 py-0.5 text-foreground/40 uppercase tracking-wide text-[10px]">Cross-section shortlist</div>
-        <LongsShorts scored={peer.scored} lowIsCheap={peer.lowIsCheap} isReturn={peer.isReturn} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} n={18} />
+        <LongsShorts scored={peer.scored} lowIsCheap={peer.lowIsCheap} isReturn={peer.isReturn} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} onOpen={onOpen} n={18} />
       </div>
+    </div>
+  );
+}
+
+// One-glance breadth of the current run: how many names are stretched rich
+// (short-heavy) vs cheap (long-heavy), oriented by the metric.
+function RegimeStrip({ scored, label }: { scored: ScoredName[]; label: string }) {
+  if (scored.length === 0) return null;
+  const n = scored.length;
+  const rich = scored.filter(s => s.richZ > 1).length;
+  const cheap = scored.filter(s => s.richZ < -1).length;
+  const neutral = n - rich - cheap;
+  const sortedRichZ = [...scored].map(s => s.richZ).sort((a, b) => a - b);
+  const medRichZ = sortedRichZ[Math.floor(n / 2)] ?? 0;
+  const w = (x: number) => `${(x / n) * 100}%`;
+  const pc = (x: number) => `${Math.round((x / n) * 100)}%`;
+  return (
+    <div className="flex items-center gap-3 px-3 py-1.5 text-[11px] font-mono border-b border-border/30 bg-card/20">
+      <span className="text-foreground/40 uppercase tracking-wide text-[10px]">{label}</span>
+      <span className="text-emerald-400/90">cheap/long {cheap} <span className="text-foreground/35">({pc(cheap)})</span></span>
+      <span className="text-foreground/45">neutral {neutral}</span>
+      <span className="text-red-400/90">rich/short {rich} <span className="text-foreground/35">({pc(rich)})</span></span>
+      <div className="flex h-2.5 w-[260px] rounded-sm overflow-hidden border border-border/40">
+        <div style={{ width: w(cheap) }} className="bg-emerald-500/60" />
+        <div style={{ width: w(neutral) }} className="bg-muted/40" />
+        <div style={{ width: w(rich) }} className="bg-red-500/60" />
+      </div>
+      <span className="text-foreground/45">median z {medRichZ >= 0 ? "+" : ""}{medRichZ.toFixed(2)}</span>
     </div>
   );
 }
@@ -797,6 +832,9 @@ export default function Distributions() {
   // (+ tail-risk stats). Reference = each name vs its OWN history, or vs PEERS today.
   const [basis, setBasis] = useState<"level" | "returns">("level");
   const [reference, setReference] = useState<"history" | "peers">("history");
+  // Peer cross-section: compare each name to the WHOLE universe, or only to its
+  // own sub-industry (dislocation net of the group — more actionable for L/S).
+  const [peerGroup, setPeerGroup] = useState<"all" | "subind">("all");
   const [sortKey, setSortKey] = useState("ticker");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [allTickers, setAllTickers] = useState<any[]>([]);
@@ -1000,6 +1038,23 @@ export default function Distributions() {
   // "Cheap-is-good" orientation for the selected metric (P/x low = cheap; yields flip).
   const lowIsCheap = useMemo(() => inferRerateMetric(selectedMetric).lowIsCheap, [selectedMetric]);
 
+  // ticker → sub-industry, for the peer "vs Sub-ind" grouping.
+  const subindMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of allTickers) if (t.ticker && t.subindustry) m.set(t.ticker, String(t.subindustry));
+    return m;
+  }, [allTickers]);
+
+  // Drill-through to the Charts tab for a name (same hand-off the Re-Rate/SI pages use).
+  const openInCharts = useCallback((ticker: string) => {
+    const years = WINDOW_YEARS[windowKey];
+    try {
+      sessionStorage.setItem("reit-viz:rerate-to-charts",
+        JSON.stringify({ ticker, metricKey: selectedMetric, lookbackDays: years ? years * 252 : 2520 }));
+    } catch {}
+    window.location.hash = "#/";
+  }, [selectedMetric, windowKey]);
+
   // Peer (cross-sectional) view: the distribution of every name's CURRENT value
   // across the universe today, with each name's z / percentile vs that cross-section.
   const peerData = useMemo(() => {
@@ -1008,16 +1063,34 @@ export default function Distributions() {
     if (items.length < 3) return null;
     const vals = items.map(i => i.value);
     const sorted = [...vals].sort((a, b) => a - b);
-    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
-    const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
-    const cross = computeDistStats(selectedMetric, vals, mean, bins, [quantile(sorted, 0.01), quantile(sorted, 0.99)]);
+    const stat = (arr: number[]) => {
+      const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+      const sd = Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+      return { m, sd };
+    };
+    const pctOf = (v: number, arr: number[]) => arr.reduce((a, x) => a + (x < v ? 1 : 0), 0) / (arr.length - 1 || 1);
+    const uni = stat(vals);
+    // The plotted histogram is always the whole-universe cross-section.
+    const cross = computeDistStats(selectedMetric, vals, uni.m, bins, [quantile(sorted, 0.01), quantile(sorted, 0.99)]);
+    // Optional sub-industry buckets (only used when a name's group has ≥4 members).
+    const groups = new Map<string, number[]>();
+    if (peerGroup === "subind") {
+      for (const i of items) {
+        const g = subindMap.get(i.ticker) || "—";
+        (groups.get(g) ?? (groups.set(g, []), groups.get(g)!)).push(i.value);
+      }
+    }
     const scored = items.map(i => {
-      const below = vals.reduce((a, v) => a + (v < i.value ? 1 : 0), 0);
-      const z = std > 0 ? (i.value - mean) / std : 0;
-      return { ticker: i.ticker, value: i.value, z, pct: below / (vals.length - 1 || 1), richZ: lowIsCheap ? z : -z };
+      const g = subindMap.get(i.ticker) || "—";
+      const gv = peerGroup === "subind" ? groups.get(g) : undefined;
+      const useGroup = !!gv && gv.length >= 4;
+      const ref = useGroup ? gv! : vals;
+      const s = useGroup ? stat(ref) : uni;
+      const z = s.sd > 0 ? (i.value - s.m) / s.sd : 0;
+      return { ticker: i.ticker, value: i.value, z, pct: pctOf(i.value, ref), richZ: lowIsCheap ? z : -z, grouped: useGroup };
     });
     return { cross, scored, lowIsCheap, isReturn: results[0]?.isReturn ?? false };
-  }, [reference, results, bins, selectedMetric, lowIsCheap]);
+  }, [reference, results, bins, selectedMetric, lowIsCheap, peerGroup, subindMap]);
 
   // Own-history longs/shorts (for the Overlay side panel): orientation-aware z ranking.
   const historyScored = useMemo(() =>
@@ -1045,6 +1118,28 @@ export default function Distributions() {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir(key === "ticker" ? "asc" : "desc"); }
   };
+
+  const exportCSV = useCallback(() => {
+    const isRet = results[0]?.isReturn ?? false;
+    let header: string[]; let rows: (string | number)[][];
+    if (reference === "peers" && peerData) {
+      header = ["Ticker", "Value", "PeerZ", "PeerPct", "GroupRelative"];
+      rows = [...peerData.scored].sort((a, b) => a.richZ - b.richZ)
+        .map(s => [s.ticker, s.value, s.z.toFixed(3), (s.pct * 100).toFixed(1), s.grouped ? "1" : "0"]);
+    } else {
+      header = ["Ticker", "n", "Current", "Mean", "Median", "Stdev", "Z", "Pctile",
+        ...(isRet ? ["AnnVol", "Skew", "ExKurt", "VaR5", "CVaR5"] : [])];
+      rows = sortedResults.map(r => [r.ticker, r.n, r.current, r.mean, r.median, r.stdev, r.z.toFixed(3), (r.percentile * 100).toFixed(1),
+        ...(isRet && r.tail ? [r.tail.annVol, r.tail.skew, r.tail.exKurt, r.tail.var5, r.tail.cvar5] : [])]);
+    }
+    const csv = [header.join(","), ...rows.map(r => r.join(","))].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `distributions_${selectedMetric.replace(/[^\w]+/g, "_")}_${reference}_${basis}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [results, sortedResults, peerData, reference, basis, selectedMetric]);
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground">
@@ -1207,6 +1302,22 @@ export default function Distributions() {
               ))}
             </div>
           </div>
+          <div className={`flex items-center gap-1 border-l border-border/30 pl-2 ml-1 ${mode === "pair" || reference !== "peers" ? "hidden" : ""}`}>
+            <span className="text-foreground/60 font-mono uppercase tracking-wide">Group</span>
+            <div className="flex rounded border border-border/40 overflow-hidden">
+              {([["all", "All"], ["subind", "Sub-ind"]] as const).map(([g, label]) => (
+                <button
+                  key={g}
+                  onClick={() => setPeerGroup(g)}
+                  className={`px-2 py-0.5 font-mono text-[11px] ${peerGroup === g ? "bg-amber-500/15 text-amber-200" : "text-foreground/60 hover:bg-accent"}`}
+                  data-testid={`dist-group-${g}`}
+                  title={g === "subind" ? "z vs each name's own sub-industry (net of the group move; groups <4 fall back to All)" : "z vs the whole universe"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className={`flex items-center gap-1 border-l border-border/30 pl-2 ml-1 ${mode === "pair" || reference === "peers" ? "hidden" : ""}`}>
             <span className="text-foreground/60 font-mono uppercase tracking-wide">View</span>
             <div className="flex rounded border border-border/40 overflow-hidden">
@@ -1234,6 +1345,16 @@ export default function Distributions() {
             </div>
           )}
           <div className="flex-1" />
+          {mode === "metric" && results.length > 0 && (
+            <button
+              onClick={exportCSV}
+              className="flex items-center gap-1 px-2 py-1 rounded border border-border/50 text-foreground/70 hover:bg-accent font-mono text-xs"
+              data-testid="dist-export"
+              title="Export the current stats table to CSV"
+            >
+              CSV
+            </button>
+          )}
           {mode === "metric" && (
             <button
               onClick={runAnalysis}
@@ -1323,12 +1444,18 @@ export default function Distributions() {
             No data yet — click Run.
           </div>
         )}
-        {mode === "metric" && reference === "peers" && results.length > 0 && peerData && (
-          <PeerView peer={peerData} metric={selectedMetric} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} />
+        {mode === "metric" && results.length > 0 && basis === "level" && (
+          <RegimeStrip
+            scored={reference === "peers" && peerData ? peerData.scored : historyScored}
+            label={reference === "peers" ? `Breadth · vs peers${peerGroup === "subind" ? " (sub-ind)" : ""}` : "Breadth · vs own history"}
+          />
         )}
-        {mode === "metric" && reference === "history" && view === "small" && results.length > 0 && <SmallMultiplesView results={sortedResults} />}
+        {mode === "metric" && reference === "peers" && results.length > 0 && peerData && (
+          <PeerView peer={peerData} metric={selectedMetric} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} onOpen={openInCharts} />
+        )}
+        {mode === "metric" && reference === "history" && view === "small" && results.length > 0 && <SmallMultiplesView results={sortedResults} onOpen={openInCharts} />}
         {mode === "metric" && reference === "history" && view === "overlay" && results.length > 0 && (
-          <OverlayView results={results} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} metric={selectedMetric} lowIsCheap={lowIsCheap} isReturn={results[0]?.isReturn ?? false} />
+          <OverlayView results={results} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} metric={selectedMetric} lowIsCheap={lowIsCheap} isReturn={results[0]?.isReturn ?? false} onOpen={openInCharts} />
         )}
         {mode === "metric" && reference === "history" && view === "box" && results.length > 0 && <BoxView results={sortedResults} metric={selectedMetric} />}
       </div>
