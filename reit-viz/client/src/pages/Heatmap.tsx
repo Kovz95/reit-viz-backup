@@ -165,6 +165,15 @@ function historicalPercentile(current: number, trailing: number[]): number | nul
   return (below / trailing.length) * 100;
 }
 
+// Market of a ticker from its suffix (-GB = UK, .HK = Hong Kong, …; else US).
+// A pair whose legs sit in different markets is "cross-calendar" — the two close
+// series come off different holiday calendars / session times, so the joined ratio
+// (and its AR(1) half-life) is noisy and not to be trusted.
+function marketOf(ticker: string): string {
+  const m = ticker.match(/[.\-]([A-Z]{2,3})$/);
+  return m ? m[1] : "US";
+}
+
 // ── Mean-reversion half-life of a (positive) ratio series ──
 // AR(1) on log(ratio): logr_t = a + φ·logr_{t-1}. Half-life = -ln2/ln(φ) when
 // 0 < φ < 1 (mean-reverting). Returns null when φ ≥ 1 (trending / random-walk /
@@ -273,6 +282,8 @@ export default function Heatmap() {
   const [minZ, setMinZ] = useState(0);
   // As-of scrubber: replay the grid N trading days back (0 = today).
   const [asOfOffset, setAsOfOffset] = useState(0);
+  // Hide cross-calendar (mixed-market) pairs from the dislocations panel.
+  const [hideXcal, setHideXcal] = useState(false);
   const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const [trailingDays, setTrailingDays] = useState(250);
@@ -595,7 +606,7 @@ export default function Heatmap() {
       if (s) for (let i = 0; i < s.times.length; i++) m.set(s.times[i], s.closes[i]);
       dmap.set(t, m);
     }
-    const flat: { a: string; b: string; z: number; pct: number | null; hl: number | null }[] = [];
+    const flat: { a: string; b: string; z: number; pct: number | null; hl: number | null; cross: boolean }[] = [];
     const rows = tickers.map(a => {
       const sa = closeSeriesMap.get(a);
       const cells = tickers.map(b => {
@@ -629,7 +640,10 @@ export default function Heatmap() {
         const current = windowed[windowed.length - 1];
         const z = historicalZScore(current, windowed);
         const pct = historicalPercentile(current, windowed);
-        if (z !== null) flat.push({ a, b, z, pct, hl: meanReversionHalfLife(windowed) });
+        const cross = marketOf(a) !== marketOf(b);
+        // Skip the half-life for cross-calendar pairs — a non-synchronous ratio makes
+        // the AR(1) estimate meaningless (better to show "cal?" than a fake number).
+        if (z !== null) flat.push({ a, b, z, pct, hl: cross ? null : meanReversionHalfLife(windowed), cross });
         let text = "—";
         let bg = "transparent";
         if (usePct) {
@@ -658,7 +672,7 @@ export default function Heatmap() {
     const top = flat
       .sort((x, y) => Math.abs(y.z) - Math.abs(x.z))
       .filter(e => { const k = [e.a, e.b].sort().join("/"); if (seen.has(k)) return false; seen.add(k); return true; })
-      .slice(0, 20);
+      .slice(0, 40);
     return { tickers, rows, top };
   }, [closeSeriesMap, matrixTickers, trailingDays, displayMode, asOfOffset]);
 
@@ -1131,25 +1145,34 @@ export default function Heatmap() {
         </div>
         {matrixData && matrixData.top.length > 0 && (
           <div className="w-[260px] border-l border-border/40 bg-card/20 overflow-y-auto p-1 flex-shrink-0" data-testid="heatmap-matrix-top">
-            <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-              Most dislocated pairs · z / half-life
+            <div className="px-1 py-0.5 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Most dislocated pairs · z / half-life</span>
+              <button
+                onClick={() => setHideXcal(v => !v)}
+                className={`text-[9px] px-1 py-0.5 rounded ${hideXcal ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                data-testid="heatmap-hide-xcal"
+                title="Hide cross-calendar (mixed US/UK/… market) pairs, whose half-life is unreliable"
+              >
+                {hideXcal ? "x-cal hidden" : "hide x-cal"}
+              </button>
             </div>
-            {matrixData.top.map(e => (
+            {matrixData.top.filter(e => !hideXcal || !e.cross).slice(0, 20).map(e => (
               <div
                 key={`${e.a}-${e.b}`}
                 onClick={() => navigateToPairs(e.a, e.b)}
                 className="flex items-center gap-1.5 px-1 py-0.5 rounded cursor-pointer hover:bg-accent/30 text-[11px] font-mono"
-                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""} · ${e.hl != null ? `mean-reversion half-life ≈ ${Math.round(e.hl)} days` : "no mean reversion (trending / structurally broken — don't fade)"}`}
+                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""} · ${e.cross ? "cross-calendar pair (mixed markets) — half-life unreliable" : e.hl != null ? `mean-reversion half-life ≈ ${Math.round(e.hl)} days` : "no mean reversion (trending / structurally broken — don't fade)"}`}
               >
-                <span className="text-foreground/85 truncate flex-1">{e.a}/{e.b}</span>
+                <span className={`truncate flex-1 ${e.cross ? "text-amber-300/80" : "text-foreground/85"}`}>{e.a}/{e.b}{e.cross ? "†" : ""}</span>
                 <span className={`tabular-nums w-9 text-right ${e.z >= 0 ? "text-emerald-400" : "text-red-400"}`}>{e.z >= 0 ? "+" : ""}{e.z.toFixed(1)}</span>
                 <span
-                  className={`tabular-nums w-10 text-right text-[10px] ${e.hl == null ? "text-amber-400/80" : e.hl <= trailingDays / 3 ? "text-foreground/70" : "text-foreground/35"}`}
+                  className={`tabular-nums w-10 text-right text-[10px] ${e.cross ? "text-amber-400/50" : e.hl == null ? "text-amber-400/80" : e.hl <= trailingDays / 3 ? "text-foreground/70" : "text-foreground/35"}`}
                 >
-                  {e.hl != null ? `${Math.round(e.hl)}d` : "∞"}
+                  {e.cross ? "cal?" : e.hl != null ? `${Math.round(e.hl)}d` : "∞"}
                 </span>
               </div>
             ))}
+            <div className="px-1 pt-1 text-[9px] text-muted-foreground">† cross-calendar — HL unreliable</div>
           </div>
         )}
         </div>
