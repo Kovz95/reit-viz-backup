@@ -165,6 +165,25 @@ function historicalPercentile(current: number, trailing: number[]): number | nul
   return (below / trailing.length) * 100;
 }
 
+// ── Mean-reversion half-life of a (positive) ratio series ──
+// AR(1) on log(ratio): logr_t = a + φ·logr_{t-1}. Half-life = -ln2/ln(φ) when
+// 0 < φ < 1 (mean-reverting). Returns null when φ ≥ 1 (trending / random-walk /
+// structurally broken — the pairs you do NOT want to fade). Units = bars (days).
+function meanReversionHalfLife(series: number[]): number | null {
+  if (series.length < 30) return null;
+  const l: number[] = [];
+  for (const v of series) { if (v > 0 && Number.isFinite(v)) l.push(Math.log(v)); }
+  if (l.length < 30) return null;
+  const x = l.slice(0, -1), y = l.slice(1), m = x.length;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (let i = 0; i < m; i++) { sx += x[i]; sy += y[i]; sxx += x[i] * x[i]; sxy += x[i] * y[i]; }
+  const denom = m * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-12) return null;
+  const phi = (m * sxy - sx * sy) / denom;
+  if (!(phi > 0 && phi < 1)) return null;
+  return -Math.LN2 / Math.log(phi);
+}
+
 // ── Historical z-score ──
 function historicalZScore(current: number, trailing: number[]): number | null {
   if (trailing.length < 20) return null;
@@ -202,6 +221,8 @@ interface HeatmapRow extends ClassifiedBase {
   conviction: number | null;
   /** strongest single-metric dislocation (max |z| across columns) — for the filter */
   maxAbsZ: number;
+  /** as-of displayed value per column (= current when asOfOffset is 0) */
+  effValues: Record<string, number | null>;
 }
 
 // ── Classification grouping levels ──
@@ -250,6 +271,8 @@ export default function Heatmap() {
   const [peerScope, setPeerScope] = useState<"group" | "universe">("group");
   // Dislocation filter: hide rows whose strongest |z| is below this (0 = off).
   const [minZ, setMinZ] = useState(0);
+  // As-of scrubber: replay the grid N trading days back (0 = today).
+  const [asOfOffset, setAsOfOffset] = useState(0);
   const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters);
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const [trailingDays, setTrailingDays] = useState(250);
@@ -264,8 +287,8 @@ export default function Heatmap() {
     groupBy,
     classFilters: serializeClassFilters(classFilters),
     manualTickers: [...manualTickers],
-    trailingDays, peerScope, minZ,
-  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays, peerScope, minZ]);
+    trailingDays, peerScope, minZ, asOfOffset,
+  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays, peerScope, minZ, asOfOffset]);
 
   const restoreHeatmap = useCallback((state: any) => {
     // Whitelist: the render branches are "matrix" and "metrics", so an unknown value
@@ -286,6 +309,7 @@ export default function Heatmap() {
     if (state.trailingDays !== undefined) setTrailingDays(state.trailingDays);
     if (state.peerScope === "group" || state.peerScope === "universe") setPeerScope(state.peerScope);
     if (typeof state.minZ === "number") setMinZ(state.minZ);
+    if (typeof state.asOfOffset === "number") setAsOfOffset(state.asOfOffset);
   }, []);
 
   useWorkspaceTab("heatmap", serializeHeatmap, restoreHeatmap);
@@ -344,6 +368,7 @@ export default function Heatmap() {
       percentiles: {},
       conviction: null,
       maxAbsZ: 0,
+      effValues: {},
     }));
   }, [snapshot]);
 
@@ -355,24 +380,46 @@ export default function Heatmap() {
     const groups = groupByLevel(rows, peerLevel as GroupLevel);
 
     for (const col of COLUMNS) {
+      const series = trailingMap.get(col.metric); // ticker → trailing values[]
+      // As-of value + trailing window per ticker. offset 0 = current snapshot;
+      // offset N = value N bars back (and history truncated to that point).
+      const effVal = new Map<string, number | null>();
+      const effTrail = new Map<string, number[]>();
+      for (const r of rows) {
+        const s = series?.get(r.ticker) ?? [];
+        if (asOfOffset > 0) {
+          if (s.length > asOfOffset) {
+            const idx = s.length - 1 - asOfOffset;
+            effVal.set(r.ticker, s[idx] ?? null);
+            effTrail.set(r.ticker, s.slice(0, idx + 1));
+          } else {
+            effVal.set(r.ticker, null);
+            effTrail.set(r.ticker, []);
+          }
+        } else {
+          effVal.set(r.ticker, r.values[col.metric] ?? null);
+          effTrail.set(r.ticker, s);
+        }
+        r.effValues[col.key] = effVal.get(r.ticker) ?? null;
+      }
+
       if (reference === "history") {
-        // vs History: each ticker compared to its own trailing data
-        const metricTrailing = trailingMap.get(col.metric);
+        // vs History: each ticker compared to its own trailing data (up to as-of).
         for (const r of rows) {
-          const trailing = metricTrailing?.get(r.ticker);
-          const current = r.values[col.metric];
-          if (trailing && current !== null) {
-            r.zScores[col.key] = historicalZScore(current, trailing);
-            r.percentiles[col.key] = historicalPercentile(current, trailing);
+          const v = effVal.get(r.ticker)!;
+          const trailing = effTrail.get(r.ticker)!;
+          if (v !== null && trailing.length >= 5) {
+            r.zScores[col.key] = historicalZScore(v, trailing);
+            r.percentiles[col.key] = historicalPercentile(v, trailing);
           } else {
             r.zScores[col.key] = null;
             r.percentiles[col.key] = null;
           }
         }
       } else {
-        // vs Peers: within the classification group
+        // vs Peers: within the classification group (or universe).
         const computeForGroup = (groupRows: HeatmapRow[]) => {
-          const vals = groupRows.map(r => r.values[col.metric] ?? null);
+          const vals = groupRows.map(r => effVal.get(r.ticker) ?? null);
           const zs = zScoresForColumn(vals);
           const pcts = peerPercentilesForColumn(vals);
           groupRows.forEach((r, i) => {
@@ -409,7 +456,7 @@ export default function Heatmap() {
     }
 
     return [...rows];
-  }, [rows, reference, trailingMap, groupBy, peerScope]);
+  }, [rows, reference, trailingMap, groupBy, peerScope, asOfOffset]);
 
   const geo = useGeoFilter(enrichedRows, "heatmap-geo");
 
@@ -444,12 +491,13 @@ export default function Heatmap() {
         va = a.percentiles[colDef.key] ?? (sortDir === "asc" ? Infinity : -Infinity);
         vb = b.percentiles[colDef.key] ?? (sortDir === "asc" ? Infinity : -Infinity);
       } else {
-        va = a.values[colDef.metric] ?? (sortDir === "asc" ? Infinity : -Infinity);
-        vb = b.values[colDef.metric] ?? (sortDir === "asc" ? Infinity : -Infinity);
+        const miss = sortDir === "asc" ? Infinity : -Infinity;
+        va = (asOfOffset > 0 ? a.effValues[colDef.key] : a.values[colDef.metric]) ?? miss;
+        vb = (asOfOffset > 0 ? b.effValues[colDef.key] : b.values[colDef.metric]) ?? miss;
       }
       return sortDir === "asc" ? va - vb : vb - va;
     });
-  }, [filtered, sortCol, sortDir, displayMode]);
+  }, [filtered, sortCol, sortDir, displayMode, asOfOffset]);
 
   // Grouped
   const grouped = useMemo(() => {
@@ -547,7 +595,7 @@ export default function Heatmap() {
       if (s) for (let i = 0; i < s.times.length; i++) m.set(s.times[i], s.closes[i]);
       dmap.set(t, m);
     }
-    const flat: { a: string; b: string; z: number; pct: number | null }[] = [];
+    const flat: { a: string; b: string; z: number; pct: number | null; hl: number | null }[] = [];
     const rows = tickers.map(a => {
       const sa = closeSeriesMap.get(a);
       const cells = tickers.map(b => {
@@ -570,7 +618,8 @@ export default function Heatmap() {
             }
           }
         }
-        const windowed = trailingDays > 0 ? ratios.slice(-trailingDays) : ratios;
+        const asOfRatios = asOfOffset > 0 ? ratios.slice(0, Math.max(0, ratios.length - asOfOffset)) : ratios;
+        const windowed = trailingDays > 0 ? asOfRatios.slice(-trailingDays) : asOfRatios;
         if (windowed.length < 20) {
           return {
             key, a, b, diag: false, text: "—", bg: "transparent",
@@ -580,7 +629,7 @@ export default function Heatmap() {
         const current = windowed[windowed.length - 1];
         const z = historicalZScore(current, windowed);
         const pct = historicalPercentile(current, windowed);
-        if (z !== null) flat.push({ a, b, z, pct });
+        if (z !== null) flat.push({ a, b, z, pct, hl: meanReversionHalfLife(windowed) });
         let text = "—";
         let bg = "transparent";
         if (usePct) {
@@ -611,7 +660,7 @@ export default function Heatmap() {
       .filter(e => { const k = [e.a, e.b].sort().join("/"); if (seen.has(k)) return false; seen.add(k); return true; })
       .slice(0, 20);
     return { tickers, rows, top };
-  }, [closeSeriesMap, matrixTickers, trailingDays, displayMode]);
+  }, [closeSeriesMap, matrixTickers, trailingDays, displayMode, asOfOffset]);
 
   const toggleSort = useCallback((key: string) => {
     if (sortCol === key) {
@@ -669,13 +718,13 @@ export default function Heatmap() {
           const p = r.percentiles[c.key];
           return p !== null && p !== undefined ? p.toFixed(1) : "";
         }
-        const v = r.values[c.metric];
+        const v = asOfOffset > 0 ? r.effValues[c.key] : r.values[c.metric];
         return v !== null && v !== undefined ? v.toFixed(c.decimals ?? 1) : "";
       });
       return [r.ticker, `"${r.name}"`, `"${groupVal}"`, r.conviction != null ? r.conviction.toFixed(2) : "", ...vals].join(",");
     });
-    dl([header, ...lines].join("\n"), `relval_${displayMode}_${reference}_${today}.csv`);
-  }, [sorted, displayMode, reference, groupBy, trailingDays, viewMode, matrixData]);
+    dl([header, ...lines].join("\n"), `relval_${displayMode}_${reference}${asOfOffset > 0 ? `_asof-${asOfOffset}d` : ""}_${today}.csv`);
+  }, [sorted, displayMode, reference, groupBy, trailingDays, viewMode, matrixData, asOfOffset]);
 
   // ── Render helpers ──
   const SortIcon = ({ colKey }: { colKey: string }) => {
@@ -715,7 +764,7 @@ export default function Heatmap() {
         {r.conviction != null ? (r.conviction >= 0 ? "+" : "") + r.conviction.toFixed(2) : "—"}
       </td>
       {COLUMNS.map(col => {
-        const v = r.values[col.metric];
+        const v = asOfOffset > 0 ? r.effValues[col.key] : r.values[col.metric];
         const bg = getCellBg(r, col);
         let cellText: string;
         if (displayMode === "zscore") {
@@ -875,6 +924,23 @@ export default function Heatmap() {
           </div>
         </div>
 
+        {/* As-of scrubber: replay the grid N trading days back */}
+        <div className="flex items-center gap-1" title="Replay the grid as of N trading days ago (0 = today). Bounded by the lookback window's history.">
+          <span className="text-[10px] text-muted-foreground">As-of</span>
+          <input
+            type="range" min={0} max={Math.max(0, trailingDays)} step={5}
+            value={Math.min(asOfOffset, Math.max(0, trailingDays))}
+            onChange={e => setAsOfOffset(Number(e.target.value))}
+            className="w-24" data-testid="heatmap-asof"
+          />
+          <span className={`text-[10px] tabular-nums w-12 ${asOfOffset > 0 ? "text-amber-300" : "text-muted-foreground"}`}>
+            {asOfOffset === 0 ? "today" : `−${asOfOffset}d`}
+          </span>
+          {asOfOffset > 0 && (
+            <button onClick={() => setAsOfOffset(0)} className="text-[11px] text-muted-foreground hover:text-foreground" title="Back to today">×</button>
+          )}
+        </div>
+
         {/* Display: what to show and how to color */}
         <Select value={displayMode} onValueChange={v => setDisplayMode(v as DisplayMode)}>
           <SelectTrigger className="h-6 text-[11px] w-[120px]" data-testid="heatmap-display-mode">
@@ -946,6 +1012,14 @@ export default function Heatmap() {
           CSV
         </Button>
       </div>
+
+      {/* As-of replay banner */}
+      {asOfOffset > 0 && (
+        <div className="px-3 py-1 text-[10px] text-amber-300 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0" data-testid="heatmap-asof-banner">
+          Replaying as of ~{asOfOffset} trading days ago — values, z-scores{viewMode === "matrix" ? " and ratios" : ""} reflect that point in time.
+          <button onClick={() => setAsOfOffset(0)} className="underline ml-1">back to today</button>
+        </div>
+      )}
 
       {/* Matrix legend + convention */}
       {viewMode === "matrix" && (
@@ -1057,16 +1131,23 @@ export default function Heatmap() {
         </div>
         {matrixData && matrixData.top.length > 0 && (
           <div className="w-[260px] border-l border-border/40 bg-card/20 overflow-y-auto p-1 flex-shrink-0" data-testid="heatmap-matrix-top">
-            <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">Most dislocated pairs (|z|)</div>
+            <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              Most dislocated pairs · z / half-life
+            </div>
             {matrixData.top.map(e => (
               <div
                 key={`${e.a}-${e.b}`}
                 onClick={() => navigateToPairs(e.a, e.b)}
                 className="flex items-center gap-1.5 px-1 py-0.5 rounded cursor-pointer hover:bg-accent/30 text-[11px] font-mono"
-                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""}`}
+                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""} · ${e.hl != null ? `mean-reversion half-life ≈ ${Math.round(e.hl)} days` : "no mean reversion (trending / structurally broken — don't fade)"}`}
               >
-                <span className="text-foreground/85 truncate">{e.a}/{e.b}</span>
-                <span className={`ml-auto tabular-nums ${e.z >= 0 ? "text-emerald-400" : "text-red-400"}`}>{e.z >= 0 ? "+" : ""}{e.z.toFixed(2)}</span>
+                <span className="text-foreground/85 truncate flex-1">{e.a}/{e.b}</span>
+                <span className={`tabular-nums w-9 text-right ${e.z >= 0 ? "text-emerald-400" : "text-red-400"}`}>{e.z >= 0 ? "+" : ""}{e.z.toFixed(1)}</span>
+                <span
+                  className={`tabular-nums w-10 text-right text-[10px] ${e.hl == null ? "text-amber-400/80" : e.hl <= trailingDays / 3 ? "text-foreground/70" : "text-foreground/35"}`}
+                >
+                  {e.hl != null ? `${Math.round(e.hl)}d` : "∞"}
+                </span>
               </div>
             ))}
           </div>
