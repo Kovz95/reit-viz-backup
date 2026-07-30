@@ -456,6 +456,25 @@ export default function Heatmap() {
     return groupByLevel(sorted, groupBy);
   }, [sorted, groupBy]);
 
+  // Per-column breadth across the visible rows: share cheap (+z) vs rich (-z),
+  // orientation-adjusted. Shown as a footer strip so you see which metrics/sectors
+  // are stretched at a glance.
+  const columnBreadth = useMemo(() => {
+    const out: Record<string, { cheap: number; rich: number; n: number }> = {};
+    for (const col of COLUMNS) {
+      let cheap = 0, rich = 0, n = 0;
+      for (const r of sorted) {
+        const z = r.zScores[col.key];
+        if (z === null || z === undefined) continue;
+        const a = col.lowerIsGreen !== false ? -z : z; // + = cheap
+        n++;
+        if (a > 1) cheap++; else if (a < -1) rich++;
+      }
+      out[col.key] = { cheap, rich, n };
+    }
+    return out;
+  }, [sorted]);
+
   // ── Pair Matrix: scoped tickers (capped) reuse the same scope pipeline as the table ──
   // Takes them in the order the table RENDERS (group by group when grouping is on), so
   // "first 40" means the first 40 rows the user is looking at. Sorts on raw values so the
@@ -528,6 +547,7 @@ export default function Heatmap() {
       if (s) for (let i = 0; i < s.times.length; i++) m.set(s.times[i], s.closes[i]);
       dmap.set(t, m);
     }
+    const flat: { a: string; b: string; z: number; pct: number | null }[] = [];
     const rows = tickers.map(a => {
       const sa = closeSeriesMap.get(a);
       const cells = tickers.map(b => {
@@ -560,6 +580,7 @@ export default function Heatmap() {
         const current = windowed[windowed.length - 1];
         const z = historicalZScore(current, windowed);
         const pct = historicalPercentile(current, windowed);
+        if (z !== null) flat.push({ a, b, z, pct });
         let text = "—";
         let bg = "transparent";
         if (usePct) {
@@ -583,7 +604,13 @@ export default function Heatmap() {
       });
       return { ticker: a, cells };
     });
-    return { tickers, rows };
+    // Most-dislocated pairs (one row per unordered pair, highest |z| kept).
+    const seen = new Set<string>();
+    const top = flat
+      .sort((x, y) => Math.abs(y.z) - Math.abs(x.z))
+      .filter(e => { const k = [e.a, e.b].sort().join("/"); if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 20);
+    return { tickers, rows, top };
   }, [closeSeriesMap, matrixTickers, trailingDays, displayMode]);
 
   const toggleSort = useCallback((key: string) => {
@@ -671,8 +698,8 @@ export default function Heatmap() {
 
   const renderRow = (r: HeatmapRow) => (
     <tr key={r.ticker} className="hover:bg-accent/30 transition-colors" data-testid={`heatmap-row-${r.ticker}`}>
-      <td className="px-2 py-1 font-mono font-bold text-primary text-[11px] whitespace-nowrap sticky left-0 bg-background z-10">
-        {r.ticker}
+      <td className={`px-2 py-1 font-mono font-bold text-[11px] whitespace-nowrap sticky left-0 bg-background z-10 ${manualTickers.has(r.ticker) ? "text-amber-300 border-l-2 border-amber-400/70" : "text-primary"}`}>
+        {manualTickers.has(r.ticker) ? "★ " : ""}{r.ticker}
       </td>
       <td className="px-2 py-1 text-[10px] text-muted-foreground truncate max-w-[140px] sticky left-[60px] bg-background z-10">
         {r.name}
@@ -718,6 +745,31 @@ export default function Heatmap() {
             onClick={() => openInCharts(r.ticker, col.metric)}
           >
             {cellText}
+          </td>
+        );
+      })}
+    </tr>
+  );
+
+  // Footer breadth strip: per column, a mini cheap(green)/rich(red) bar over the
+  // visible rows, so you can read which metrics are stretched at a glance.
+  const renderBreadthFooter = () => (
+    <tr className="bg-card/70">
+      <td colSpan={3} className="px-2 py-1 text-[9px] uppercase tracking-wider text-muted-foreground sticky left-0 bg-card z-10">
+        Breadth (cheap / rich)
+      </td>
+      <td className="sticky left-[300px] bg-card z-10 border-r border-border/40" />
+      {COLUMNS.map(col => {
+        const b = columnBreadth[col.key];
+        const cheapPct = b && b.n ? (b.cheap / b.n) * 100 : 0;
+        const richPct = b && b.n ? (b.rich / b.n) * 100 : 0;
+        return (
+          <td key={col.key} className="px-1 py-1 align-middle" title={`${col.label}: ${b?.cheap ?? 0} cheap / ${b?.rich ?? 0} rich of ${b?.n ?? 0}`}>
+            <div className="flex h-2 w-full min-w-[36px] rounded-sm overflow-hidden bg-muted/20">
+              <div style={{ width: `${cheapPct}%` }} className="bg-emerald-500/70" />
+              <div className="flex-1" />
+              <div style={{ width: `${richPct}%` }} className="bg-red-500/70" />
+            </div>
           </td>
         );
       })}
@@ -946,6 +998,7 @@ export default function Heatmap() {
 
       {/* Pair Matrix */}
       {viewMode === "matrix" && (
+        <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 overflow-auto" data-testid="heatmap-matrix">
           {matrixTickers.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
@@ -1002,6 +1055,23 @@ export default function Heatmap() {
             </table>
           )}
         </div>
+        {matrixData && matrixData.top.length > 0 && (
+          <div className="w-[260px] border-l border-border/40 bg-card/20 overflow-y-auto p-1 flex-shrink-0" data-testid="heatmap-matrix-top">
+            <div className="px-1 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">Most dislocated pairs (|z|)</div>
+            {matrixData.top.map(e => (
+              <div
+                key={`${e.a}-${e.b}`}
+                onClick={() => navigateToPairs(e.a, e.b)}
+                className="flex items-center gap-1.5 px-1 py-0.5 rounded cursor-pointer hover:bg-accent/30 text-[11px] font-mono"
+                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""}`}
+              >
+                <span className="text-foreground/85 truncate">{e.a}/{e.b}</span>
+                <span className={`ml-auto tabular-nums ${e.z >= 0 ? "text-emerald-400" : "text-red-400"}`}>{e.z >= 0 ? "+" : ""}{e.z.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        </div>
       )}
 
       {/* Table */}
@@ -1057,6 +1127,7 @@ export default function Heatmap() {
                 sorted.map(renderRow)
               )}
             </tbody>
+            {sorted.length > 0 && <tfoot className="sticky bottom-0 z-10">{renderBreadthFooter()}</tfoot>}
           </table>
         )}
       </div>
