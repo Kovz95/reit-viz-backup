@@ -11,6 +11,7 @@ import { useGeoFilter } from "@/lib/useGeoFilter";
 import { P as PlayIcon } from "@/lib/play";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { inferRerateMetric } from "@/lib/valuationRerate";
+import { isCrossCalendar } from "@/lib/tickerMarket";
 
 // Curated metrics always offered; unioned at runtime with the loaded universe.
 const ALL_METRICS_BASE = [
@@ -140,6 +141,7 @@ interface PairResult {
   tail?: PairTailStats;
   asOf?: string;     // date of the last ratio observation (legs can end on different days)
   source?: string;   // "workbook" | "yahoo" — both legs always share one calendar
+  crossCal?: boolean; // legs trade on different market calendars (US vs -GB, …) → noisy
   error?: string;    // "no data for <leg>" | "insufficient overlap" | "mixed price calendars…"
 }
 
@@ -279,6 +281,7 @@ async function computePairResult(pairKey: string, windowKey: string, bins: numbe
     tail,
     asOf: sliced[sliced.length - 1]?.time,
     source: mixedCalendar ? `${legA.source}×${legB.source} calendars` : legA.source,
+    crossCal: isCrossCalendar(a, b),
   };
 }
 
@@ -330,12 +333,13 @@ function PairCard({ p }: { p: PairResult }) {
   return (
     <div
       data-testid={`dist-pair-card-${p.a}-${p.b}`}
-      title={`${p.a}/${p.b} · ${r.n} daily log returns${p.asOf ? ` · as of ${p.asOf}` : ""}${p.source ? ` · ${p.source} prices` : ""}`}
-      className="border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors"
+      title={`${p.a}/${p.b} · ${r.n} daily log returns${p.asOf ? ` · as of ${p.asOf}` : ""}${p.source ? ` · ${p.source} prices` : ""}${p.crossCal ? " · CROSS-CALENDAR pair (mixed markets) — the ratio is non-synchronous, so these tail stats are unreliable" : ""}`}
+      className={`bg-card/30 rounded p-1.5 transition-colors border ${p.crossCal ? "border-amber-500/40 hover:border-amber-500/70" : "border-border/40 hover:border-border/70"}`}
     >
       <div className="flex items-baseline justify-between mb-1">
         <div className="flex items-baseline gap-1.5">
           <span className="font-mono font-bold text-xs text-foreground">{p.a} / {p.b}</span>
+          {p.crossCal && <span className="font-mono text-[9px] text-amber-400/90 border border-amber-500/40 rounded px-1" title="Cross-calendar (mixed markets) — tail stats unreliable">†cal?</span>}
           <span className="font-mono text-[10px] text-foreground/40">n={r.n}</span>
         </div>
         <span className={`font-mono text-xs ${zClass(r.z)}`}>{fmtRetPct(r.current)}</span>

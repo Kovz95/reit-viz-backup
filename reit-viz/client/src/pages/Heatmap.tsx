@@ -7,6 +7,7 @@ import {
   type ClassifiedBase,
 } from "@/lib/dataService";
 import { navigateToPairs } from "@/lib/navigateToPairs";
+import { marketOf } from "@/lib/tickerMarket";
 import { apiRequest } from "@/lib/queryClient";
 import ClassificationFilters, {
   emptyClassFilters,
@@ -163,15 +164,6 @@ function historicalPercentile(current: number, trailing: number[]): number | nul
   if (trailing.length < 5) return null;
   const below = trailing.filter(v => v < current).length;
   return (below / trailing.length) * 100;
-}
-
-// Market of a ticker from its suffix (-GB = UK, .HK = Hong Kong, …; else US).
-// A pair whose legs sit in different markets is "cross-calendar" — the two close
-// series come off different holiday calendars / session times, so the joined ratio
-// (and its AR(1) half-life) is noisy and not to be trusted.
-function marketOf(ticker: string): string {
-  const m = ticker.match(/[.\-]([A-Z]{2,3})$/);
-  return m ? m[1] : "US";
 }
 
 // ── Mean-reversion half-life of a (positive) ratio series ──
