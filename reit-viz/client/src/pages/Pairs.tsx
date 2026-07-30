@@ -209,6 +209,12 @@ const CHART_OPTIONS = {
   timeScale: {
     borderColor: "rgba(255,255,255,0.1)",
     timeVisible: false,
+    // Match the Charts tab (ChartPane) so zoom/scroll feel identical: a little
+    // right padding, a sane default bar spacing, and a min spacing that caps how
+    // far a wheel-zoom can zoom in.
+    rightOffset: 5,
+    barSpacing: 3,
+    minBarSpacing: 1,
   },
   // Same interaction model as the Charts tab (ChartPane): wheel zooms
   // (cursor-anchored) without scrolling sideways; pan via click-drag.
@@ -2188,6 +2194,15 @@ function MiniChart({
   // Counter that increments when chart + main series are ready, to trigger re-render
   // so sub-charts receive the actual parentChart/parentSeries refs (not null).
   const [chartReady, setChartReady] = useState(0);
+  // Fingerprint of the underlying data. The effect below rebuilds the whole chart
+  // on any dep change (indicator toggle, theme, maximize, …); without this we would
+  // fitContent() every time and snap the user's pan/zoom back to full range — the
+  // "scroll bounce-back" the Charts tab (ChartPane) guards against the same way.
+  const dataFpRef = useRef<string>("");
+  // Last visible range, captured in this effect's CLEANUP (which runs before the
+  // next re-run and has already been where the chart is disposed) so it survives
+  // the teardown/rebuild and can be restored below.
+  const savedRangeRef = useRef<ReturnType<ReturnType<IChartApi["timeScale"]>["getVisibleLogicalRange"]> | null>(null);
 
   // Serialize activeIndicators to a stable string so the effect only fires when values actually change
   const indicatorsKey = useMemo(() => JSON.stringify(activeIndicators), [activeIndicators]);
@@ -2196,11 +2211,20 @@ function MiniChart({
     const el = containerRef.current;
     if (!el) return;
 
+    // Defensive: React's cleanup normally disposes the old chart before this runs.
     if (chartRef.current) {
       onUnregisterChart(id);
       chartRef.current.remove();
       chartRef.current = null;
     }
+    // Only reframe (fitContent) when the underlying data changes; otherwise restore
+    // the pre-rebuild view so indicator/theme/maximize toggles don't snap pan/zoom
+    // back to full range — the "scroll bounce-back" ChartPane guards against too.
+    const dataFp =
+      `${data.length}:${data[0]?.time ?? ""}:${data[data.length - 1]?.time ?? ""}:${data[data.length - 1]?.value ?? ""}` +
+      `|sec:${secondaryData?.length ?? 0}:${secondaryData?.[secondaryData.length - 1]?.time ?? ""}`;
+    const dataChanged = dataFp !== dataFpRef.current;
+    dataFpRef.current = dataFp;
 
     const chart = createChart(el, {
       ...CHART_OPTIONS,
@@ -2519,7 +2543,14 @@ function MiniChart({
     };
     chart.subscribeCrosshairMove(crosshairCb);
 
-    chart.timeScale().fitContent();
+    // Reframe only on a real data change (new pair / metric / refresh); otherwise
+    // restore the pre-rebuild view so pan/zoom/scroll survive indicator & UI toggles.
+    if (dataChanged || !savedRangeRef.current) {
+      chart.timeScale().fitContent();
+    } else {
+      try { chart.timeScale().setVisibleLogicalRange(savedRangeRef.current); }
+      catch { chart.timeScale().fitContent(); }
+    }
 
     // Global Labels/Px-line preference — OFF state only; toggling back on
     // recreates the chart with original options (chrome in deps).
@@ -2541,6 +2572,12 @@ function MiniChart({
 
     return () => {
       ro.disconnect();
+      // Save the current view so the next rebuild (indicator/theme/maximize toggle)
+      // can restore it instead of fitting to full range.
+      try {
+        const r = chart.timeScale().getVisibleLogicalRange();
+        if (r) savedRangeRef.current = r;
+      } catch {}
       try { chart.unsubscribeCrosshairMove(crosshairCb); } catch {}
       onCrosshairMove?.(id, null);
       setHoverReadout(null);
@@ -2971,6 +3008,7 @@ export default function Pairs() {
   const registerChart = useCallback((id: string, chart: IChartApi, dataLength?: number) => {
     chartsMapRef.current.set(id, chart);
     if (dataLength != null) dataLengthsRef.current.set(id, dataLength);
+    (window as any).__pairCharts = chartsMapRef.current; // debug hook (e2e range assertions, same as __chartsPanes)
     setupSync(id, chart);
     // After a short delay, sync this chart to the first registered chart's time range
     // This ensures charts with different data start points align on initial load
