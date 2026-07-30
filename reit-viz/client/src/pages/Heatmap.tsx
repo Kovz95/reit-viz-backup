@@ -3,8 +3,10 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery } from "@tanstack/react-query";
 import {
   getMultiMetricForAllTickers,
+  getOhlcData,
   type ClassifiedBase,
 } from "@/lib/dataService";
+import { navigateToPairs } from "@/lib/navigateToPairs";
 import { apiRequest } from "@/lib/queryClient";
 import ClassificationFilters, {
   emptyClassFilters,
@@ -89,6 +91,12 @@ const COMPUTED_METRICS = new Set(["SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M"
 const TRAILING_METRICS = [...new Set(
   COLUMNS.filter(c => !COMPUTED_METRICS.has(c.metric)).map(c => c.metric)
 )];
+
+// ── View mode: current metrics table vs pairwise ratio-dislocation matrix ──
+type ViewMode = "metrics" | "matrix";
+
+// Max tickers rendered in the N×N pair matrix (keeps compute + DOM bounded)
+const MATRIX_CAP = 40;
 
 // ── Two orthogonal controls ──
 // Reference: what are we comparing against?
@@ -222,6 +230,7 @@ const LOOKBACK_PRESETS = [
 export default function Heatmap() {
   const { universeTickers } = useUniverse();
   const basketScope = useBasketScope("reit-viz:basket-scope:heatmap");
+  const [viewMode, setViewMode] = useState<ViewMode>("metrics");
   const [search, setSearch] = useState("");
   const [sortCol, setSortCol] = useState("pffo_fy2");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -234,6 +243,7 @@ export default function Heatmap() {
   const [customDaysInput, setCustomDaysInput] = useState("");
 
   const serializeHeatmap = useCallback(() => ({
+    viewMode,
     sortCol,
     sortDir,
     reference,
@@ -242,9 +252,10 @@ export default function Heatmap() {
     classFilters: serializeClassFilters(classFilters),
     manualTickers: [...manualTickers],
     trailingDays,
-  }), [sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays]);
+  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays]);
 
   const restoreHeatmap = useCallback((state: any) => {
+    if (state.viewMode !== undefined) setViewMode(state.viewMode as ViewMode);
     if (state.sortCol !== undefined) setSortCol(state.sortCol);
     if (state.sortDir !== undefined) setSortDir(state.sortDir);
     // Migrate old colorMode → reference
@@ -400,6 +411,103 @@ export default function Heatmap() {
     return groupByLevel(sorted, groupBy);
   }, [sorted, groupBy]);
 
+  // ── Pair Matrix: scoped tickers (capped) reuse the same scope pipeline as the table ──
+  const matrixTickers = useMemo(
+    () => sorted.slice(0, MATRIX_CAP).map(r => r.ticker),
+    [sorted],
+  );
+  const matrixTickerKey = matrixTickers.join(",");
+
+  // Fetch per-ticker close series (bounded concurrency); only in matrix mode
+  const { data: closeSeriesMap, isLoading: loadingMatrix } = useQuery({
+    queryKey: ["heatmap-matrix-series", matrixTickerKey, trailingDays],
+    enabled: viewMode === "matrix" && matrixTickers.length > 0,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const map = new Map<string, { times: string[]; closes: number[] }>();
+      const batchSize = 8;
+      for (let i = 0; i < matrixTickers.length; i += batchSize) {
+        const batch = matrixTickers.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (t) => {
+          try {
+            const ohlc = await getOhlcData(t);
+            const times: string[] = [];
+            const closes: number[] = [];
+            for (const p of ohlc) {
+              if (Number.isFinite(p.close)) {
+                times.push(p.time);
+                closes.push(p.close);
+              }
+            }
+            map.set(t, { times, closes });
+          } catch {
+            map.set(t, { times: [], closes: [] });
+          }
+        }));
+      }
+      return map;
+    },
+  });
+
+  // Build the N×N ratio-dislocation matrix.
+  // Cell (A,B) = z-score (or percentile) of the CURRENT price ratio closeA/closeB
+  // vs that ratio's own trailing history within the trailingDays window.
+  const matrixData = useMemo(() => {
+    if (!closeSeriesMap) return null;
+    const tickers = matrixTickers;
+    const usePct = displayMode === "percentile";
+    // date → close lookup per ticker (for inner-join by date)
+    const dmap = new Map<string, Map<string, number>>();
+    for (const t of tickers) {
+      const s = closeSeriesMap.get(t);
+      const m = new Map<string, number>();
+      if (s) for (let i = 0; i < s.times.length; i++) m.set(s.times[i], s.closes[i]);
+      dmap.set(t, m);
+    }
+    const rows = tickers.map(a => {
+      const sa = closeSeriesMap.get(a);
+      const cells = tickers.map(b => {
+        const key = `${a}-${b}`;
+        if (a === b) {
+          return { key, a, b, diag: true, text: "", bg: "transparent", title: "" };
+        }
+        const mb = dmap.get(b)!;
+        const ratios: number[] = [];
+        if (sa) {
+          for (let i = 0; i < sa.times.length; i++) {
+            const ca = sa.closes[i];
+            const cb = mb.get(sa.times[i]);
+            if (cb !== undefined && cb !== 0 && Number.isFinite(ca) && Number.isFinite(cb)) {
+              const r = ca / cb;
+              if (Number.isFinite(r)) ratios.push(r);
+            }
+          }
+        }
+        const windowed = trailingDays > 0 ? ratios.slice(-trailingDays) : ratios;
+        if (windowed.length < 20) {
+          return {
+            key, a, b, diag: false, text: "—", bg: "transparent",
+            title: `${a}/${b}  insufficient overlap (n ${windowed.length})`,
+          };
+        }
+        const current = windowed[windowed.length - 1];
+        const z = historicalZScore(current, windowed);
+        const pct = historicalPercentile(current, windowed);
+        let text = "—";
+        let bg = "transparent";
+        if (usePct) {
+          if (pct !== null) { text = pct.toFixed(0) + "%"; bg = pctColor(pct, false); }
+        } else {
+          if (z !== null) { text = (z >= 0 ? "+" : "") + z.toFixed(1); bg = zColor(z, false); }
+        }
+        const title = `${a}/${b}  ratio ${current.toFixed(3)}  z ${z !== null ? z.toFixed(2) : "n/a"}  n ${windowed.length}`;
+        return { key, a, b, diag: false, text, bg, title };
+      });
+      return { ticker: a, cells };
+    });
+    return { tickers, rows };
+  }, [closeSeriesMap, matrixTickers, trailingDays, displayMode]);
+
   const toggleSort = useCallback((key: string) => {
     if (sortCol === key) {
       setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -539,6 +647,19 @@ export default function Heatmap() {
         <Grid3X3 className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-xs font-bold text-foreground mr-2">Relative Value</span>
 
+        {/* View mode: metrics table vs pairwise ratio-dislocation matrix */}
+        <Select value={viewMode} onValueChange={v => setViewMode(v as ViewMode)}>
+          <SelectTrigger className="h-6 text-[11px] w-[120px]" data-testid="heatmap-view-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="metrics">Metrics</SelectItem>
+            <SelectItem value="matrix">Pair Matrix</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <div className="mx-1 w-px h-4 bg-border" />
+
         <ClassificationFilters
           filters={classFilters}
           onFiltersChange={setClassFilters}
@@ -639,8 +760,33 @@ export default function Heatmap() {
         </Button>
       </div>
 
+      {/* Matrix legend + convention */}
+      {viewMode === "matrix" && (
+        <div className="flex items-center gap-3 px-3 py-1 border-b border-border/30 bg-card/30 flex-shrink-0 flex-wrap">
+          <span className="text-[9px] text-muted-foreground uppercase tracking-wider">
+            Pair ratio A/B {displayMode === "percentile" ? "percentile" : "z-score"} vs own {trailingDays}d history
+          </span>
+          <div className="flex items-center gap-0.5">
+            <div className="w-5 h-3 rounded-sm" style={{ backgroundColor: "rgba(239, 68, 68, 0.4)" }} />
+            <div className="w-5 h-3 rounded-sm" style={{ backgroundColor: "rgba(239, 68, 68, 0.2)" }} />
+            <div className="w-5 h-3 rounded-sm border border-border/30" style={{ backgroundColor: "transparent" }} />
+            <div className="w-5 h-3 rounded-sm" style={{ backgroundColor: "rgba(34, 197, 94, 0.2)" }} />
+            <div className="w-5 h-3 rounded-sm" style={{ backgroundColor: "rgba(34, 197, 94, 0.4)" }} />
+          </div>
+          <span className="text-[9px] text-red-400">Ratio low (A cheap / B rich)</span>
+          <span className="text-[9px] text-muted-foreground">→</span>
+          <span className="text-[9px] text-green-400">Ratio high (A rich / B cheap)</span>
+          {sorted.length > MATRIX_CAP && (
+            <span className="text-[9px] text-yellow-400 ml-2">
+              Showing first {MATRIX_CAP} of {sorted.length} — narrow scope via basket/filters.
+            </span>
+          )}
+          {loadingMatrix && <span className="text-[9px] text-yellow-400 ml-2">Loading price series…</span>}
+        </div>
+      )}
+
       {/* Color legend */}
-      {displayMode !== "none" && (
+      {viewMode === "metrics" && displayMode !== "none" && (
         <div className="flex items-center gap-3 px-3 py-1 border-b border-border/30 bg-card/30 flex-shrink-0">
           <span className="text-[9px] text-muted-foreground uppercase tracking-wider">
             {displayLabel} vs {refLabel}
@@ -661,7 +807,60 @@ export default function Heatmap() {
         </div>
       )}
 
+      {/* Pair Matrix */}
+      {viewMode === "matrix" && (
+        <div className="flex-1 overflow-auto" data-testid="heatmap-matrix">
+          {matrixTickers.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              No tickers in scope.
+            </div>
+          ) : loadingMatrix || !matrixData ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
+              <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+              Loading price series…
+            </div>
+          ) : (
+            <table className="border-collapse text-[10px]">
+              <thead className="sticky top-0 z-20 bg-card">
+                <tr>
+                  <th className="px-1.5 py-1 text-[10px] font-semibold text-muted-foreground sticky left-0 top-0 z-30 bg-card">
+                    A \ B
+                  </th>
+                  {matrixData.tickers.map(b => (
+                    <th key={b} className="px-1 py-1 font-mono font-bold text-primary text-[10px] bg-card text-center">
+                      {b}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {matrixData.rows.map(row => (
+                  <tr key={row.ticker} className="hover:bg-accent/20" data-testid={`heatmap-matrix-row-${row.ticker}`}>
+                    <td className="px-1.5 py-1 font-mono font-bold text-primary text-[10px] whitespace-nowrap sticky left-0 z-10 bg-background">
+                      {row.ticker}
+                    </td>
+                    {row.cells.map(cell => (
+                      <td
+                        key={cell.key}
+                        data-testid={`heatmap-matrix-cell-${cell.a}-${cell.b}`}
+                        className={`px-1 py-1 text-right font-mono tabular-nums whitespace-nowrap ${cell.diag ? "bg-muted/20" : "cursor-pointer hover:ring-1 hover:ring-inset hover:ring-primary/60"}`}
+                        style={{ backgroundColor: cell.bg }}
+                        title={cell.title}
+                        onClick={cell.diag ? undefined : () => navigateToPairs(cell.a, cell.b)}
+                      >
+                        {cell.text}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       {/* Table */}
+      {viewMode === "metrics" && (
       <div className="flex-1 overflow-auto">
         {loadingSnapshot ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
@@ -708,6 +907,7 @@ export default function Heatmap() {
           </table>
         )}
       </div>
+      )}
     </div>
   );
 }

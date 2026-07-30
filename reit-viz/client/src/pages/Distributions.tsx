@@ -103,6 +103,187 @@ function computeDistStats(ticker: string, values: number[], current: number, bin
   return { ticker, n, min, max, mean, median: med, p25, p75, stdev, current, percentile, z, values, hist, binEdges };
 }
 
+// ---- Pair Ratio mode -------------------------------------------------------
+// Distribution of a pair ratio's DAILY LOG RETURNS: returns of closeA/closeB.
+// Helps size pair trades and judge tail risk.
+
+interface PairTailStats {
+  skew: number;      // sample skewness of the return series
+  exKurt: number;    // excess kurtosis (0 = normal)
+  var5: number;      // 5% historical VaR (5th-percentile daily log return, typically < 0)
+  cvar5: number;     // 5% CVaR / expected shortfall (mean of returns at or below var5)
+  annVol: number;    // annualized sigma = daily stdev * sqrt(252)
+}
+
+interface PairResult {
+  key: string;       // "A/B"
+  a: string;
+  b: string;
+  dist?: DistResult; // computeDistStats over the log-return series
+  tail?: PairTailStats;
+  error?: string;    // "no data for <leg>" | "insufficient overlap"
+}
+
+function computeTailStats(returns: number[]): PairTailStats {
+  const n = returns.length;
+  const mean = returns.reduce((s, v) => s + v, 0) / n;
+  let m2 = 0, m3 = 0, m4 = 0;
+  for (const v of returns) {
+    const d = v - mean;
+    const d2 = d * d;
+    m2 += d2; m3 += d2 * d; m4 += d2 * d2;
+  }
+  m2 /= n; m3 /= n; m4 /= n;
+  const sd = Math.sqrt(m2);
+  const skew = sd > 0 ? m3 / (sd * sd * sd) : 0;
+  const exKurt = m2 > 0 ? m4 / (m2 * m2) - 3 : 0;
+  const sorted = [...returns].sort((a, b) => a - b);
+  const var5 = quantile(sorted, 0.05);
+  let sum = 0, cnt = 0;
+  for (const v of sorted) {
+    if (v <= var5) { sum += v; cnt++; } else break;
+  }
+  const cvar5 = cnt > 0 ? sum / cnt : var5;
+  const annVol = sd * Math.sqrt(252);
+  return { skew, exKurt, var5, cvar5, annVol };
+}
+
+// Load one leg's close series. Tries the workbook metric ("close") first, then
+// falls back to the server Yahoo price cache so ETFs/indices (VNQ, IYR, …) work
+// — the exact fallback SimilarSetups uses for typed pairs.
+async function loadLegCloses(ticker: string): Promise<{ times: string[]; closes: number[] } | null> {
+  try {
+    const pts = await fetchMetricSeries(ticker, "close");
+    if (pts.length) {
+      return { times: pts.map(p => p.time), closes: pts.map(p => p.value) };
+    }
+  } catch {}
+  try {
+    const res = await fetch(`/api/yahoo-prices/${encodeURIComponent(ticker)}`);
+    if (res.ok) {
+      const data = await res.json();
+      const closes: number[] =
+        Array.isArray(data?.adjCloses) && data.adjCloses.length ? data.adjCloses : data?.closes;
+      if (Array.isArray(data?.dates) && Array.isArray(closes) && closes.length) {
+        return { times: data.dates, closes };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function computePairResult(pairKey: string, windowKey: string, bins: number): Promise<PairResult> {
+  const [a, b] = pairKey.split("/");
+  const legA = await loadLegCloses(a);
+  if (!legA || !legA.closes.length) return { key: pairKey, a, b, error: `no data for ${a}` };
+  const legB = await loadLegCloses(b);
+  if (!legB || !legB.closes.length) return { key: pairKey, a, b, error: `no data for ${b}` };
+
+  // Inner-join on date → ratio r_t = closeA / closeB.
+  const mapB = new Map<string, number>();
+  for (let i = 0; i < legB.times.length; i++) {
+    const c = legB.closes[i];
+    if (Number.isFinite(c) && c !== 0) mapB.set(legB.times[i], c);
+  }
+  const ratioSeries: { time: string; value: number }[] = [];
+  for (let i = 0; i < legA.times.length; i++) {
+    const ca = legA.closes[i];
+    const cb = mapB.get(legA.times[i]);
+    if (cb != null && Number.isFinite(ca) && ca !== 0 && Number.isFinite(cb) && cb !== 0) {
+      ratioSeries.push({ time: legA.times[i], value: ca / cb });
+    }
+  }
+
+  const sliced = sliceByYears(ratioSeries, WINDOW_YEARS[windowKey]);
+  // Daily LOG returns of the ratio.
+  const returns: number[] = [];
+  for (let i = 1; i < sliced.length; i++) {
+    const r0 = sliced[i - 1].value, r1 = sliced[i].value;
+    if (r0 > 0 && r1 > 0 && Number.isFinite(r0) && Number.isFinite(r1)) {
+      returns.push(Math.log(r1 / r0));
+    }
+  }
+  if (returns.length < 30) return { key: pairKey, a, b, error: "insufficient overlap" };
+
+  const current = returns[returns.length - 1];
+  const dist = computeDistStats(`${a}/${b}`, returns, current, bins);
+  const tail = computeTailStats(returns);
+  return { key: pairKey, a, b, dist, tail };
+}
+
+// Log returns display as signed percent.
+function fmtRetPct(v: number): string {
+  return Number.isFinite(v) ? `${(v * 100).toFixed(2)}%` : "—";
+}
+
+function PairCard({ p }: { p: PairResult }) {
+  if (p.error || !p.dist || !p.tail) {
+    return (
+      <div
+        data-testid={`dist-pair-card-${p.a}-${p.b}`}
+        className="border border-border/40 bg-card/30 rounded p-1.5"
+      >
+        <div className="flex items-baseline justify-between mb-1">
+          <span className="font-mono font-bold text-xs text-foreground">{p.a} / {p.b}</span>
+        </div>
+        <div className="h-[92px] flex items-center justify-center text-[10px] font-mono text-foreground/40">
+          {p.error || "no data"}
+        </div>
+      </div>
+    );
+  }
+  const r = p.dist;
+  const tail = p.tail;
+  const maxCount = Math.max(1, ...r.hist);
+  const svgW = 212;
+  const svgH = 92;
+  const barW = svgW / r.hist.length;
+  const range = r.max - r.min || 1;
+  const currentX = 4 + ((r.current - r.min) / range) * svgW;
+  return (
+    <div
+      data-testid={`dist-pair-card-${p.a}-${p.b}`}
+      className="border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors"
+    >
+      <div className="flex items-baseline justify-between mb-1">
+        <div className="flex items-baseline gap-1.5">
+          <span className="font-mono font-bold text-xs text-foreground">{p.a} / {p.b}</span>
+          <span className="font-mono text-[10px] text-foreground/40">n={r.n}</span>
+        </div>
+        <span className={`font-mono text-xs ${zClass(r.z)}`}>{fmtRetPct(r.current)}</span>
+      </div>
+      <svg width="100%" height={100} viewBox={`0 0 220 100`} preserveAspectRatio="none" className="block">
+        {r.hist.map((count, i) => {
+          const barH = (count / maxCount) * svgH;
+          return (
+            <rect
+              key={i}
+              x={4 + i * barW}
+              y={4 + (svgH - barH)}
+              width={Math.max(0.5, barW - 0.5)}
+              height={barH}
+              fill="rgba(14,165,233,0.45)"
+            />
+          );
+        })}
+        <line x1={currentX} x2={currentX} y1={4} y2={4 + svgH} stroke="rgb(251 191 36)" strokeWidth={1.5} />
+      </svg>
+      <div className="flex items-center justify-between mt-0.5 font-mono text-[10px] text-foreground/50">
+        <span>μ={fmtRetPct(r.mean)}</span>
+        <span>Ann.σ={fmtRetPct(tail.annVol)}</span>
+        <span className={zClass(r.z)}>z={r.z.toFixed(2)}</span>
+        <span>pct={fmtPct(r.percentile)}</span>
+      </div>
+      <div className="flex items-center justify-between mt-0.5 font-mono text-[10px] text-foreground/40">
+        <span>skew={Number.isFinite(tail.skew) ? tail.skew.toFixed(2) : "—"}</span>
+        <span>kurt={Number.isFinite(tail.exKurt) ? tail.exKurt.toFixed(2) : "—"}</span>
+        <span className="text-red-400/70">VaR5={fmtRetPct(tail.var5)}</span>
+        <span className="text-red-400/70">CVaR5={fmtRetPct(tail.cvar5)}</span>
+      </div>
+    </div>
+  );
+}
+
 function hashStr(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
@@ -439,6 +620,63 @@ export default function Distributions() {
   const runIdRef = useRef(0);
   const autoRunRef = useRef(false);
 
+  // ---- Pair Ratio mode ----
+  const [mode, setMode] = useState<"metric" | "pair">("metric");
+  const [pairs, setPairs] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("reit-viz:dist-pairs");
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) return arr.filter((x: any) => typeof x === "string");
+      }
+    } catch {}
+    return [];
+  });
+  const [pairInput, setPairInput] = useState("");
+  const [pairResults, setPairResults] = useState<PairResult[]>([]);
+  const [pairRunning, setPairRunning] = useState(false);
+  const pairRunIdRef = useRef(0);
+
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:dist-pairs", JSON.stringify(pairs)); } catch {}
+  }, [pairs]);
+
+  const addPair = useCallback(() => {
+    const raw = pairInput.trim().toUpperCase();
+    const m = raw.match(/^([A-Z0-9.\-]{1,12})\/([A-Z0-9.\-]{1,12})$/);
+    if (!m) return;
+    const [, a, b] = m;
+    if (a === b) { setPairInput(""); return; }
+    const key = `${a}/${b}`;
+    if (pairs.includes(key)) { setPairInput(""); return; }
+    setPairs(prev => [...prev, key]);
+    setPairInput("");
+  }, [pairInput, pairs]);
+
+  const removePair = useCallback((key: string) => {
+    setPairs(prev => prev.filter(k => k !== key));
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "pair") return;
+    if (pairs.length === 0) { setPairResults([]); return; }
+    const runId = ++pairRunIdRef.current;
+    setPairRunning(true);
+    (async () => {
+      const out: PairResult[] = [];
+      for (const key of pairs) {
+        const res = await computePairResult(key, windowKey, bins);
+        if (pairRunIdRef.current !== runId) return;
+        out.push(res);
+        setPairResults([...out]);
+      }
+      if (pairRunIdRef.current === runId) {
+        setPairResults(out);
+        setPairRunning(false);
+      }
+    })();
+  }, [mode, pairs, windowKey, bins]);
+
   useEffect(() => {
     fetchWorkbookTickers().then((t: any[]) => setAllTickers(t)).catch(() => setAllTickers([]));
   }, []);
@@ -553,7 +791,50 @@ export default function Distributions() {
     <div className="flex flex-col h-full bg-background text-foreground">
       <div className="flex-shrink-0 border-b border-border/40 bg-card/40">
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
-          <label className="flex items-center gap-1.5 text-foreground/60">
+          <div className="flex rounded border border-border/40 overflow-hidden">
+            {([["metric", "Metric"], ["pair", "Pair Ratio"]] as const).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`px-2 py-0.5 font-mono text-[11px] ${mode === m ? "bg-amber-500/15 text-amber-200" : "text-foreground/60 hover:bg-accent"}`}
+                data-testid={`dist-mode-${m}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {mode === "pair" && (
+            <div className="flex items-center gap-1.5">
+              <input
+                value={pairInput}
+                onChange={e => setPairInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addPair(); } }}
+                placeholder="A/B (e.g. WELL/VTR)"
+                className="bg-background border border-border/40 rounded px-2 py-0.5 font-mono text-foreground w-[160px]"
+                data-testid="dist-pair-input"
+              />
+              {pairs.map(key => {
+                const [a, b] = key.split("/");
+                return (
+                  <span
+                    key={key}
+                    data-testid={`dist-pair-chip-${a}-${b}`}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 font-mono text-[11px]"
+                  >
+                    {a}/{b}
+                    <button
+                      onClick={() => removePair(key)}
+                      className="text-amber-200/60 hover:text-amber-100"
+                      aria-label={`remove ${key}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <label className={`flex items-center gap-1.5 text-foreground/60 ${mode === "pair" ? "hidden" : ""}`}>
             <span className="font-mono uppercase tracking-wide">Metric</span>
             <select
               value={selectedMetric}
@@ -568,7 +849,7 @@ export default function Distributions() {
               ))}
             </select>
           </label>
-          <div className="flex items-center gap-1 border-l border-border/30 pl-2 ml-1">
+          <div className={`flex items-center gap-1 border-l border-border/30 pl-2 ml-1 ${mode === "pair" ? "hidden" : ""}`}>
             <span className="text-foreground/60 font-mono uppercase tracking-wide">Universe</span>
             <div className="flex rounded border border-border/40 overflow-hidden">
               {["workbook", "basket", "classification"].map(m => (
@@ -612,7 +893,7 @@ export default function Distributions() {
             )}
             <span className="text-foreground/40 font-mono ml-1">{universeTickers.length} tickers</span>
           </div>
-          <div className="flex items-center gap-1.5 border-l border-border/30 pl-2 ml-1">
+          <div className={`flex items-center gap-1.5 border-l border-border/30 pl-2 ml-1 ${mode === "pair" ? "hidden" : ""}`}>
             <span className="text-foreground/60 font-mono uppercase tracking-wide">Geo</span>
             {geo.geoFilterUI}
           </div>
@@ -630,7 +911,7 @@ export default function Distributions() {
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-1 border-l border-border/30 pl-2 ml-1">
+          <div className={`flex items-center gap-1 border-l border-border/30 pl-2 ml-1 ${mode === "pair" ? "hidden" : ""}`}>
             <span className="text-foreground/60 font-mono uppercase tracking-wide">View</span>
             <div className="flex rounded border border-border/40 overflow-hidden">
               {[["small", "Small Multiples"], ["overlay", "Overlay"], ["box", "Box / Violin"]].map(([v, label]) => (
@@ -645,7 +926,7 @@ export default function Distributions() {
               ))}
             </div>
           </div>
-          {(view === "small" || view === "overlay") && (
+          {(mode === "pair" || view === "small" || view === "overlay") && (
             <div className="flex items-center gap-1.5 border-l border-border/30 pl-2 ml-1">
               <span className="text-foreground/60 font-mono uppercase tracking-wide">Bins</span>
               <input
@@ -657,29 +938,42 @@ export default function Distributions() {
             </div>
           )}
           <div className="flex-1" />
-          <button
-            onClick={runAnalysis}
-            disabled={running || universeTickers.length === 0}
-            className="flex items-center gap-1 px-3 py-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 disabled:opacity-50 font-mono text-xs"
-            data-testid="dist-run"
-          >
-            {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayIcon className="w-3 h-3" />}
-            Run
-          </button>
+          {mode === "metric" && (
+            <button
+              onClick={runAnalysis}
+              disabled={running || universeTickers.length === 0}
+              className="flex items-center gap-1 px-3 py-1 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 disabled:opacity-50 font-mono text-xs"
+              data-testid="dist-run"
+            >
+              {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayIcon className="w-3 h-3" />}
+              Run
+            </button>
+          )}
         </div>
         <div className="px-3 pb-1.5 text-[11px] font-mono text-foreground/50 flex items-center gap-3">
-          {running ? (
-            <span>Computing {progress.done}/{progress.total} · {progress.current}…</span>
+          {mode === "pair" ? (
+            <>
+              <span>
+                {pairRunning ? "Computing pairs…" : `${pairResults.length} pair${pairResults.length === 1 ? "" : "s"}`}
+              </span>
+              <span className="text-foreground/40">Ratio daily log-returns · window {windowKey}</span>
+            </>
           ) : (
-            <span>
-              {results.length} computed
-              {skipped.length > 0 && ` · ${skipped.length} n/a (${skipped.slice(0, 6).join(", ")}${skipped.length > 6 ? "…" : ""})`}
-            </span>
+            <>
+              {running ? (
+                <span>Computing {progress.done}/{progress.total} · {progress.current}…</span>
+              ) : (
+                <span>
+                  {results.length} computed
+                  {skipped.length > 0 && ` · ${skipped.length} n/a (${skipped.slice(0, 6).join(", ")}${skipped.length > 6 ? "…" : ""})`}
+                </span>
+              )}
+              <span className="text-foreground/40">
+                Metric: <span className="text-foreground/70">{selectedMetric}</span>
+              </span>
+            </>
           )}
-          <span className="text-foreground/40">
-            Metric: <span className="text-foreground/70">{selectedMetric}</span>
-          </span>
-          {(view === "small" || view === "box") && (
+          {mode === "metric" && (view === "small" || view === "box") && (
             <div className="ml-auto flex items-center gap-1">
               <span className="text-foreground/40">Sort:</span>
               {["ticker", "current", "percentile", "z", "median"].map(key => (
@@ -696,13 +990,29 @@ export default function Distributions() {
         </div>
       </div>
       <div className="flex-1 overflow-auto">
-        {running && results.length === 0 && (
+        {mode === "pair" && (
+          <>
+            {pairs.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-foreground/40 font-mono text-xs">
+                Add a pair above (e.g. WELL/VTR) to see its ratio return distribution.
+              </div>
+            ) : (
+              <div
+                className="grid gap-2 p-2"
+                style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}
+              >
+                {pairResults.map(p => <PairCard key={p.key} p={p} />)}
+              </div>
+            )}
+          </>
+        )}
+        {mode === "metric" && running && results.length === 0 && (
           <div className="h-full flex items-center justify-center text-foreground/60 font-mono text-xs gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
             Computing distribution for {selectedMetric}…
           </div>
         )}
-        {results.length === 0 && !running && skipped.length > 0 && (
+        {mode === "metric" && results.length === 0 && !running && skipped.length > 0 && (
           <div className="h-full flex flex-col items-center justify-center text-foreground/50 font-mono text-xs gap-1 px-6 text-center">
             <div>No tickers in this universe report {selectedMetric}.</div>
             <div className="text-foreground/35">
@@ -710,16 +1020,16 @@ export default function Distributions() {
             </div>
           </div>
         )}
-        {results.length === 0 && !running && skipped.length === 0 && (
+        {mode === "metric" && results.length === 0 && !running && skipped.length === 0 && (
           <div className="h-full flex items-center justify-center text-foreground/40 font-mono text-xs">
             No data yet — click Run.
           </div>
         )}
-        {view === "small" && results.length > 0 && <SmallMultiplesView results={sortedResults} />}
-        {view === "overlay" && results.length > 0 && (
+        {mode === "metric" && view === "small" && results.length > 0 && <SmallMultiplesView results={sortedResults} />}
+        {mode === "metric" && view === "overlay" && results.length > 0 && (
           <OverlayView results={results} hoverTicker={hoverTicker} setHoverTicker={setHoverTicker} metric={selectedMetric} />
         )}
-        {view === "box" && results.length > 0 && <BoxView results={sortedResults} metric={selectedMetric} />}
+        {mode === "metric" && view === "box" && results.length > 0 && <BoxView results={sortedResults} metric={selectedMetric} />}
       </div>
     </div>
   );

@@ -1,7 +1,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync, getTickers } from "@/lib/dataService";
+import { getMultiMetricForAllTickers, getMetricTrailing, isPercentMetric, getRevisionMomentumAll, getCustomFundamentalMetrics, getTickersCacheSync, getTickers, getMetricSeries } from "@/lib/dataService";
+import { ratioSeries, unorderedPairs } from "@/lib/pairValuation";
+import { navigateToPairs } from "@/lib/navigateToPairs";
 import {
   WINDOW_OPTIONS,
   BASIS_FAMILIES,
@@ -13,7 +15,7 @@ import {
   type BasisPeriod,
 } from "@/lib/attribution";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
-import type { RevisionData, ClassifiedBase } from "@/lib/dataService";
+import type { RevisionData, ClassifiedBase, TimeValue } from "@/lib/dataService";
 import ClassificationFilters, {
   emptyClassFilters,
   applyClassFilters,
@@ -205,6 +207,15 @@ const CLASS_LEVELS = [
 ] as const;
 
 type ClassLevelKey = typeof CLASS_LEVELS[number]["key"];
+
+// ── Pairs ranking mode ──
+// In "pairs" mode the ranked entities are A/B pairs; the composite scorer runs
+// over this fixed vocabulary of ratio-derived metrics instead of fundamentals.
+const PAIR_METRICS: string[] = ["Ratio Z", "Mom 3M", "Mom 6M", "Ratio %ile"];
+// Cap on how many legs form pairs (n² growth). 25 legs → up to 300 pairs.
+const PAIR_LEG_CAP = 25;
+// Minimum ratio-series length required to score a pair.
+const PAIR_MIN_POINTS = 60;
 
 // Column types that can be toggled on/off per metric
 interface ColumnVisibility {
@@ -625,6 +636,7 @@ export default function Ranking() {
     setShowSaveInput(false);
   };
 
+  const [rankMode, setRankMode] = useState<"tickers" | "pairs">("tickers");
   const [sortCol, setSortCol] = useState<string>("compositeZ");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
@@ -679,6 +691,7 @@ export default function Ranking() {
   }, []);
 
   const serializeRanking = useCallback(() => ({
+    rankMode,
     metrics,
     sortCol,
     sortDir,
@@ -699,9 +712,10 @@ export default function Ranking() {
     groupBy,
     metricWeights,
     metricDirections,
-  }), [metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, attrPeriod, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
+  }), [rankMode, metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, attrPeriod, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
 
   const restoreRanking = useCallback((state: any) => {
+    if (state.rankMode !== undefined) setRankMode(state.rankMode);
     if (state.metrics !== undefined) setMetrics(state.metrics);
     if (state.sortCol !== undefined) setSortCol(state.sortCol);
     if (state.sortDir !== undefined) setSortDir(state.sortDir);
@@ -812,9 +826,96 @@ export default function Ranking() {
     enabled: showAttribution && !!attrTickerSig,
   });
 
+  // ─── Pairs mode ───────────────────────────────────────────────────────────
+  // The active metric vocabulary: fundamentals in "tickers" mode, the fixed
+  // ratio-derived set in "pairs" mode. Identical reference in tickers mode so
+  // the composite pipeline behaves byte-for-byte the same.
+  const activeMetrics = rankMode === "pairs" ? PAIR_METRICS : metrics;
+
+  // Leg set for pairs, built from the CURRENT scope (universe ∩ basket ∩ class
+  // filters), alphabetical, capped to PAIR_LEG_CAP so pair count stays bounded.
+  const pairLegInfo = useMemo(() => {
+    if (rankMode !== "pairs") return { legs: [] as string[], total: 0 };
+    const metas = tickersMetaAll || getTickersCacheSync() || [];
+    let cand = metas.filter((m) => {
+      if (universeTickers && !universeTickers.has(m.ticker)) return false;
+      if (basketScope.members && !basketScope.inScope(m.ticker)) return false;
+      return true;
+    });
+    cand = applyClassFilters(cand as any, classFilters, "", new Set<string>());
+    const legs = [...new Set(cand.map((m) => m.ticker))].sort();
+    return { legs: legs.slice(0, PAIR_LEG_CAP), total: legs.length };
+  }, [rankMode, tickersMetaAll, universeTickers, basketScope.members, classFilters]);
+  const pairLegs = pairLegInfo.legs;
+
+  // Per-leg close series (bounded concurrency), only while in pairs mode.
+  const { data: pairCloses, isLoading: pairClosesLoading } = useQuery({
+    queryKey: ["ranking-pair-closes", pairLegs.join(",")],
+    queryFn: async () => {
+      const map = new Map<string, TimeValue[]>();
+      const CONCURRENCY = 8;
+      let idx = 0;
+      async function worker() {
+        for (;;) {
+          const i = idx++;
+          if (i >= pairLegs.length) return;
+          const leg = pairLegs[i];
+          try { map.set(leg, await getMetricSeries(leg, "close")); } catch { /* skip leg */ }
+        }
+      }
+      await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+      return map;
+    },
+    enabled: rankMode === "pairs" && pairLegs.length > 0,
+  });
+
+  // Synthetic rawRows-shaped array: one row per A/B pair, with the ratio-derived
+  // metric values. Fed into the exact same composite scorer as ticker rows.
+  const pairRawRows = useMemo(() => {
+    if (rankMode !== "pairs" || !pairCloses) return [] as any[];
+    const metaByTicker = new Map(
+      (tickersMetaAll || getTickersCacheSync() || []).map((m) => [m.ticker, m]),
+    );
+    const rows: any[] = [];
+    for (const [a, b] of unorderedPairs(pairLegs)) {
+      const ca = pairCloses.get(a);
+      const cb = pairCloses.get(b);
+      if (!ca || !cb) continue;
+      const r = ratioSeries(ca, cb);
+      if (r.length < PAIR_MIN_POINTS) continue;
+      const vals = r.map((p) => p.value);
+      const n = vals.length;
+      const cur = vals[n - 1];
+      const mean = vals.reduce((s, v) => s + v, 0) / n;
+      const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1));
+      const ratioZ = std > 0 ? (cur - mean) / std : 0;
+      const mom3 = n > 63 ? (cur / vals[n - 1 - 63] - 1) * 100 : null;
+      const mom6 = n > 126 ? (cur / vals[n - 1 - 126] - 1) * 100 : null;
+      const pctile = histPercentile(cur, vals);
+      const ma = metaByTicker.get(a);
+      rows.push({
+        ticker: `${a}/${b}`,
+        name: `${a} / ${b}`,
+        economy: ma?.economy ?? "",
+        sector: ma?.sector ?? "",
+        subsector: ma?.subsector ?? "",
+        industryGroup: ma?.industryGroup ?? "",
+        industry: ma?.industry ?? "",
+        subindustry: ma?.subindustry ?? "",
+        values: { "Ratio Z": ratioZ, "Mom 3M": mom3, "Mom 6M": mom6, "Ratio %ile": pctile },
+      });
+    }
+    return rows;
+  }, [rankMode, pairLegs, pairCloses, tickersMetaAll]);
+
+  // The rawRows actually consumed by the composite pipeline below.
+  const effectiveRawRows = rankMode === "pairs" ? pairRawRows : rawRows;
+
   // Build composite rows with Z-scores, percentiles (all classification levels), sparklines
   const compositeRows = useMemo(() => {
-    if (rawRows.length === 0) return [];
+    if (effectiveRawRows.length === 0) return [];
+    const rawRows = effectiveRawRows;
+    const metrics = activeMetrics;
 
     // Cross-sectional z-scores for each metric (across all tickers)
     const zScoresByMetric: Record<string, (number | null)[]> = {};
@@ -918,18 +1019,29 @@ export default function Ranking() {
         sparklineData: sparkData,
       } as CompositeRow;
     });
-  }, [rawRows, metrics, sparklineMap, metricWeights, metricDirections]);
+  }, [effectiveRawRows, activeMetrics, sparklineMap, metricWeights, metricDirections]);
 
   const geo = useGeoFilter(compositeRows, "rank-geo");
 
   const sorted = useMemo(() => {
     let filtered = compositeRows.filter((r) =>
-      metrics.some((m) => r.values[m] !== null)
+      activeMetrics.some((m) => r.values[m] !== null)
     );
-    if (universeTickers) filtered = filtered.filter(r => universeTickers.has(r.ticker));
-    if (basketScope.members) filtered = filtered.filter(r => basketScope.inScope(r.ticker));
-    filtered = applyClassFilters(filtered, classFilters, search, manualTickers);
-    filtered = geo.filterByGeo(filtered);
+    if (rankMode === "pairs") {
+      // Pair rows are synthetic — universe/class/geo scoping is already baked
+      // into the leg set, so only honor the text search (matches "A" or "B").
+      if (search) {
+        const q = search.toLowerCase();
+        filtered = filtered.filter(
+          (r) => r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q),
+        );
+      }
+    } else {
+      if (universeTickers) filtered = filtered.filter(r => universeTickers.has(r.ticker));
+      if (basketScope.members) filtered = filtered.filter(r => basketScope.inScope(r.ticker));
+      filtered = applyClassFilters(filtered, classFilters, search, manualTickers);
+      filtered = geo.filterByGeo(filtered);
+    }
 
     return filtered.sort((a, b) => {
       let av: number, bv: number;
@@ -956,7 +1068,7 @@ export default function Ranking() {
       }
       return sortDir === "asc" ? av - bv : bv - av;
     });
-  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, metrics, revisionMap, showRevisions, attributionMap, universeTickers, basketScope.members, geo.filterByGeo]);
+  }, [compositeRows, sortCol, sortDir, search, classFilters, manualTickers, activeMetrics, rankMode, revisionMap, showRevisions, attributionMap, universeTickers, basketScope.members, geo.filterByGeo]);
 
   const grouped = useMemo(() => {
     if (groupBy === "none") return null;
@@ -1223,15 +1335,41 @@ export default function Ranking() {
 
         <div className="h-5 w-px bg-border" />
 
-        <span className="text-xs font-semibold text-muted-foreground">Metrics</span>
+        <div className="inline-flex items-center rounded border border-border overflow-hidden" title="Rank single tickers, or A/B pairs scored on their price-ratio dislocation & momentum">
+          <button
+            className={`h-6 px-2 text-[11px] font-medium ${rankMode === "tickers" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setRankMode("tickers")}
+            data-testid="rank-mode-tickers"
+          >
+            Tickers
+          </button>
+          <button
+            className={`h-6 px-2 text-[11px] font-medium ${rankMode === "pairs" ? "bg-purple-600 text-white" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+            onClick={() => {
+              setRankMode("pairs");
+              setSortCol("compositeZ");
+              setSortDir("asc");
+              // Seed sensible default signs for pair metrics (user can flip via Weights).
+              // Cheap-A-vs-B (low Ratio Z / low %ile) ranks up; positive ratio momentum ranks up.
+              setMetricDirections((prev) => ({ "Ratio Z": -1, "Ratio %ile": -1, ...prev }));
+            }}
+            data-testid="rank-mode-pairs"
+          >
+            Pairs
+          </button>
+        </div>
+
+        <div className="h-5 w-px bg-border" />
+
+        <span className="text-xs font-semibold text-muted-foreground">{rankMode === "pairs" ? "Pair Metrics" : "Metrics"}</span>
         <div className="flex items-center gap-1 flex-wrap">
-          {metrics.map((m) => (
+          {activeMetrics.map((m) => (
             <span
               key={m}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 text-primary text-[11px] font-mono"
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono ${rankMode === "pairs" ? "bg-purple-500/10 text-purple-400" : "bg-primary/10 text-primary"}`}
             >
               {m}
-              {metrics.length > 1 && (
+              {rankMode !== "pairs" && metrics.length > 1 && (
                 <button onClick={() => removeMetric(m)} className="hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
@@ -1239,6 +1377,8 @@ export default function Ranking() {
             </span>
           ))}
           <div className="flex items-center gap-0.5">
+            {rankMode !== "pairs" && (
+            <React.Fragment>
             <Select value={pendingMetric} onValueChange={setPendingMetric}>
               <SelectTrigger className="h-6 text-[11px] w-[180px]" data-testid="add-metric-select">
                 <SelectValue placeholder="Add metric..." />
@@ -1272,7 +1412,9 @@ export default function Ranking() {
             >
               <Plus className="w-3 h-3" />
             </Button>
-            {metrics.length > 1 && (
+            </React.Fragment>
+            )}
+            {activeMetrics.length > 1 && (
               <DropdownMenu open={showWeights} onOpenChange={setShowWeights}>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1302,7 +1444,7 @@ export default function Ranking() {
                     Drag sliders to weight metrics (0–100). Toggle <span className="font-mono">−</span> for "lower-is-better" metrics (e.g. P/FFO). Composite Z = Σ(sign·z·w) / Σw.
                   </div>
                   <div className="flex flex-col gap-1.5 max-h-[300px] overflow-y-auto">
-                    {metrics.map((m) => {
+                    {activeMetrics.map((m) => {
                       const w = metricWeights[m] !== undefined ? metricWeights[m] : 1;
                       const dir = metricDirections[m] === -1 ? -1 : 1;
                       return (
@@ -1695,11 +1837,23 @@ export default function Ranking() {
         </ClassificationFilters>
       </div>
 
+      {/* Pairs-mode scope note */}
+      {rankMode === "pairs" && (
+        <div className="px-3 py-1 border-b border-border/50 bg-purple-500/5 text-[10px] text-purple-300/90 flex items-center gap-2" data-testid="pairs-note">
+          <span className="font-semibold text-purple-400">Pairs</span>
+          {pairLegInfo.total > PAIR_LEG_CAP ? (
+            <span>Pairs from first {PAIR_LEG_CAP} legs of scope ({pairLegInfo.total} in scope) — narrow via basket/filters.</span>
+          ) : (
+            <span>{pairLegs.length} legs in scope → up to {(pairLegs.length * (pairLegs.length - 1)) / 2} pairs. Set a basket scope to focus.</span>
+          )}
+        </div>
+      )}
+
       {/* Table */}
       <div className="flex-1 overflow-auto">
-        {isLoading ? (
+        {(rankMode === "pairs" ? pairClosesLoading : isLoading) ? (
           <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
-            Loading...
+            {rankMode === "pairs" ? "Computing pairs…" : "Loading..."}
           </div>
         ) : (
           <table className="w-full text-[11px]" data-testid="rank-table">
@@ -1709,7 +1863,7 @@ export default function Ranking() {
                 <th className="text-left px-2 py-1.5 w-14 text-muted-foreground font-medium">Ticker</th>
                 <th className="text-left px-2 py-1.5 text-muted-foreground font-medium max-w-[140px]">Name</th>
                 <th className="text-left px-2 py-1.5 w-32 text-muted-foreground font-medium">SubInd</th>
-                {metrics.map((m) => (
+                {activeMetrics.map((m) => (
                   <th key={m} colSpan={countVisibleCols(colVis)} className="text-center px-1 py-1 border-l border-border/30">
                     <button
                       className="inline-flex items-center gap-0.5 hover:text-foreground text-muted-foreground font-medium text-[10px]"
@@ -1720,7 +1874,7 @@ export default function Ranking() {
                     </button>
                   </th>
                 ))}
-                {metrics.length > 1 && (
+                {activeMetrics.length > 1 && (
                   <th className="text-center px-2 py-1.5 border-l border-border/30">
                     <button
                       className="inline-flex items-center gap-0.5 hover:text-foreground text-muted-foreground font-medium text-[10px]"
@@ -1749,7 +1903,7 @@ export default function Ranking() {
               {/* Dynamic sub-headers based on colVis */}
               <tr className="border-b border-border/30 text-[9px] text-muted-foreground/60">
                 <th /><th /><th /><th />
-                {metrics.map((m) => (
+                {activeMetrics.map((m) => (
                   <React.Fragment key={m + "-sub"}>
                     {colVis.value && <th className="px-1 py-0.5 text-right border-l border-border/20">Value</th>}
                     {colVis.zScore && <th className="px-1 py-0.5 text-right">AllZ</th>}
@@ -1764,7 +1918,7 @@ export default function Ranking() {
                     {colVis.sparkline && <th className="px-1 py-0.5 text-center">Trail</th>}
                   </React.Fragment>
                 ))}
-                {metrics.length > 1 && <th />}
+                {activeMetrics.length > 1 && <th />}
                 {showRevisions && (
                   <React.Fragment>
                     <th className="px-1 py-0.5 text-right border-l border-border/20">
@@ -1801,19 +1955,29 @@ export default function Ranking() {
             </thead>
             <tbody>
               {(() => {
-                const totalCols = 4 + metrics.length * countVisibleCols(colVis) + (metrics.length > 1 ? 1 : 0) + (showRevisions ? 5 : 0) + (showAttribution ? 5 : 0);
-                const renderRow = (row: CompositeRow, rank: number) => (
+                const totalCols = 4 + activeMetrics.length * countVisibleCols(colVis) + (activeMetrics.length > 1 ? 1 : 0) + (showRevisions ? 5 : 0) + (showAttribution ? 5 : 0);
+                const renderRow = (row: CompositeRow, rank: number) => {
+                const isPair = row.ticker.includes("/");
+                const openRow = () => {
+                  if (isPair) {
+                    const [la, lb] = row.ticker.split("/");
+                    navigateToPairs(la, lb);
+                  } else {
+                    navigateToChart(row.ticker);
+                  }
+                };
+                return (
                 <tr
                   key={row.ticker}
                   className="group border-b border-border/20 hover:bg-accent/30 transition-colors cursor-pointer"
-                  onClick={() => navigateToChart(row.ticker)}
+                  onClick={openRow}
                   data-testid={`rank-row-${row.ticker}`}
                 >
                   <td className="px-2 py-1 text-muted-foreground font-mono tabular-nums">{rank}</td>
                   <td className="px-2 py-1 font-mono font-bold">
                     <button
-                      className="text-primary hover:text-primary/80 hover:underline inline-flex items-center gap-0.5"
-                      onClick={(e) => { e.stopPropagation(); navigateToChart(row.ticker); }}
+                      className={`hover:underline inline-flex items-center gap-0.5 ${isPair ? "text-purple-400 hover:text-purple-300" : "text-primary hover:text-primary/80"}`}
+                      onClick={(e) => { e.stopPropagation(); openRow(); }}
                     >
                       {row.ticker}
                       <ExternalLink className="w-2.5 h-2.5 opacity-0 group-hover:opacity-60" />
@@ -1823,7 +1987,7 @@ export default function Ranking() {
                   <td className="px-2 py-1 text-muted-foreground truncate text-[10px]">
                     {row.subindustry.replace(" Equity REITs", "")}
                   </td>
-                  {metrics.map((m) => {
+                  {activeMetrics.map((m) => {
                     const val = row.values[m];
                     const z = row.zScores[m];
                     const hp = row.histPctile[m];
@@ -1882,7 +2046,7 @@ export default function Ranking() {
                       </React.Fragment>
                     );
                   })}
-                  {metrics.length > 1 && (
+                  {activeMetrics.length > 1 && (
                     <td className={`px-2 py-1 text-center font-mono font-semibold tabular-nums border-l border-border/30 ${zColor(row.compositeZ)}`}>
                       {row.compositeZ !== null ? row.compositeZ.toFixed(2) : "—"}
                     </td>
@@ -1945,6 +2109,7 @@ export default function Ranking() {
                   })()}
                 </tr>
                 );
+                };
                 if (!grouped) return sorted.map((row, i) => renderRow(row, i + 1));
                 let runningRank = 0;
                 return grouped.flatMap((g) => {
