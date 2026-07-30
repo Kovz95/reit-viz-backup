@@ -70,7 +70,16 @@ interface DistResult {
   binEdges: number[];
 }
 
-function computeDistStats(ticker: string, values: number[], current: number, bins: number): DistResult {
+// `binRange` clips only the HISTOGRAM domain (all stats still use every value).
+// Fat-tailed series otherwise pile ~everything into 2 of `bins` bars; Overlay and
+// Box views already clip to the 1–99% quantiles for the same reason.
+function computeDistStats(
+  ticker: string,
+  values: number[],
+  current: number,
+  bins: number,
+  binRange?: [number, number]
+): DistResult {
   const n = values.length;
   const sorted = [...values].sort((a, b) => a - b);
   const min = sorted[0];
@@ -87,14 +96,17 @@ function computeDistStats(ticker: string, values: number[], current: number, bin
   const z = stdev > 0 ? (current - mean) / stdev : 0;
   const hist = new Array(bins).fill(0);
   const binEdges = new Array(bins + 1);
-  if (max === min) {
-    for (let i = 0; i <= bins; i++) binEdges[i] = min + (i - bins / 2) * 1e-9;
+  const loEdge = binRange ? binRange[0] : min;
+  const hiEdge = binRange ? binRange[1] : max;
+  if (hiEdge === loEdge) {
+    for (let i = 0; i <= bins; i++) binEdges[i] = loEdge + (i - bins / 2) * 1e-9;
     hist[Math.floor(bins / 2)] = n;
   } else {
-    const step = (max - min) / bins;
-    for (let i = 0; i <= bins; i++) binEdges[i] = min + i * step;
+    const step = (hiEdge - loEdge) / bins;
+    for (let i = 0; i <= bins; i++) binEdges[i] = loEdge + i * step;
     for (const v of values) {
-      let b = Math.floor((v - min) / step);
+      let b = Math.floor((v - loEdge) / step);
+      if (binRange && (b < 0 || b >= bins)) continue; // clipped tail: excluded from the plot only
       if (b >= bins) b = bins - 1;
       if (b < 0) b = 0;
       hist[b]++;
@@ -108,7 +120,7 @@ function computeDistStats(ticker: string, values: number[], current: number, bin
 // Helps size pair trades and judge tail risk.
 
 interface PairTailStats {
-  skew: number;      // sample skewness of the return series
+  skew: number;      // population (method-of-moments) skewness, m3/sd^3
   exKurt: number;    // excess kurtosis (0 = normal)
   var5: number;      // 5% historical VaR (5th-percentile daily log return, typically < 0)
   cvar5: number;     // 5% CVaR / expected shortfall (mean of returns at or below var5)
@@ -121,7 +133,9 @@ interface PairResult {
   b: string;
   dist?: DistResult; // computeDistStats over the log-return series
   tail?: PairTailStats;
-  error?: string;    // "no data for <leg>" | "insufficient overlap"
+  asOf?: string;     // date of the last ratio observation (legs can end on different days)
+  source?: string;   // "workbook" | "yahoo" — both legs always share one calendar
+  error?: string;    // "no data for <leg>" | "insufficient overlap" | "mixed price calendars…"
 }
 
 function computeTailStats(returns: number[]): PairTailStats {
@@ -148,16 +162,13 @@ function computeTailStats(returns: number[]): PairTailStats {
   return { skew, exKurt, var5, cvar5, annVol };
 }
 
-// Load one leg's close series. Tries the workbook metric ("close") first, then
-// falls back to the server Yahoo price cache so ETFs/indices (VNQ, IYR, …) work
-// — the exact fallback SimilarSetups uses for typed pairs.
-async function loadLegCloses(ticker: string): Promise<{ times: string[]; closes: number[] } | null> {
-  try {
-    const pts = await fetchMetricSeries(ticker, "close");
-    if (pts.length) {
-      return { times: pts.map(p => p.time), closes: pts.map(p => p.value) };
-    }
-  } catch {}
+interface LegCloses {
+  times: string[];
+  closes: number[];
+  source: "workbook" | "yahoo";
+}
+
+async function loadYahooCloses(ticker: string): Promise<LegCloses | null> {
   try {
     const res = await fetch(`/api/yahoo-prices/${encodeURIComponent(ticker)}`);
     if (res.ok) {
@@ -165,19 +176,49 @@ async function loadLegCloses(ticker: string): Promise<{ times: string[]; closes:
       const closes: number[] =
         Array.isArray(data?.adjCloses) && data.adjCloses.length ? data.adjCloses : data?.closes;
       if (Array.isArray(data?.dates) && Array.isArray(closes) && closes.length) {
-        return { times: data.dates, closes };
+        return { times: data.dates, closes, source: "yahoo" };
       }
     }
   } catch {}
   return null;
 }
 
+// Load one leg's close series. Tries the workbook metric ("close") first, then
+// falls back to the server Yahoo price cache so ETFs/indices (VNQ, IYR, …) work
+// — the exact fallback SimilarSetups uses for typed pairs.
+async function loadLegCloses(ticker: string): Promise<LegCloses | null> {
+  try {
+    const pts = await fetchMetricSeries(ticker, "close");
+    if (pts.length) {
+      return { times: pts.map(p => p.time), closes: pts.map(p => p.value), source: "workbook" };
+    }
+  } catch {}
+  return loadYahooCloses(ticker);
+}
+
 async function computePairResult(pairKey: string, windowKey: string, bins: number): Promise<PairResult> {
   const [a, b] = pairKey.split("/");
-  const legA = await loadLegCloses(a);
+  let legA = await loadLegCloses(a);
   if (!legA || !legA.closes.length) return { key: pairKey, a, b, error: `no data for ${a}` };
-  const legB = await loadLegCloses(b);
+  let legB = await loadLegCloses(b);
   if (!legB || !legB.closes.length) return { key: pairKey, a, b, error: `no data for ${b}` };
+
+  // Prefer both legs from ONE price source. The workbook axis and the Yahoo cache
+  // don't carry the same calendar, and a workbook whose value arrays have drifted out
+  // of sync with its `dates` axis (what a data volume missing a realign pass looks
+  // like) will silently join prices from different sessions and roughly double the
+  // ratio's apparent vol. Legs the Yahoo cache doesn't know (UK tickers, …) still fall
+  // back to the cross-source join — flagged, since it can't be validated here.
+  let mixedCalendar = false;
+  if (legA.source !== legB.source) {
+    const rebase = legA.source === "workbook" ? a : b;
+    const realigned = await loadYahooCloses(rebase);
+    if (realigned && realigned.closes.length) {
+      if (rebase === a) legA = realigned; else legB = realigned;
+    } else {
+      mixedCalendar = true;
+    }
+  }
 
   // Inner-join on date → ratio r_t = closeA / closeB.
   const mapB = new Map<string, number>();
@@ -206,9 +247,34 @@ async function computePairResult(pairKey: string, windowKey: string, bins: numbe
   if (returns.length < 30) return { key: pairKey, a, b, error: "insufficient overlap" };
 
   const current = returns[returns.length - 1];
-  const dist = computeDistStats(`${a}/${b}`, returns, current, bins);
+  const sortedRet = [...returns].sort((x, y) => x - y);
+  const dist = computeDistStats(`${a}/${b}`, returns, current, bins, [
+    quantile(sortedRet, 0.01),
+    quantile(sortedRet, 0.99),
+  ]);
   const tail = computeTailStats(returns);
-  return { key: pairKey, a, b, dist, tail };
+  return {
+    key: pairKey,
+    a,
+    b,
+    dist,
+    tail,
+    asOf: sliced[sliced.length - 1]?.time,
+    source: mixedCalendar ? `${legA.source}×${legB.source} calendars` : legA.source,
+  };
+}
+
+const MAX_PAIRS = 24;
+
+// "well / vtr" → "WELL/VTR"; null if it isn't a clean A/B pair. Shared by the input
+// handler and the localStorage hydration so a stale/hand-edited entry can't produce
+// duplicate React keys, "GARBAGE / undefined" cards, or colliding test ids.
+function parsePairKey(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const m = raw.replace(/\s+/g, "").toUpperCase().match(/^([A-Z0-9.\-]{1,12})\/([A-Z0-9.\-]{1,12})$/);
+  if (!m) return null;
+  const [, a, b] = m;
+  return a === b ? null : `${a}/${b}`;
 }
 
 // Log returns display as signed percent.
@@ -238,11 +304,15 @@ function PairCard({ p }: { p: PairResult }) {
   const svgW = 212;
   const svgH = 92;
   const barW = svgW / r.hist.length;
-  const range = r.max - r.min || 1;
-  const currentX = 4 + ((r.current - r.min) / range) * svgW;
+  // Bin edges are the clipped 1–99% domain, so the marker has to be clamped into view.
+  const loEdge = r.binEdges[0];
+  const hiEdge = r.binEdges[r.binEdges.length - 1];
+  const range = hiEdge - loEdge || 1;
+  const currentX = 4 + Math.min(1, Math.max(0, (r.current - loEdge) / range)) * svgW;
   return (
     <div
       data-testid={`dist-pair-card-${p.a}-${p.b}`}
+      title={`${p.a}/${p.b} · ${r.n} daily log returns${p.asOf ? ` · as of ${p.asOf}` : ""}${p.source ? ` · ${p.source} prices` : ""}`}
       className="border border-border/40 bg-card/30 rounded p-1.5 hover:border-border/70 transition-colors"
     >
       <div className="flex items-baseline justify-between mb-1">
@@ -268,15 +338,15 @@ function PairCard({ p }: { p: PairResult }) {
         })}
         <line x1={currentX} x2={currentX} y1={4} y2={4 + svgH} stroke="rgb(251 191 36)" strokeWidth={1.5} />
       </svg>
-      <div className="flex items-center justify-between mt-0.5 font-mono text-[10px] text-foreground/50">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 font-mono text-[10px] text-foreground/50">
         <span>μ={fmtRetPct(r.mean)}</span>
         <span>Ann.σ={fmtRetPct(tail.annVol)}</span>
         <span className={zClass(r.z)}>z={r.z.toFixed(2)}</span>
         <span>pct={fmtPct(r.percentile)}</span>
       </div>
-      <div className="flex items-center justify-between mt-0.5 font-mono text-[10px] text-foreground/40">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 font-mono text-[10px] text-foreground/40">
         <span>skew={Number.isFinite(tail.skew) ? tail.skew.toFixed(2) : "—"}</span>
-        <span>kurt={Number.isFinite(tail.exKurt) ? tail.exKurt.toFixed(2) : "—"}</span>
+        <span>exKurt={Number.isFinite(tail.exKurt) ? tail.exKurt.toFixed(2) : "—"}</span>
         <span className="text-red-400/70">VaR5={fmtRetPct(tail.var5)}</span>
         <span className="text-red-400/70">CVaR5={fmtRetPct(tail.cvar5)}</span>
       </div>
@@ -627,12 +697,20 @@ export default function Distributions() {
       const raw = localStorage.getItem("reit-viz:dist-pairs");
       if (raw) {
         const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) return arr.filter((x: any) => typeof x === "string");
+        if (Array.isArray(arr)) {
+          const seen = new Set<string>();
+          for (const x of arr) {
+            const key = parsePairKey(x);
+            if (key) seen.add(key);
+          }
+          return [...seen].slice(0, MAX_PAIRS);
+        }
       }
     } catch {}
     return [];
   });
   const [pairInput, setPairInput] = useState("");
+  const [pairError, setPairError] = useState<string | null>(null);
   const [pairResults, setPairResults] = useState<PairResult[]>([]);
   const [pairRunning, setPairRunning] = useState(false);
   const pairRunIdRef = useRef(0);
@@ -642,25 +720,30 @@ export default function Distributions() {
   }, [pairs]);
 
   const addPair = useCallback(() => {
-    const raw = pairInput.trim().toUpperCase();
-    const m = raw.match(/^([A-Z0-9.\-]{1,12})\/([A-Z0-9.\-]{1,12})$/);
-    if (!m) return;
-    const [, a, b] = m;
-    if (a === b) { setPairInput(""); return; }
-    const key = `${a}/${b}`;
-    if (pairs.includes(key)) { setPairInput(""); return; }
+    const key = parsePairKey(pairInput);
+    if (!key) {
+      const txt = pairInput.trim();
+      setPairError(txt ? `“${txt}” is not a valid A/B pair` : null);
+      return;
+    }
+    if (pairs.includes(key)) { setPairError(`${key} is already pinned`); setPairInput(""); return; }
+    if (pairs.length >= MAX_PAIRS) { setPairError(`limit is ${MAX_PAIRS} pairs`); return; }
     setPairs(prev => [...prev, key]);
     setPairInput("");
+    setPairError(null);
   }, [pairInput, pairs]);
 
   const removePair = useCallback((key: string) => {
     setPairs(prev => prev.filter(k => k !== key));
+    setPairError(null);
   }, []);
 
   useEffect(() => {
-    if (mode !== "pair") return;
-    if (pairs.length === 0) { setPairResults([]); return; }
+    // Bump BEFORE the early returns so leaving pair mode / clearing every pin also
+    // cancels an in-flight run instead of letting it write stale results.
     const runId = ++pairRunIdRef.current;
+    if (mode !== "pair") return;
+    if (pairs.length === 0) { setPairResults([]); setPairRunning(false); return; }
     setPairRunning(true);
     (async () => {
       const out: PairResult[] = [];
@@ -807,7 +890,7 @@ export default function Distributions() {
             <div className="flex items-center gap-1.5">
               <input
                 value={pairInput}
-                onChange={e => setPairInput(e.target.value)}
+                onChange={e => { setPairInput(e.target.value); setPairError(null); }}
                 onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addPair(); } }}
                 placeholder="A/B (e.g. WELL/VTR)"
                 className="bg-background border border-border/40 rounded px-2 py-0.5 font-mono text-foreground w-[160px]"
@@ -832,6 +915,11 @@ export default function Distributions() {
                   </span>
                 );
               })}
+              {pairError && (
+                <span data-testid="dist-pair-error" className="font-mono text-[10px] text-red-400/80">
+                  {pairError}
+                </span>
+              )}
             </div>
           )}
           <label className={`flex items-center gap-1.5 text-foreground/60 ${mode === "pair" ? "hidden" : ""}`}>

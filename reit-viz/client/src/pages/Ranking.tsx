@@ -212,6 +212,22 @@ type ClassLevelKey = typeof CLASS_LEVELS[number]["key"];
 // In "pairs" mode the ranked entities are A/B pairs; the composite scorer runs
 // over this fixed vocabulary of ratio-derived metrics instead of fundamentals.
 const PAIR_METRICS: string[] = ["Ratio Z", "Mom 3M", "Mom 6M", "Ratio %ile"];
+// Default composite signs for the pair metrics, per the Weights contract (− = "lower
+// z is better"): a cheap A-vs-B has a LOW ratio z / %ile, and rising ratio momentum
+// is good. Applied as defaults rather than seeded on click so a restored workspace
+// (or one saved after Weights → Reset) scores identically to a fresh Pairs click.
+const PAIR_METRIC_DIRS: Record<string, number> = {
+  "Ratio Z": -1,
+  "Ratio %ile": -1,
+  "Mom 3M": 1,
+  "Mom 6M": 1,
+};
+
+/** Composite sign for a metric: explicit user choice, else the pair default, else +1. */
+function resolveDir(metric: string, dirs: Record<string, number>): 1 | -1 {
+  const d = dirs[metric] !== undefined ? dirs[metric] : PAIR_METRIC_DIRS[metric];
+  return d === -1 ? -1 : 1;
+}
 // Cap on how many legs form pairs (n² growth). 25 legs → up to 300 pairs.
 const PAIR_LEG_CAP = 25;
 // Minimum ratio-series length required to score a pair.
@@ -788,7 +804,9 @@ export default function Ranking() {
       }
       return map;
     },
-    enabled: rawRows.length > 0 && metrics.length > 0,
+    // Pair rows are keyed "A/B", so nothing here is ever read in pairs mode — and the
+    // serial crawl over the whole universe competes with the leg-close fetches.
+    enabled: rankMode !== "pairs" && rawRows.length > 0 && metrics.length > 0,
   });
 
   // Fetch attribution (Δln(P) = Δln(multiple) + Δln(estimate)) per ticker over the
@@ -959,7 +977,7 @@ export default function Ranking() {
         const z = zScoresByMetric[metric][idx];
         zScores[metric] = z;
         if (z !== null) {
-          const dir = metricDirections[metric] === -1 ? -1 : 1;
+          const dir = resolveDir(metric, metricDirections);
           const w = metricWeights[metric] !== undefined ? metricWeights[metric] : 1;
           zSum += dir * z * w;
           weightSum += w;
@@ -1139,7 +1157,7 @@ export default function Ranking() {
     // Build headers dynamically based on visible columns
     const baseHeaders = ["Rank", "Ticker", "Name", "Subindustry"];
     const metricHeaders: string[] = [];
-    for (const m of metrics) {
+    for (const m of activeMetrics) {
       if (colVis.value) metricHeaders.push(m);
       if (colVis.zScore) metricHeaders.push(`Z(${m})`);
       for (const lv of CLASS_LEVELS) {
@@ -1152,11 +1170,11 @@ export default function Ranking() {
     const attrHeaders = showAttribution
       ? ["Attr Total%", "Attr Multiple%", "Attr Estimate%", "Attr Multiple Share%"]
       : [];
-    const headers = [...baseHeaders, ...metricHeaders, ...(metrics.length > 1 ? ["Composite Z"] : []), ...attrHeaders];
+    const headers = [...baseHeaders, ...metricHeaders, ...(activeMetrics.length > 1 ? ["Composite Z"] : []), ...attrHeaders];
     const lines = sorted.map((r, i) => {
       const base = [i + 1, r.ticker, `"${r.name}"`, `"${r.subindustry}"`];
       const metricVals: (string | number)[] = [];
-      for (const m of metrics) {
+      for (const m of activeMetrics) {
         if (colVis.value) metricVals.push(r.values[m]?.toFixed(2) ?? "");
         if (colVis.zScore) metricVals.push(r.zScores[m]?.toFixed(2) ?? "");
         for (const lv of CLASS_LEVELS) {
@@ -1166,7 +1184,7 @@ export default function Ranking() {
         if (colVis.histPctile) metricVals.push(r.histPctile[m]?.toFixed(1) ?? "");
         if (colVis.histZScore) metricVals.push(r.histZScore[m]?.toFixed(2) ?? "");
       }
-      if (metrics.length > 1) metricVals.push(r.compositeZ?.toFixed(2) ?? "");
+      if (activeMetrics.length > 1) metricVals.push(r.compositeZ?.toFixed(2) ?? "");
       if (showAttribution) {
         const ar = attributionMap[r.ticker];
         metricVals.push(ar?.totalPct?.toFixed(2) ?? "");
@@ -1338,7 +1356,13 @@ export default function Ranking() {
         <div className="inline-flex items-center rounded border border-border overflow-hidden" title="Rank single tickers, or A/B pairs scored on their price-ratio dislocation & momentum">
           <button
             className={`h-6 px-2 text-[11px] font-medium ${rankMode === "tickers" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
-            onClick={() => setRankMode("tickers")}
+            onClick={() => {
+              setRankMode("tickers");
+              // Pair-only sort columns don't exist on ticker rows; leaving one selected
+              // makes every sort key equal and silently unsorts the table.
+              setSortCol("compositeZ");
+              setSortDir("asc");
+            }}
             data-testid="rank-mode-tickers"
           >
             Tickers
@@ -1348,10 +1372,11 @@ export default function Ranking() {
             onClick={() => {
               setRankMode("pairs");
               setSortCol("compositeZ");
-              setSortDir("asc");
-              // Seed sensible default signs for pair metrics (user can flip via Weights).
-              // Cheap-A-vs-B (low Ratio Z / low %ile) ranks up; positive ratio momentum ranks up.
-              setMetricDirections((prev) => ({ "Ratio Z": -1, "Ratio %ile": -1, ...prev }));
+              // Composite Z = Σ(sign·z·w)/Σw with the signs already encoding "better",
+              // so the most attractive pair has the HIGHEST composite → sort descending.
+              // (Default signs live in PAIR_METRIC_DIRS, not seeded here, so a restored
+              // workspace ranks the same way.)
+              setSortDir("desc");
             }}
             data-testid="rank-mode-pairs"
           >
@@ -1446,7 +1471,7 @@ export default function Ranking() {
                   <div className="flex flex-col gap-1.5 max-h-[300px] overflow-y-auto">
                     {activeMetrics.map((m) => {
                       const w = metricWeights[m] !== undefined ? metricWeights[m] : 1;
-                      const dir = metricDirections[m] === -1 ? -1 : 1;
+                      const dir = resolveDir(m, metricDirections);
                       return (
                         <div key={m} className="flex items-center gap-2 text-[11px]">
                           <span className="font-mono w-[140px] truncate" title={m}>{m}</span>
@@ -1810,7 +1835,8 @@ export default function Ranking() {
             <Download className="w-3 h-3" />
             CSV
           </Button>
-          {!isDeployed && (
+          {/* Cohort backtest takes real tickers; "A/B" pair ids are rejected by the endpoint. */}
+          {!isDeployed && rankMode !== "pairs" && (
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-muted-foreground">Top</span>
               <Input
@@ -1844,8 +1870,17 @@ export default function Ranking() {
           {pairLegInfo.total > PAIR_LEG_CAP ? (
             <span>Pairs from first {PAIR_LEG_CAP} legs of scope ({pairLegInfo.total} in scope) — narrow via basket/filters.</span>
           ) : (
-            <span>{pairLegs.length} legs in scope → up to {(pairLegs.length * (pairLegs.length - 1)) / 2} pairs. Set a basket scope to focus.</span>
+            <span>
+              {pairLegs.length} leg{pairLegs.length === 1 ? "" : "s"} in scope → up to{" "}
+              {(pairLegs.length * (pairLegs.length - 1)) / 2} pair
+              {(pairLegs.length * (pairLegs.length - 1)) / 2 === 1 ? "" : "s"}. Set a basket scope to focus.
+            </span>
           )}
+          <span className="text-purple-300/60">
+            Highest Composite Z first; default signs reward a low ratio z/%ile and rising ratio
+            momentum, so a strong-momentum pair can outrank a cheaper one — flip signs via Weights.
+            Country/Exchange and Date don't apply to pairs.
+          </span>
         </div>
       )}
 

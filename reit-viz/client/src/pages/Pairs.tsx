@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
+import {
+  useRouterState,
+  PAIRS_HANDOFF_EVENT,
+  pairsHandoffPending,
+  takePairsHandoff,
+  type PairsHandoff,
+} from "@/lib/navigateToPairs";
 import { useQuery } from "@tanstack/react-query";
 import { getTickers, getPairsData, getCustomFundamentalMetrics, getTickersCacheSync } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
@@ -2816,10 +2823,16 @@ function ExtraOlsZChart({
 }
 
 export default function Pairs() {
-  const [tickerA, setTickerA] = useState("ESS");
-  const [tickerB, setTickerB] = useState("MAA");
-  const [metricA, setMetricA] = useState("close");
-  const [metricB, setMetricB] = useState("close");
+  // Legs handed over by navigateToPairs (Heatmap matrix cells, Ranking pair rows, …).
+  // Without this the hand-off silently dropped and every caller landed on ESS/MAA.
+  // Read the cache for a cold mount, and listen for the event for the common case
+  // where this page is already mounted when the hand-off happens.
+  const handoff = useRouterState().getCachedState("pairs");
+  const [tickerA, setTickerA] = useState(() => handoff?.tickerA || "ESS");
+  const [tickerB, setTickerB] = useState(() => handoff?.tickerB || "MAA");
+  const [metricA, setMetricA] = useState(() => handoff?.metricA || "close");
+  const [metricB, setMetricB] = useState(() => handoff?.metricB || "close");
+
   const [zWindow, setZWindow] = useState(60);
   const [betaLookback, setBetaLookback] = useState(52);
   const [spreadZWindow, setSpreadZWindow] = useState(8);
@@ -2866,10 +2879,13 @@ export default function Pairs() {
   }), [tickerA, tickerB, metricA, metricB, zWindow, betaLookback, spreadZWindow, olsResidWindow, extraOlsZPlots, pairsLayout, visibleChartIds, indicatorsMap]);
 
   const restorePairs = useCallback((state: any) => {
-    if (state.tickerA !== undefined) setTickerA(state.tickerA);
-    if (state.tickerB !== undefined) setTickerB(state.tickerB);
-    if (state.metricA !== undefined) setMetricA(state.metricA);
-    if (state.metricB !== undefined) setMetricB(state.metricB);
+    // A pair the user just clicked through to beats the legs saved in the workspace.
+    if (!pairsHandoffPending()) {
+      if (state.tickerA !== undefined) setTickerA(state.tickerA);
+      if (state.tickerB !== undefined) setTickerB(state.tickerB);
+      if (state.metricA !== undefined) setMetricA(state.metricA);
+      if (state.metricB !== undefined) setMetricB(state.metricB);
+    }
     if (state.zWindow !== undefined) setZWindow(state.zWindow);
     if (state.betaLookback !== undefined) setBetaLookback(state.betaLookback);
     if (state.spreadZWindow !== undefined) setSpreadZWindow(state.spreadZWindow);
@@ -2889,6 +2905,26 @@ export default function Pairs() {
   }, []);
 
   useWorkspaceTab("pairs", serializePairs, restorePairs);
+
+  // Declared AFTER useWorkspaceTab on purpose: effects run in declaration order, so
+  // this claims the hand-off once restorePairs has had its turn. Both are needed —
+  // the guard in restorePairs stops it clobbering, this puts the clicked legs in.
+  useEffect(() => {
+    const apply = (d: PairsHandoff | null) => {
+      if (!d) return;
+      if (d.tickerA) setTickerA(d.tickerA);
+      if (d.tickerB) setTickerB(d.tickerB);
+      if (d.metricA) setMetricA(d.metricA);
+      if (d.metricB) setMetricB(d.metricB);
+    };
+    apply(takePairsHandoff());
+    const onHandoff = (e: Event) => {
+      apply((e as CustomEvent<PairsHandoff>).detail);
+      takePairsHandoff();
+    };
+    window.addEventListener(PAIRS_HANDOFF_EVENT, onHandoff);
+    return () => window.removeEventListener(PAIRS_HANDOFF_EVENT, onHandoff);
+  }, []);
 
   const chartScrollRef = useRef<HTMLDivElement>(null);
 

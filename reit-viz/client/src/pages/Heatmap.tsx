@@ -255,7 +255,9 @@ export default function Heatmap() {
   }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays]);
 
   const restoreHeatmap = useCallback((state: any) => {
-    if (state.viewMode !== undefined) setViewMode(state.viewMode as ViewMode);
+    // Whitelist: the render branches are "matrix" and "metrics", so an unknown value
+    // would show neither panel — a blank page with only the toolbar.
+    if (state.viewMode === "matrix" || state.viewMode === "metrics") setViewMode(state.viewMode);
     if (state.sortCol !== undefined) setSortCol(state.sortCol);
     if (state.sortDir !== undefined) setSortDir(state.sortDir);
     // Migrate old colorMode → reference
@@ -412,10 +414,25 @@ export default function Heatmap() {
   }, [sorted, groupBy]);
 
   // ── Pair Matrix: scoped tickers (capped) reuse the same scope pipeline as the table ──
-  const matrixTickers = useMemo(
-    () => sorted.slice(0, MATRIX_CAP).map(r => r.ticker),
-    [sorted],
-  );
+  // Takes them in the order the table RENDERS (group by group when grouping is on), so
+  // "first 40" means the first 40 rows the user is looking at. Sorts on raw values so the
+  // leg set is independent of displayMode: that only changes how values are shown, and
+  // routing it through `sorted` silently swapped which 40 legs the matrix used — and
+  // refetched all 40 series — when the user merely switched Z-Scores ↔ Percentiles.
+  const matrixTickers = useMemo(() => {
+    const colDef = COLUMNS.find(c => c.key === sortCol);
+    const base = colDef
+      ? [...filtered].sort((a, b) => {
+          const miss = sortDir === "asc" ? Infinity : -Infinity;
+          const va = a.values[colDef.metric] ?? miss;
+          const vb = b.values[colDef.metric] ?? miss;
+          return sortDir === "asc" ? va - vb : vb - va;
+        })
+      : filtered;
+    const g = groupByLevel(base, groupBy);
+    const rows = g ? [...g.values()].flat() : base;
+    return rows.slice(0, MATRIX_CAP).map(r => r.ticker);
+  }, [filtered, sortCol, sortDir, groupBy]);
   const matrixTickerKey = matrixTickers.join(",");
 
   // Fetch per-ticker close series (bounded concurrency); only in matrix mode
@@ -456,6 +473,10 @@ export default function Heatmap() {
     if (!closeSeriesMap) return null;
     const tickers = matrixTickers;
     const usePct = displayMode === "percentile";
+    // "Raw Values" shows the ratio itself (still tinted by z, as in metrics mode);
+    // "No Color" drops the tint. Previously both silently fell through to the z branch.
+    const useRaw = displayMode === "raw";
+    const noColor = displayMode === "none";
     // date → close lookup per ticker (for inner-join by date)
     const dmap = new Map<string, Map<string, number>>();
     for (const t of tickers) {
@@ -473,13 +494,16 @@ export default function Heatmap() {
         }
         const mb = dmap.get(b)!;
         const ratios: number[] = [];
+        // Leg vintages differ across the universe, so a cell's "current" is the last
+        // date BOTH legs trade on — surfaced in the tooltip so stale cells are visible.
+        let lastJoined: string | undefined;
         if (sa) {
           for (let i = 0; i < sa.times.length; i++) {
             const ca = sa.closes[i];
             const cb = mb.get(sa.times[i]);
             if (cb !== undefined && cb !== 0 && Number.isFinite(ca) && Number.isFinite(cb)) {
               const r = ca / cb;
-              if (Number.isFinite(r)) ratios.push(r);
+              if (Number.isFinite(r)) { ratios.push(r); lastJoined = sa.times[i]; }
             }
           }
         }
@@ -497,10 +521,21 @@ export default function Heatmap() {
         let bg = "transparent";
         if (usePct) {
           if (pct !== null) { text = pct.toFixed(0) + "%"; bg = pctColor(pct, false); }
-        } else {
-          if (z !== null) { text = (z >= 0 ? "+" : "") + z.toFixed(1); bg = zColor(z, false); }
+        } else if (useRaw) {
+          text = current.toFixed(3);
+          if (z !== null) bg = zColor(z, false);
+        } else if (z !== null) {
+          // -0.0 / +0.0 reads as a rendering artifact; show a plain 0.0 near zero.
+          const zr = z.toFixed(1);
+          text = Number(zr) === 0 ? "0.0" : (z >= 0 ? "+" : "") + zr;
+          bg = zColor(z, false);
         }
-        const title = `${a}/${b}  ratio ${current.toFixed(3)}  z ${z !== null ? z.toFixed(2) : "n/a"}  n ${windowed.length}`;
+        if (noColor) bg = "transparent";
+        const asOf = lastJoined;
+        const title =
+          `${a}/${b}  ratio ${current.toFixed(3)}  z ${z !== null ? z.toFixed(2) : "n/a"}` +
+          `  pctile ${pct !== null ? pct.toFixed(0) + "%" : "n/a"}  n ${windowed.length}` +
+          (asOf ? `  as of ${asOf}` : "");
         return { key, a, b, diag: false, text, bg, title };
       });
       return { ticker: a, cells };
@@ -764,7 +799,9 @@ export default function Heatmap() {
       {viewMode === "matrix" && (
         <div className="flex items-center gap-3 px-3 py-1 border-b border-border/30 bg-card/30 flex-shrink-0 flex-wrap">
           <span className="text-[9px] text-muted-foreground uppercase tracking-wider">
-            Pair ratio A/B {displayMode === "percentile" ? "percentile" : "z-score"} vs own {trailingDays}d history
+            Pair ratio A/B{" "}
+            {displayMode === "percentile" ? "percentile" : displayMode === "raw" ? "value" : "z-score"} vs own{" "}
+            {trailingDays}d history
           </span>
           <div className="flex items-center gap-0.5">
             <div className="w-5 h-3 rounded-sm" style={{ backgroundColor: "rgba(239, 68, 68, 0.4)" }} />
@@ -811,8 +848,16 @@ export default function Heatmap() {
       {viewMode === "matrix" && (
         <div className="flex-1 overflow-auto" data-testid="heatmap-matrix">
           {matrixTickers.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              No tickers in scope.
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
+              {loadingSnapshot ? (
+                <>
+                  {/* Restoring straight into matrix mode: the scope isn't empty yet, it's unloaded. */}
+                  <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+                  Loading…
+                </>
+              ) : (
+                "No tickers in scope."
+              )}
             </div>
           ) : loadingMatrix || !matrixData ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
