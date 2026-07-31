@@ -23,6 +23,7 @@ import { FilterDropdown, applyClassFilters, emptyClassFilters, type ClassFilters
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { emitChartSignals } from "@/lib/chartBridge";
+import { PagePresets } from "@/components/PagePresets";
 import { MA_TYPES, type MaType } from "@/lib/maEngine";
 import { DEFAULT_PERIODS } from "@/lib/findBestMA";
 import { defaultMaSlopeParams, configLabel, type MaSlopeParams, type SlopeFreq } from "@/lib/maSlope";
@@ -527,6 +528,23 @@ export default function MaSlope() {
           Turns in a moving average's slope, backtested for forward predictive edge.
         </span>
         <div className="ml-auto flex items-center gap-2">
+          <PagePresets
+            storageKey="reit-viz:ma-slope:presets"
+            label="Templates"
+            testIdPrefix="ma-slope-presets"
+            capture={() => ({ settings, primaryH, tab, ddTicker })}
+            apply={(c) => {
+              if (c?.settings && typeof c.settings === "object") {
+                const def = defaultSettings();
+                setSettings({ ...def, ...c.settings, det: { ...def.det, ...(c.settings.det ?? {}) } });
+              }
+              if (c?.tab === "scan" || c?.tab === "deep") setTab(c.tab);
+              if (typeof c?.ddTicker === "string") setDdTicker(c.ddTicker);
+              // Applied after the freq-change effect resets primaryH to the
+              // frequency default — the template's horizon must win.
+              if (Number.isFinite(c?.primaryH)) setTimeout(() => setPrimaryH(c.primaryH), 0);
+            }}
+          />
           <BasketScopeSelect scope={scope} />
           <div className="flex rounded border border-border overflow-hidden">
             {FREQS.map((f) => (
