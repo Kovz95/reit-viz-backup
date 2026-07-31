@@ -36,6 +36,7 @@ import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import DateInput from "@/components/DateInput";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { BasketPicker } from "@/components/BasketPicker";
+import { PresetBar } from "@/components/PresetBar";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
 import { Download } from "lucide-react";
@@ -343,6 +344,12 @@ export default function TVAOptimizer() {
   }, [pairComboPicker, setBasketMode, setFrequency, setInputSelection]);
 
   useWorkspaceTab("tva-optimizer", getWorkspaceState, restoreWorkspaceState);
+
+  // Presets capture settings only — not the run target or view state.
+  const captureForPreset = useCallback(() => {
+    const { selectedTicker: _t, pairTickerA: _a, pairTickerB: _b, expandedTicker: _e, sortBy: _s, expandedRows: _x, ...rest } = getWorkspaceState() as any;
+    return rest;
+  }, [getWorkspaceState]);
 
   const enabledSignalTypes = useMemo(() => {
     const types: string[] = [];
@@ -982,6 +989,8 @@ export default function TVAOptimizer() {
         </>
       ) : (
         <>
+          <PresetBar kind="tva" captureInputs={captureForPreset} applyInputs={restoreWorkspaceState} />
+
           {/* Optimize header */}
           <div className="px-4 py-2 border-b border-border flex items-center justify-between bg-card/30 flex-shrink-0">
             <div>

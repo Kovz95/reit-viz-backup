@@ -49,6 +49,7 @@ const fetchWorkbookSeriesForTicker = fetchWorkbookSeriesForTickerFn as any;
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
+import { PresetBar } from "@/components/PresetBar";
 import {
   e as evaluateSignals,
   E as EvaluatorResultPanel,
@@ -1037,6 +1038,12 @@ export default function RSIRegimeOptimizer() {
 
   useWorkspaceTab("rsi-regime-optimizer", getWorkspaceState, restoreWorkspaceState);
 
+  // Presets capture settings only — not the run target, results, or view state.
+  const captureForPreset = useCallback(() => {
+    const { selectedTicker: _t, pairTickerA: _a, pairTickerB: _b, results: _r, expandedTicker: _e, sortBy: _s, ...rest } = getWorkspaceState() as any;
+    return rest;
+  }, [getWorkspaceState]);
+
   // Recompute results with updated rank weights
   const rankedResults = useMemo(
     () =>
@@ -1532,6 +1539,8 @@ export default function RSIRegimeOptimizer() {
         </>
       ) : (
         <>
+          <PresetBar kind="rsi-regime" captureInputs={captureForPreset} applyInputs={restoreWorkspaceState} />
+
           {/* Optimize toolbar */}
           <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
             <div className="flex items-center gap-4 flex-wrap">

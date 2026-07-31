@@ -24,6 +24,7 @@ import { hitRateClass, formatPct, pfClass, pfTextColor, scoreTextColor, scoreBac
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { useFrequency, isValidFrequency } from "@/lib/useFrequency";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { PresetBar } from "@/components/PresetBar";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 
@@ -271,6 +272,12 @@ export default function PairOptimizer() {
   );
 
   useWorkspaceState("pair-optimizer", serializeState, hydrateState);
+
+  // Presets capture settings only — not the pair legs, results, or view state.
+  const captureForPreset = useCallback(() => {
+    const { tickerA: _a, tickerB: _b, results: _r, expandedPair: _e, sortBy: _s, ...rest } = serializeState() as any;
+    return rest;
+  }, [serializeState]);
 
   // ── Run pair analysis ──
   const runAnalysis = useCallback(async (
@@ -565,6 +572,7 @@ export default function PairOptimizer() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      <PresetBar kind="pair" captureInputs={captureForPreset} applyInputs={hydrateState} />
       {/* ── Header ── */}
       <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
         <div className="flex items-center gap-4 flex-wrap">
