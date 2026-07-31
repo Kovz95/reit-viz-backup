@@ -75,7 +75,7 @@ function mkTf(tf: Timeframe, keys: string[], opens: number[], highs: number[], l
 }
 
 /** Daily source arrays a bundle is assembled from (single ticker or ratio). */
-interface DailySeriesInput {
+export interface DailySeriesInput {
   dates: string[];
   opens: number[];
   highs: number[];
@@ -91,7 +91,7 @@ interface DailySeriesInput {
 // don't refetch it.
 const yahooDailyCache = new Map<string, Promise<DailySeriesInput | null>>();
 
-async function fetchDailyAnySymbol(ticker: string): Promise<DailySeriesInput | null> {
+export async function fetchDailyAnySymbol(ticker: string): Promise<DailySeriesInput | null> {
   const wb = await fetchTickerOHLCV(ticker).catch(() => null);
   if (wb && wb.dates.length) return wb;
   const key = ticker.toUpperCase();

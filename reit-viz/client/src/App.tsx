@@ -99,6 +99,7 @@ const Setups = lazy(() => import("@/pages/Setups"));
 const SetupsScreener = lazy(() => import("@/pages/SetupsScreener"));
 const PatternScreener = lazy(() => import("@/pages/PatternScreener"));
 const UniversalScreener = lazy(() => import("@/pages/UniversalScreener"));
+const MaSlope = lazy(() => import("@/pages/MaSlope"));
 const DataExplorer = lazy(() => import("@/pages/DataExplorer"));
 const PCA = lazy(() => import("@/pages/PCA"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -629,6 +630,7 @@ const PAGES = [
   { path: "/setups", label: "Setups" },
   { path: "/similar-setups", label: "Similar Setups" },
   { path: "/mtf-setups", label: "MTF Setups" },
+  { path: "/ma-slope", label: "MA Slope Inflections" },
   { path: "/setups-screener", label: "Setups Screener" },
   { path: "/rates-forward", label: "Rates Forward" },
   { path: "/yield-correlation", label: "Yield Corr" },
@@ -734,6 +736,7 @@ function AppShell() {
               <Route path="/short-interest">{() => <Sentiment initialFamily="si" />}</Route>
               <Route path="/screeners" component={AllScreeners} />
               <Route path="/universal-screener" component={UniversalScreener} />
+              <Route path="/ma-slope" component={MaSlope} />
               <Route path="/gap-fill" component={GapFillScreener} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings">{() => <Sentiment initialFamily="ratings" />}</Route>

@@ -26,6 +26,7 @@ const REGISTRY: ScreenerDef[] = [
   { key: "setups", label: "Setups Screener", Component: lazy(() => import("@/pages/SetupsScreener")) },
   { key: "pattern", label: "Pattern Screener", Component: lazy(() => import("@/pages/PatternScreener")) },
   { key: "gapfill", label: "Gap Fill", Component: lazy(() => import("@/pages/GapFillScreener")) },
+  { key: "maslope", label: "MA Slope", Component: lazy(() => import("@/pages/MaSlope")) },
 ];
 
 const REG_BY_KEY = new Map(REGISTRY.map((s) => [s.key, s]));

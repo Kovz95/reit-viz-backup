@@ -21,6 +21,7 @@ import { LineSeries, LineStyle, HistogramSeries, createSeriesMarkers, type IChar
 import { computeKalmanTrend, computeCusumChangePoints, computeHmmRegimes } from "./adaptiveModels";
 import type { OhlcBar } from "./indicators";
 import { MA_TYPES } from "./maEngine";
+import { computeMaSlopeSeries, defaultMaSlopeParams } from "./maSlope";
 import { IchimokuCloudPrimitive, type CloudPoint } from "./ichimokuCloudPrimitive";
 import {
   computeADX,
@@ -1069,8 +1070,52 @@ const REG_SLOPE: IndicatorDef = {
   },
 };
 
+const MA_SLOPE: IndicatorDef = {
+  id: "maslope",
+  label: "MA Slope",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "period", label: "MA Period", default: 50, min: 2, max: 400 },
+    {
+      key: "maType",
+      label: "Type",
+      default: 1, // EMA
+      min: 0,
+      max: MA_TYPES.length - 1,
+      options: MA_TYPES.map((t, i) => ({ value: i, label: t })),
+    },
+    { key: "lookback", label: "Slope Lookback", default: 3, min: 1, max: 30 },
+  ],
+  colorKeys: ["maslope_line", "maslope_zero"],
+  renderPane: (ctx, bars, p) => {
+    const maType = MA_TYPES[p.maType] ?? "EMA";
+    const closes = bars.map((b) => b.close);
+    const { slope } = computeMaSlopeSeries(closes, {
+      ...defaultMaSlopeParams(maType, p.period),
+      slopeLookback: p.lookback,
+      detectCurvature: false,
+    }, { highs: bars.map((b) => b.high), lows: bars.map((b) => b.low) });
+    const data: { time: string; value: number }[] = [];
+    for (let i = 0; i < bars.length; i++) {
+      const v = slope[i];
+      if (v != null && Number.isFinite(v)) data.push({ time: String(bars[i].time), value: v });
+    }
+    if (!data.length) return;
+    const s = ctx.chart.addSeries(LineSeries, {
+      color: ctx.colors.maslope_line,
+      lineWidth: 1,
+      title: `${maType} ${p.period} slope (bps/bar)${ctx.baseLabel}`,
+    });
+    s.setData(asLine(data));
+    ctx.register(s);
+    ctx.refLine(0, ctx.colors.maslope_zero, data[0].time, data[data.length - 1].time);
+  },
+};
+
 export const PANE_INDICATORS: IndicatorDef[] = [
-  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, AUTOCORR,
+  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, AUTOCORR,
   ZSCORE, PCTRANK, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];

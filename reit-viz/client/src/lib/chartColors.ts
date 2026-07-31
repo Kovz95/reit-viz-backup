@@ -130,6 +130,8 @@ export const INDICATOR_COLORS = {
   madist_line: '#14b8a6',
   madist_band: 'rgba(239, 68, 68, 0.4)',
   madist_zero: 'rgba(148, 163, 184, 0.4)',
+  maslope_line: '#60a5fa',
+  maslope_zero: 'rgba(148, 163, 184, 0.4)',
   autocorr_line: '#e879f9',
   autocorr_band: 'rgba(239, 68, 68, 0.4)',
   autocorr_zero: 'rgba(148, 163, 184, 0.4)',
