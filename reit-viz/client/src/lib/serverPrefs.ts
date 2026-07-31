@@ -40,8 +40,29 @@ async function fetchJson(url: string, init?: RequestInit): Promise<any | undefin
   }
 }
 
+// Ad-blocker filter lists match URLs containing "prefs" (reads like
+// telemetry) and silently eat these requests in real browsers. The server
+// registers every prefs route under /api/kv/… too; try the canonical path
+// first and fail over to the alias. Sticky: once the alias is the one that
+// works, prefer it for the rest of the session so we don't pay a blocked
+// request per call.
+const PREF_BASES = ["/api/prefs", "/api/kv"] as const;
+let prefBaseIdx = 0;
+
+async function prefRequest(suffix: string, init?: RequestInit): Promise<any | undefined> {
+  const first = await fetchJson(`${PREF_BASES[prefBaseIdx]}${suffix}`, init);
+  if (first !== undefined) return first;
+  const altIdx = 1 - prefBaseIdx;
+  const second = await fetchJson(`${PREF_BASES[altIdx]}${suffix}`, init);
+  if (second !== undefined) {
+    prefBaseIdx = altIdx;
+    return second;
+  }
+  return undefined;
+}
+
 function postPref(key: string, value: any): Promise<any | undefined> {
-  return fetchJson(`/api/prefs/${encodeURIComponent(key)}`, {
+  return prefRequest(`/${encodeURIComponent(key)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ value }),
@@ -54,7 +75,7 @@ function postPref(key: string, value: any): Promise<any | undefined> {
  * localStorage synchronously, then apply this promise's result if non-null.
  */
 export async function loadServerPref<T>(key: string): Promise<T | null> {
-  const body = await fetchJson(`/api/prefs/${encodeURIComponent(key)}`);
+  const body = await prefRequest(`/${encodeURIComponent(key)}`);
   const local = lsGet(key);
   if (body === undefined) return local; // server unreachable / route absent
   if (body.value !== null && body.value !== undefined) {
@@ -86,5 +107,5 @@ export function saveServerPref(key: string, value: any, debounceMs = 400): void 
 
 export function deleteServerPref(key: string): void {
   try { localStorage.removeItem(key); } catch {}
-  void fetchJson(`/api/prefs/${encodeURIComponent(key)}/delete`, { method: "POST" });
+  void prefRequest(`/${encodeURIComponent(key)}/delete`, { method: "POST" });
 }

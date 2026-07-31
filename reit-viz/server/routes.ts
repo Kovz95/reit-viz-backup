@@ -2638,8 +2638,13 @@ export async function registerRoutes(server: Server, app: Express) {
   // Server-side home for named-template stores (pair templates, screener
   // saved screens, disloc presets, indicator sets, ...) so they sync across
   // browsers/computers. Values are opaque JSON.
+  //
+  // Every route is ALSO registered at /api/kv/… : ad-blocker filter lists
+  // match URLs containing "prefs" (reads like telemetry), which silently ate
+  // template saves in real browsers. The client tries /api/prefs first and
+  // fails over to /api/kv (serverPrefs.ts).
 
-  app.get("/api/prefs", (_req, res) => {
+  app.get(["/api/prefs", "/api/kv"], (_req, res) => {
     try {
       res.json(storage.listPrefs());
     } catch (e: any) {
@@ -2647,13 +2652,14 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
-  app.get("/api/prefs/:key", (req, res) => {
+  app.get(["/api/prefs/:key", "/api/kv/:key"], (req, res) => {
     try {
-      const raw = storage.getPref(req.params.key);
-      if (raw === undefined) return res.json({ key: req.params.key, value: null });
+      const key = String(req.params.key);
+      const raw = storage.getPref(key);
+      if (raw === undefined) return res.json({ key, value: null });
       let value: any = null;
       try { value = JSON.parse(raw); } catch { value = raw; }
-      res.json({ key: req.params.key, value });
+      res.json({ key, value });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2661,19 +2667,20 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // POST (not PUT) so proxies that only pass GET/POST still work — mirrors
   // the workspace routes' POST fallbacks.
-  app.post("/api/prefs/:key", (req, res) => {
+  app.post(["/api/prefs/:key", "/api/kv/:key"], (req, res) => {
     try {
       if (!("value" in (req.body ?? {}))) return res.status(400).json({ error: "Body must be { value }" });
-      storage.setPref(req.params.key, JSON.stringify(req.body.value));
-      res.json({ ok: true, key: req.params.key });
+      const key = String(req.params.key);
+      storage.setPref(key, JSON.stringify(req.body.value));
+      res.json({ ok: true, key });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post("/api/prefs/:key/delete", (req, res) => {
+  app.post(["/api/prefs/:key/delete", "/api/kv/:key/delete"], (req, res) => {
     try {
-      res.json({ ok: storage.deletePref(req.params.key) });
+      res.json({ ok: storage.deletePref(String(req.params.key)) });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
