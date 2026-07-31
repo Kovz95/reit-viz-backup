@@ -555,12 +555,15 @@ export default function MaSlope() {
             storageKey="reit-viz:ma-slope:presets"
             label="Templates"
             testIdPrefix="ma-slope-presets"
-            capture={() => ({ settings, primaryH, tab, ddTicker })}
+            capture={() => ({ settings, primaryH, tab, ddTicker, combo: combo.serialize() })}
             apply={(c) => {
               if (c?.settings && typeof c.settings === "object") {
                 const def = defaultSettings();
                 setSettings({ ...def, ...c.settings, det: { ...def.det, ...(c.settings.det ?? {}) } });
               }
+              // Combo legs live in the picker's own storage, not PageSettings —
+              // hydrate them so combos templates carry their leg set across machines.
+              if (c?.combo) combo.hydrate(c.combo);
               if (c?.tab === "scan" || c?.tab === "deep") setTab(c.tab);
               if (typeof c?.ddTicker === "string") setDdTicker(c.ddTicker);
               // Deferred a tick so it lands after the freq-change effect resets
