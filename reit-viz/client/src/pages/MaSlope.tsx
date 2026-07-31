@@ -443,6 +443,10 @@ export default function MaSlope() {
   const [ddSelectedKey, setDdSelectedKey] = useState<string | null>(null);
   const [ddSide, setDdSide] = useState<"up" | "down" | "curvUp" | "curvDown">("up");
   const ddCancel = useRef({ current: false });
+  /** Template apply queues a sweep here; the effect below fires it only after
+   *  the applied settings/primaryH have committed (a direct call would sweep
+   *  with the pre-apply grid). */
+  const [autoRunSymbol, setAutoRunSymbol] = useState<string | null>(null);
 
   const deepSelected = useMemo(
     () => ddResults.find((r) => r.key === ddSelectedKey) ?? ddResults[0] ?? null,
@@ -494,6 +498,13 @@ export default function MaSlope() {
     }
   };
 
+  useEffect(() => {
+    if (!autoRunSymbol || ddRunning) return;
+    setAutoRunSymbol(null);
+    void runDeepDive(autoRunSymbol);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunSymbol]);
+
   const openDeepDive = (row: ScanRow) => {
     if (!row.best) return;
     setTab("deep");
@@ -540,9 +551,14 @@ export default function MaSlope() {
               }
               if (c?.tab === "scan" || c?.tab === "deep") setTab(c.tab);
               if (typeof c?.ddTicker === "string") setDdTicker(c.ddTicker);
-              // Applied after the freq-change effect resets primaryH to the
-              // frequency default — the template's horizon must win.
-              if (Number.isFinite(c?.primaryH)) setTimeout(() => setPrimaryH(c.primaryH), 0);
+              // Deferred a tick so it lands after the freq-change effect resets
+              // primaryH to the frequency default — the template's horizon must
+              // win, and the auto-run sweep must see it.
+              setTimeout(() => {
+                if (Number.isFinite(c?.primaryH)) setPrimaryH(c.primaryH);
+                const sym = typeof c?.ddTicker === "string" ? c.ddTicker.trim().toUpperCase() : "";
+                if (c?.tab === "deep" && sym) setAutoRunSymbol(sym);
+              }, 0);
             }}
           />
           <BasketScopeSelect scope={scope} />
