@@ -9,6 +9,7 @@ import {
 import { navigateToPairs } from "@/lib/navigateToPairs";
 import { marketOf } from "@/lib/tickerMarket";
 import { apiRequest } from "@/lib/queryClient";
+import { PagePresets } from "@/components/PagePresets";
 import ClassificationFilters, {
   emptyClassFilters,
   applyClassFilters,
@@ -854,6 +855,13 @@ export default function Heatmap() {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card flex-shrink-0 flex-wrap">
         <Grid3X3 className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-xs font-bold text-foreground mr-2">Relative Value</span>
+        <PagePresets
+          storageKey="reit-viz:heatmap:presets"
+          label="Templates"
+          testIdPrefix="heatmap-presets"
+          capture={serializeHeatmap}
+          apply={(cfg) => { if (cfg) restoreHeatmap(cfg); }}
+        />
 
         {/* View mode: metrics table vs pairwise ratio-dislocation matrix */}
         <Select value={viewMode} onValueChange={v => setViewMode(v as ViewMode)}>

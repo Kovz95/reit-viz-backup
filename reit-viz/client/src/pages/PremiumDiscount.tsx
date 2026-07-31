@@ -4,6 +4,7 @@ import * as React from "react";
 import { createLucideIcon } from "@/lib/createLucideIcon";
 import { createChart, ColorType, CrosshairMode, AreaSeries, LineSeries, HistogramSeries, BarSeries } from "lightweight-charts";
 import { usePersistedState } from "@/lib/persistedState";
+import { PagePresets } from "@/components/PagePresets";
 import { useBaskets } from "@/lib/useBaskets";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { getTickers } from "@/lib/dataService";
@@ -1975,6 +1976,14 @@ export default function PremiumDiscount() {
       {/* ── Header ── */}
       <div className="border-b border-border bg-card px-4 py-2.5 flex-shrink-0">
         <div className="flex items-end gap-3 flex-wrap">
+          <PagePresets
+            storageKey="reit-viz:premium-discount:presets"
+            label="Templates"
+            testIdPrefix="pd-page-presets"
+            className="order-last ml-auto self-center"
+            capture={captureState}
+            apply={applyState}
+          />
           {/* Ticker */}
           <div className="flex flex-col gap-0.5">
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Ticker</label>

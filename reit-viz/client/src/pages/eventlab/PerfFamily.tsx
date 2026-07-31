@@ -32,6 +32,7 @@ import { SortAsc, SortDesc } from "lucide-react";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { PagePresets } from "@/components/PagePresets";
 import { useBaskets, type Basket } from "@/lib/useBaskets";
 import { getBasketOhlc } from "@/lib/basketOhlc";
 
@@ -1047,6 +1048,13 @@ export default function PerfFamily() {
       {/* ── Header ── */}
       <div className="flex flex-col gap-1.5 px-3 py-1.5 border-b border-border bg-card flex-shrink-0">
         <div className="flex items-center gap-2 flex-wrap">
+          <PagePresets
+            storageKey="reit-viz:performance:presets"
+            label="Templates"
+            testIdPrefix="perf-presets"
+            capture={serializeState}
+            apply={(cfg) => { if (cfg) hydrateState(cfg); }}
+          />
           {/* View tabs */}
           <div className="flex items-center bg-muted rounded p-0.5">
             {VIEW_TABS.map((tab) => (

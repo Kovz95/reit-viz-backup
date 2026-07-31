@@ -29,6 +29,7 @@ import { weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
+import { PresetBar } from "@/components/PresetBar";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import CartesianGrid from "@/components/CartesianGrid";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
@@ -575,6 +576,16 @@ export default function DualMAOptimizer() {
 
   useWorkspaceTab("dual-ma-optimizer", serializeState, hydrateState);
 
+  // Presets capture settings only — not the run target, results, or view state.
+  const captureForPreset = useCallback(() => {
+    const {
+      selectedTicker: _t, pairTickerA: _a, pairTickerB: _b, results: _r,
+      expandedTicker: _e, sortKey: _sk, sortAsc: _sa, evalTicker: _et,
+      ...rest
+    } = serializeState() as any;
+    return rest;
+  }, [serializeState]);
+
   const handleRun = useCallback(async () => {
     setRunning(true);
     setResults([]);
@@ -805,6 +816,7 @@ export default function DualMAOptimizer() {
       {/* Optimize tab */}
       {activeTab === "optimize" && (
         <>
+          <PresetBar kind="dualma" captureInputs={captureForPreset} applyInputs={hydrateState} />
           <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
             <div className="flex items-start gap-4 flex-wrap">
               {/* Grid Size */}

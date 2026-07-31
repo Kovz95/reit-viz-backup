@@ -25,6 +25,7 @@ import {
 } from "@/lib/pairMath";
 import { useUniverse } from "@/lib/universeContext";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { PagePresets } from "@/components/PagePresets";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import {
   Select,
@@ -2093,6 +2094,14 @@ export default function Screener() {
             </PopoverContent>
           </Popover>
         )}
+
+        <PagePresets
+          storageKey="reit-viz:screener:presets"
+          label="Templates"
+          testIdPrefix="screener-presets"
+          capture={() => { const { results: _r, hasRun: _h, ...cfg } = serialize() as any; return cfg; }}
+          apply={restore}
+        />
 
         {/* Basket scope */}
         <BasketScopeSelect scope={basketScope} />

@@ -6,6 +6,7 @@ import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { useLocation } from "wouter";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
+import { PagePresets } from "@/components/PagePresets";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { filterTickersByClassification } from "@/lib/classificationFilters";
 import { emptyClassFilters } from "@/lib/dataService";
@@ -524,6 +525,13 @@ export default function PairsScreener() {
           <Shield className="w-4 h-4 text-primary" />
           Pairs Cointegration Screener
         </div>
+        <PagePresets
+          storageKey="reit-viz:pair-screener:presets"
+          label="Templates"
+          testIdPrefix="pairscreener-presets"
+          capture={() => { const { allResults: _r, ...cfg } = getWorkspaceState() as any; return cfg; }}
+          apply={restoreWorkspaceState}
+        />
 
         <TooltipProvider delayDuration={200}>
           <Tooltip>

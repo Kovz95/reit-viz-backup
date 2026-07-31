@@ -44,6 +44,7 @@ import { fetchWorkbookSeriesForTicker } from "@/lib/fetchWorkbookSeriesForTicker
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
+import { PresetBar } from "@/components/PresetBar";
 import { e as evaluateSignals, E as EvaluatorResultPanel, H as HitConditionsPanel } from "@/components/EvaluatorPanel";
 import { InputSeriesPicker } from "@/components/InputSeriesPicker";
 import { Button } from "@/components/ui/button";
@@ -891,6 +892,12 @@ export default function MomentumOptimizer() {
 
   useWorkspaceTab("momentum-optimizer", serializeState, hydrateState);
 
+  // Presets capture settings only — not the run target, results, or view state.
+  const captureForPreset = useCallback(() => {
+    const { selectedTicker: _t, pairTickerA: _a, pairTickerB: _b, results: _r, expandedTicker: _e, sortBy: _s, ...rest } = serializeState() as any;
+    return rest;
+  }, [serializeState]);
+
   // ── Derived sorted results ──
 
   const scoredResults = useMemo(() =>
@@ -1219,6 +1226,8 @@ export default function MomentumOptimizer() {
         </>
       ) : (
         <>
+          <PresetBar kind="momentum" captureInputs={captureForPreset} applyInputs={hydrateState} />
+
           {/* Optimize toolbar */}
           <div className="flex-shrink-0 px-4 py-3 border-b border-border bg-card">
             <div className="flex items-center gap-4 flex-wrap">
