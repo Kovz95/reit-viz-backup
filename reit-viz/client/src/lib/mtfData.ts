@@ -188,7 +188,7 @@ export async function buildPairMtfBundle(a: string, b: string): Promise<MtfBundl
 }
 
 /** Field-wise ratio bar; null when any input is non-positive/non-finite. */
-function ratioOhlc(
+export function ratioOhlc(
   ao: number, ah: number, al: number, ac: number,
   bo: number, bh: number, bl: number, bc: number,
 ): { o: number; h: number; l: number; c: number } | null {

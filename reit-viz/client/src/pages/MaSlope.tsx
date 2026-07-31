@@ -19,6 +19,9 @@ import { Play, Loader2, LineChart as LineChartIcon, ChevronDown, ChevronRight, F
 import { fetchWorkbookTickers, type TickerMeta } from "@/lib/fetchWorkbookTickers";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { BasketScopeSelect, useBasketScope } from "@/components/BasketScopeSelect";
+import { FilterDropdown, applyClassFilters, emptyClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
+import { useGeoFilter } from "@/lib/useGeoFilter";
+import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { emitChartSignals } from "@/lib/chartBridge";
 import { MA_TYPES, type MaType } from "@/lib/maEngine";
 import { DEFAULT_PERIODS } from "@/lib/findBestMA";
@@ -35,6 +38,43 @@ const FREQS: Array<{ key: SlopeFreq; label: string }> = [
   { key: "daily", label: "Daily" },
   { key: "weekly", label: "Weekly" },
 ];
+
+type ScanScope = "universe" | "list" | "pairs" | "combos";
+const SCOPE_LABEL: Record<ScanScope, string> = {
+  universe: "Universe",
+  list: "Ticker list",
+  pairs: "Pairs",
+  combos: "Pair combos",
+};
+
+/** Hard cap on symbols per scan run (each is a full fetch + eval; pair combos
+ *  explode combinatorially). The UI says when a scope was truncated. */
+const MAX_TARGETS = 150;
+
+const CLASS_FIELDS = [
+  { key: "economy", label: "Economy" },
+  { key: "sector", label: "Sector" },
+  { key: "subsector", label: "Subsector" },
+  { key: "industryGroup", label: "Ind. Group" },
+  { key: "industry", label: "Industry" },
+  { key: "subindustry", label: "Subindustry" },
+] as const;
+
+/** Parse free-typed symbols: whitespace/comma separated, any Yahoo symbol.
+ *  With pairMode, only "A/B" tokens survive. */
+function parseSymbols(text: string, pairMode: boolean): string[] {
+  const out: string[] = [];
+  for (const tok of text.toUpperCase().split(/[\s,;]+/)) {
+    if (!tok) continue;
+    if (pairMode) {
+      const [a, b] = tok.split("/");
+      if (a && b && a !== b && !out.includes(tok)) out.push(`${a}/${b}`);
+    } else if (!tok.includes("/") && !out.includes(tok)) {
+      out.push(tok);
+    }
+  }
+  return out;
+}
 
 const SETTINGS_KEY = "reit-viz:ma-slope:settings";
 
@@ -53,6 +93,11 @@ interface PageSettings {
   holdoutPct: number;
   ddTypes: MaType[];
   ddPeriods: number[];
+  scanScope: ScanScope;
+  /** Free-typed symbols for the "Ticker list" scope (any Yahoo symbol). */
+  listText: string;
+  /** Free-typed "A/B" ratios for the "Pairs" scope. */
+  pairsText: string;
 }
 
 function defaultSettings(): PageSettings {
@@ -73,6 +118,9 @@ function defaultSettings(): PageSettings {
     holdoutPct: 30,
     ddTypes: [...MA_TYPES],
     ddPeriods: [...DEFAULT_PERIODS],
+    scanScope: "universe",
+    listText: "",
+    pairsText: "",
   };
 }
 
@@ -89,6 +137,7 @@ function loadSettings(): PageSettings {
       ddTypes: Array.isArray(p?.ddTypes) ? p.ddTypes.filter((t: any) => MA_TYPES.includes(t)) : def.ddTypes,
       autoPeriods: Array.isArray(p?.autoPeriods) ? p.autoPeriods.filter((n: any) => Number.isFinite(n) && n >= 2) : def.autoPeriods,
       ddPeriods: Array.isArray(p?.ddPeriods) ? p.ddPeriods.filter((n: any) => Number.isFinite(n) && n >= 2) : def.ddPeriods,
+      scanScope: p?.scanScope in SCOPE_LABEL ? p.scanScope : def.scanScope,
     };
   } catch {
     return def;
@@ -254,10 +303,41 @@ export default function MaSlope() {
     fetchWorkbookTickers().then((t) => { if (active) setWorkbook(t); }).catch(() => {});
     return () => { active = false; };
   }, []);
-  const universe = useMemo(
-    () => workbook.map((t) => t.ticker.toUpperCase()).filter((t) => scope.inScope(t)),
-    [workbook, scope],
-  );
+  // ── Scan targets: universe (basket + class + geo filters), free ticker
+  //    list (any Yahoo symbol), explicit A/B pairs, or all pair combos ──
+  const scanScope = settings.scanScope;
+  const [classFilters, setClassFilters] = useState<ClassFilters>(emptyClassFilters());
+  const geo = useGeoFilter(workbook, "ma-slope");
+  const combo = usePairComboPicker(workbook, scanScope === "combos", "ma-slope");
+
+  const classOpts = useMemo(() => {
+    const dims: Record<string, Record<string, number>> = {};
+    for (const f of CLASS_FIELDS) dims[f.key] = {};
+    for (const t of workbook) {
+      for (const f of CLASS_FIELDS) {
+        const v = (t as any)[f.key];
+        if (v) dims[f.key][v] = (dims[f.key][v] || 0) + 1;
+      }
+    }
+    return dims;
+  }, [workbook]);
+
+  const universe = useMemo(() => {
+    const rows = applyClassFilters(workbook as any[], classFilters, "", new Set<string>());
+    return geo.filterByGeo(rows)
+      .map((r: any) => String(r.ticker).toUpperCase())
+      .filter((t: string) => scope.inScope(t));
+  }, [workbook, classFilters, geo.filterByGeo, scope]);
+
+  const allTargets = useMemo<string[]>(() => {
+    switch (scanScope) {
+      case "universe": return universe;
+      case "list": return parseSymbols(settings.listText, false);
+      case "pairs": return parseSymbols(settings.pairsText, true);
+      case "combos": return combo.pairs.map((p) => `${p.a}/${p.b}`);
+    }
+  }, [scanScope, universe, settings.listText, settings.pairsText, combo.pairs]);
+  const targets = useMemo(() => allTargets.slice(0, MAX_TARGETS), [allTargets]);
 
   // ── Universe scan state ────────────────────────────────────────────────────
   const [scanRows, setScanRows] = useState<ScanRow[]>([]);
@@ -269,19 +349,19 @@ export default function MaSlope() {
   const sort = useTableSort<ScanRow>("score", "desc", "desc", "ma-slope-scan");
 
   const runScan = async () => {
-    if (scanning || !universe.length) return;
+    if (scanning || !targets.length) return;
     scanCancel.current = { current: false };
     setScanning(true);
     setScanRows([]);
     setExpandedRow(null);
-    setScanProgress([0, universe.length]);
+    setScanProgress([0, targets.length]);
     const det = settings.det;
     const mode: ScanMode = settings.scanKind === "fixed"
       ? { kind: "fixed", params: { ...det, maType: settings.fixedType, period: settings.fixedPeriod } }
       : { kind: "auto", types: settings.autoTypes, periods: settings.autoPeriods, baseParams: det };
     try {
       await runUniverseScan({
-        tickers: universe,
+        tickers: targets,
         freq,
         mode,
         freshBars: settings.freshBars,
@@ -324,17 +404,33 @@ export default function MaSlope() {
     });
   }, [scanRows, freshOnly, sort, primaryH]);
 
-  const sendToCharts = (ticker: string, cfg: ConfigEval, kinds: Array<"slope" | "curvature">) => {
+  const sendToCharts = (symbol: string, cfg: ConfigEval, kinds: Array<"slope" | "curvature">) => {
+    // Pair symbols route through the Pair Ratios → Charts hand-off: Dashboard
+    // drains reit-viz:pair-to-charts on mount and builds the A/B RELVAL ratio
+    // pane; markers piggyback on the chartBridge sessionStorage slot keyed by
+    // leg A (the pane's anchor ticker) — same recipe as MTF Setups.
+    const isPair = symbol.includes("/");
+    const anchor = isPair ? symbol.split("/")[0] : symbol;
     const signals = cfg.events
       .map((e, i) => ({ e, date: cfg.eventDates[i] }))
       .filter(({ e, date }) => kinds.includes(e.kind) && !!date)
-      .map(({ e, date }) => ({ ticker, date, direction: e.direction, type: e.kind, label: `${e.direction === "up" ? "▲" : "▼"} ${e.kind}` }));
+      .map(({ e, date }) => ({ ticker: anchor, date, direction: e.direction, type: e.kind, label: `${e.direction === "up" ? "▲" : "▼"} ${e.kind}` }));
     if (!signals.length) return;
-    emitChartSignals({
-      ticker,
-      label: `MA Slope ${configLabel(cfg.params)} ${freq} · ${signals.length} inflections`,
+    const payload = {
+      ticker: anchor,
+      label: `MA Slope ${symbol} ${configLabel(cfg.params)} ${freq} · ${signals.length} inflections`,
       signals,
-    });
+    };
+    if (isPair) {
+      const [a, b] = symbol.split("/");
+      try {
+        sessionStorage.setItem("reit-viz:pair-to-charts", JSON.stringify({ tickerA: a, tickerB: b, metric: "close" }));
+        sessionStorage.setItem(`reit-viz:chart-signals:${anchor}`, JSON.stringify(payload));
+      } catch {}
+      window.location.hash = "#/";
+      return;
+    }
+    emitChartSignals(payload);
   };
 
   // ── Deep dive state ────────────────────────────────────────────────────────
@@ -365,7 +461,13 @@ export default function MaSlope() {
     try {
       const data = await loadSlopeSeries(ticker, freq);
       if (!data) {
-        setDdError(freq === "hourly" ? `No usable hourly data for ${ticker} (need ≥250 bars).` : `No price data for ${ticker}.`);
+        setDdError(
+          freq === "hourly"
+            ? `No usable hourly data for ${ticker} (need ≥250 aligned bars).`
+            : ticker.includes("/")
+              ? `No price data for ${ticker} (need both legs + ≥60 overlapping days).`
+              : `No price data for ${ticker}.`,
+        );
         return;
       }
       const results = await runDeepDiveSweep({
@@ -453,6 +555,15 @@ export default function MaSlope() {
           {tab === "scan" && (
             <>
               <label className="flex flex-col gap-1 text-xs">
+                <span className="text-muted-foreground text-[10px]">Scope</span>
+                <select className={selectCls} value={scanScope}
+                  onChange={(e) => set("scanScope", e.target.value as ScanScope)} data-testid="scan-scope">
+                  {(Object.keys(SCOPE_LABEL) as ScanScope[]).map((s) => (
+                    <option key={s} value={s}>{SCOPE_LABEL[s]}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs">
                 <span className="text-muted-foreground text-[10px]">Config mode</span>
                 <select className={selectCls} value={settings.scanKind}
                   onChange={(e) => set("scanKind", e.target.value as "fixed" | "auto")}>
@@ -499,10 +610,10 @@ export default function MaSlope() {
           {tab === "deep" && (
             <>
               <label className="flex flex-col gap-1 text-xs">
-                <span className="text-muted-foreground text-[10px]">Ticker</span>
+                <span className="text-muted-foreground text-[10px]" title="Any Yahoo symbol (SPY, AAPL, ^TNX) or an A/B ratio pair (PLD/O) — not limited to the workbook">Symbol or A/B pair</span>
                 <div className="flex items-center gap-1">
-                  <input className={`${inputCls} w-28 uppercase`} value={ddTicker} list="ma-slope-tickers"
-                    placeholder="e.g. PLD" data-testid="dd-ticker-input"
+                  <input className={`${inputCls} w-32 uppercase`} value={ddTicker} list="ma-slope-tickers"
+                    placeholder="PLD · SPY · PLD/O" data-testid="dd-ticker-input"
                     onChange={(e) => setDdTicker(e.target.value.toUpperCase())}
                     onKeyDown={(e) => { if (e.key === "Enter") void runDeepDive(); }} />
                   <datalist id="ma-slope-tickers">
@@ -558,8 +669,11 @@ export default function MaSlope() {
                 </button>
               ) : (
                 <button type="button" className={btnCls} onClick={() => void runScan()}
-                  disabled={!universe.length} data-testid="run-scan">
-                  <Play className="w-3.5 h-3.5" /> Scan {universe.length} tickers
+                  disabled={!targets.length} data-testid="run-scan">
+                  <Play className="w-3.5 h-3.5" /> Scan {targets.length} {scanScope === "pairs" || scanScope === "combos" ? "pairs" : "tickers"}
+                  {allTargets.length > MAX_TARGETS && (
+                    <span className="text-muted-foreground">(of {allTargets.length})</span>
+                  )}
                 </button>
               )
             ) : ddRunning ? (
@@ -575,6 +689,49 @@ export default function MaSlope() {
             )}
           </div>
         </div>
+        {tab === "scan" && scanScope === "universe" && (
+          <div className="flex items-center gap-2 flex-wrap text-[11px]" data-testid="ma-slope-universe-filters">
+            {CLASS_FIELDS.map((f) => (
+              <FilterDropdown
+                key={f.key}
+                label={f.label}
+                options={Object.keys(classOpts[f.key] ?? {}).sort()}
+                selected={classFilters[f.key]}
+                onChange={(sel: Set<string>) => setClassFilters((prev) => ({ ...prev, [f.key]: sel }))}
+                testId={`ma-slope-class-${f.key}`}
+                counts={classOpts[f.key]}
+              />
+            ))}
+            {geo.geoFilterUI}
+            <span className="text-[10px] text-muted-foreground font-mono">{universe.length} tickers match</span>
+          </div>
+        )}
+        {tab === "scan" && scanScope === "list" && (
+          <div className="flex flex-col gap-1" data-testid="ma-slope-list-input">
+            <span className="text-muted-foreground text-[10px]">
+              Any Yahoo symbols — space/comma separated (e.g. SPY XLRE ^TNX AAPL); not limited to the workbook
+            </span>
+            <textarea rows={2} className={`${inputCls} font-mono uppercase`} value={settings.listText}
+              placeholder="SPY XLRE IYR AAPL MSFT ..."
+              onChange={(e) => set("listText", e.target.value)} />
+          </div>
+        )}
+        {tab === "scan" && scanScope === "pairs" && (
+          <div className="flex flex-col gap-1" data-testid="ma-slope-pairs-input">
+            <span className="text-muted-foreground text-[10px]">
+              A/B ratio pairs, one per token (e.g. PLD/O AVB/EQR SPG/SPY) — slope runs on the ratio; LONG↑ = long A / short B
+            </span>
+            <textarea rows={2} className={`${inputCls} font-mono uppercase`} value={settings.pairsText}
+              placeholder="PLD/O AVB/EQR SPG/SPY ..."
+              onChange={(e) => set("pairsText", e.target.value)} />
+          </div>
+        )}
+        {tab === "scan" && scanScope === "combos" && (
+          <div className="flex items-center gap-2 flex-wrap text-[11px]" data-testid="ma-slope-combo-picker">
+            {combo.ui}
+            <span className="text-[10px] text-muted-foreground font-mono">{combo.pairs.length} pairs from the leg set</span>
+          </div>
+        )}
         <details>
           <summary className="cursor-pointer text-[10px] text-muted-foreground select-none">Detection parameters</summary>
           <div className="pt-2">
@@ -899,7 +1056,8 @@ export default function MaSlope() {
         </div>
         <div>
           Weekly bars only count once the week has closed (no lookahead); hourly uses raw (unadjusted) closes — small
-          ex-div bias on multi-week horizons. A grid of {MA_TYPES.length}×{DEFAULT_PERIODS.length} configs will produce
+          ex-div bias on multi-week horizons. A/B pair symbols run the slope on the adjusted-close ratio (LONG↑ = long
+          A / short B; ratios move roughly half as much as outright prices, so expect smaller edges). A grid of {MA_TYPES.length}×{DEFAULT_PERIODS.length} configs will produce
           a handful of spuriously significant rows by chance — with the holdout split on, ranking sees only the train
           window and the OOS column shows whether the edge persisted on unseen data (✓/✗); an edge that flips sign
           out-of-sample was probably noise.
