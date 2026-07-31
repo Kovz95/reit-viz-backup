@@ -10,6 +10,7 @@ import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { UniverseProvider } from "@/lib/universeContext";
 import { WorkspaceTabProvider } from "@/lib/workspaceContext";
+import { OptimizerPresetsProvider } from "@/lib/optimizerPresets";
 import { UploadProvider } from "@/lib/uploadContext";
 import { IndicatorColorsProvider } from "@/lib/indicatorColorsContext";
 import {
@@ -787,12 +788,14 @@ function App() {
       <UploadProvider>
       <UniverseProvider>
       <WorkspaceTabProvider>
+      <OptimizerPresetsProvider>
       <IndicatorColorsProvider>
       <AutoSaveManager />
       <Router hook={useHashLocation}>
         <AppShell />
       </Router>
       </IndicatorColorsProvider>
+      </OptimizerPresetsProvider>
       </WorkspaceTabProvider>
       </UniverseProvider>
       </UploadProvider>

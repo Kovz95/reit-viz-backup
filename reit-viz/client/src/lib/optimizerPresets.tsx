@@ -39,6 +39,7 @@ const STORE_KEYS: string[] = [
   "rsi-regime",
   "dualma",
   "tva",
+  "pair",
 ];
 
 export interface Preset {
