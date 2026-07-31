@@ -109,7 +109,8 @@ function defaultSettings(): PageSettings {
   return {
     freq: "daily",
     det: {
-      slopeLookback: d.slopeLookback, measure: d.measure, thresholdK: d.thresholdK,
+      slopeLookback: d.slopeLookback, measure: d.measure, normalization: d.normalization,
+      thresholdMode: d.thresholdMode, thresholdK: d.thresholdK, tCrit: d.tCrit,
       confirmBars: d.confirmBars, minBarsBetween: d.minBarsBetween, detectCurvature: d.detectCurvature,
     },
     fixedType: "EMA",
@@ -198,10 +199,29 @@ function DetectionControls({ det, onChange }: {
           onChange={(e) => onChange({ ...det, slopeLookback: Math.max(1, num(e.target.value, det.slopeLookback)) })} />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-muted-foreground text-[10px]" title="Hysteresis width in slope-MAD units. 0 = raw sign flip.">Threshold k (MAD)</span>
-        <input type="number" min={0} max={3} step={0.1} className={`${inputCls} w-20`} value={det.thresholdK}
-          onChange={(e) => onChange({ ...det, thresholdK: Math.max(0, num(e.target.value, det.thresholdK)) })} />
+        <span className="text-muted-foreground text-[10px]"
+          title="MAD hysteresis: adaptive dead zone of ±k·MAD of the slope's own history. t-stat: significance gate — fire only when the regression slope's t-statistic escapes ±t.">
+          Trigger
+        </span>
+        <select className={selectCls} value={det.thresholdMode ?? "mad"}
+          onChange={(e) => onChange({ ...det, thresholdMode: e.target.value as "mad" | "tstat" })} data-testid="det-trigger-mode">
+          <option value="mad">MAD hysteresis</option>
+          <option value="tstat">t-stat gate</option>
+        </select>
       </label>
+      {(det.thresholdMode ?? "mad") === "mad" ? (
+        <label className="flex flex-col gap-1">
+          <span className="text-muted-foreground text-[10px]" title="Hysteresis width in slope-MAD units. 0 = raw sign flip.">Threshold k (MAD)</span>
+          <input type="number" min={0} max={3} step={0.1} className={`${inputCls} w-20`} value={det.thresholdK}
+            onChange={(e) => onChange({ ...det, thresholdK: Math.max(0, num(e.target.value, det.thresholdK)) })} />
+        </label>
+      ) : (
+        <label className="flex flex-col gap-1">
+          <span className="text-muted-foreground text-[10px]" title="Dead-zone half-width in t-statistic units (2 ≈ 95% significance of the slope vs zero).">Critical t</span>
+          <input type="number" min={0.5} max={6} step={0.25} className={`${inputCls} w-20`} value={det.tCrit ?? 2}
+            onChange={(e) => onChange({ ...det, tCrit: Math.max(0.5, num(e.target.value, det.tCrit ?? 2)) })} />
+        </label>
+      )}
       <label className="flex flex-col gap-1">
         <span className="text-muted-foreground text-[10px]">Confirm bars</span>
         <input type="number" min={1} max={10} className={`${inputCls} w-16`} value={det.confirmBars}
@@ -213,11 +233,20 @@ function DetectionControls({ det, onChange }: {
           onChange={(e) => onChange({ ...det, minBarsBetween: Math.max(0, num(e.target.value, det.minBarsBetween)) })} />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-muted-foreground text-[10px]" title="diff = MA change over the lookback; regress = OLS slope of the MA (steadier for short periods on hourly)">Slope measure</span>
+        <span className="text-muted-foreground text-[10px]" title="diff = MA change over the lookback (least lag); regress = OLS slope of the MA (steadier for short periods on hourly); kalman = local-linear Kalman trend of log(MA) (max smoothness per unit of lag)">Slope measure</span>
         <select className={selectCls} value={det.measure}
-          onChange={(e) => onChange({ ...det, measure: e.target.value as "diff" | "regress" })}>
+          onChange={(e) => onChange({ ...det, measure: e.target.value as "diff" | "regress" | "kalman" })} data-testid="det-measure">
           <option value="diff">diff</option>
           <option value="regress">regress</option>
+          <option value="kalman">kalman</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-muted-foreground text-[10px]" title="MA level: slope in bps/bar of the MA (comparable across price levels). ATR: slope as % of ATR(14) per bar (volatility units — a steep slope in a quiet name counts for more).">Normalize by</span>
+        <select className={selectCls} value={det.normalization ?? "ma"}
+          onChange={(e) => onChange({ ...det, normalization: e.target.value as "ma" | "atr" })} data-testid="det-normalization">
+          <option value="ma">MA level</option>
+          <option value="atr">ATR</option>
         </select>
       </label>
       <label className="flex items-center gap-1.5 pb-1">
@@ -1116,10 +1145,11 @@ export default function MaSlope() {
       {/* ── Footnotes ── */}
       <div className="text-[10px] text-muted-foreground leading-relaxed space-y-0.5">
         <div>
-          Slope is normalized (bps/bar of the MA). An inflection fires when the slope escapes a dead zone of
-          ±k·MAD of its trailing distribution (hysteresis) — k = 0 reduces to a raw sign flip. Curvature events flip on the
-          slope's second difference (earlier, noisier). Edge = event mean − unconditional baseline at the primary horizon;
-          Score shrinks the edge by √(min(n,40)/40).
+          Slope = diff / OLS regression / Kalman trend of the MA, normalized by MA level (bps/bar) or ATR (% of ATR/bar).
+          An inflection fires when the signal escapes a dead zone: ±k·MAD of its trailing distribution (hysteresis; k = 0
+          reduces to a raw sign flip) or ±t on the regression slope's t-statistic (significance gate). Curvature events flip
+          on the slope's second difference (earlier, noisier). Edge = event mean − unconditional baseline at the primary
+          horizon; Score shrinks the edge by √(min(n,40)/40).
         </div>
         <div>
           Weekly bars only count once the week has closed (no lookahead); hourly uses raw (unadjusted) closes — small

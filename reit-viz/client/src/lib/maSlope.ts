@@ -16,7 +16,9 @@
 
 import { computeMaByType, type MaType, type MaOptions } from "@/lib/maEngine";
 
-export type SlopeMeasure = "diff" | "regress";
+export type SlopeMeasure = "diff" | "regress" | "kalman";
+export type SlopeNormalization = "ma" | "atr";
+export type SlopeThresholdMode = "mad" | "tstat";
 export type SlopeFreq = "hourly" | "daily" | "weekly";
 
 export interface MaSlopeParams {
@@ -26,11 +28,24 @@ export interface MaSlopeParams {
   slopeLookback: number;
   /** "diff" = (ma[i]−ma[i−L])/L (default; the MA is already the smoother);
    *  "regress" = OLS slope of the MA over max(5, L) bars (steadier for short
-   *  periods on hourly bars, at the cost of a little extra lag). */
+   *  periods on hourly bars, at the cost of a little extra lag);
+   *  "kalman" = local-linear Kalman trend of log(MA) (max smoothness-per-lag;
+   *  effective window tied to L). */
   measure: SlopeMeasure;
-  /** Hysteresis width in slope-MAD units. 0 = raw sign flip. */
+  /** Slope denominator: "ma" = per-bar change relative to the MA level
+   *  (bps/bar); "atr" = per-bar change as a % of ATR(14) of the underlying
+   *  bars — volatility units instead of price units. */
+  normalization: SlopeNormalization;
+  /** "mad" = adaptive hysteresis (±thresholdK · trailing MAD of the slope);
+   *  "tstat" = significance gate — fire only when the regression slope's
+   *  t-statistic escapes ±tCrit (always computed from the OLS fit over
+   *  max(5, L) bars, regardless of the display measure). */
+  thresholdMode: SlopeThresholdMode;
+  /** Hysteresis width in slope-MAD units (thresholdMode "mad"). 0 = raw sign flip. */
   thresholdK: number;
-  /** Consecutive bars the slope must hold beyond ±θ before an event fires. */
+  /** t-statistic dead zone half-width (thresholdMode "tstat"). */
+  tCrit: number;
+  /** Consecutive bars the signal must hold beyond ±θ before an event fires. */
   confirmBars: number;
   /** Refractory: suppress a same-direction event within this many bars. */
   minBarsBetween: number;
@@ -64,7 +79,10 @@ export function defaultMaSlopeParams(maType: MaType = "EMA", period = 50): MaSlo
     period,
     slopeLookback: 3,
     measure: "diff",
+    normalization: "ma",
+    thresholdMode: "mad",
     thresholdK: 0.3,
+    tCrit: 2,
     confirmBars: 1,
     minBarsBetween: 5,
     detectCurvature: true,
@@ -72,7 +90,8 @@ export function defaultMaSlopeParams(maType: MaType = "EMA", period = 50): MaSlo
 }
 
 export function configKey(p: MaSlopeParams, freq: SlopeFreq): string {
-  return `${p.maType}${p.period}·${freq}·L${p.slopeLookback}·k${p.thresholdK}·c${p.confirmBars}·g${p.minBarsBetween}·${p.measure}`;
+  const trigger = p.thresholdMode === "tstat" ? `t${p.tCrit}` : `k${p.thresholdK}`;
+  return `${p.maType}${p.period}·${freq}·L${p.slopeLookback}·${trigger}·c${p.confirmBars}·g${p.minBarsBetween}·${p.measure}·${p.normalization}`;
 }
 
 export function configLabel(p: MaSlopeParams): string {
@@ -108,17 +127,22 @@ function trailingMad(series: (number | null)[], from: number, to: number): numbe
   return medianInPlace(vals);
 }
 
-/** Detect state transitions of a Schmitt trigger over `series` with adaptive
- *  MAD-scaled threshold. Shared by slope and curvature detection. */
+type FlipThreshold = { kind: "mad"; k: number } | { kind: "fixed"; theta: number };
+
+/** Detect state transitions of a Schmitt trigger over `series`. The dead zone
+ *  is either adaptive (±k · trailing MAD of the series) or fixed (±theta, for
+ *  self-normalized series like a t-statistic). Shared by slope and curvature. */
 function detectFlips(
   series: (number | null)[],
-  thresholdK: number,
+  threshold: FlipThreshold,
   confirmBars: number,
   minBarsBetween: number,
   emit: (idx: number, direction: "up" | "down") => void,
 ): void {
   const n = series.length;
-  let theta = thresholdK === 0 ? 0 : NaN; // NaN = not enough history yet
+  const thresholdK = threshold.kind === "mad" ? threshold.k : 0;
+  let theta = threshold.kind === "fixed" ? Math.abs(threshold.theta)
+    : thresholdK === 0 ? 0 : NaN; // NaN = not enough history yet
   let nextMadAt = 0;
   let state: "up" | "down" | null = null;
   let pendingDir: "up" | "down" | null = null;
@@ -133,7 +157,7 @@ function detectFlips(
       pendingCount = 0;
       continue;
     }
-    if (thresholdK !== 0 && i >= nextMadAt) {
+    if (threshold.kind === "mad" && thresholdK !== 0 && i >= nextMadAt) {
       const mad = trailingMad(series, i - MAD_WINDOW, i);
       theta = Number.isFinite(mad) ? thresholdK * mad : NaN;
       nextMadAt = i + MAD_STEP;
@@ -167,6 +191,122 @@ function detectFlips(
   }
 }
 
+/** Wilder ATR(14) of the underlying bars; close-to-close TR fallback when
+ *  highs/lows are absent. Causal (seeded from the first 14 TRs). */
+function atrSeries(closes: number[], highs?: number[], lows?: number[], period = 14): (number | null)[] {
+  const n = closes.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  const hasHL = !!highs && !!lows && highs.length === n && lows.length === n;
+  let atr = 0;
+  let count = 0;
+  for (let i = 1; i < n; i++) {
+    const pc = closes[i - 1];
+    if (!Number.isFinite(pc)) continue;
+    const tr = hasHL
+      ? Math.max(highs![i] - lows![i], Math.abs(highs![i] - pc), Math.abs(lows![i] - pc))
+      : Math.abs(closes[i] - pc);
+    if (!Number.isFinite(tr)) continue;
+    count++;
+    if (count <= period) {
+      atr += (tr - atr) / count; // simple mean while seeding
+    } else {
+      atr += (tr - atr) / period; // Wilder smoothing
+    }
+    if (count >= period && atr > 0) out[i] = atr;
+  }
+  return out;
+}
+
+/** Per-window OLS slope of the MA + the slope's t-statistic (b / SE(b)).
+ *  Window w = max(5, L); both series are null through warmup. */
+function regressionSlope(
+  ma: (number | null)[],
+  L: number,
+): { b: (number | null)[]; t: (number | null)[] } {
+  const n = ma.length;
+  const w = Math.max(5, L);
+  const b: (number | null)[] = new Array(n).fill(null);
+  const t: (number | null)[] = new Array(n).fill(null);
+  const sx = (w * (w - 1)) / 2;
+  const sxx = ((w - 1) * w * (2 * w - 1)) / 6;
+  const denom = w * sxx - sx * sx;
+  if (denom === 0) return { b, t };
+  const sxxCentered = sxx - (sx * sx) / w;
+  for (let i = w - 1; i < n; i++) {
+    let sy = 0, sxy = 0, cnt = 0;
+    for (let j = 0; j < w; j++) {
+      const y = ma[i - w + 1 + j];
+      if (y == null || !Number.isFinite(y)) { cnt = -1; break; }
+      sy += y;
+      sxy += j * y;
+      cnt++;
+    }
+    if (cnt !== w) continue;
+    const slope = (w * sxy - sx * sy) / denom;
+    b[i] = slope;
+    if (w > 2) {
+      // Residual variance of the fit -> SE of the slope coefficient.
+      const intercept = (sy - slope * sx) / w;
+      let sse = 0;
+      for (let j = 0; j < w; j++) {
+        const y = ma[i - w + 1 + j] as number;
+        const resid = y - (intercept + slope * j);
+        sse += resid * resid;
+      }
+      const s2 = sse / (w - 2);
+      const se = Math.sqrt(s2 / sxxCentered);
+      t[i] = se > 0 ? slope / se : slope === 0 ? 0 : slope > 0 ? 1e6 : -1e6;
+    }
+  }
+  return { b, t };
+}
+
+/** Local-linear Kalman filter on log(MA) — same construction as
+ *  adaptiveModels.computeKalmanTrend (R from innovation variance, Q tied to an
+ *  effective window) but returning the per-bar log-slope state. Causal. */
+function kalmanLogSlope(ma: (number | null)[], L: number): (number | null)[] {
+  const n = ma.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  const idxs: number[] = [];
+  const y: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const v = ma[i];
+    if (v != null && Number.isFinite(v) && v > 0) { idxs.push(i); y.push(Math.log(v)); }
+  }
+  if (y.length < 10) return out;
+  let R = 0, mean = 0;
+  const m = y.length;
+  for (let i = 1; i < m; i++) mean += y[i] - y[i - 1];
+  mean /= m - 1;
+  for (let i = 1; i < m; i++) R += (y[i] - y[i - 1] - mean) ** 2;
+  R = Math.max(R / Math.max(1, m - 2), 1e-12);
+  const W = Math.max(5, 2 * L);
+  const ql = R / (W * W);
+  const qs = R / (W * W * W * W);
+  let l = y[0], s = 0;
+  let P00 = R * 10, P01 = 0, P11 = R;
+  for (let k = 0; k < m; k++) {
+    if (k > 0) {
+      const lp = l + s;
+      const P00p = P00 + 2 * P01 + P11 + ql;
+      const P01p = P01 + P11;
+      const P11p = P11 + qs;
+      const S = P00p + R;
+      const K0 = P00p / S;
+      const K1 = P01p / S;
+      const innov = y[k] - lp;
+      l = lp + K0 * innov;
+      s = s + K1 * innov;
+      P00 = (1 - K0) * P00p;
+      P01 = (1 - K0) * P01p;
+      P11 = P11p - K1 * P01p;
+    }
+    // Skip the filter's own burn-in before reporting a slope.
+    if (k >= Math.min(W, m - 1)) out[idxs[k]] = s;
+  }
+  return out;
+}
+
 export function computeMaSlopeSeries(
   closes: number[],
   params: MaSlopeParams,
@@ -177,34 +317,38 @@ export function computeMaSlopeSeries(
   const maOpts: MaOptions = { highs: opts?.highs, lows: opts?.lows };
   const ma = n >= 2 ? computeMaByType(closes, params.period, params.maType, maOpts) : new Array(n).fill(null);
 
-  const slope: (number | null)[] = new Array(n).fill(null);
+  // ── Per-bar absolute MA change (price units), by estimator ──
+  const needRegress = params.measure === "regress" || params.thresholdMode === "tstat";
+  const reg = needRegress ? regressionSlope(ma, L) : null;
+  const absSlope: (number | null)[] = new Array(n).fill(null);
   if (params.measure === "regress") {
-    const w = Math.max(5, L);
-    for (let i = w - 1; i < n; i++) {
-      const anchor = ma[i];
-      if (anchor == null || anchor <= 0) continue;
-      // OLS slope of the MA over the window, x = 0..w-1.
-      let sy = 0, sxy = 0, cnt = 0;
-      for (let j = 0; j < w; j++) {
-        const y = ma[i - w + 1 + j];
-        if (y == null || !Number.isFinite(y)) { cnt = -1; break; }
-        sy += y;
-        sxy += j * y;
-        cnt++;
-      }
-      if (cnt !== w) continue;
-      const sx = (w * (w - 1)) / 2;
-      const sxx = ((w - 1) * w * (2 * w - 1)) / 6;
-      const denom = w * sxx - sx * sx;
-      if (denom === 0) continue;
-      const b = (w * sxy - sx * sy) / denom;
-      slope[i] = (b / anchor) * 10000;
+    for (let i = 0; i < n; i++) absSlope[i] = reg!.b[i];
+  } else if (params.measure === "kalman") {
+    const kal = kalmanLogSlope(ma, L);
+    for (let i = 0; i < n; i++) {
+      const s = kal[i], anchor = ma[i];
+      if (s != null && anchor != null && anchor > 0) absSlope[i] = s * anchor; // log-slope -> price units
     }
   } else {
     for (let i = L; i < n; i++) {
       const cur = ma[i], prev = ma[i - L];
-      if (cur == null || prev == null || cur <= 0) continue;
-      slope[i] = ((cur - prev) / (L * cur)) * 10000;
+      if (cur == null || prev == null) continue;
+      absSlope[i] = (cur - prev) / L;
+    }
+  }
+
+  // ── Normalization: MA level (bps/bar) or ATR (% of ATR per bar) ──
+  const atr = params.normalization === "atr" ? atrSeries(closes, opts?.highs, opts?.lows) : null;
+  const slope: (number | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const a = absSlope[i];
+    if (a == null || !Number.isFinite(a)) continue;
+    if (params.normalization === "atr") {
+      const d = atr![i];
+      if (d != null && d > 0) slope[i] = (a / d) * 100;
+    } else {
+      const anchor = ma[i];
+      if (anchor != null && anchor > 0) slope[i] = (a / anchor) * 10000;
     }
   }
 
@@ -221,9 +365,15 @@ export function computeMaSlopeSeries(
   const push = (kind: "slope" | "curvature") => (idx: number, direction: "up" | "down") => {
     events.push({ idx, direction, kind, slope: slope[idx] ?? 0, maValue: ma[idx] ?? 0 });
   };
-  detectFlips(slope, params.thresholdK, Math.max(1, params.confirmBars), Math.max(0, params.minBarsBetween), push("slope"));
+  // Slope events: MAD hysteresis on the normalized slope, or a fixed dead zone
+  // on the regression t-statistic (self-normalized — no MAD scaling needed).
+  if (params.thresholdMode === "tstat") {
+    detectFlips(reg!.t, { kind: "fixed", theta: params.tCrit }, Math.max(1, params.confirmBars), Math.max(0, params.minBarsBetween), push("slope"));
+  } else {
+    detectFlips(slope, { kind: "mad", k: params.thresholdK }, Math.max(1, params.confirmBars), Math.max(0, params.minBarsBetween), push("slope"));
+  }
   if (params.detectCurvature) {
-    detectFlips(curvature, params.thresholdK, Math.max(1, params.confirmBars), Math.max(0, params.minBarsBetween), push("curvature"));
+    detectFlips(curvature, { kind: "mad", k: params.thresholdK }, Math.max(1, params.confirmBars), Math.max(0, params.minBarsBetween), push("curvature"));
   }
   events.sort((a, b) => a.idx - b.idx || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0));
 
