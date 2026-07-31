@@ -19,7 +19,10 @@ import { Play, Loader2, LineChart as LineChartIcon, ChevronDown, ChevronRight, F
 import { fetchWorkbookTickers, type TickerMeta } from "@/lib/fetchWorkbookTickers";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { BasketScopeSelect, useBasketScope } from "@/components/BasketScopeSelect";
-import { FilterDropdown, applyClassFilters, emptyClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
+import {
+  FilterDropdown, applyClassFilters, emptyClassFilters,
+  serializeClassFilters, deserializeClassFilters, type ClassFilters,
+} from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { emitChartSignals } from "@/lib/chartBridge";
@@ -555,15 +558,29 @@ export default function MaSlope() {
             storageKey="reit-viz:ma-slope:presets"
             label="Templates"
             testIdPrefix="ma-slope-presets"
-            capture={() => ({ settings, primaryH, tab, ddTicker, combo: combo.serialize() })}
+            capture={() => ({
+              settings, primaryH, tab, ddTicker,
+              combo: combo.serialize(),
+              classFilters: serializeClassFilters(classFilters),
+              geo: { nations: [...geo.state.nations], exchanges: [...geo.state.exchanges] },
+              basketId: scope.basketId,
+            })}
             apply={(c) => {
               if (c?.settings && typeof c.settings === "object") {
                 const def = defaultSettings();
                 setSettings({ ...def, ...c.settings, det: { ...def.det, ...(c.settings.det ?? {}) } });
               }
-              // Combo legs live in the picker's own storage, not PageSettings —
-              // hydrate them so combos templates carry their leg set across machines.
+              // Universe-narrowing state lives outside PageSettings (in-memory
+              // filters, picker/basket storage) — restore it explicitly so a
+              // filtered-universe template reproduces its exact ticker pool.
+              // Templates saved before these keys existed leave current state alone.
               if (c?.combo) combo.hydrate(c.combo);
+              if (c?.classFilters) setClassFilters(deserializeClassFilters(c.classFilters));
+              if (c?.geo) {
+                geo.setNations(new Set(Array.isArray(c.geo.nations) ? c.geo.nations : []));
+                geo.setExchanges(new Set(Array.isArray(c.geo.exchanges) ? c.geo.exchanges : []));
+              }
+              if (typeof c?.basketId === "string") scope.setBasketId(c.basketId);
               if (c?.tab === "scan" || c?.tab === "deep") setTab(c.tab);
               if (typeof c?.ddTicker === "string") setDdTicker(c.ddTicker);
               // Deferred a tick so it lands after the freq-change effect resets
