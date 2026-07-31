@@ -24,9 +24,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X } from "lucide-react";
 import {
-  LOOKBACKS, getRerateMetric, buildRerateRow, computeCriticalLevels,
+  LOOKBACKS, getRerateMetric, buildRerateRow, computeCriticalLevels, impliedMoveToMultiple,
   type RerateRow, type RerateMetric, type CriticalLevel, type CriticalLevels,
 } from "@/lib/valuationRerate";
+import { computeAllMAs } from "@/lib/maUtils";
 import {
   buildResidence, RESIDENCE_BAND_LABELS, type ResidenceResult, type PctBasis,
 } from "@/lib/percentileResidence";
@@ -66,7 +67,8 @@ type TickerMetaLite = {
 };
 // One table row per ticker; per metric it carries BOTH stat families computed
 // from the same series (either may be null on thin history).
-type Cell = { rr: RerateRow | null; res: ResidenceResult | null; trailing?: number[] };
+type IndAnchor = { level: number; move: number; label: string };
+type Cell = { rr: RerateRow | null; res: ResidenceResult | null; trailing?: number[]; indAnchor?: IndAnchor | null };
 type MultiRow = { meta: TickerMetaLite; byMetric: Record<string, Cell> };
 
 // ── formatting / color helpers ─────────────────────────────────────────────
@@ -127,10 +129,17 @@ export default function ValuationRerateResidence() {
   // View-defining controls persist across reloads.
   const [metricKeys, setMetricKeys] = usePersistedState<string[]>("reit-viz:vrr:metricKeys", ["P/FFO FY2"]);
   const [pctMove, setPctMove] = usePersistedState("reit-viz:vrr:pctMove", 20);
-  // Scenario anchor: a fixed % move, or the nearest critical levels (support /
-  // resistance) detected on each metric's own history.
-  const [levelMode, setLevelMode] = usePersistedState<"percent" | "critical">("reit-viz:vrr:levelMode", "percent");
+  // Scenario anchor: a fixed % move, the nearest critical levels (support /
+  // resistance), or a specific indicator level (e.g. EMA 200 / Hull 50) computed
+  // on price or the multiple.
+  const [levelMode, setLevelMode] = usePersistedState<"percent" | "critical" | "indicator">("reit-viz:vrr:levelMode", "percent");
   const criticalMode = levelMode === "critical";
+  const indicatorMode = levelMode === "indicator";
+  // Indicator anchor config.
+  const [indMaType, setIndMaType] = usePersistedState("reit-viz:vrr:indMaType", "EMA");
+  const [indMaPeriod, setIndMaPeriod] = usePersistedState("reit-viz:vrr:indMaPeriod", 200);
+  const [indBasis, setIndBasis] = usePersistedState<"price" | "metric">("reit-viz:vrr:indBasis", "price");
+  const indLabel = `${indMaType}${indMaPeriod}`;
   const [lookbackDays, setLookbackDays] = usePersistedState("reit-viz:vrr:lookbackDays", 1260);
   const [basis, setBasis] = usePersistedState<PctBasis>("reit-viz:vrr:basis", "trailing");
   const [horizon, setHorizon] = usePersistedState("reit-viz:vrr:horizon", 63);
@@ -224,26 +233,56 @@ export default function ValuationRerateResidence() {
     close: { time: string; value: number }[],
     metric: RerateMetric,
   ): Cell | null => {
-    const res = buildResidence(series, close, {
-      basis, window: lookbackDays, pctMove,
-      dir: metric.dir, lowIsCheap: metric.lowIsCheap,
-      horizons: HORIZONS.map((h) => h.days),
-      skipFirstYear: true,
-    });
     const vals = series.map((p) => p.value);
     // Match the residence basis: expanding judges vs ALL history, trailing vs
     // the window — so Rich% and the re-rate stats share one reference frame.
     const trailing = basis === "expanding" || lookbackDays >= vals.length ? vals : vals.slice(-lookbackDays);
-    const rr = buildRerateRow(meta, trailing, pctMove, metric, { critical: criticalMode });
+
+    // Indicator anchor: derive a per-ticker % PRICE move to reach the chosen MA of
+    // PRICE (close) or of the METRIC's own series, then feed it as the scenario move
+    // so the pro-forma is "the multiple when it hits its EMA 200 / Hull 50 / …".
+    // Must be computed BEFORE buildResidence so the pro-forma Rich%/Seen% columns
+    // (which come off res) use the SAME move as the @Ind multiple (off rr).
+    let effMove = pctMove;
+    let indAnchor: IndAnchor | null = null;
+    if (indicatorMode) {
+      const m0 = [...trailing].reverse().find((x) => Number.isFinite(x));
+      const src = (indBasis === "price" ? close : series).map((p) => p.value).filter((x) => Number.isFinite(x));
+      if (m0 != null && m0 !== 0 && src.length > indMaPeriod + 1) {
+        const ma = computeAllMAs(src, indMaPeriod, indMaType);
+        const maVal = [...ma].reverse().find((x): x is number => x != null && Number.isFinite(x));
+        const cur = src[src.length - 1];
+        if (maVal != null && cur > 0) {
+          // Price basis → % move of price to its MA; metric basis → implied price
+          // move that re-rates the multiple to the MA of the multiple.
+          const move = indBasis === "price"
+            ? (maVal / cur - 1) * 100
+            : impliedMoveToMultiple(m0, maVal, metric.dir);
+          if (Number.isFinite(move) && Math.abs(move) <= 10000) {
+            effMove = move;
+            indAnchor = { level: maVal, move, label: indLabel };
+          }
+        }
+      }
+    }
+
+    const res = buildResidence(series, close, {
+      basis, window: lookbackDays, pctMove: indicatorMode ? effMove : pctMove,
+      dir: metric.dir, lowIsCheap: metric.lowIsCheap,
+      horizons: HORIZONS.map((h) => h.days),
+      skipFirstYear: true,
+    });
+
+    const rr = buildRerateRow(meta, trailing, indicatorMode ? effMove : pctMove, metric, { critical: criticalMode });
     if (!rr && !res) return null;
     // Keep the series so the detail modal can show critical levels on demand even
     // when the table is in % Move mode (rr.critical is only precomputed in Critical).
-    return { rr, res, trailing };
+    return { rr, res, trailing, indAnchor };
   };
 
   const metricsSig = metricKeys.join("|");
   const { data: singleRows = [], isLoading: singleLoading } = useQuery({
-    queryKey: ["vrr-single", metricsSig, basis, lookbackDays, pctMove, levelMode, tickerKey],
+    queryKey: ["vrr-single", metricsSig, basis, lookbackDays, pctMove, levelMode, indMaType, indMaPeriod, indBasis, tickerKey],
     queryFn: async () => {
       const out: MultiRow[] = [];
       const batchSize = 12;
@@ -285,7 +324,7 @@ export default function ValuationRerateResidence() {
   const pairLegKey = useMemo(() => pairLegs.map((t) => t.ticker).join(","), [pairLegs]);
 
   const { data: pairRows = [], isLoading: pairLoading } = useQuery({
-    queryKey: ["vrr-pairs", pairBasis, pairMetricKey, basis, lookbackDays, pctMove, levelMode, pairLegKey],
+    queryKey: ["vrr-pairs", pairBasis, pairMetricKey, basis, lookbackDays, pctMove, levelMode, indMaType, indMaPeriod, indBasis, pairLegKey],
     queryFn: async () => {
       const seriesKey = pairBasis === "price" ? "close" : pairMetricKey;
       const seriesByTicker = new Map<string, { time: string; value: number }[]>();
@@ -323,7 +362,7 @@ export default function ValuationRerateResidence() {
   // metric where either leg lacks the metric is skipped quietly.
   const customPairsSig = customPairs.join("|");
   const { data: customPairRows = [] } = useQuery({
-    queryKey: ["vrr-custom-pairs", metricsSig, basis, lookbackDays, pctMove, levelMode, customPairsSig, tickerKey],
+    queryKey: ["vrr-custom-pairs", metricsSig, basis, lookbackDays, pctMove, levelMode, indMaType, indMaPeriod, indBasis, customPairsSig, tickerKey],
     queryFn: async () => {
       const out: MultiRow[] = [];
       for (const pairKey of customPairs) {
@@ -389,9 +428,9 @@ export default function ValuationRerateResidence() {
       case "m0": v = c.rr?.m0 ?? c.res?.m0 ?? NaN; break;
       case "rich": v = cellRich(c, m); break;
       case "z": v = c.rr?.nowZ ?? NaN; break;
-      case "proForma": v = criticalMode ? (c.rr?.critical?.support?.move ?? NaN) : (c.rr?.proForma ?? NaN); break;
-      case "pfRich": v = criticalMode ? (c.rr?.critical?.resistance?.move ?? NaN) : cellPfRich(c, m); break;
-      case "seen": v = criticalMode ? critRatio(c.rr) : (c.res?.proFormaFreqRicher ?? NaN); break;
+      case "proForma": v = indicatorMode ? (c.indAnchor ? (c.rr?.proForma ?? NaN) : NaN) : criticalMode ? (c.rr?.critical?.support?.move ?? NaN) : (c.rr?.proForma ?? NaN); break;
+      case "pfRich": v = indicatorMode ? (c.indAnchor ? cellPfRich(c, m) : NaN) : criticalMode ? (c.rr?.critical?.resistance?.move ?? NaN) : cellPfRich(c, m); break;
+      case "seen": v = indicatorMode ? (c.indAnchor?.move ?? NaN) : criticalMode ? critRatio(c.rr) : (c.res?.proFormaFreqRicher ?? NaN); break;
       case "toMedian": v = c.rr?.toMedian ?? NaN; break;
       case "toRich": v = c.rr?.toRich ?? NaN; break;
       case "toCheap": v = c.rr?.toCheap ?? NaN; break;
@@ -470,7 +509,13 @@ export default function ValuationRerateResidence() {
       <Th col="m0" label="Now" title="Current value" metricKey={m.key} sep />
       <Th col="rich" label="Rich%" title="Richness percentile vs own history (100 = most expensive, 0 = cheapest; orientation-aware)" metricKey={m.key} />
       <Th col="z" label="z" title="Current z-score vs history" metricKey={m.key} />
-      {criticalMode ? (
+      {indicatorMode ? (
+        <>
+          <Th col="proForma" label={`@${indLabel}`} title={`Pro-forma value when ${indBasis === "price" ? "PRICE" : "the multiple"} reaches its ${indLabel}`} metricKey={m.key} />
+          <Th col="pfRich" label="Rich%" title={`Richness percentile at the ${indLabel} anchor`} metricKey={m.key} />
+          <Th col="seen" label="→Mv" title={`Implied % ${indBasis === "price" ? "price " : ""}move to reach the ${indLabel}`} metricKey={m.key} />
+        </>
+      ) : criticalMode ? (
         <>
           <Th col="proForma" label="↓Supp" title="Implied % move to the nearest SUPPORT level (downside room) detected on this metric's own history" metricKey={m.key} />
           <Th col="pfRich" label="↑Res" title="Implied % move to the nearest RESISTANCE level (upside room) detected on this metric's own history" metricKey={m.key} />
@@ -541,7 +586,13 @@ export default function ValuationRerateResidence() {
         <td onClick={onCell} className={`${cls} border-l border-border/60`}>{fmtVal(rr?.m0 ?? res?.m0)}</td>
         <td onClick={onCell} className={`${cls} ${richColor(rich)}`}>{fmtPct(rich)}</td>
         <td onClick={onCell} className={`${cls} text-muted-foreground`}>{fmtZ(rr?.nowZ)}</td>
-        {criticalMode ? (
+        {indicatorMode ? (
+          <>
+            <td onClick={onCell} className={cls} title={c.indAnchor ? `${indLabel} @ ${fmtVal(c.indAnchor.level)} · ${fmtMove(c.indAnchor.move)} away (${indBasis} basis)` : `no ${indLabel} (insufficient history)`}>{c.indAnchor ? fmtVal(rr?.proForma) : "—"}</td>
+            <td onClick={onCell} className={`${cls} ${c.indAnchor ? richColor(pfRich) : ""}`}>{c.indAnchor ? fmtPct(pfRich) : "—"}</td>
+            <td onClick={onCell} className={`${cls} ${moveColor(c.indAnchor?.move)}`}>{fmtMove(c.indAnchor?.move)}</td>
+          </>
+        ) : criticalMode ? (
           <>
             <td onClick={onCell} className={`${cls} ${moveColor(rr?.critical?.support?.move)}`} title={critTitle(rr?.critical?.support, "Support")}>{fmtMove(rr?.critical?.support?.move)}</td>
             <td onClick={onCell} className={`${cls} ${moveColor(rr?.critical?.resistance?.move)}`} title={critTitle(rr?.critical?.resistance, "Resistance")}>{fmtMove(rr?.critical?.resistance?.move)}</td>
@@ -688,13 +739,54 @@ export default function ValuationRerateResidence() {
               onClick={() => setLevelMode("critical")}
               data-testid="vrr-anchor-critical"
             >Critical</button>
+            <button
+              className={`px-2 text-xs ${indicatorMode ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}
+              onClick={() => setLevelMode("indicator")}
+              data-testid="vrr-anchor-indicator"
+            >Indicator</button>
           </div>
         </div>
-        {!criticalMode && (
+        {levelMode === "percent" && (
           <div title="For valuation multiples this is a PRICE move (the metric re-rates with it). For any other metric, read it as a move in the metric itself.">
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Move %</div>
             <Input type="number" value={pctMove} onChange={(e) => setPctMove(Number(e.target.value))} className="h-7 w-20 text-xs" step={5} data-testid="vrr-pctmove" />
           </div>
+        )}
+        {indicatorMode && (
+          <>
+            <div title="Which moving average to anchor on. The implied move is measured to the LATEST value of this MA.">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">MA type</div>
+              <Select value={indMaType} onValueChange={setIndMaType}>
+                <SelectTrigger className="h-7 w-24 text-xs" data-testid="vrr-ind-matype"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["SMA", "EMA", "WMA", "HMA", "KAMA", "FRAMA", "T3", "ALMA", "LSMA", "SLSMA"].map((t) => (
+                    <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div title="Lookback period of the moving average (bars).">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Period</div>
+              <div className="flex items-center gap-1">
+                <Input type="number" value={indMaPeriod} onChange={(e) => setIndMaPeriod(Math.max(2, Number(e.target.value) || 0))} className="h-7 w-16 text-xs" step={10} data-testid="vrr-ind-period" />
+                <div className="inline-flex h-7 rounded border border-border overflow-hidden">
+                  {[20, 50, 100, 200].map((p) => (
+                    <button key={p} onClick={() => setIndMaPeriod(p)} data-testid={`vrr-ind-period-${p}`}
+                      className={`px-1.5 text-[11px] ${indMaPeriod === p ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}>{p}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div title="Price: the MA is computed on the price series and the move is the price gap to it (the metric re-rates with the price). Metric: the MA is computed on the metric's own history and the move is the implied price move that lands the metric on that level.">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">On</div>
+              <div className="inline-flex h-7 rounded border border-border overflow-hidden">
+                <button onClick={() => setIndBasis("price")} data-testid="vrr-ind-basis-price"
+                  className={`px-2 text-xs ${indBasis === "price" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}>Price</button>
+                <button onClick={() => setIndBasis("metric")} data-testid="vrr-ind-basis-metric"
+                  className={`px-2 text-xs ${indBasis === "metric" ? "bg-primary text-primary-foreground" : "bg-transparent text-muted-foreground hover:text-foreground"}`}>Metric</button>
+              </div>
+            </div>
+          </>
         )}
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Basis</div>
@@ -853,7 +945,7 @@ export default function ValuationRerateResidence() {
               <div className="grid grid-cols-4 gap-2 px-4 py-3 text-xs">
                 <div><div className="text-[10px] uppercase text-muted-foreground">Now</div><div className="text-lg font-mono">{fmtVal(rr?.m0 ?? res?.m0)}</div></div>
                 <div><div className="text-[10px] uppercase text-muted-foreground">Richness</div><div className={`text-lg font-mono ${richColor(rich)}`}>{fmtPct(rich)}</div></div>
-                <div><div className="text-[10px] uppercase text-muted-foreground">After {fmtMove(pctMove)}</div><div className={`text-lg font-mono ${richColor(pfRich)}`}>{fmtPct(pfRich)}{res?.proFormaUnprecedented && <span className="ml-1 text-[10px] text-red-400 font-bold align-middle">ATH</span>}</div></div>
+                <div><div className="text-[10px] uppercase text-muted-foreground">After {indicatorMode && detail.cell.indAnchor ? `@${detail.cell.indAnchor.label}` : fmtMove(pctMove)}</div><div className={`text-lg font-mono ${richColor(pfRich)}`}>{fmtPct(pfRich)}{res?.proFormaUnprecedented && <span className="ml-1 text-[10px] text-red-400 font-bold align-middle">ATH</span>}</div></div>
                 <div><div className="text-[10px] uppercase text-muted-foreground">Seen this rich</div><div className="text-lg font-mono text-muted-foreground">{res ? <>{fmtPct(res.proFormaFreqRicher)}%<span className="text-[10px]"> of history</span></> : "—"}</div></div>
               </div>
 
@@ -866,6 +958,27 @@ export default function ValuationRerateResidence() {
                     <div><div className="text-[10px] text-muted-foreground">↑ Rich end ({fmtVal(m.lowIsCheap ? rr.stats.p90 : rr.stats.p10)})</div><div className={`font-mono text-sm ${moveColor(rr.toRich)}`}>{fmtMove(rr.toRich)}</div></div>
                     <div><div className="text-[10px] text-muted-foreground">↓ Cheap end ({fmtVal(m.lowIsCheap ? rr.stats.p10 : rr.stats.p90)})</div><div className={`font-mono text-sm ${moveColor(rr.toCheap)}`}>{fmtMove(rr.toCheap)}</div></div>
                     <div><div className="text-[10px] text-muted-foreground">Reward : Risk</div><div className="font-mono text-sm">{Number.isFinite(rrOf(rr)) ? rrOf(rr).toFixed(2) : "—"}</div></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Indicator anchor (chosen MA of price or metric) */}
+              {indicatorMode && detail.cell.indAnchor && (
+                <div className="px-4 pb-3">
+                  <div className="text-[10px] uppercase text-muted-foreground mb-1">Indicator anchor</div>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">{detail.cell.indAnchor.label} ({indBasis})</div>
+                      <div className="font-mono text-sm">{fmtVal(detail.cell.indAnchor.level)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Implied move to reach</div>
+                      <div className={`font-mono text-sm ${moveColor(detail.cell.indAnchor.move)}`}>{fmtMove(detail.cell.indAnchor.move)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-muted-foreground">Multiple there</div>
+                      <div className="font-mono text-sm">{fmtVal(rr?.proForma)}</div>
+                    </div>
                   </div>
                 </div>
               )}
