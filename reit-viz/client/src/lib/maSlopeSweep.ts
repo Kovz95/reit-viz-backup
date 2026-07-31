@@ -60,20 +60,44 @@ export interface ConfigEval {
    *  (down-side edge is baseline − event: a good down signal predicts underperformance). */
   edge: number;
   tStat: number;
-  /** Shrunk rank key: edge · √(min(n,40)/40). NaN when insufficient. */
+  /** Shrunk rank key: edge · √(min(n,40)/40). NaN when insufficient.
+   *  With a holdout split, side/edge/tStat/score come from the TRAIN window. */
   score: number;
   insufficient: boolean;
+  /** Out-of-sample check (null when the split is off). Ranking uses train
+   *  only; the holdout window reports whether the edge persisted unseen. */
+  holdout: {
+    splitDate: string;
+    trainN: number;
+    hoN: number;
+    hoEdge: number;
+    hoT: number;
+    /** hoEdge > 0 on the train-chosen side; null when hoN is too small to say. */
+    confirmed: boolean | null;
+  } | null;
   lastEvent: (InflectionEvent & { dailyDate: string }) | null;
   barsSinceLast: number;
 }
 
 const SHRINK_N = 40;
+/** Below this many holdout events, "confirmed" is not worth calling. */
+const MIN_HOLDOUT_N = 3;
+
+/** Edge on a side at a horizon: event mean − baseline mean for up events,
+ *  baseline − event for down (a good down signal predicts underperformance). */
+function sideEdge(study: StudyResult, side: "up" | "down", horizonBars: number): { edge: number; stats: HorizonStats | undefined } {
+  const stats = statsAt(study, horizonBars);
+  const base = baselineAt(study, horizonBars);
+  if (!stats || !base || stats.count === 0 || !Number.isFinite(base.mean)) return { edge: NaN, stats };
+  return { edge: side === "up" ? stats.mean - base.mean : base.mean - stats.mean, stats };
+}
 
 export function evalConfig(
   data: SlopeSeriesData,
   params: MaSlopeParams,
   primaryHorizonBars: number,
   minEvents = 10,
+  holdoutFrac = 0,
 ): ConfigEval {
   const series = computeMaSlopeSeries(data.closes, params, { highs: data.highs, lows: data.lows });
   const horizons = SLOPE_HORIZONS[data.freq].map((h) => h.bars);
@@ -84,27 +108,66 @@ export function evalConfig(
       .filter((e) => e.kind === kind && e.direction === direction)
       .map((e) => ({ idx: e.idx, val: e.slope }));
 
-  const upStudy = runEventStudy(bundle, hitsOf("slope", "up"), { horizons });
-  const downStudy = runEventStudy(bundle, hitsOf("slope", "down"), { horizons });
+  const upHits = hitsOf("slope", "up");
+  const downHits = hitsOf("slope", "down");
+  const upStudy = runEventStudy(bundle, upHits, { horizons });
+  const downStudy = runEventStudy(bundle, downHits, { horizons });
   const curvUpStudy = params.detectCurvature ? runEventStudy(bundle, hitsOf("curvature", "up"), { horizons }) : null;
   const curvDownStudy = params.detectCurvature ? runEventStudy(bundle, hitsOf("curvature", "down"), { horizons }) : null;
 
   const nUp = upStudy.events.length;
   const nDown = downStudy.events.length;
 
-  const upStats = statsAt(upStudy, primaryHorizonBars);
-  const downStats = statsAt(downStudy, primaryHorizonBars);
-  const upBase = baselineAt(upStudy, primaryHorizonBars);
-  const upEdge = upStats && upBase && upStats.count > 0 ? upStats.mean - upBase.mean : NaN;
-  const downEdge = downStats && upBase && downStats.count > 0 ? upBase.mean - downStats.mean : NaN;
+  // ── Rank basis: full sample, or the train window when a split is on ──
+  // Detection ran causally on the full series, so events are identical either
+  // way; the split only partitions which events (and which baseline bars) the
+  // ranking may see. Train forward windows are truncated at the split — an
+  // event whose horizon crosses into the holdout is scored only on what the
+  // train window contains, never on holdout bars.
+  const n = data.closes.length;
+  const splitIdx = holdoutFrac > 0 ? Math.floor(n * (1 - holdoutFrac)) : n;
+  const maxH = Math.max(...horizons);
+  const splitUsable = holdoutFrac > 0 && splitIdx > maxH * 2 && n - splitIdx > maxH;
 
+  let rankUpStudy = upStudy;
+  let rankDownStudy = downStudy;
+  let holdout: ConfigEval["holdout"] = null;
+  let hoUpStudy: StudyResult | null = null;
+  let hoDownStudy: StudyResult | null = null;
+  if (splitUsable) {
+    const trainBundle = { dates: data.dailyDates.slice(0, splitIdx), closes: data.closes.slice(0, splitIdx) as (number | null)[] };
+    const hoBundle = { dates: data.dailyDates.slice(splitIdx), closes: data.closes.slice(splitIdx) as (number | null)[] };
+    const before = (hits: typeof upHits) => hits.filter((h) => h.idx < splitIdx);
+    const after = (hits: typeof upHits) => hits.filter((h) => h.idx >= splitIdx).map((h) => ({ idx: h.idx - splitIdx, val: h.val }));
+    rankUpStudy = runEventStudy(trainBundle, before(upHits), { horizons });
+    rankDownStudy = runEventStudy(trainBundle, before(downHits), { horizons });
+    hoUpStudy = runEventStudy(hoBundle, after(upHits), { horizons });
+    hoDownStudy = runEventStudy(hoBundle, after(downHits), { horizons });
+  }
+
+  const up = sideEdge(rankUpStudy, "up", primaryHorizonBars);
+  const down = sideEdge(rankDownStudy, "down", primaryHorizonBars);
   const side: "up" | "down" =
-    Number.isFinite(upEdge) && (!Number.isFinite(downEdge) || upEdge >= downEdge) ? "up" : "down";
-  const edge = side === "up" ? upEdge : downEdge;
-  const sideStats = side === "up" ? upStats : downStats;
-  const n = sideStats?.count ?? 0;
-  const insufficient = n < minEvents;
-  const score = !insufficient && Number.isFinite(edge) ? edge * Math.sqrt(Math.min(n, SHRINK_N) / SHRINK_N) : NaN;
+    Number.isFinite(up.edge) && (!Number.isFinite(down.edge) || up.edge >= down.edge) ? "up" : "down";
+  const edge = side === "up" ? up.edge : down.edge;
+  const sideStats = side === "up" ? up.stats : down.stats;
+  const nRank = sideStats?.count ?? 0;
+  const insufficient = nRank < minEvents;
+  const score = !insufficient && Number.isFinite(edge) ? edge * Math.sqrt(Math.min(nRank, SHRINK_N) / SHRINK_N) : NaN;
+
+  if (splitUsable && hoUpStudy && hoDownStudy) {
+    const hoStudy = side === "up" ? hoUpStudy : hoDownStudy;
+    const ho = sideEdge(hoStudy, side, primaryHorizonBars);
+    const hoN = ho.stats?.count ?? 0;
+    holdout = {
+      splitDate: data.dailyDates[splitIdx] ?? "",
+      trainN: nRank,
+      hoN,
+      hoEdge: ho.edge,
+      hoT: tStatOf(ho.stats),
+      confirmed: hoN >= MIN_HOLDOUT_N && Number.isFinite(ho.edge) ? ho.edge > 0 : null,
+    };
+  }
 
   const slopeEvents = series.events.filter((e) => e.kind === "slope");
   const last = slopeEvents.length ? slopeEvents[slopeEvents.length - 1] : null;
@@ -131,6 +194,7 @@ export function evalConfig(
     tStat: tStatOf(sideStats),
     score,
     insufficient,
+    holdout,
     lastEvent: last ? { ...last, dailyDate: data.dailyDates[last.idx] ?? "" } : null,
     barsSinceLast: last ? data.closes.length - 1 - last.idx : Infinity,
   };
@@ -145,6 +209,9 @@ export interface SweepOpts {
   baseParams: Omit<MaSlopeParams, "maType" | "period">;
   primaryHorizonBars: number;
   minEvents?: number;
+  /** Fraction of the series (from the end) reserved as an out-of-sample
+   *  holdout; 0 disables the split. */
+  holdoutFrac?: number;
   onProgress?: (done: number, total: number) => void;
   cancelRef?: { current: boolean };
 }
@@ -152,7 +219,7 @@ export interface SweepOpts {
 /** Grid-sweep types × periods on one ticker; sorted by score desc (ranked
  *  configs first, insufficient-sample configs trail in input order). */
 export async function runDeepDiveSweep(opts: SweepOpts): Promise<ConfigEval[]> {
-  const { data, types, periods, baseParams, primaryHorizonBars, minEvents = 10, onProgress, cancelRef } = opts;
+  const { data, types, periods, baseParams, primaryHorizonBars, minEvents = 10, holdoutFrac = 0, onProgress, cancelRef } = opts;
   const out: ConfigEval[] = [];
   const total = types.length * periods.length;
   let done = 0;
@@ -161,7 +228,7 @@ export async function runDeepDiveSweep(opts: SweepOpts): Promise<ConfigEval[]> {
       if (cancelRef?.current) return out;
       // Skip configs whose warmup would consume most of the series.
       if (period * 3 + 20 < data.closes.length) {
-        out.push(evalConfig(data, { ...baseParams, maType, period }, primaryHorizonBars, minEvents));
+        out.push(evalConfig(data, { ...baseParams, maType, period }, primaryHorizonBars, minEvents, holdoutFrac));
       }
       done++;
       if (done % 12 === 0) {
@@ -199,6 +266,8 @@ export interface ScanOpts {
   freshBars?: number;
   primaryHorizonBars: number;
   minEvents?: number;
+  /** See SweepOpts.holdoutFrac. */
+  holdoutFrac?: number;
   hourlyConcurrency?: number;
   onRow?: (row: ScanRow) => void;
   onProgress?: (done: number, total: number) => void;
@@ -209,19 +278,19 @@ async function scanOne(
   ticker: string,
   opts: ScanOpts,
 ): Promise<ScanRow> {
-  const { freq, mode, primaryHorizonBars, minEvents = 10, freshBars = 3 } = opts;
+  const { freq, mode, primaryHorizonBars, minEvents = 10, freshBars = 3, holdoutFrac = 0 } = opts;
   const data = await loadSlopeSeries(ticker, freq).catch(() => null);
   if (!data) return { ticker, status: freq === "hourly" ? "no-hourly" : "no-data", best: null, fresh: false };
 
   let best: ConfigEval | null = null;
   if (mode.kind === "fixed") {
-    best = evalConfig(data, mode.params, primaryHorizonBars, minEvents);
+    best = evalConfig(data, mode.params, primaryHorizonBars, minEvents, holdoutFrac);
   } else {
     for (const maType of mode.types) {
       for (const period of mode.periods) {
         if (opts.cancelRef?.current) break;
         if (period * 3 + 20 >= data.closes.length) continue;
-        const ev = evalConfig(data, { ...mode.baseParams, maType, period }, primaryHorizonBars, minEvents);
+        const ev = evalConfig(data, { ...mode.baseParams, maType, period }, primaryHorizonBars, minEvents, holdoutFrac);
         const evScore = Number.isFinite(ev.score) ? ev.score : -Infinity;
         const bestScore = best && Number.isFinite(best.score) ? best.score : -Infinity;
         if (!best || (best.insufficient && !ev.insufficient) || (ev.insufficient === best.insufficient && evScore > bestScore)) {

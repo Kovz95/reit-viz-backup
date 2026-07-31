@@ -49,6 +49,8 @@ interface PageSettings {
   autoPeriods: number[];
   freshBars: number;
   minEvents: number;
+  /** Percent of the series (from the end) held out for the OOS check; 0 = off. */
+  holdoutPct: number;
   ddTypes: MaType[];
   ddPeriods: number[];
 }
@@ -68,6 +70,7 @@ function defaultSettings(): PageSettings {
     autoPeriods: [10, 20, 50, 100, 150, 200],
     freshBars: 3,
     minEvents: 10,
+    holdoutPct: 30,
     ddTypes: [...MA_TYPES],
     ddPeriods: [...DEFAULT_PERIODS],
   };
@@ -107,6 +110,20 @@ function DirBadge({ direction, kind }: { direction: "up" | "down"; kind: "slope"
       up ? "border-chart-2/40 bg-chart-2/10 text-chart-2" : "border-destructive/40 bg-destructive/10 text-destructive"
     }`}>
       {up ? "▲" : "▼"} {kind === "curvature" ? "curv" : "slope"}
+    </span>
+  );
+}
+
+/** Out-of-sample verdict cell: holdout edge + confirm mark. */
+function OosCell({ holdout }: { holdout: ConfigEval["holdout"] }) {
+  if (!holdout) return <span className="text-muted-foreground">—</span>;
+  const { hoEdge, hoN, confirmed } = holdout;
+  if (!Number.isFinite(hoEdge)) return <span className="text-muted-foreground" title={`holdout events: ${hoN}`}>—</span>;
+  return (
+    <span className={edgeClass(hoEdge)} title={`Holdout edge on ${hoN} unseen events (t ${fmtT(holdout.hoT)}), split at ${holdout.splitDate}`}>
+      {confirmed === true ? "✓ " : confirmed === false ? "✗ " : ""}
+      {`${hoEdge > 0 ? "+" : ""}${hoEdge.toFixed(2)}pp`}
+      <span className="text-muted-foreground text-[9px]"> ({hoN})</span>
     </span>
   );
 }
@@ -270,6 +287,7 @@ export default function MaSlope() {
         freshBars: settings.freshBars,
         primaryHorizonBars: primaryH,
         minEvents: settings.minEvents,
+        holdoutFrac: settings.holdoutPct / 100,
         onRow: (row) => setScanRows((rs) => [...rs, row]),
         onProgress: (d, t) => setScanProgress([d, t]),
         cancelRef: scanCancel.current,
@@ -300,6 +318,7 @@ export default function MaSlope() {
         case "edge": return b && Number.isFinite(b.edge) ? b.edge : null;
         case "t": return b && Number.isFinite(b.tStat) ? b.tStat : null;
         case "score": return b && Number.isFinite(b.score) ? b.score : null;
+        case "oos": return b?.holdout && Number.isFinite(b.holdout.hoEdge) ? b.holdout.hoEdge : null;
         default: return null;
       }
     });
@@ -356,6 +375,7 @@ export default function MaSlope() {
         baseParams: settings.det,
         primaryHorizonBars: primaryH,
         minEvents: settings.minEvents,
+        holdoutFrac: settings.holdoutPct / 100,
         onProgress: (d, t) => setDdProgress([d, t]),
         cancelRef: ddCancel.current,
       });
@@ -516,6 +536,19 @@ export default function MaSlope() {
             <input type="number" min={3} max={100} className={`${inputCls} w-16`} value={settings.minEvents}
               onChange={(e) => set("minEvents", Math.max(3, Number(e.target.value) || settings.minEvents))} />
           </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground text-[10px]"
+              title="Reserve the last X% of history as an out-of-sample holdout: ranking (side/edge/score) uses only the train window; the OOS column shows whether the edge persisted on unseen data.">
+              Holdout
+            </span>
+            <select className={selectCls} value={settings.holdoutPct}
+              onChange={(e) => set("holdoutPct", Number(e.target.value))} data-testid="holdout-select">
+              <option value={0}>Off</option>
+              <option value={20}>Last 20%</option>
+              <option value={30}>Last 30%</option>
+              <option value={40}>Last 40%</option>
+            </select>
+          </label>
           <div className="ml-auto flex items-center gap-2">
             {tab === "scan" ? (
               scanning ? (
@@ -574,9 +607,12 @@ export default function MaSlope() {
                   <th className="text-right py-1 px-2"><SortHeader label="N" columnKey="n" sort={sort} align="right" title="Events on the ranked side" /></th>
                   <th className="text-right py-1 px-2"><SortHeader label={`Hit%`} columnKey="hit" sort={sort} align="right" title="pUp at the primary horizon (ranked side)" /></th>
                   <th className="text-right py-1 px-2"><SortHeader label="Mean" columnKey="mean" sort={sort} align="right" /></th>
-                  <th className="text-right py-1 px-2"><SortHeader label="Edge" columnKey="edge" sort={sort} align="right" title="Event mean − baseline mean at primary horizon" /></th>
-                  <th className="text-right py-1 px-2"><SortHeader label="t" columnKey="t" sort={sort} align="right" /></th>
-                  <th className="text-right py-1 px-2"><SortHeader label="Score" columnKey="score" sort={sort} align="right" title="Edge shrunk by sample size" /></th>
+                  <th className="text-right py-1 px-2"><SortHeader label="Edge" columnKey="edge" sort={sort} align="right" title="Event mean − baseline mean at primary horizon (train window when holdout is on)" /></th>
+                  <th className="text-right py-1 px-2"><SortHeader label="t" columnKey="t" sort={sort} align="right" title="t-stat of the ranked side (train window when holdout is on)" /></th>
+                  <th className="text-right py-1 px-2"><SortHeader label="Score" columnKey="score" sort={sort} align="right" title="Edge shrunk by sample size (train window when holdout is on)" /></th>
+                  {settings.holdoutPct > 0 && (
+                    <th className="text-right py-1 px-2"><SortHeader label="OOS" columnKey="oos" sort={sort} align="right" title="Holdout edge on unseen data — ✓ persists, ✗ flips" /></th>
+                  )}
                   <th className="text-right py-1 px-2">Actions</th>
                 </tr>
               </thead>
@@ -598,7 +634,7 @@ export default function MaSlope() {
                           </span>
                         </td>
                         {r.status !== "ok" || !b ? (
-                          <td colSpan={9} className="py-1 px-2 text-muted-foreground">
+                          <td colSpan={settings.holdoutPct > 0 ? 10 : 9} className="py-1 px-2 text-muted-foreground">
                             {r.status === "no-hourly" ? "no usable hourly data (need ≥250 bars)" : "no price data"}
                           </td>
                         ) : (
@@ -628,6 +664,9 @@ export default function MaSlope() {
                             </td>
                             <td className="py-1 px-2 text-right">{fmtT(b.tStat)}</td>
                             <td className="py-1 px-2 text-right font-semibold">{Number.isFinite(b.score) ? b.score.toFixed(2) : "—"}</td>
+                            {settings.holdoutPct > 0 && (
+                              <td className="py-1 px-2 text-right"><OosCell holdout={b.holdout} /></td>
+                            )}
                           </>
                         )}
                         <td className="py-1 px-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -642,7 +681,7 @@ export default function MaSlope() {
                       </tr>
                       {expanded && b && (
                         <tr className="border-b border-border/40 bg-muted/10">
-                          <td colSpan={11} className="py-2 px-6">
+                          <td colSpan={settings.holdoutPct > 0 ? 12 : 11} className="py-2 px-6">
                             <div className="flex flex-wrap gap-8">
                               <div>
                                 <div className="text-[10px] text-muted-foreground mb-1">▲ Up inflections ({b.nUp})</div>
@@ -685,9 +724,12 @@ export default function MaSlope() {
                         <th className="text-right py-1 px-2">N↓</th>
                         <th className="text-right py-1 px-2">Ev/yr</th>
                         <th className="text-left py-1 px-2">Side</th>
-                        <th className="text-right py-1 px-2">Edge</th>
+                        <th className="text-right py-1 px-2" title="Train window when holdout is on">Edge</th>
                         <th className="text-right py-1 px-2">t</th>
                         <th className="text-right py-1 px-2">Score</th>
+                        {settings.holdoutPct > 0 && (
+                          <th className="text-right py-1 px-2" title="Holdout edge on unseen data — ✓ persists, ✗ flips">OOS</th>
+                        )}
                         <th className="text-left py-1 px-2">Last</th>
                       </tr>
                     </thead>
@@ -708,6 +750,9 @@ export default function MaSlope() {
                             </td>
                             <td className="py-1 px-2 text-right">{fmtT(r.tStat)}</td>
                             <td className="py-1 px-2 text-right font-semibold">{Number.isFinite(r.score) ? r.score.toFixed(2) : "—"}</td>
+                            {settings.holdoutPct > 0 && (
+                              <td className="py-1 px-2 text-right"><OosCell holdout={r.holdout} /></td>
+                            )}
                             <td className="py-1 px-2 text-muted-foreground whitespace-nowrap">
                               {r.lastEvent ? `${r.lastEvent.direction === "up" ? "▲" : "▼"} ${r.lastEvent.dailyDate} (${r.barsSinceLast}b)` : "—"}
                             </td>
@@ -742,6 +787,13 @@ export default function MaSlope() {
                         <LineChartIcon className="w-3.5 h-3.5" /> Send to Charts
                       </button>
                     </div>
+                    {deepSelected.holdout && (
+                      <div className="text-[10px] text-muted-foreground">
+                        Ranked on the train window ({deepSelected.holdout.trainN} events before {deepSelected.holdout.splitDate}) ·
+                        holdout since then: <OosCell holdout={deepSelected.holdout} />
+                        <span className="ml-1">— tables below use the full sample.</span>
+                      </div>
+                    )}
                     <HorizonTable study={selectedStudy} freq={freq} />
                   </div>
 
@@ -848,7 +900,9 @@ export default function MaSlope() {
         <div>
           Weekly bars only count once the week has closed (no lookahead); hourly uses raw (unadjusted) closes — small
           ex-div bias on multi-week horizons. A grid of {MA_TYPES.length}×{DEFAULT_PERIODS.length} configs will produce
-          a handful of spuriously significant rows by chance — treat the top of the table as candidates, not truths.
+          a handful of spuriously significant rows by chance — with the holdout split on, ranking sees only the train
+          window and the OOS column shows whether the edge persisted on unseen data (✓/✗); an edge that flips sign
+          out-of-sample was probably noise.
         </div>
       </div>
     </div>
