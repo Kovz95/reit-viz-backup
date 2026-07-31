@@ -20,7 +20,8 @@ import { getTickerEvents } from "@/lib/dataService";
 import { ArrowUpDown } from "@/components/ui/icons";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { useGridColor } from "@/lib/gridPref";
-import ClassificationFilters, { emptyClassFilters, applyClassFilters } from "@/components/ClassificationFilters";
+import ClassificationFilters, { emptyClassFilters, applyClassFilters, serializeClassFilters, deserializeClassFilters } from "@/components/ClassificationFilters";
+import { PagePresets } from "@/components/PagePresets";
 import AttributionCompare from "@/components/AttributionCompare";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useBaskets } from "@/lib/useBaskets";
@@ -1212,6 +1213,39 @@ export default function Attribution() {
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-bold tracking-tight">Price Attribution</h1>
           <span className="text-[10px] text-muted-foreground">Δln(P) = Δln(M) + Δln(E) — decompose returns into multiple expansion vs estimate revisions</span>
+          <PagePresets
+            storageKey="reit-viz:attribution:presets"
+            label="Templates"
+            testIdPrefix="attr-presets"
+            capture={() => ({
+              mode, basisMode, basisPeriod, windowDays, rollingDays, attrFreq,
+              activeTicker, basketId, sortKey, sortDir, showEarnings,
+              classFilters: serializeClassFilters(classFilters),
+              clfSearch,
+              manualTickers: [...manualTickers],
+              geo: { nations: [...geo.state.nations], exchanges: [...geo.state.exchanges] },
+            })}
+            apply={(c) => {
+              if (c?.mode === "single" || c?.mode === "compare" || c?.mode === "basket" || c?.mode === "table") setMode(c.mode);
+              if (typeof c?.basisMode === "string" && c.basisMode) setBasisMode(c.basisMode);
+              if (typeof c?.basisPeriod === "string" && c.basisPeriod) setBasisPeriod(c.basisPeriod);
+              if (Number.isFinite(c?.windowDays)) setWindowDays(c.windowDays);
+              if (Number.isFinite(c?.rollingDays)) setRollingDays(c.rollingDays);
+              if (c?.attrFreq === "daily" || c?.attrFreq === "weekly") setAttrFreq(c.attrFreq);
+              if (typeof c?.activeTicker === "string" && c.activeTicker) setActiveTicker(c.activeTicker);
+              if (typeof c?.basketId === "string") setBasketId(c.basketId);
+              if (typeof c?.sortKey === "string" && c.sortKey) setSortKey(c.sortKey);
+              if (c?.sortDir === "asc" || c?.sortDir === "desc") setSortDir(c.sortDir);
+              if (typeof c?.showEarnings === "boolean") setShowEarnings(c.showEarnings);
+              if (c?.classFilters) setClassFilters(deserializeClassFilters(c.classFilters));
+              if (typeof c?.clfSearch === "string") setClfSearch(c.clfSearch);
+              if (Array.isArray(c?.manualTickers)) setManualTickers(new Set(c.manualTickers.filter((t: any) => typeof t === "string")));
+              if (c?.geo) {
+                geo.setNations(new Set(Array.isArray(c.geo.nations) ? c.geo.nations : []));
+                geo.setExchanges(new Set(Array.isArray(c.geo.exchanges) ? c.geo.exchanges : []));
+              }
+            }}
+          />
         </div>
         <div className="flex items-center gap-2">
           {/* Mode toggle */}

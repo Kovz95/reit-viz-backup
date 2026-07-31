@@ -32,6 +32,7 @@ import {
 import {
   Card, CardContent, CardHeader, CardTitle
 } from "@/components/ui/card";
+import { PagePresets } from "@/components/PagePresets";
 import { ChevronRight, ChevronDown, Play, Download, Plus, Minus, Activity } from "lucide-react";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
@@ -825,6 +826,23 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-semibold">
             <Play className="w-4 h-4 text-primary" /> Price Action — Event Study
+            <PagePresets
+              storageKey="reit-viz:study:presets"
+              label="Templates"
+              testIdPrefix="study-presets"
+              className="ml-auto font-normal"
+              capture={() => ({ mode, ticker, tickerB, conditions, combinator, rankHorizon, sortKey, sortDir })}
+              apply={(c) => {
+                if (c?.mode === "single" || c?.mode === "cross" || c?.mode === "pairs") setMode(c.mode);
+                if (typeof c?.ticker === "string") setTicker(c.ticker);
+                if (typeof c?.tickerB === "string") setTickerB(c.tickerB);
+                if (Array.isArray(c?.conditions) && c.conditions.length) setConditions(c.conditions);
+                if (c?.combinator === "AND" || c?.combinator === "OR") setCombinator(c.combinator);
+                if (Number.isFinite(c?.rankHorizon)) setRankHorizon(c.rankHorizon);
+                if (typeof c?.sortKey === "string" && c.sortKey) setSortKey(c.sortKey);
+                if (c?.sortDir === "asc" || c?.sortDir === "desc") setSortDir(c.sortDir);
+              }}
+            />
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0 flex flex-col gap-3">

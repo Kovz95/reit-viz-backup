@@ -10,6 +10,7 @@ import { fetchTradingDates } from "@/lib/fetchTradingDates";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { getYahooPairsRatio as yahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { usePairComboPicker } from "@/hooks/usePairComboPicker";
+import { PagePresets } from "@/components/PagePresets";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
@@ -1891,6 +1892,54 @@ export default function SimilarSetups() {
           Similar Setups ·{" "}
           <span className="text-amber-300">{targetLabel}</span>
         </h1>
+        <PagePresets
+          storageKey="reit-viz:similar-setups:presets"
+          label="Templates"
+          testIdPrefix="similar-presets"
+          capture={() => ({
+            mode, singleTicker, pairA, pairB, basketSymbol, classSource, industrySearch,
+            classFilters: Object.fromEntries(Object.entries(classFilters).map(([k, v]) => [k, [...v]])),
+            manualTickers: [...manualTickers],
+            nNeighbors, exclusion, lookbackBars,
+            enabledFeatures: [...enabledFeatures],
+            algo, dtwWindow, kernelH, regimeK, consensusMode,
+            consensusPresets: [...consensusPresets],
+            perTickerMode,
+            pairCombo: pairComboCtx.serialize(),
+          })}
+          apply={(c) => {
+            if (typeof c?.mode === "string" && c.mode) setMode(c.mode);
+            if (typeof c?.singleTicker === "string" && c.singleTicker) setSingleTicker(c.singleTicker);
+            if (typeof c?.pairA === "string") setPairA(c.pairA);
+            if (typeof c?.pairB === "string") setPairB(c.pairB);
+            if (typeof c?.basketSymbol === "string") setBasketSymbol(c.basketSymbol);
+            if (c?.classSource === "workbook" || c?.classSource === "global") setClassSource(c.classSource);
+            if (typeof c?.industrySearch === "string") setIndustrySearch(c.industrySearch);
+            if (c?.classFilters && typeof c.classFilters === "object") {
+              setClassFilters({
+                economy: new Set(Array.isArray(c.classFilters.economy) ? c.classFilters.economy : []),
+                sector: new Set(Array.isArray(c.classFilters.sector) ? c.classFilters.sector : []),
+                subsector: new Set(Array.isArray(c.classFilters.subsector) ? c.classFilters.subsector : []),
+                industryGroup: new Set(Array.isArray(c.classFilters.industryGroup) ? c.classFilters.industryGroup : []),
+                industry: new Set(Array.isArray(c.classFilters.industry) ? c.classFilters.industry : []),
+                subindustry: new Set(Array.isArray(c.classFilters.subindustry) ? c.classFilters.subindustry : []),
+              });
+            }
+            if (Array.isArray(c?.manualTickers)) setManualTickers(new Set(c.manualTickers.filter((t: any) => typeof t === "string")));
+            if (Number.isFinite(c?.nNeighbors)) setNNeighbors(c.nNeighbors);
+            if (Number.isFinite(c?.exclusion)) setExclusion(c.exclusion);
+            if (Number.isFinite(c?.lookbackBars)) setLookbackBars(c.lookbackBars);
+            if (Array.isArray(c?.enabledFeatures)) setEnabledFeatures(new Set(c.enabledFeatures.filter((f: any) => typeof f === "string")));
+            if (typeof c?.algo === "string" && c.algo) setAlgo(c.algo);
+            if (Number.isFinite(c?.dtwWindow)) setDtwWindow(c.dtwWindow);
+            if (Number.isFinite(c?.kernelH)) setKernelH(c.kernelH);
+            if (Number.isFinite(c?.regimeK)) setRegimeK(c.regimeK);
+            if (typeof c?.consensusMode === "boolean") setConsensusMode(c.consensusMode);
+            if (Array.isArray(c?.consensusPresets)) setConsensusPresets(new Set(c.consensusPresets.filter((p: any) => typeof p === "string")));
+            if (typeof c?.perTickerMode === "boolean") setPerTickerMode(c.perTickerMode);
+            if (c?.pairCombo) pairComboCtx.hydrate(c.pairCombo);
+          }}
+        />
         {!consensusMode && mainResult && (
           <span className="text-[10px] font-mono text-muted-foreground">
             {mainResult.matches.length}/{mainResult.total} bars matched · feature dim{" "}

@@ -1,6 +1,7 @@
 // Reconstructed from recovered-bundle/Distributions-U9XjHz3w.js on 2026-06-11
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useBaskets } from "@/lib/useBaskets";
+import { PagePresets } from "@/components/PagePresets";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchMetricSeries } from "@/lib/fetchMetricSeries";
 import { metricMultiplier } from "@/lib/dataService";
@@ -1149,6 +1150,32 @@ export default function Distributions() {
     <div className="flex flex-col h-full bg-background text-foreground">
       <div className="flex-shrink-0 border-b border-border/40 bg-card/40">
         <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+          <PagePresets
+            storageKey="reit-viz:distributions:presets"
+            label="Templates"
+            testIdPrefix="dist-presets"
+            capture={() => ({
+              mode, selectedMetric, universeMode, selectedBasket, classKey, classValue,
+              windowKey, view, bins, basis, reference, peerGroup, sortKey, sortDir, pairs,
+            })}
+            apply={(c) => {
+              if (c?.mode === "metric" || c?.mode === "pair") setMode(c.mode);
+              if (typeof c?.selectedMetric === "string" && c.selectedMetric) { metricLockedRef.current = true; setSelectedMetric(c.selectedMetric); }
+              if (typeof c?.universeMode === "string" && c.universeMode) setUniverseMode(c.universeMode);
+              if (typeof c?.selectedBasket === "string") setSelectedBasket(c.selectedBasket);
+              if (typeof c?.classKey === "string" && c.classKey) setClassKey(c.classKey);
+              if (typeof c?.classValue === "string") setClassValue(c.classValue);
+              if (typeof c?.windowKey === "string" && c.windowKey) setWindowKey(c.windowKey);
+              if (typeof c?.view === "string" && c.view) setView(c.view);
+              if (Number.isFinite(c?.bins)) setBins(c.bins);
+              if (c?.basis === "level" || c?.basis === "returns") setBasis(c.basis);
+              if (c?.reference === "history" || c?.reference === "peers") setReference(c.reference);
+              if (c?.peerGroup === "all" || c?.peerGroup === "subind") setPeerGroup(c.peerGroup);
+              if (typeof c?.sortKey === "string" && c.sortKey) setSortKey(c.sortKey);
+              if (c?.sortDir === "asc" || c?.sortDir === "desc") setSortDir(c.sortDir);
+              if (Array.isArray(c?.pairs)) setPairs(c.pairs.filter((p: any) => typeof p === "string" && p.includes("/")));
+            }}
+          />
           <div className="flex rounded border border-border/40 overflow-hidden">
             {([["metric", "Metric"], ["pair", "Pair Ratio"]] as const).map(([m, label]) => (
               <button

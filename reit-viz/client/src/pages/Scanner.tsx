@@ -13,6 +13,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PagePresets } from "@/components/PagePresets";
 import { Input } from "@/components/ui/input";
 import { X, Loader2, Database, ArrowDown, ArrowUp, BarChart3, Zap } from "lucide-react";
 import { Play } from "@/lib/icons";
@@ -884,6 +885,24 @@ export default function Scanner() {
           <Zap className="w-4 h-4 text-amber-400" />
           <span className="text-sm font-semibold">Signal Scanner</span>
           <span className="text-[10px] text-muted-foreground">Ranks the workbook by predictive-signal quality. Pairs and singles, mean-reversion edge.</span>
+          <PagePresets
+            storageKey="reit-viz:scanner:presets"
+            label="Templates"
+            testIdPrefix="scanner-presets"
+            capture={() => ({ universeMode, selectedBasket, classField, classValue, scanMode, singleSort, pairSort, minN, filterQuery, hideSmall })}
+            apply={(c) => {
+              if (c?.universeMode === "workbook" || c?.universeMode === "basket" || c?.universeMode === "classification") setUniverseMode(c.universeMode);
+              if (typeof c?.selectedBasket === "string") setSelectedBasket(c.selectedBasket);
+              if (typeof c?.classField === "string" && c.classField) setClassField(c.classField);
+              if (typeof c?.classValue === "string") setClassValue(c.classValue);
+              if (c?.scanMode === "singles" || c?.scanMode === "pairs") setScanMode(c.scanMode);
+              if (c?.singleSort && typeof c.singleSort.key === "string") setSingleSort(c.singleSort);
+              if (c?.pairSort && typeof c.pairSort.key === "string") setPairSort(c.pairSort);
+              if (Number.isFinite(c?.minN)) setMinN(c.minN);
+              if (typeof c?.filterQuery === "string") setFilterQuery(c.filterQuery);
+              if (typeof c?.hideSmall === "boolean") setHideSmall(c.hideSmall);
+            }}
+          />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Singles / Pairs tabs */}
