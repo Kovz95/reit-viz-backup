@@ -418,6 +418,10 @@ export default function ValuationRerateResidence() {
     return (col === "fwdCheap" ? f.cheap.n : f.rich.n) >= MIN_TAIL_N;
   };
 
+  // Indicator anchor sorts only when the pro-forma multiple is defined — matches
+  // the cell render (a "—" trio must sort as absent, not by its residual move/rich).
+  const indSortOk = (c: Cell) => !!c.indAnchor && Number.isFinite(c.rr?.proForma);
+
   const sortValue = (row: MultiRow, col: SortCol): number | string => {
     if (col === "ticker") return row.meta.ticker;
     const c = row.byMetric[effSortMetric];
@@ -428,9 +432,9 @@ export default function ValuationRerateResidence() {
       case "m0": v = c.rr?.m0 ?? c.res?.m0 ?? NaN; break;
       case "rich": v = cellRich(c, m); break;
       case "z": v = c.rr?.nowZ ?? NaN; break;
-      case "proForma": v = indicatorMode ? (c.indAnchor ? (c.rr?.proForma ?? NaN) : NaN) : criticalMode ? (c.rr?.critical?.support?.move ?? NaN) : (c.rr?.proForma ?? NaN); break;
-      case "pfRich": v = indicatorMode ? (c.indAnchor ? cellPfRich(c, m) : NaN) : criticalMode ? (c.rr?.critical?.resistance?.move ?? NaN) : cellPfRich(c, m); break;
-      case "seen": v = indicatorMode ? (c.indAnchor?.move ?? NaN) : criticalMode ? critRatio(c.rr) : (c.res?.proFormaFreqRicher ?? NaN); break;
+      case "proForma": v = indicatorMode ? (indSortOk(c) ? (c.rr?.proForma ?? NaN) : NaN) : criticalMode ? (c.rr?.critical?.support?.move ?? NaN) : (c.rr?.proForma ?? NaN); break;
+      case "pfRich": v = indicatorMode ? (indSortOk(c) ? cellPfRich(c, m) : NaN) : criticalMode ? (c.rr?.critical?.resistance?.move ?? NaN) : cellPfRich(c, m); break;
+      case "seen": v = indicatorMode ? (indSortOk(c) ? (c.indAnchor?.move ?? NaN) : NaN) : criticalMode ? critRatio(c.rr) : (c.res?.proFormaFreqRicher ?? NaN); break;
       case "toMedian": v = c.rr?.toMedian ?? NaN; break;
       case "toRich": v = c.rr?.toRich ?? NaN; break;
       case "toCheap": v = c.rr?.toCheap ?? NaN; break;
@@ -579,6 +583,11 @@ export default function ValuationRerateResidence() {
     const richLow = !f || f.rich.n < MIN_TAIL_N;
     const cheapLow = !f || f.cheap.n < MIN_TAIL_N;
     const rich = cellRich(c, m), pfRich = cellPfRich(c, m);
+    // Indicator anchor is only meaningful when the pro-forma multiple itself is
+    // defined — on a zero-touching scale (e.g. a yield with 0 readings) proForma
+    // is NaN, so blank the whole @Ind/Rich%/→Mv trio rather than showing a move
+    // next to a "—" multiple.
+    const indOk = !!c.indAnchor && Number.isFinite(rr?.proForma);
     const onCell = () => setDetail({ meta, cell: c, metric: m });
     const cls = "px-2 py-1 text-right cursor-pointer";
     return (
@@ -588,9 +597,9 @@ export default function ValuationRerateResidence() {
         <td onClick={onCell} className={`${cls} text-muted-foreground`}>{fmtZ(rr?.nowZ)}</td>
         {indicatorMode ? (
           <>
-            <td onClick={onCell} className={cls} title={c.indAnchor ? `${indLabel} @ ${fmtVal(c.indAnchor.level)} · ${fmtMove(c.indAnchor.move)} away (${indBasis} basis)` : `no ${indLabel} (insufficient history)`}>{c.indAnchor ? fmtVal(rr?.proForma) : "—"}</td>
-            <td onClick={onCell} className={`${cls} ${c.indAnchor ? richColor(pfRich) : ""}`}>{c.indAnchor ? fmtPct(pfRich) : "—"}</td>
-            <td onClick={onCell} className={`${cls} ${moveColor(c.indAnchor?.move)}`}>{fmtMove(c.indAnchor?.move)}</td>
+            <td onClick={onCell} className={cls} title={indOk ? `${indLabel} @ ${fmtVal(c.indAnchor!.level)} · ${fmtMove(c.indAnchor!.move)} away (${indBasis} basis)` : c.indAnchor ? `${indLabel} reached, but the multiple is undefined on this scale (history touches zero)` : `no ${indLabel} (insufficient history)`}>{indOk ? fmtVal(rr?.proForma) : "—"}</td>
+            <td onClick={onCell} className={`${cls} ${indOk ? richColor(pfRich) : ""}`}>{indOk ? fmtPct(pfRich) : "—"}</td>
+            <td onClick={onCell} className={`${cls} ${indOk ? moveColor(c.indAnchor?.move) : ""}`}>{indOk ? fmtMove(c.indAnchor?.move) : "—"}</td>
           </>
         ) : criticalMode ? (
           <>
