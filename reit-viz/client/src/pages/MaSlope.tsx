@@ -443,10 +443,11 @@ export default function MaSlope() {
   const [ddSelectedKey, setDdSelectedKey] = useState<string | null>(null);
   const [ddSide, setDdSide] = useState<"up" | "down" | "curvUp" | "curvDown">("up");
   const ddCancel = useRef({ current: false });
-  /** Template apply queues a sweep here; the effect below fires it only after
-   *  the applied settings/primaryH have committed (a direct call would sweep
-   *  with the pre-apply grid). */
+  /** Template apply queues a run here; the effects below fire only after the
+   *  applied settings/primaryH have committed (a direct call would run with
+   *  the pre-apply grid/targets). */
   const [autoRunSymbol, setAutoRunSymbol] = useState<string | null>(null);
+  const [autoRunScan, setAutoRunScan] = useState(false);
 
   const deepSelected = useMemo(
     () => ddResults.find((r) => r.key === ddSelectedKey) ?? ddResults[0] ?? null,
@@ -505,6 +506,17 @@ export default function MaSlope() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRunSymbol]);
 
+  // Scan auto-run waits for targets to materialize (the workbook fetch may
+  // still be in flight right after a reload+apply); once the pool exists —
+  // or turns out empty with the workbook loaded — the flag is consumed.
+  useEffect(() => {
+    if (!autoRunScan || scanning) return;
+    if (!targets.length && !workbook.length) return;
+    setAutoRunScan(false);
+    if (targets.length) void runScan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunScan, targets, workbook.length]);
+
   const openDeepDive = (row: ScanRow) => {
     if (!row.best) return;
     setTab("deep");
@@ -558,6 +570,7 @@ export default function MaSlope() {
                 if (Number.isFinite(c?.primaryH)) setPrimaryH(c.primaryH);
                 const sym = typeof c?.ddTicker === "string" ? c.ddTicker.trim().toUpperCase() : "";
                 if (c?.tab === "deep" && sym) setAutoRunSymbol(sym);
+                else if (c?.tab === "scan") setAutoRunScan(true);
               }, 0);
             }}
           />
