@@ -33,8 +33,8 @@ import { defaultMaSlopeParams, configLabel, type MaSlopeParams, type SlopeFreq }
 import { SLOPE_HORIZONS, defaultPrimaryHorizon, horizonLabel, loadSlopeSeries } from "@/lib/maSlopeData";
 import { pctFmt, buildHistogram, type StudyResult } from "@/lib/eventStudy";
 import {
-  runDeepDiveSweep, runUniverseScan, tStatOf, statsAt,
-  type ConfigEval, type ScanRow, type ScanMode,
+  runDeepDiveSweep, runUniverseScan, runMethodologyShootout, tStatOf, statsAt,
+  SHOOTOUT_COMBOS, type ConfigEval, type ScanRow, type ScanMode, type ShootoutResult,
 } from "@/lib/maSlopeSweep";
 
 const FREQS: Array<{ key: SlopeFreq; label: string }> = [
@@ -481,6 +481,12 @@ export default function MaSlope() {
   const [autoRunSymbol, setAutoRunSymbol] = useState<string | null>(null);
   const [autoRunScan, setAutoRunScan] = useState(false);
 
+  // ── Methodology shootout state ──
+  const [shootout, setShootout] = useState<ShootoutResult[] | null>(null);
+  const [shootoutRunning, setShootoutRunning] = useState(false);
+  const [shootoutProgress, setShootoutProgress] = useState<[number, number, number, number] | null>(null);
+  const [shootoutActive, setShootoutActive] = useState<string | null>(null);
+
   const deepSelected = useMemo(
     () => ddResults.find((r) => r.key === ddSelectedKey) ?? ddResults[0] ?? null,
     [ddResults, ddSelectedKey],
@@ -548,6 +554,51 @@ export default function MaSlope() {
     if (targets.length) void runScan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRunScan, targets, workbook.length]);
+
+  const runShootout = async () => {
+    const ticker = ddTicker.trim().toUpperCase();
+    if (!ticker || ddRunning || shootoutRunning) return;
+    setDdTicker(ticker);
+    ddCancel.current = { current: false };
+    setShootoutRunning(true);
+    setDdError(null);
+    setShootout(null);
+    setShootoutActive(null);
+    setDdResults([]);
+    setDdSelectedKey(null);
+    try {
+      const data = await loadSlopeSeries(ticker, freq);
+      if (!data) {
+        setDdError(freq === "hourly" ? `No usable hourly data for ${ticker} (need ≥250 aligned bars).` : `No price data for ${ticker}.`);
+        return;
+      }
+      const results = await runMethodologyShootout({
+        data,
+        types: settings.ddTypes.length ? settings.ddTypes : [...MA_TYPES],
+        periods: settings.ddPeriods.length ? settings.ddPeriods : [...DEFAULT_PERIODS],
+        baseParams: settings.det,
+        primaryHorizonBars: primaryH,
+        minEvents: settings.minEvents,
+        holdoutFrac: settings.holdoutPct / 100,
+        onProgress: (ci, ct, d, t) => setShootoutProgress([ci, ct, d, t]),
+        cancelRef: ddCancel.current,
+      });
+      setShootout(results);
+    } catch (e: any) {
+      setDdError(String(e?.message ?? e));
+    } finally {
+      setShootoutRunning(false);
+      setShootoutProgress(null);
+    }
+  };
+
+  const openShootoutCombo = (combo: ShootoutResult) => {
+    setShootoutActive(combo.key);
+    setDdResults(combo.results);
+    setDdSelectedKey(combo.results[0]?.key ?? null);
+    // Sync the detection panel so a follow-up single sweep uses this methodology.
+    set("det", { ...settings.det, ...combo.overrides });
+  };
 
   const openDeepDive = (row: ScanRow) => {
     if (!row.best) return;
@@ -777,11 +828,27 @@ export default function MaSlope() {
                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Cancel
                 {ddProgress && <span className="text-muted-foreground">{ddProgress[0]}/{ddProgress[1]}</span>}
               </button>
-            ) : (
-              <button type="button" className={btnCls} onClick={() => void runDeepDive()}
-                disabled={!ddTicker.trim()} data-testid="run-deep-dive">
-                <Search className="w-3.5 h-3.5" /> Run sweep
+            ) : shootoutRunning ? (
+              <button type="button" className={btnCls} onClick={() => { ddCancel.current.current = true; }} data-testid="shootout-cancel">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Cancel
+                {shootoutProgress && (
+                  <span className="text-muted-foreground">
+                    {SHOOTOUT_COMBOS[shootoutProgress[0]]?.label} ({shootoutProgress[0] + 1}/{shootoutProgress[1]}) · {shootoutProgress[2]}/{shootoutProgress[3]}
+                  </span>
+                )}
               </button>
+            ) : (
+              <>
+                <button type="button" className={btnCls} onClick={() => void runDeepDive()}
+                  disabled={!ddTicker.trim()} data-testid="run-deep-dive">
+                  <Search className="w-3.5 h-3.5" /> Run sweep
+                </button>
+                <button type="button" className={btnCls} onClick={() => void runShootout()}
+                  disabled={!ddTicker.trim()} data-testid="run-shootout"
+                  title="Run the full grid once per methodology (3 estimators × 2 normalizations + t-stat gate = 7 combos) and compare their out-of-sample robustness head-to-head.">
+                  <Play className="w-3.5 h-3.5" /> Shootout
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -961,12 +1028,76 @@ export default function MaSlope() {
       {tab === "deep" && (
         <div className="space-y-3">
           {ddError && <div className="text-xs text-destructive px-1">{ddError}</div>}
+          {shootout && (
+            <div className="rounded border border-border bg-card overflow-hidden" data-testid="shootout-table">
+              <div className="px-3 py-2 border-b border-border flex items-center gap-2">
+                <span className="text-xs font-semibold">Methodology shootout · {ddTicker} · {freq}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  full grid per combo — pick a row to inspect its ranked configs below
+                </span>
+              </div>
+              <table className="w-full text-[11px] font-mono border-collapse">
+                <thead>
+                  <tr className="text-muted-foreground text-[10px] border-b border-border">
+                    <th className="text-left py-1 px-2">Methodology</th>
+                    <th className="text-right py-1 px-2" title="Configs meeting the min-event bar">Ranked</th>
+                    <th className="text-right py-1 px-2" title="Holdout verdicts across ranked configs — the robustness metric">OOS ✓ / ✗</th>
+                    <th className="text-right py-1 px-2" title="Share of called verdicts that confirmed">Confirm%</th>
+                    <th className="text-right py-1 px-2" title="Median holdout edge across ranked configs">Med OOS edge</th>
+                    <th className="text-left py-1 px-2">Best config (train)</th>
+                    <th className="text-right py-1 px-2">Best OOS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shootout.map((c) => {
+                    const s = c.summary;
+                    const called = s.oosConfirmed + s.oosRejected;
+                    const rate = called > 0 ? (s.oosConfirmed / called) * 100 : NaN;
+                    return (
+                      <tr key={c.key}
+                        className={`border-b border-border/40 cursor-pointer ${shootoutActive === c.key ? "bg-primary/10" : "hover:bg-muted/30"}`}
+                        onClick={() => openShootoutCombo(c)} data-testid={`shootout-row-${c.key}`}>
+                        <td className="py-1 px-2 font-semibold">{c.label}</td>
+                        <td className="py-1 px-2 text-right">{s.ranked}</td>
+                        <td className="py-1 px-2 text-right">
+                          <span className="text-chart-2">{s.oosConfirmed}</span>
+                          {" / "}
+                          <span className="text-destructive">{s.oosRejected}</span>
+                          {s.oosUncalled > 0 && <span className="text-muted-foreground text-[9px]"> (+{s.oosUncalled} n/a)</span>}
+                        </td>
+                        <td className={`py-1 px-2 text-right font-semibold ${Number.isFinite(rate) ? (rate >= 55 ? "text-chart-2" : rate <= 45 ? "text-destructive" : "") : ""}`}>
+                          {Number.isFinite(rate) ? `${rate.toFixed(0)}%` : "—"}
+                        </td>
+                        <td className={`py-1 px-2 text-right ${edgeClass(s.medianHoEdge)}`}>
+                          {Number.isFinite(s.medianHoEdge) ? `${s.medianHoEdge > 0 ? "+" : ""}${s.medianHoEdge.toFixed(2)}pp` : "—"}
+                        </td>
+                        <td className="py-1 px-2">
+                          {s.best ? `${configLabel(s.best.params)} ${s.best.side === "up" ? "↑" : "↓"} ${Number.isFinite(s.best.edge) ? (s.best.edge > 0 ? "+" : "") + s.best.edge.toFixed(2) + "pp" : ""}` : "—"}
+                        </td>
+                        <td className="py-1 px-2 text-right"><OosCell holdout={s.best?.holdout ?? null} /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border/40">
+                Confirm% ≈ how often a methodology's in-sample edges survive unseen data — prefer the methodology, not the single
+                best cell (7 × {ddResults.length || "n"} configs is a lot of chances to be lucky). Selecting a row also sets the
+                Detection parameters to that methodology.
+              </div>
+            </div>
+          )}
           {ddResults.length > 0 && (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
               {/* Ranked config grid */}
               <div className="rounded border border-border bg-card overflow-hidden">
                 <div className="px-3 py-2 border-b border-border text-xs font-semibold">
                   {ddTicker} · {ddResults.length} configs ranked · {freq}
+                  {shootoutActive && (
+                    <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                      ({SHOOTOUT_COMBOS.find((c) => c.key === shootoutActive)?.label})
+                    </span>
+                  )}
                 </div>
                 <div className="overflow-y-auto max-h-[540px]">
                   <table className="w-full text-[11px] font-mono border-collapse" data-testid="dd-config-table">

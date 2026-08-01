@@ -247,6 +247,83 @@ export async function runDeepDiveSweep(opts: SweepOpts): Promise<ConfigEval[]> {
   return out;
 }
 
+// ── Methodology shootout ─────────────────────────────────────────────────────
+// Run the full type×period sweep once per methodology combo so estimators can
+// be compared head-to-head under the identical backtest/holdout discipline.
+// 7 distinct combos, not 3×2×2 = 12: under the t-stat gate, detection runs on
+// the regression t-statistic alone — measure and normalization don't affect
+// the event stream — so all t-stat variants collapse into one.
+export const SHOOTOUT_COMBOS: Array<{
+  key: string;
+  label: string;
+  overrides: Partial<Pick<MaSlopeParams, "measure" | "normalization" | "thresholdMode">>;
+}> = [
+  { key: "diff-ma", label: "diff · MA-level", overrides: { measure: "diff", normalization: "ma", thresholdMode: "mad" } },
+  { key: "regress-ma", label: "regress · MA-level", overrides: { measure: "regress", normalization: "ma", thresholdMode: "mad" } },
+  { key: "kalman-ma", label: "kalman · MA-level", overrides: { measure: "kalman", normalization: "ma", thresholdMode: "mad" } },
+  { key: "diff-atr", label: "diff · ATR", overrides: { measure: "diff", normalization: "atr", thresholdMode: "mad" } },
+  { key: "regress-atr", label: "regress · ATR", overrides: { measure: "regress", normalization: "atr", thresholdMode: "mad" } },
+  { key: "kalman-atr", label: "kalman · ATR", overrides: { measure: "kalman", normalization: "atr", thresholdMode: "mad" } },
+  { key: "tstat", label: "t-stat gate", overrides: { measure: "regress", normalization: "ma", thresholdMode: "tstat" } },
+];
+
+export interface ShootoutSummary {
+  /** Configs that met the min-event bar and were ranked. */
+  ranked: number;
+  /** Of the ranked, holdout verdicts (null when the split is off or hoN too small). */
+  oosConfirmed: number;
+  oosRejected: number;
+  oosUncalled: number;
+  /** Median holdout edge across ranked configs with a finite hoEdge. */
+  medianHoEdge: number;
+  best: ConfigEval | null;
+}
+
+export interface ShootoutResult {
+  key: string;
+  label: string;
+  overrides: (typeof SHOOTOUT_COMBOS)[number]["overrides"];
+  results: ConfigEval[];
+  summary: ShootoutSummary;
+}
+
+function summarizeShootout(results: ConfigEval[]): ShootoutSummary {
+  const ranked = results.filter((r) => !r.insufficient);
+  let oosConfirmed = 0, oosRejected = 0, oosUncalled = 0;
+  const hoEdges: number[] = [];
+  for (const r of ranked) {
+    if (r.holdout?.confirmed === true) oosConfirmed++;
+    else if (r.holdout?.confirmed === false) oosRejected++;
+    else oosUncalled++;
+    if (r.holdout && Number.isFinite(r.holdout.hoEdge)) hoEdges.push(r.holdout.hoEdge);
+  }
+  hoEdges.sort((a, b) => a - b);
+  const medianHoEdge = hoEdges.length
+    ? hoEdges.length % 2 ? hoEdges[hoEdges.length >> 1] : (hoEdges[hoEdges.length / 2 - 1] + hoEdges[hoEdges.length / 2]) / 2
+    : NaN;
+  return { ranked: ranked.length, oosConfirmed, oosRejected, oosUncalled, medianHoEdge, best: results[0] ?? null };
+}
+
+export interface ShootoutOpts extends Omit<SweepOpts, "onProgress"> {
+  onProgress?: (comboIdx: number, comboTotal: number, done: number, total: number) => void;
+}
+
+/** Full sweep per methodology combo; combo order matches SHOOTOUT_COMBOS. */
+export async function runMethodologyShootout(opts: ShootoutOpts): Promise<ShootoutResult[]> {
+  const out: ShootoutResult[] = [];
+  for (let c = 0; c < SHOOTOUT_COMBOS.length; c++) {
+    if (opts.cancelRef?.current) break;
+    const combo = SHOOTOUT_COMBOS[c];
+    const results = await runDeepDiveSweep({
+      ...opts,
+      baseParams: { ...opts.baseParams, ...combo.overrides },
+      onProgress: (done, total) => opts.onProgress?.(c, SHOOTOUT_COMBOS.length, done, total),
+    });
+    out.push({ key: combo.key, label: combo.label, overrides: combo.overrides, results, summary: summarizeShootout(results) });
+  }
+  return out;
+}
+
 export interface ScanRow {
   ticker: string;
   status: "ok" | "no-data" | "no-hourly";
