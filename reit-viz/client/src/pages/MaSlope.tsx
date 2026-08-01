@@ -30,7 +30,8 @@ import { PagePresets } from "@/components/PagePresets";
 import { MA_TYPES, type MaType } from "@/lib/maEngine";
 import { DEFAULT_PERIODS } from "@/lib/findBestMA";
 import { defaultMaSlopeParams, configLabel, type MaSlopeParams, type SlopeFreq } from "@/lib/maSlope";
-import { SLOPE_HORIZONS, defaultPrimaryHorizon, horizonLabel, loadSlopeSeries } from "@/lib/maSlopeData";
+import { SLOPE_HORIZONS, defaultPrimaryHorizon, horizonLabel, loadSlopeSeries, type SlopeSeriesData } from "@/lib/maSlopeData";
+import { analyzeConditioners } from "@/lib/maSlopeConditioners";
 import { pctFmt, buildHistogram, type StudyResult } from "@/lib/eventStudy";
 import {
   runDeepDiveSweep, runUniverseScan, runMethodologyShootout, tStatOf, statsAt,
@@ -475,6 +476,8 @@ export default function MaSlope() {
   const [ddSelectedKey, setDdSelectedKey] = useState<string | null>(null);
   const [ddSide, setDdSide] = useState<"up" | "down" | "curvUp" | "curvDown">("up");
   const ddCancel = useRef({ current: false });
+  /** Series the current deep-dive/shootout ran on — feeds the conditioner study. */
+  const deepDataRef = useRef<SlopeSeriesData | null>(null);
   /** Template apply queues a run here; the effects below fire only after the
    *  applied settings/primaryH have committed (a direct call would run with
    *  the pre-apply grid/targets). */
@@ -514,6 +517,7 @@ export default function MaSlope() {
         );
         return;
       }
+      deepDataRef.current = data;
       const results = await runDeepDiveSweep({
         data,
         types: settings.ddTypes.length ? settings.ddTypes : [...MA_TYPES],
@@ -572,6 +576,7 @@ export default function MaSlope() {
         setDdError(freq === "hourly" ? `No usable hourly data for ${ticker} (need ≥250 aligned bars).` : `No price data for ${ticker}.`);
         return;
       }
+      deepDataRef.current = data;
       const results = await runMethodologyShootout({
         data,
         types: settings.ddTypes.length ? settings.ddTypes : [...MA_TYPES],
@@ -620,6 +625,17 @@ export default function MaSlope() {
     () => (selectedStudy ? buildHistogram(selectedStudy.distribution[primaryH] ?? [], 24) : []),
     [selectedStudy, primaryH],
   );
+
+  // Event-conditioning study for the selected config (slope sides only).
+  const conditioners = useMemo(() => {
+    if (!deepSelected || !deepDataRef.current) return null;
+    if (ddSide !== "up" && ddSide !== "down") return null;
+    try {
+      return analyzeConditioners(deepDataRef.current, deepSelected.params, ddSide, primaryH, settings.holdoutPct / 100);
+    } catch {
+      return null;
+    }
+  }, [deepSelected, ddSide, primaryH, settings.holdoutPct]);
 
   const horizonOptions = SLOPE_HORIZONS[freq];
 
@@ -1223,6 +1239,62 @@ export default function MaSlope() {
                             <Bar dataKey="count" fill="hsl(var(--chart-2))" />
                           </BarChart>
                         </ResponsiveContainer>
+                      </div>
+                    </div>
+                  )}
+
+                  {conditioners && conditioners.rows.length > 0 && (
+                    <div className="rounded border border-border bg-card overflow-hidden" data-testid="conditioners-card">
+                      <div className="px-3 py-2 border-b border-border">
+                        <span className="text-[10px] text-muted-foreground">
+                          Conditioners — what else was true when {conditioners.side === "up" ? "▲ up" : "▼ down"} events worked
+                          ({conditioners.nTrain} train / {conditioners.nHoldout} holdout events @ {horizonLabel(freq, primaryH)})
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[10px] font-mono border-collapse">
+                          <thead>
+                            <tr className="text-muted-foreground border-b border-border">
+                              <th className="text-left py-1 px-3">Condition</th>
+                              <th className="text-right py-1 px-3" title="Events where the condition held: n · favorable hit% · favorable mean">With</th>
+                              <th className="text-right py-1 px-3" title="Events where it didn't">Without</th>
+                              <th className="text-right py-1 px-3" title="Train: favorable-mean(with) − favorable-mean(without)">Δ mean</th>
+                              <th className="text-right py-1 px-3" title="Train hit-rate difference">Δ hit</th>
+                              <th className="text-right py-1 px-3" title="Same split on holdout events — does the uplift persist?">OOS Δ</th>
+                              <th className="text-center py-1 px-3">✓</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {conditioners.rows.map((r) => {
+                              const fmtSplit = (s: { n: number; hit: number; mean: number }) =>
+                                s.n > 0 ? `${s.n} · ${Number.isFinite(s.hit) ? (s.hit * 100).toFixed(0) : "—"}% · ${Number.isFinite(s.mean) ? (s.mean > 0 ? "+" : "") + s.mean.toFixed(2) + "%" : "—"}` : "—";
+                              return (
+                                <tr key={r.id} className="border-b border-border/40">
+                                  <td className="py-1 px-3">{r.label}</td>
+                                  <td className="py-1 px-3 text-right whitespace-nowrap">{fmtSplit(r.train.on)}</td>
+                                  <td className="py-1 px-3 text-right whitespace-nowrap text-muted-foreground">{fmtSplit(r.train.off)}</td>
+                                  <td className={`py-1 px-3 text-right font-semibold ${edgeClass(r.upliftMean)}`}>
+                                    {Number.isFinite(r.upliftMean) ? `${r.upliftMean > 0 ? "+" : ""}${r.upliftMean.toFixed(2)}pp` : "—"}
+                                  </td>
+                                  <td className={`py-1 px-3 text-right ${edgeClass(r.upliftHit)}`}>
+                                    {Number.isFinite(r.upliftHit) ? `${r.upliftHit > 0 ? "+" : ""}${r.upliftHit.toFixed(0)}pp` : "—"}
+                                  </td>
+                                  <td className={`py-1 px-3 text-right ${edgeClass(r.oosUplift ?? NaN)}`}>
+                                    {r.oosUplift !== null ? `${r.oosUplift > 0 ? "+" : ""}${r.oosUplift.toFixed(2)}pp` : "—"}
+                                  </td>
+                                  <td className="py-1 px-3 text-center">
+                                    {r.confirmed === true ? <span className="text-chart-2">✓</span> : r.confirmed === false ? <span className="text-destructive">✗</span> : <span className="text-muted-foreground">—</span>}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="px-3 py-1.5 text-[9px] text-muted-foreground border-t border-border/40">
+                        Hit/mean are favorable-signed for the side (down events "hit" when the stock falls). ✓ = the Δ-mean uplift
+                        kept its sign on holdout events; splits thinner than 5 train / 3 holdout events aren't called. A positive
+                        Δ with ✓ means taking only condition-true events historically raised the edge.
                       </div>
                     </div>
                   )}
