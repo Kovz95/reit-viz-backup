@@ -50,6 +50,13 @@ export interface MaSlopeParams {
   /** Refractory: suppress a same-direction event within this many bars. */
   minBarsBetween: number;
   detectCurvature: boolean;
+  /** Long-trend regime filter on SLOPE events (research: counter-trend
+   *  inflections carry the robust edge — see maSlopeConditioners):
+   *  "counter" keeps up-flips only while the long-MA slope is ≤ 0 and
+   *  down-flips only while it is ≥ 0; "with" keeps the opposite; "off" keeps
+   *  all. Events during the long MA's warmup are dropped when filtering.
+   *  Curvature events are never filtered. */
+  trendFilter: "off" | "counter" | "with";
 }
 
 export interface InflectionEvent {
@@ -86,12 +93,14 @@ export function defaultMaSlopeParams(maType: MaType = "EMA", period = 50): MaSlo
     confirmBars: 1,
     minBarsBetween: 5,
     detectCurvature: true,
+    trendFilter: "off",
   };
 }
 
 export function configKey(p: MaSlopeParams, freq: SlopeFreq): string {
   const trigger = p.thresholdMode === "tstat" ? `t${p.tCrit}` : `k${p.thresholdK}`;
-  return `${p.maType}${p.period}·${freq}·L${p.slopeLookback}·${trigger}·c${p.confirmBars}·g${p.minBarsBetween}·${p.measure}·${p.normalization}`;
+  const tf = p.trendFilter && p.trendFilter !== "off" ? `·${p.trendFilter}` : "";
+  return `${p.maType}${p.period}·${freq}·L${p.slopeLookback}·${trigger}·c${p.confirmBars}·g${p.minBarsBetween}·${p.measure}·${p.normalization}${tf}`;
 }
 
 export function configLabel(p: MaSlopeParams): string {
@@ -377,5 +386,23 @@ export function computeMaSlopeSeries(
   }
   events.sort((a, b) => a.idx - b.idx || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0));
 
-  return { ma, slope, curvature, events, warmupIdx };
+  // ── Long-trend regime filter on slope events ──
+  // Same construction as the conditioner study that motivated it: SMA over
+  // min(200, max(20, n/4)) with a 10-bar slope difference, strictly causal.
+  let filtered = events;
+  if (params.trendFilter === "counter" || params.trendFilter === "with") {
+    const longPeriod = Math.min(200, Math.max(20, Math.floor(n / 4)));
+    const longMa = computeMaByType(closes, longPeriod, "SMA");
+    const keep = (e: InflectionEvent): boolean => {
+      if (e.kind !== "slope") return true;
+      const a = longMa[e.idx], b = longMa[e.idx - 10];
+      if (a == null || b == null) return false; // unclassifiable during warmup
+      const longUp = a - b > 0;
+      const withTrend = e.direction === "up" ? longUp : !longUp;
+      return params.trendFilter === "with" ? withTrend : !withTrend;
+    };
+    filtered = events.filter(keep);
+  }
+
+  return { ma, slope, curvature, events: filtered, warmupIdx };
 }

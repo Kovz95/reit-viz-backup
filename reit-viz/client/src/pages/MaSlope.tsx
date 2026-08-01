@@ -113,6 +113,7 @@ function defaultSettings(): PageSettings {
       slopeLookback: d.slopeLookback, measure: d.measure, normalization: d.normalization,
       thresholdMode: d.thresholdMode, thresholdK: d.thresholdK, tCrit: d.tCrit,
       confirmBars: d.confirmBars, minBarsBetween: d.minBarsBetween, detectCurvature: d.detectCurvature,
+      trendFilter: d.trendFilter,
     },
     fixedType: "EMA",
     fixedPeriod: 50,
@@ -809,6 +810,19 @@ export default function MaSlope() {
             <span className="text-muted-foreground text-[10px]">Min events</span>
             <input type="number" min={3} max={100} className={`${inputCls} w-16`} value={settings.minEvents}
               onChange={(e) => set("minEvents", Math.max(3, Number(e.target.value) || settings.minEvents))} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground text-[10px]"
+              title="Filter slope events by the long-MA (≈200d SMA) trend regime. Counter-trend keeps up-flips only while the long trend still points down (and down-flips only in uptrends) — the conditioner study's one robust cross-sectional edge. With-trend keeps the opposite for comparison.">
+              Trend filter
+            </span>
+            <select className={selectCls} value={settings.det.trendFilter ?? "off"}
+              onChange={(e) => set("det", { ...settings.det, trendFilter: e.target.value as "off" | "counter" | "with" })}
+              data-testid="trend-filter">
+              <option value="off">Off</option>
+              <option value="counter">Counter-trend only</option>
+              <option value="with">With-trend only</option>
+            </select>
           </label>
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground text-[10px]"
