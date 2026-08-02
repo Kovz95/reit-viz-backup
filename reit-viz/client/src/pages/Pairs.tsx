@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import {
   useRouterState,
@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -959,17 +959,26 @@ function PairsIndicatorsPanel({
         <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Indicator Sets</p>
         <IndicatorSetsSection activeIndicators={activeIndicators} onApply={setIndicators} />
 
-        {/* ───── Moving Averages ───── */}
+        {/* ───── Moving Averages (full Charts-tab set) ───── */}
         <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Moving Averages</p>
-        <MiniMaRow label="SMA" presets={[20, 50, 100, 200]} defaultLen={50}
-          active={activeIndicators.sma}
-          onToggle={(v) => setIndicators({ ...activeIndicators, sma: v })} />
-        <MiniMaRow label="EMA" presets={[9, 21, 50, 100]} defaultLen={21}
-          active={activeIndicators.ema}
-          onToggle={(v) => setIndicators({ ...activeIndicators, ema: v })} />
-        <MiniMaRow label="HMA" presets={[9, 20, 50, 100]} defaultLen={20}
-          active={activeIndicators.hma}
-          onToggle={(v) => setIndicators({ ...activeIndicators, hma: v })} />
+        {([
+          ["SMA", "sma", [20, 50, 100, 200], 50],
+          ["EMA", "ema", [9, 21, 50, 100], 21],
+          ["HMA", "hma", [9, 20, 50, 100], 20],
+          ["WMA", "wma", [9, 20, 50, 100], 20],
+          ["DEMA", "dema", [9, 21, 50, 100], 21],
+          ["TEMA", "tema", [9, 21, 50, 100], 21],
+          ["KAMA", "kama", [10, 20, 50, 100], 20],
+          ["FRAMA", "frama", [16, 26, 50, 100], 26],
+          ["T3", "t3", [5, 10, 21, 50], 10],
+          ["ALMA", "alma", [9, 21, 50, 100], 21],
+          ["LSMA", "lsma", [14, 25, 50, 100], 25],
+          ["SLSMA", "slsma", [14, 25, 50, 100], 25],
+        ] as [string, keyof ActiveIndicators, number[], number][]).map(([label, field, presets, defaultLen]) => (
+          <MiniMaRow key={field} label={label} presets={presets} defaultLen={defaultLen}
+            active={activeIndicators[field] as number | number[] | undefined}
+            onToggle={(v) => setIndicators({ ...activeIndicators, [field]: v })} />
+        ))}
 
         {/* ───── Oscillators ───── */}
         <div className="border-t border-border pt-3">
@@ -991,6 +1000,17 @@ function PairsIndicatorsPanel({
                 }}
                 testid="custom-rsi"
               />
+              <select
+                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                value={activeIndicators.rsiFreq ?? "chart"}
+                onChange={(e) => setIndicators({ ...activeIndicators, rsiFreq: e.target.value as any })}
+                title="Compute RSI on the chart's bars, or on weekly/monthly resampled closes (weekly RSI on a daily chart)"
+                data-testid="pairs-freq-rsi"
+              >
+                <option value="chart">Chart</option>
+                <option value="weekly">W</option>
+                <option value="monthly">M</option>
+              </select>
             </div>
           </div>
           {/* MACD */}
@@ -1230,6 +1250,29 @@ function PairsIndicatorsPanel({
           collapsed={ovlCollapsed}
           onToggle={() => setOvlCollapsed(v => !v)}
         />
+
+        {/* ───── Hidden sub-panes (eye on a sub-pane) — click to restore ───── */}
+        {(activeIndicators.hiddenSubCharts?.length ?? 0) > 0 && (
+          <div className="border-t border-border pt-3 space-y-1.5">
+            <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Hidden Sub-Panes</p>
+            <div className="flex flex-wrap gap-1">
+              {activeIndicators.hiddenSubCharts!.map((t) => (
+                <button
+                  key={t}
+                  className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50"
+                  onClick={() => {
+                    const rest = activeIndicators.hiddenSubCharts!.filter((x) => x !== t);
+                    setIndicators({ ...activeIndicators, hiddenSubCharts: rest.length ? rest : undefined });
+                  }}
+                  title="Show this sub-pane again"
+                  data-testid={`pairs-unhide-sub-${t}`}
+                >
+                  <Eye className="w-3 h-3" /> {pairsSubChartLabel(t, activeIndicators)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="border-t border-border pt-3">
           <p className="text-[10px] text-muted-foreground">
@@ -1492,7 +1535,7 @@ function OlsScatterChart({
 // "reg:<id>" so one component handles both the bespoke and registry kinds.
 type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv" | `reg:${string}` | `ovl:${string}`;
 
-const SUB_CHART_HEIGHT = 70;
+const SUB_CHART_HEIGHT = 80;
 
 // Pairs plots are line series (ratio/z-score/price); registry indicators take
 // OHLC bars, so synthesize flat bars (o=h=l=c) — the same degradation the
@@ -1509,6 +1552,18 @@ function fmtReadoutVal(v: number): string {
   if (a >= 100) return v.toFixed(1);
   if (a >= 1) return v.toFixed(2);
   return v.toFixed(4);
+}
+
+// Human label for a sub-pane type — shared by the sub-pane chip and the
+// panel's "Hidden Sub-Panes" restore row.
+function pairsSubChartLabel(type: string, indicators: ActiveIndicators): string {
+  if (type.startsWith("ovl:")) {
+    const o = (indicators.indicatorOverlays ?? []).find((x) => `ovl:${x.id}` === type);
+    return o ? overlayPaneLabel(o) : type;
+  }
+  return type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
+    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV"
+    : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
 }
 
 function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
@@ -1552,6 +1607,12 @@ function PairsSubIndicatorChart({
   overlayDef,
   sourceData,
   onPrimaryData,
+  isMaximized,
+  onToggleMaximize,
+  onHide,
+  onClose,
+  height,
+  onResizeStart,
 }: {
   type: PairsSubChartType;
   closeData: DataPoint[];
@@ -1565,6 +1626,14 @@ function PairsSubIndicatorChart({
   /** Non-ovl panes publish their first plotted series (keyed by plain source
    *  id — "rsi", "adx") so derived panes compute from what's displayed. */
   onPrimaryData?: (type: string, data: DataPoint[]) => void;
+  /** Charts-tab pane parity: expand to fill the plot, hide (keep state),
+   *  close (turn the indicator off), and drag-resize the top border. */
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
+  onHide?: () => void;
+  onClose?: () => void;
+  height?: number;
+  onResizeStart?: (defaultH: number, e: ReactMouseEvent) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1696,15 +1765,25 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // RSI (one line per period)
+    // RSI (one line per period; optional weekly/monthly compute frequency —
+    // resample the closes first, same as the Charts tab)
     if (type === "rsi") {
+      const rsiFreq = activeIndicators.rsiFreq;
+      const rsiInput =
+        rsiFreq === "weekly" || rsiFreq === "monthly"
+          ? resampleIndicatorBars(
+              closeData.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
+              rsiFreq,
+            ).map((b) => ({ time: b.time, value: b.close }))
+          : closeData;
+      const rsiSuffix = rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : "";
       let refDrawn = false;
       for (const p of indicatorPeriods(activeIndicators.rsi)) {
-        const rsiData = computeRSI(closeData, p);
+        const rsiData = computeRSI(rsiInput, p);
         if (rsiData.length === 0) continue;
         const rsiLine = chart.addSeries(LineSeries, {
           color: IC.rsi_line, lineWidth: 1,
-          title: `RSI ${p}`,
+          title: `RSI ${p}${rsiSuffix}`,
         });
         rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
         if (!firstSeries) firstSeries = rsiLine;
@@ -2101,21 +2180,66 @@ function PairsSubIndicatorChart({
     return () => ro.disconnect();
   });
 
-  const label = type.startsWith("ovl:") && overlayDef ? overlayPaneLabel(overlayDef)
-    : type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
-    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV"
-    : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
+  const label = pairsSubChartLabel(type, activeIndicators) || (overlayDef ? overlayPaneLabel(overlayDef) : type);
+  const defaultH = type === "ha" ? 100 : SUB_CHART_HEIGHT;
 
   return (
     <div
-      className="relative w-full border-t border-border/30 flex-shrink-0"
-      style={{ height: type === "ha" ? 100 : SUB_CHART_HEIGHT }}
+      // Same chrome as the Charts tab (ChartPane SubIndicatorChart): strong top
+      // rule, drag-resize handle, expand/hide/close buttons, double-click expands.
+      className={`relative w-full border-t-2 border-border/80 bg-white/[0.015] ${isMaximized ? "flex-1 min-h-0" : "flex-shrink-0"}`}
+      style={isMaximized ? undefined : { height: height ?? defaultH }}
+      onDoubleClick={(e) => { e.stopPropagation(); onToggleMaximize?.(); }}
       onMouseLeave={() => setHoverReadout(null)}
+      data-testid={`pairs-sub-indicator-${type}`}
     >
+      {/* Drag the top border to resize this subplot (hidden while expanded). */}
+      {!isMaximized && onResizeStart && (
+        <div
+          className="absolute -top-1 left-0 right-0 h-2 z-20 group"
+          style={{ cursor: "row-resize" }}
+          onMouseDown={(e) => onResizeStart(defaultH, e)}
+          data-testid={`pairs-sub-indicator-${type}-resize`}
+        >
+          <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[2px] bg-transparent group-hover:bg-primary/60 transition-colors" />
+        </div>
+      )}
       <div className="absolute left-2 z-10 mt-0.5">
-        <span className="text-[9px] font-mono text-muted-foreground/50 bg-background/80 px-1 py-0.5 rounded">
+        <span className="text-[9px] font-mono text-muted-foreground/80 bg-background/90 border border-border/50 px-1 py-0.5 rounded">
           {label}
         </span>
+      </div>
+      <div className="absolute right-1.5 top-0.5 z-10 flex items-center gap-0.5">
+        {onToggleMaximize && (
+          <button
+            className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onToggleMaximize(); }}
+            title={isMaximized ? "Restore" : "Expand full pane"}
+            data-testid={`pairs-sub-indicator-${type}-maximize`}
+          >
+            {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+          </button>
+        )}
+        {onHide && (
+          <button
+            className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onHide(); }}
+            title={`Hide ${label} (keeps its settings — bring it back from the Indicators panel)`}
+            data-testid={`pairs-sub-indicator-${type}-hide`}
+          >
+            <EyeOff className="w-3 h-3" />
+          </button>
+        )}
+        {onClose && (
+          <button
+            className="text-muted-foreground/50 hover:text-destructive bg-background/80 rounded p-0.5"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            title={`Remove ${label} from this chart`}
+            data-testid={`pairs-sub-indicator-${type}-close`}
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
       </div>
       {hoverReadout && hoverReadout.items.length > 0 && (
         <div
@@ -2156,6 +2280,7 @@ function MiniChart({
   onRegisterSeries,
   onCrosshairMove,
   onRemove,
+  onChangeIndicators,
 }: {
   data: DataPoint[];
   title: string;
@@ -2176,6 +2301,9 @@ function MiniChart({
   onRegisterSeries: (id: string, series: ISeriesApi<any>) => void;
   onCrosshairMove?: (id: string, data: { time: string; values: Record<string, number> } | null) => void;
   onRemove?: () => void;
+  /** Enables the sub-panes' hide/close buttons (they mutate this chart's
+   *  ActiveIndicators — same contract as the Charts tab's ChartArea). */
+  onChangeIndicators?: (i: ActiveIndicators) => void;
 }) {
   const effectiveFlexHeight = useFlexHeight || isMaximized;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2350,6 +2478,34 @@ function MiniChart({
             title: `HMA ${p}`,
           });
           s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
+        }
+      }
+      // Extended MAs (WMA/DEMA/TEMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA) — same
+      // engine + colors as the Charts tab.
+      {
+        const EXTRA_MA: Array<[keyof ActiveIndicators, MaType, number]> = [
+          ["wma", "WMA", 1], ["dema", "DEMA", 2], ["tema", "TEMA", 2],
+          ["kama", "KAMA", 2], ["frama", "FRAMA", 2], ["t3", "T3", 2],
+          ["alma", "ALMA", 1], ["lsma", "LSMA", 1], ["slsma", "SLSMA", 2],
+        ];
+        const closeVals = data.map((d) => d.value);
+        for (const [field, maType, width] of EXTRA_MA) {
+          for (const p of indicatorPeriods(activeIndicators[field] as number | number[] | undefined)) {
+            const series = computeMaByType(closeVals, p, maType);
+            const maData: { time: Time; value: number }[] = [];
+            for (let i = 0; i < data.length; i++) {
+              const v = series[i];
+              if (v != null && Number.isFinite(v)) maData.push({ time: data[i].time as Time, value: v });
+            }
+            if (maData.length > 0) {
+              const s = chart.addSeries(LineSeries, {
+                color: (IC as any)[field] ?? "#94a3b8",
+                lineWidth: width as LineWidth,
+                title: `${maType} ${p}`,
+              });
+              s.setData(maData);
+            }
+          }
         }
       }
       // NOTE: RSI, MACD, Stochastic, ROC, ATR, OBV are now rendered in separate sub-panes below (PairsSubIndicatorChart)
@@ -2561,7 +2717,9 @@ function MiniChart({
     }
 
     const ro = new ResizeObserver(() => {
-      if (chartRef.current && el) {
+      // clientWidth is 0 while a sub-pane is expanded (main plot display:none) —
+      // don't collapse the chart to zero, just skip until it's visible again.
+      if (chartRef.current && el && el.clientWidth > 0) {
         chartRef.current.applyOptions({
           width: el.clientWidth,
           height: effectiveFlexHeight ? el.clientHeight || 300 : height,
@@ -2599,7 +2757,73 @@ function MiniChart({
     } catch {}
   }, [logScale]);
 
-  const subCharts = getActiveSubCharts(activeIndicators);
+  // Hidden sub-panes unmount (state stays enabled) — same as the Charts tab.
+  const hiddenSubSet = new Set(activeIndicators.hiddenSubCharts ?? []);
+  const subCharts = getActiveSubCharts(activeIndicators).filter((sc) => !hiddenSubSet.has(sc));
+
+  // Which sub-pane is expanded to fill the plot (null = none) + per-sub-pane
+  // drag heights — mirrors ChartPane's maxSub/subHeights/startSubResize.
+  const [maxSub, setMaxSub] = useState<PairsSubChartType | null>(null);
+  const [subHeights, setSubHeights] = useState<Partial<Record<string, number>>>({});
+  const effMaxSub = maxSub !== null && subCharts.includes(maxSub) ? maxSub : null;
+  const startSubResize = useCallback((type: string, defaultH: number, e: ReactMouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startH = subHeights[type] ?? defaultH;
+    const onMove = (ev: globalThis.MouseEvent) => {
+      // Dragging up (smaller clientY) grows the subplot; the flex main chart absorbs the delta.
+      const next = Math.max(48, Math.min(600, startH + (startY - ev.clientY)));
+      setSubHeights((prev) => ({ ...prev, [type]: next }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = "row-resize";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [subHeights]);
+
+  // ✕ on a sub-pane: turn its indicator off (same mapping as the Charts tab).
+  const closeSub = useCallback((t: PairsSubChartType) => {
+    if (!onChangeIndicators) return;
+    const next = { ...activeIndicators };
+    if (t.startsWith("ovl:")) {
+      const oid = t.slice(4);
+      next.indicatorOverlays = (next.indicatorOverlays ?? []).filter((o) => o.id !== oid);
+      if (!next.indicatorOverlays.length) delete next.indicatorOverlays;
+    } else if (t.startsWith("reg:")) {
+      const rid = t.slice(4);
+      if (next.registry?.[rid]?.enabled) {
+        next.registry = { ...next.registry, [rid]: { ...next.registry[rid], enabled: false } };
+      }
+    } else {
+      switch (t) {
+        case "rsi": delete next.rsi; delete next.rsiFreq; break;
+        case "macd": delete next.macd; break;
+        case "roc": delete next.roc; break;
+        case "stochastic": delete next.stochastic; break;
+        case "atr": delete next.atr; break;
+        case "obv": delete next.obv; break;
+      }
+    }
+    if (next.hiddenSubCharts?.includes(t)) {
+      const rest = next.hiddenSubCharts.filter((x) => x !== t);
+      next.hiddenSubCharts = rest.length ? rest : undefined;
+    }
+    onChangeIndicators(next);
+  }, [onChangeIndicators, activeIndicators]);
+
+  // Eye on a sub-pane: hide it but keep the indicator's settings (restore from
+  // the Indicators panel's "Hidden Sub-Panes" row).
+  const hideSub = useCallback((t: PairsSubChartType) => {
+    if (!onChangeIndicators) return;
+    const hidden = activeIndicators.hiddenSubCharts ?? [];
+    const nextHidden = hidden.includes(t) ? hidden.filter((x) => x !== t) : [...hidden, t];
+    onChangeIndicators({ ...activeIndicators, hiddenSubCharts: nextHidden.length ? nextHidden : undefined });
+  }, [onChangeIndicators, activeIndicators]);
 
   // Source sub-panes publish their displayed primary series; derived overlay
   // panes ("ovl:<id>") read it — see the Charts-tab pane-overlay machinery.
@@ -2678,8 +2902,8 @@ function MiniChart({
       {/* lightweight-charts does not reliably emit a final crosshairMove on
           pointer exit, so clear the readout on DOM mouseleave (as ChartPane does). */}
       <div
-        style={effectiveFlexHeight ? { flex: 1 } : { height }}
-        className={`relative ${effectiveFlexHeight ? "flex-1 min-h-0" : ""}`}
+        style={effMaxSub ? undefined : effectiveFlexHeight ? { flex: 1 } : { height }}
+        className={`relative ${effMaxSub ? "hidden" : effectiveFlexHeight ? "flex-1 min-h-0" : ""}`}
         onMouseLeave={() => setHoverReadout(null)}
       >
         <div ref={containerRef} className="w-full h-full" />
@@ -2699,23 +2923,34 @@ function MiniChart({
           </div>
         )}
       </div>
-      {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV) */}
+      {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV, registry).
+          Double-click one (or its expand button) to fill the plot; drag a top
+          border to resize — same behavior as the Charts tab. */}
       {subCharts.map(sc => {
         const ovlDef = sc.startsWith("ovl:")
           ? (activeIndicators.indicatorOverlays ?? []).find(o => `ovl:${o.id}` === sc) ?? null
           : null;
+        const isMaxSub = effMaxSub === sc;
+        const hiddenWhileMax = effMaxSub !== null && !isMaxSub;
         return (
-          <PairsSubIndicatorChart
-            key={sc}
-            type={sc}
-            closeData={data}
-            activeIndicators={activeIndicators}
-            parentChart={chartRef.current}
-            parentSeries={mainSeriesRef.current}
-            overlayDef={ovlDef}
-            sourceData={ovlDef ? subPrimaryRef.current.get(ovlDef.source) : undefined}
-            onPrimaryData={sc.startsWith("ovl:") ? undefined : handleSubPrimaryData}
-          />
+          <div key={sc} className={hiddenWhileMax ? "hidden" : "contents"}>
+            <PairsSubIndicatorChart
+              type={sc}
+              closeData={data}
+              activeIndicators={activeIndicators}
+              parentChart={chartRef.current}
+              parentSeries={mainSeriesRef.current}
+              overlayDef={ovlDef}
+              sourceData={ovlDef ? subPrimaryRef.current.get(ovlDef.source) : undefined}
+              onPrimaryData={sc.startsWith("ovl:") ? undefined : handleSubPrimaryData}
+              isMaximized={isMaxSub}
+              onToggleMaximize={() => setMaxSub((cur) => (cur === sc ? null : sc))}
+              onClose={onChangeIndicators ? () => { setMaxSub((cur) => (cur === sc ? null : cur)); closeSub(sc); } : undefined}
+              onHide={onChangeIndicators ? () => { setMaxSub((cur) => (cur === sc ? null : cur)); hideSub(sc); } : undefined}
+              height={subHeights[sc]}
+              onResizeStart={(defaultH, e) => startSubResize(sc, defaultH, e)}
+            />
+          </div>
         );
       })}
     </div>
@@ -2747,6 +2982,7 @@ function ExtraOlsZChart({
   onCrosshairMove,
   onRemove,
   indicatorsForChart,
+  onChangeIndicators,
 }: {
   row: ExtraOlsZRow;
   tickerA: string;
@@ -2765,6 +3001,7 @@ function ExtraOlsZChart({
   onCrosshairMove?: (id: string, data: { time: string; values: Record<string, number> } | null) => void;
   onRemove: () => void;
   indicatorsForChart: ActiveIndicators;
+  onChangeIndicators?: (i: ActiveIndicators) => void;
 }) {
   const chartId = `olsResidZ_extra_${row.id}`;
   const { data, isLoading } = useQuery({
@@ -2855,6 +3092,7 @@ function ExtraOlsZChart({
       onRegisterSeries={onRegisterSeries}
       onCrosshairMove={onCrosshairMove}
       onRemove={onRemove}
+      onChangeIndicators={onChangeIndicators}
     />
   );
 }
@@ -3897,6 +4135,7 @@ export default function Pairs() {
                       onUnregisterChart={unregisterChart}
                       onRegisterSeries={registerSeries}
                       onCrosshairMove={handlePairsCrosshairMove}
+                      onChangeIndicators={(i) => setIndicatorsMap(prev => ({ ...prev, [c.id]: i }))}
                     />
                   ))}
                   {/* OLS Scatter chart */}
@@ -3956,6 +4195,7 @@ export default function Pairs() {
                         onCrosshairMove={handlePairsCrosshairMove}
                         onRemove={() => setExtraOlsZPlots((prev) => prev.filter((p) => p.id !== row.id))}
                         indicatorsForChart={indicatorsMap[extraId] || EMPTY_INDICATORS}
+                        onChangeIndicators={(i) => setIndicatorsMap(prev => ({ ...prev, [extraId]: i }))}
                       />
                     );
                   })}
