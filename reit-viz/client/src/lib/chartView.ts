@@ -127,12 +127,12 @@ export function makeSplitViewPreserver(): SplitViewPreserver {
 /** Fingerprint one or more series (length + last time + last value). A change here
  *  is a genuine data change that should reframe; anything else preserves the view. */
 export function seriesFingerprint(
-  ...series: Array<ReadonlyArray<{ time: unknown; value?: number }> | null | undefined>
+  ...series: Array<ReadonlyArray<{ time: unknown; value?: number | null }> | null | undefined>
 ): string {
   return series
     .map((s) => {
       if (!s || s.length === 0) return "0";
-      const last = s[s.length - 1] as { time: unknown; value?: number };
+      const last = s[s.length - 1] as { time: unknown; value?: number | null };
       return `${s.length}:${String(last.time)}:${last.value ?? ""}`;
     })
     .join("|");
