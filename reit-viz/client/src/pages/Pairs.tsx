@@ -3043,45 +3043,20 @@ export default function Pairs() {
   }, []);
 
   const setupSync = useCallback((id: string, chart: IChartApi) => {
-    // Clamp a logical range so it doesn't scroll past data boundaries.
-    // Allows a small buffer of 20 bars of whitespace on either side.
-    const clampRange = (range: { from: number; to: number }): { from: number; to: number } | null => {
-      const maxLen = Math.max(1, ...Array.from(dataLengthsRef.current.values()));
-      const pad = 20;
-      let { from, to } = range;
-      const barCount = to - from;
-      let clamped = false;
-      if (to > maxLen - 1 + pad) {
-        to = maxLen - 1 + pad;
-        from = to - barCount;
-        clamped = true;
-      }
-      if (from < -pad) {
-        from = -pad;
-        to = from + barCount;
-        clamped = true;
-      }
-      return clamped ? { from, to } : null;
-    };
-
     // Scroll/zoom sync using LOGICAL range (bar indices) so charts
-    // with different data start points align correctly without feedback loops
+    // with different data start points align correctly without feedback loops.
+    // No edge clamping — the Charts tab (ChartArea pane sync) syncs the raw
+    // range and lets you pan freely into whitespace; a clamp here fought the
+    // drag and made the chart lock near the data edges.
     const rangeHandler = () => {
       if (syncingRef.current) return;
       const logicalRange = chart.timeScale().getVisibleLogicalRange();
       if (!logicalRange) return;
 
-      // Clamp the range to prevent scrolling past data boundaries
-      const clampedRange = clampRange(logicalRange);
-      const rangeToSync = clampedRange || logicalRange;
-
       syncingRef.current = true;
-      if (clampedRange) {
-        try { chart.timeScale().setVisibleLogicalRange(clampedRange); } catch {}
-      }
       chartsMapRef.current.forEach((other, otherId) => {
         if (otherId !== id) {
-          try { other.timeScale().setVisibleLogicalRange(rangeToSync); } catch {}
+          try { other.timeScale().setVisibleLogicalRange(logicalRange); } catch {}
         }
       });
       // Use rAF to clear the flag after all sync callbacks have fired
