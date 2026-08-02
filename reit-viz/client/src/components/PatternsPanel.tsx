@@ -17,7 +17,9 @@ import {
 } from "@/lib/patternSettings";
 
 interface PatternsPanelProps {
-  paneId: number;
+  /** Charts tab uses numeric pane ids; the Pairs (Compare) tab keys its
+   *  charts by string id — both are valid settings/event keys. */
+  paneId: number | string;
 }
 
 const PATTERN_LIST: { key: string; label: string }[] = [

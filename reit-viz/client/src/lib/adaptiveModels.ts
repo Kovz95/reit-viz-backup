@@ -223,8 +223,9 @@ export function computeCusumChangePoints(
 // bar plus its probability — the caller shades the chart with it.
 
 export interface HmmRegimesResult {
-  /** One entry per return bar (i.e. closes[1..]). */
-  points: { time: string; state: number; prob: number }[];
+  /** One entry per return bar (i.e. closes[1..]). `probs` is the full
+   *  posterior in ranked-state order (probs[state] === prob). */
+  points: { time: string; state: number; prob: number; probs: number[] }[];
   /** Per (sorted) state: mean/vol of daily log return, annualized-ish display strings are the caller's business. */
   stateMeans: number[];
   stateVols: number[];
@@ -362,7 +363,11 @@ export function computeHmmRegimes(
   const points = times.map((time, t) => {
     let best = 0;
     for (let j = 1; j < K; j++) if (gamma[t][j] > gamma[t][best]) best = j;
-    return { time, state: rank[best], prob: gamma[t][best] };
+    // probs = full posterior in RANKED state order, so consumers that
+    // re-label a bar (e.g. min-run smoothing) can look up its confidence.
+    const probs = new Array<number>(K);
+    for (let j = 0; j < K; j++) probs[rank[j]] = gamma[t][j];
+    return { time, state: rank[best], prob: gamma[t][best], probs };
   });
   return {
     points,

@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -77,7 +77,13 @@ import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays } from "@/components/IndicatorsPanel";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays, SectionHeader } from "@/components/IndicatorsPanel";
+import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
+import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
+import { getPatternSettings } from "@/lib/patternSettings";
+import PatternsPanel from "@/components/PatternsPanel";
+import DateInput from "@/components/DateInput";
 import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { indicatorPeriods, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
 import type { IndicatorOverlay } from "@/components/ChartPane";
@@ -866,6 +872,24 @@ function PairsIndicatorsPanel({
     }
   };
 
+  // Per-section collapse state (Charts-tab parity) — empty set = all expanded.
+  const PAIRS_SECTIONS = [
+    "Indicator Sets", "Moving Averages", "Oscillators", "Volatility",
+    "Overlays", "Volume", "Trend", "Statistical", "More Indicators",
+  ];
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
+  const isCollapsed = (name: string) => collapsedSections.has(name);
+  const toggleSection = (name: string) =>
+    setCollapsedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  const allCollapsed = PAIRS_SECTIONS.every((s) => collapsedSections.has(s));
+  const toggleAll = () =>
+    setCollapsedSections(allCollapsed ? new Set() : new Set(PAIRS_SECTIONS));
+
   const meanCfg = activeIndicators.mean;
   const [meanRolling, setMeanRolling] = useState(meanCfg?.rolling ?? false);
   const [meanPeriod, setMeanPeriod] = useState(meanCfg?.period ?? 200);
@@ -879,6 +903,28 @@ function PairsIndicatorsPanel({
   const [stochK, setStochK] = useState(activeIndicators.stochastic?.kPeriod ?? 14);
   const [stochD, setStochD] = useState(activeIndicators.stochastic?.dPeriod ?? 3);
   const [ovlCollapsed, setOvlCollapsed] = useState(false);
+  const [fractalN, setFractalN] = useState(activeIndicators.fractalLines?.n ?? 10);
+
+  // Update fractal-lines config (Charts parity). anchorDate: undefined = keep
+  // current, null = clear (live), string = set.
+  const updateFractal = (
+    on: boolean,
+    n?: number,
+    anchorDate?: string | null,
+    timeframe?: "daily" | "weekly" | "monthly",
+  ) => {
+    if (!on) {
+      setIndicators({ ...activeIndicators, fractalLines: undefined });
+      return;
+    }
+    const cur = activeIndicators.fractalLines;
+    const nextAnchor =
+      anchorDate === undefined ? cur?.anchorDate : anchorDate === null ? undefined : anchorDate;
+    setIndicators({
+      ...activeIndicators,
+      fractalLines: { n: n ?? fractalN, anchorDate: nextAnchor, timeframe: timeframe ?? cur?.timeframe },
+    });
+  };
 
   // Heikin-Ashi state
   const haVal = activeIndicators.heikinAshi;
@@ -924,9 +970,21 @@ function PairsIndicatorsPanel({
           <TrendingUp className="w-3.5 h-3.5 text-primary" />
           <span className="text-xs font-semibold">Indicators</span>
         </div>
-        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
-          <X className="w-3.5 h-3.5" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[10px] gap-1"
+            onClick={toggleAll}
+            title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
+            data-testid="pairs-collapse-all-indicators"
+          >
+            {allCollapsed ? <ChevronsUpDown className="w-3.5 h-3.5" /> : <ChevronsDownUp className="w-3.5 h-3.5" />}
+          </Button>
+          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Chart selector */}
@@ -956,12 +1014,25 @@ function PairsIndicatorsPanel({
 
       <div className="p-3 space-y-4">
         {/* ───── Indicator Sets (shared, server-synced) ───── */}
-        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Indicator Sets</p>
-        <IndicatorSetsSection activeIndicators={activeIndicators} onApply={setIndicators} />
+        <SectionHeader
+          title="Indicator Sets"
+          collapsed={isCollapsed("Indicator Sets")}
+          onToggle={() => toggleSection("Indicator Sets")}
+        />
+        {!isCollapsed("Indicator Sets") && (
+          <IndicatorSetsSection activeIndicators={activeIndicators} onApply={setIndicators} />
+        )}
+
+        {/* ───── Pattern Recognition (same panel + engine as the Charts tab) ───── */}
+        <PatternsPanel paneId={activeChartId} />
 
         {/* ───── Moving Averages (full Charts-tab set) ───── */}
-        <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Moving Averages</p>
-        {([
+        <SectionHeader
+          title="Moving Averages"
+          collapsed={isCollapsed("Moving Averages")}
+          onToggle={() => toggleSection("Moving Averages")}
+        />
+        {!isCollapsed("Moving Averages") && ([
           ["SMA", "sma", [20, 50, 100, 200], 50],
           ["EMA", "ema", [9, 21, 50, 100], 21],
           ["HMA", "hma", [9, 20, 50, 100], 20],
@@ -982,7 +1053,13 @@ function PairsIndicatorsPanel({
 
         {/* ───── Oscillators ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Oscillators</p>
+          <SectionHeader
+            title="Oscillators"
+            collapsed={isCollapsed("Oscillators")}
+            onToggle={() => toggleSection("Oscillators")}
+            className="mb-3"
+          />
+          {!isCollapsed("Oscillators") && (<>
           {/* RSI — multi-period, one line per period (Charts parity) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1067,11 +1144,18 @@ function PairsIndicatorsPanel({
               />
             </div>
           </div>
+          </>)}
         </div>
 
         {/* ───── Volatility ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Volatility</p>
+          <SectionHeader
+            title="Volatility"
+            collapsed={isCollapsed("Volatility")}
+            onToggle={() => toggleSection("Volatility")}
+            className="mb-3"
+          />
+          {!isCollapsed("Volatility") && (<>
           {/* Bollinger Bands */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1119,12 +1203,18 @@ function PairsIndicatorsPanel({
               />
             </div>
           </div>
+          </>)}
         </div>
 
         {/* ───── Overlays ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Overlays</p>
-          {/* VWAP */}
+          <SectionHeader
+            title="Overlays"
+            collapsed={isCollapsed("Overlays")}
+            onToggle={() => toggleSection("Overlays")}
+            className="mb-3"
+          />
+          {!isCollapsed("Overlays") && (
           <div className="flex items-center justify-between">
             <div>
               <Label className="text-xs font-medium">VWAP</Label>
@@ -1133,12 +1223,18 @@ function PairsIndicatorsPanel({
             <Switch checked={!!activeIndicators.vwap}
               onCheckedChange={(on) => setIndicators({ ...activeIndicators, vwap: on || undefined })} data-testid="toggle-vwap" />
           </div>
+          )}
         </div>
 
         {/* ───── Volume ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Volume</p>
-          {/* OBV */}
+          <SectionHeader
+            title="Volume"
+            collapsed={isCollapsed("Volume")}
+            onToggle={() => toggleSection("Volume")}
+            className="mb-3"
+          />
+          {!isCollapsed("Volume") && (
           <div className="flex items-center justify-between">
             <div>
               <Label className="text-xs font-medium">OBV</Label>
@@ -1147,11 +1243,18 @@ function PairsIndicatorsPanel({
             <Switch checked={!!activeIndicators.obv}
               onCheckedChange={(on) => setIndicators({ ...activeIndicators, obv: on || undefined })} data-testid="toggle-obv" />
           </div>
+          )}
         </div>
 
         {/* ───── Trend ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Trend</p>
+          <SectionHeader
+            title="Trend"
+            collapsed={isCollapsed("Trend")}
+            onToggle={() => toggleSection("Trend")}
+            className="mb-3"
+          />
+          {!isCollapsed("Trend") && (<>
           {/* Heikin-Ashi */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1198,11 +1301,103 @@ function PairsIndicatorsPanel({
             <Switch checked={!!activeIndicators.haSignals}
               onCheckedChange={(on) => setIndicators({ ...activeIndicators, haSignals: on || undefined })} data-testid="toggle-ha-signals" />
           </div>
+
+          {/* Fractal Lines (DojiEmoji auto-trendline) — Charts parity */}
+          <div className="space-y-2 mt-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-xs font-medium">Fractal Lines</Label>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  <span className="text-red-400">R</span> /{" "}
+                  <span className="text-green-400">S</span> trendlines from last 2 fractal pivots
+                </p>
+              </div>
+              <Switch
+                checked={activeIndicators.fractalLines !== undefined}
+                onCheckedChange={(on) => updateFractal(on)}
+                data-testid="pairs-toggle-fractal-lines"
+              />
+            </div>
+            {activeIndicators.fractalLines !== undefined && (<>
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">Period</span>
+                {[5, 10, 20].map((p) => (
+                  <Button
+                    key={p}
+                    variant={fractalN === p ? "default" : "secondary"}
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    onClick={() => { setFractalN(p); updateFractal(true, p); }}
+                  >
+                    {p}
+                  </Button>
+                ))}
+                <Input
+                  type="number"
+                  placeholder="#"
+                  className="h-6 w-14 text-[10px] px-1.5"
+                  min={2}
+                  max={100}
+                  value={fractalN}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value);
+                    if (Number.isFinite(n) && n >= 2 && n <= 100) {
+                      setFractalN(n);
+                      updateFractal(true, n);
+                    }
+                  }}
+                  data-testid="pairs-custom-fractal-period"
+                />
+              </div>
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">Timeframe</span>
+                {(["daily", "weekly", "monthly"] as const).map((tf) => (
+                  <Button
+                    key={tf}
+                    variant={(activeIndicators.fractalLines?.timeframe ?? "daily") === tf ? "default" : "secondary"}
+                    size="sm"
+                    className="h-6 px-2 text-[10px] flex-1"
+                    onClick={() => updateFractal(true, undefined, undefined, tf)}
+                    data-testid={`pairs-fractal-tf-${tf}`}
+                  >
+                    {tf === "daily" ? "Daily" : tf === "weekly" ? "Weekly" : "Monthly"}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex gap-1 items-center">
+                <span className="text-[10px] text-muted-foreground w-12">As of</span>
+                <DateInput
+                  wrapperClassName="flex-1"
+                  className="h-6 text-[10px] px-1.5 flex-1"
+                  value={activeIndicators.fractalLines.anchorDate ?? ""}
+                  onChange={(v) => updateFractal(true, undefined, v || null)}
+                  data-testid="pairs-fractal-anchor-date"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => updateFractal(true, undefined, null)}
+                  title="Use the latest bar (live)"
+                  disabled={!activeIndicators.fractalLines.anchorDate}
+                >
+                  Latest
+                </Button>
+              </div>
+            </>)}
+          </div>
+          </>)}
         </div>
 
         {/* ───── Statistical ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">Statistical</p>
+          <SectionHeader
+            title="Statistical"
+            collapsed={isCollapsed("Statistical")}
+            onToggle={() => toggleSection("Statistical")}
+            className="mb-3"
+          />
+          {!isCollapsed("Statistical") && (<>
           {/* Mean + Std Bands */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1235,12 +1430,20 @@ function PairsIndicatorsPanel({
                 data-testid="custom-mean-period" />
             </div>
           </div>
+          </>)}
         </div>
 
         {/* ───── More Indicators (registry-driven, same list as the Charts tab) ───── */}
         <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-3">More Indicators</p>
-          <RegistryIndicatorControls activeIndicators={activeIndicators} onChange={setIndicators} />
+          <SectionHeader
+            title="More Indicators"
+            collapsed={isCollapsed("More Indicators")}
+            onToggle={() => toggleSection("More Indicators")}
+            className="mb-3"
+          />
+          {!isCollapsed("More Indicators") && (
+            <RegistryIndicatorControls activeIndicators={activeIndicators} onChange={setIndicators} />
+          )}
         </div>
 
         {/* ───── Indicator Overlays (indicator-on-indicator, same as Charts) ───── */}
@@ -2335,6 +2538,76 @@ function MiniChart({
   // Serialize activeIndicators to a stable string so the effect only fires when values actually change
   const indicatorsKey = useMemo(() => JSON.stringify(activeIndicators), [activeIndicators]);
 
+  // ── Pattern Recognition (same engine + window-event bus as ChartPane, keyed
+  // by this chart's string id). Settings live in localStorage; a nonce forces
+  // recomputation on settings-changed / rescan for this chart.
+  const [patternNonce, setPatternNonce] = useState(0);
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent).detail?.paneId === id) setPatternNonce((x) => x + 1);
+    };
+    window.addEventListener("reit-viz:patterns-settings-changed", onChange);
+    window.addEventListener("reit-viz:patterns-rescan", onChange);
+    return () => {
+      window.removeEventListener("reit-viz:patterns-settings-changed", onChange);
+      window.removeEventListener("reit-viz:patterns-rescan", onChange);
+    };
+  }, [id]);
+
+  const patternResults = useMemo(() => {
+    const s = getPatternSettings(id);
+    // Pairs plots are line series — detect on flat bars (o=h=l=c), the same
+    // degradation every other OHLC consumer on this page uses.
+    const flat = data.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
+    const empty = { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[], bars: flat };
+    if (!s.enabled) return empty;
+    let detectionBars = flat;
+    const tf = s.timeframe;
+    if ((tf === "weekly" || tf === "monthly") && flat.length > 0) {
+      try {
+        const ds = weeklyDownsample(
+          {
+            dates: flat.map((b) => b.time),
+            closes: flat.map((b) => b.close),
+            adjCloses: flat.map((b) => b.close),
+            highs: flat.map((b) => b.high),
+            lows: flat.map((b) => b.low),
+            opens: flat.map((b) => b.open),
+          },
+          tf,
+        );
+        detectionBars = ds.dates.map((d: string, i: number) => ({
+          time: d, open: ds.opens[i], high: ds.highs[i], low: ds.lows[i], close: ds.closes[i],
+        }));
+      } catch { detectionBars = flat; }
+    }
+    if (detectionBars.length < 40) return { ...empty, bars: detectionBars };
+    let patterns: ReturnType<typeof detectChartPatterns> = [];
+    try {
+      patterns = detectChartPatterns(detectionBars, {
+        sensitivity: s.sensitivity, lookbackBars: s.lookbackBars, maxPatterns: s.maxPatterns, perPattern: s.perPattern,
+      });
+    } catch { patterns = []; }
+    const relevant = s.showMostRelevant
+      ? rankRelevance(patterns, detectionBars, s.lookbackBars).slice(0, 5).map((p) => ({
+          id: `${p.key}-${p.endIdx}`,
+          label: p.label,
+          direction: p.direction,
+          relevance: p.relevance ?? 0,
+          components: p.components ?? { confidence: 0, recency: 0, proximity: 0 },
+        }))
+      : [];
+    return { patterns, relevant, bars: detectionBars };
+    // patternNonce forces re-read of localStorage settings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, id, patternNonce]);
+
+  // Publish results to the PatternsPanel (badge count + most-relevant list).
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-detected", { detail: { paneId: id, patterns: patternResults.patterns } }));
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-most-relevant", { detail: { paneId: id, relevant: patternResults.relevant } }));
+  }, [patternResults, id]);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -2643,6 +2916,83 @@ function MiniChart({
         }
       }
 
+      // ── Fractal trendlines (DojiEmoji auto-trendline) — same engine as the
+      // Charts tab, run on the line values (pivots of the ratio/z series).
+      if (activeIndicators.fractalLines) {
+        const { n, anchorDate, timeframe } = activeIndicators.fractalLines;
+        const daily = data.map((d) => ({ time: String(d.time), high: d.value, low: d.value }));
+        const frBars =
+          timeframe === "weekly" ? resampleWeekly(daily)
+          : timeframe === "monthly" ? resampleMonthly(daily)
+          : daily;
+        const fr = computeFractalTrendlines(frBars, n, anchorDate);
+        const tfLabel = timeframe === "weekly" ? ", W" : timeframe === "monthly" ? ", M" : "";
+        const anchorLabel = anchorDate ? ` @ ${anchorDate}` : "";
+        const drawFractal = (line: typeof fr.resistance, lineColor: string, label: string) => {
+          if (!line || line.points.length < 2) return;
+          const s = chart.addSeries(LineSeries, {
+            color: lineColor,
+            lineWidth: 4,
+            lineStyle: LineStyle.Solid,
+            title: label,
+            crosshairMarkerVisible: false,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 4,
+            autoscaleInfoProvider: () => null,
+          });
+          s.setData(line.points.map((p) => ({ time: p.time as Time, value: p.value })));
+        };
+        drawFractal(fr.resistance, IC.fractal_resistance, `Fractal R (n${fr.n}${tfLabel})${anchorLabel}`);
+        drawFractal(fr.support, IC.fractal_support, `Fractal S (n${fr.n}${tfLabel})${anchorLabel}`);
+      }
+
+      // ── Chart patterns (Pattern Recognition) — polylines index into the SAME
+      // (possibly weekly/monthly-resampled) bars detection ran on.
+      if (patternResults.patterns.length && patternResults.bars.length) {
+        const timeAt = (idx: number) => patternResults.bars[idx]?.time;
+        for (const pat of patternResults.patterns) {
+          const patColor = pat.direction > 0 ? "#26a69a" : pat.direction < 0 ? "#ef5350" : "#3b82f6";
+          let labelSeries: ISeriesApi<any> | null = null;
+          for (const ln of pat.lines) {
+            const lnData = ln.points
+              .map((p) => ({ time: timeAt(p.idx) as Time, value: p.price }))
+              .filter((d) => d.time != null)
+              .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+            if (lnData.length < 2) continue;
+            const s = chart.addSeries(LineSeries, {
+              color: patColor,
+              lineWidth: 2,
+              lineStyle: ln.dashed ? LineStyle.Dashed : LineStyle.Solid,
+              title: "",
+              crosshairMarkerVisible: false,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              pointMarkersVisible: true,
+              pointMarkersRadius: 3,
+              autoscaleInfoProvider: () => null,
+            });
+            s.setData(lnData);
+            if (!labelSeries) labelSeries = s;
+          }
+          if (labelSeries) {
+            const endTime = timeAt(pat.endIdx);
+            if (endTime) {
+              try {
+                createSeriesMarkers(labelSeries, [{
+                  time: endTime as Time,
+                  position: pat.direction < 0 ? "aboveBar" : "belowBar",
+                  color: patColor,
+                  shape: pat.direction > 0 ? "arrowUp" : pat.direction < 0 ? "arrowDown" : "circle",
+                  text: pat.label,
+                }] as any);
+              } catch {}
+            }
+          }
+        }
+      }
+
       // HA Signal markers on main series
       if (activeIndicators.haSignals && mainSeries) {
         const haSmooth2: HASmoothConfig | undefined =
@@ -2744,7 +3094,7 @@ function MiniChart({
       chartRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands, gridColor, chrome]);
+  }, [data, secondaryData, color, secondaryColor, height, id, indicatorsKey, isMaximized, effectiveFlexHeight, IC, refBands, gridColor, chrome, patternResults]);
 
   // Log scale
   useEffect(() => {
@@ -4205,18 +4555,32 @@ export default function Pairs() {
           );
         })()}
 
-        {showIndicators && (
+        {showIndicators && (() => {
+          // Only offer charts that are actually on screen (visibility picker +
+          // user-added OLS plots) — hidden charts can't show indicators anyway.
+          const panelCharts = [
+            ...chartConfigs.filter(c => visibleChartIds.has(c.id)).map(c => ({ id: c.id, title: c.title })),
+            ...extraOlsZPlots.map(r => ({
+              id: `olsResidZ_extra_${r.id}`,
+              title: `OLS Residual Z — ${r.metricA === r.metricB ? r.metricA : `${r.metricA} / ${r.metricB}`}`,
+            })),
+          ];
+          const effectiveChartId = panelCharts.some(c => c.id === indicatorChartId)
+            ? indicatorChartId
+            : (panelCharts[0]?.id ?? indicatorChartId);
+          return (
           <PairsIndicatorsPanel
-            charts={chartConfigs.map(c => ({ id: c.id, title: c.title }))}
+            charts={panelCharts}
             indicatorsMap={indicatorsMap}
-            activeChartId={indicatorChartId}
+            activeChartId={effectiveChartId}
             onSelectChart={setIndicatorChartId}
             onChangeIndicators={(chartId, indicators) =>
               setIndicatorsMap(prev => ({ ...prev, [chartId]: indicators }))
             }
             onClose={() => setShowIndicators(false)}
           />
-        )}
+          );
+        })()}
       </div>
     </div>
   );

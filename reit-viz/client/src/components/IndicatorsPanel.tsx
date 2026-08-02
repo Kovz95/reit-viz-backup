@@ -195,8 +195,9 @@ const INDICATOR_SECTIONS = [
   "Indicator Overlays",
 ] as const;
 
-/** Clickable section header — toggles its section open/closed with a rotating chevron. */
-function SectionHeader({
+/** Clickable section header — toggles its section open/closed with a rotating chevron.
+ *  Exported for the Pairs (Compare) panel, which mirrors this panel's layout. */
+export function SectionHeader({
   title,
   collapsed,
   onToggle,

@@ -815,11 +815,37 @@ const HMM_REGIME: IndicatorDef = {
       ],
     },
     { key: "alpha", label: "Shade %", default: 12, min: 3, max: 40 },
+    // Anti-flicker: regime runs shorter than this many bars are absorbed into
+    // their neighbor, so one-day blips don't repaint the background.
+    { key: "minRun", label: "Min run (bars)", default: 5, min: 1, max: 60 },
   ],
   colorKeys: ["hmm_bear", "hmm_chop", "hmm_bull"],
   renderOverlay: (ctx, bars, p) => {
     const res = computeHmmRegimes(barsToCloses(bars), p.states);
     if (!res || !res.points.length) return;
+    // Min-run smoothing: absorb short runs into the PRECEDING regime (repeat
+    // until stable — merges can create new short runs). Reassigned bars keep
+    // an honest confidence via the full posterior (probs[newState]).
+    const minRun = Math.max(1, Math.round(p.minRun ?? 1));
+    if (minRun > 1) {
+      const st = res.points.map((pt) => pt.state);
+      for (let pass = 0, changed = true; changed && pass < 20; pass++) {
+        changed = false;
+        for (let i = 0; i < st.length; ) {
+          let j = i;
+          while (j < st.length && st[j] === st[i]) j++;
+          const fill = i > 0 ? st[i - 1] : j < st.length ? st[j] : null;
+          if (j - i < minRun && fill !== null && fill !== st[i]) {
+            for (let k = i; k < j; k++) st[k] = fill;
+            changed = true;
+          }
+          i = j;
+        }
+      }
+      res.points = res.points.map((pt, i) =>
+        st[i] === pt.state ? pt : { ...pt, state: st[i], prob: pt.probs[st[i]] ?? pt.prob },
+      );
+    }
     const a = Math.max(0.03, Math.min(0.4, p.alpha / 100));
     const stateColor = (s: number): string => {
       if (p.states === 2) return s === 0 ? ctx.colors.hmm_bear : ctx.colors.hmm_bull;

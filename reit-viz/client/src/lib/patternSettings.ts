@@ -58,14 +58,14 @@ function persist() {
   for (const fn of subscribers) fn();
 }
 
-export function getPatternSettings(paneId: number): PatternSettings {
+export function getPatternSettings(paneId: number | string): PatternSettings {
   return {
     ...defaultPatternSettings(),
     ...(store[paneId] ?? {}),
   };
 }
 
-export function setPatternSettings(paneId: number, patch: Partial<PatternSettings>) {
+export function setPatternSettings(paneId: number | string, patch: Partial<PatternSettings>) {
   const prev = store[paneId] ?? defaultPatternSettings();
   store[paneId] = {
     ...prev,
@@ -75,7 +75,7 @@ export function setPatternSettings(paneId: number, patch: Partial<PatternSetting
 }
 
 export function usePatternSettings(
-  paneId: number,
+  paneId: number | string,
 ): readonly [PatternSettings, (patch: Partial<PatternSettings>) => void] {
   const [, force] = useState(0);
   useEffect(() => {
@@ -91,7 +91,7 @@ export function usePatternSettings(
   ] as const;
 }
 
-export function notifyPatternsSettingsChanged(paneId: number) {
+export function notifyPatternsSettingsChanged(paneId: number | string) {
   try {
     window.dispatchEvent(
       new CustomEvent("reit-viz:patterns-settings-changed", {
