@@ -237,7 +237,7 @@ const CHART_OPTIONS = {
 // ---------------------------------------------------------------------------
 interface PairRatioChartProps {
   ratioSeries: { time: string; value: number }[];
-  zScoreSeries: { time: string; value: number }[];
+  zScoreSeries: { time: string; value: number | null }[];
   ratioTitle: string;
   zScoreTitle: string;
 }
@@ -297,7 +297,8 @@ function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: 
       lastValueVisible: true,
       crosshairMarkerRadius: 3,
     });
-    zSeries.setData(zScoreSeries.map((p) => ({ time: p.time, value: p.value })));
+    // Warm-up bars (value null) become whitespace so both charts share one axis.
+    zSeries.setData(zScoreSeries.map((p) => (p.value == null ? { time: p.time } : { time: p.time, value: p.value })));
 
     for (const [level, color] of [
       [0, "rgba(148,163,184,0.4)"],
@@ -832,18 +833,30 @@ export default function PairRatios() {
     }
     if (ratioSeries.length === 0) return null;
 
-    const values = ratioSeries.map((p) => p.value);
-    const mean = values.reduce((s, v) => s + v, 0) / values.length;
-    const n = Math.max(1, values.length - 1);
-    const std = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+    // Rolling log-z over the page's lookback window — same methodology as the
+    // table/sparkline (computePairRatios: z of log-ratio vs window mean/σ), so
+    // the chart's last value matches the row's Z chip. Warm-up bars are
+    // whitespace to keep both charts on one time axis for synced pan/zoom.
+    const logVals = ratioSeries.map((p) => Math.log(p.value));
+    const n = logVals.length;
+    const win = lookback === "all" ? n : Math.min(parseInt(lookback), n);
+    const prefix = new Float64Array(n + 1);
+    const prefixSq = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      prefix[i + 1] = prefix[i] + logVals[i];
+      prefixSq[i + 1] = prefixSq[i] + logVals[i] * logVals[i];
+    }
+    const zScoreSeries: { time: string; value: number | null }[] = ratioSeries.map((p, i) => {
+      if (i < win - 1) return { time: p.time, value: null };
+      const sum = prefix[i + 1] - prefix[i + 1 - win];
+      const sumSq = prefixSq[i + 1] - prefixSq[i + 1 - win];
+      const winMean = sum / win;
+      const winStd = Math.sqrt(Math.max(0, sumSq / win - winMean * winMean));
+      return { time: p.time, value: winStd === 0 ? 0 : (logVals[i] - winMean) / winStd };
+    });
 
-    const zScoreSeries = ratioSeries.map((p) => ({
-      time: p.time,
-      value: std === 0 ? 0 : (p.value - mean) / std,
-    }));
-
-    return { fullRatio: ratioSeries, fullZ: zScoreSeries, fullMean: mean, fullStd: std };
-  }, [selectedPair, workbookData, globalDates, metric]);
+    return { fullRatio: ratioSeries, fullZ: zScoreSeries };
+  }, [selectedPair, workbookData, globalDates, metric, lookback]);
 
   const valueFilterDefs = [
     { label: "Z-Score", vf: vfZScore, set: setVfZScore },
@@ -923,7 +936,7 @@ export default function PairRatios() {
               ratioSeries={detailChartData.fullRatio}
               zScoreSeries={detailChartData.fullZ}
               ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${metricLabel(metric)} (${detailChartData.fullRatio.length} pts)`}
-              zScoreTitle={`Z-Score (±2σ bands — mean/σ from ${LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label} window)`}
+              zScoreTitle={`Z-Score (±2σ bands — ${lookback === "all" ? "full-history" : `rolling ${LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label}`} log-z, matches table)`}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
