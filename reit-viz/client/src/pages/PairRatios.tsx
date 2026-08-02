@@ -19,7 +19,7 @@ import {
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { SlidersHorizontal, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Download, Loader2, ExternalLink } from "lucide-react";
+import { Download, Loader2, ExternalLink, Maximize2 } from "lucide-react";
 import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
 import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { useUniverseSignature } from "@/lib/universeSignature";
@@ -865,6 +865,7 @@ export default function PairRatios() {
               size="sm"
               className="h-7 text-xs gap-1"
               onClick={() => setSelectedPair(null)}
+              data-testid="pair-detail-back"
             >
               <ChevronLeft className="w-3 h-3" /> Back
             </Button>
@@ -1202,9 +1203,22 @@ export default function PairRatios() {
                       data-testid={`pair-row-${idx}`}
                     >
                       <td className="px-3 py-1.5 font-bold">
-                        <span className="text-foreground">{pair.tickerA}</span>
-                        <span className="text-muted-foreground/60">/</span>
-                        <span className="text-foreground">{pair.tickerB}</span>
+                        <div className="flex items-center">
+                          <span className="text-foreground">{pair.tickerA}</span>
+                          <span className="text-muted-foreground/60">/</span>
+                          <span className="text-foreground">{pair.tickerB}</span>
+                          <button
+                            className="ml-auto pl-1 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                            title="View ratio + z-score detail charts"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedPair(pair);
+                            }}
+                            data-testid={`pair-detail-btn-${idx}`}
+                          >
+                            <Maximize2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       </td>
                       <td className="text-right px-2 py-1.5">{pair.currentRatio.toFixed(3)}</td>
                       <td className="text-right px-2 py-1.5">
@@ -1242,7 +1256,15 @@ export default function PairRatios() {
                           {pair.pctChange90d >= 0 ? "+" : ""}{pair.pctChange90d.toFixed(1)}%
                         </span>
                       </td>
-                      <td className="px-2 py-0.5 w-[180px] min-w-[180px] max-w-[180px]">
+                      <td
+                        className="px-2 py-0.5 w-[180px] min-w-[180px] max-w-[180px] cursor-zoom-in"
+                        title="View ratio + z-score detail charts"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPair(pair);
+                        }}
+                        data-testid={`pair-spark-${idx}`}
+                      >
                         <PairSparkline pair={pair} />
                       </td>
                     </tr>
