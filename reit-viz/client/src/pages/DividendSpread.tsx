@@ -15,7 +15,7 @@ import { PairDetailCharts } from "@/pages/PairRatios";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
-import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
+import { fetchStaticSeries } from "@/lib/macroStatic";
 import { getDividendYieldMultiplier } from "@/lib/getDividendYieldMultiplier";
 import { fetchTickerData } from "@/lib/fetchTickerData";
 import { filterTickers } from "@/lib/classFilters";
@@ -74,10 +74,15 @@ interface SpreadRow {
 }
 
 async function loadSpreadData(treasuryId: string, lookback: number): Promise<SpreadRow[]> {
+  // fetchStaticSeries = the macro pipeline's DGS10/DGS2/… daily rate series
+  // ({time, value}[]). The old call here went to fetchMonthlySeasonality,
+  // which IGNORES its argument and returns performance-seasonality objects —
+  // the treasury map stayed empty, every spread series was empty, and the
+  // whole vs-Treasury table rendered 0 rows.
   const [workbookTickers, datesList, treasurySeries] = await Promise.all([
     fetchWorkbookTickers(),
     fetchGlobalDatesList(),
-    fetchMonthlySeasonality(treasuryId),
+    fetchStaticSeries(treasuryId),
   ]);
   const treasuryMap = new Map<string, number>();
   for (const item of treasurySeries) treasuryMap.set(item.time, item.value);
