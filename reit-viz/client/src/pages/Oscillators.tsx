@@ -29,6 +29,7 @@ import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { refreshTickerData } from "@/lib/dataService";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
+import { PairSeriesDetailOverlay } from "@/pages/PairRatios";
 import { PresetBar } from "@/components/PresetBar";
 import DateInput from "@/components/DateInput";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -164,6 +165,20 @@ export default function Oscillators() {
   const [ewoDisplay, setEwoDisplay] = useState("raw");
   const [mode, setMode] = useState("single");
   const [pairTickerA, setPairTickerA] = useState("");
+  // Pair ratio chart overlay: null = closed, undefined = loading, [] = no data.
+  const [pairChartSeries, setPairChartSeries] = useState<{ time: string; value: number }[] | undefined | null>(null);
+  const openPairChart = async () => {
+    if (!pairTickerA || !pairTickerB || pairTickerA === pairTickerB) return;
+    setPairChartSeries(undefined);
+    try {
+      const d = await getYahooPairsRatio(pairTickerA, pairTickerB);
+      setPairChartSeries(
+        d ? d.dates.map((t, i) => ({ time: t, value: d.ratio[i] })).filter((p) => Number.isFinite(p.value)) : [],
+      );
+    } catch {
+      setPairChartSeries([]);
+    }
+  };
   const [pairTickerB, setPairTickerB] = useState("");
   const [basketTickers, setBasketTickers] = useState<string[]>([]);
   const [basketRunMode, setBasketRunMode] = useState("stocks");
@@ -1330,6 +1345,14 @@ export default function Oscillators() {
                 <>
                   <UnifiedTickerPicker tickers={filteredAllTickers} value={pairTickerA} onChange={setPairTickerA} label="Ticker A" />
                   <UnifiedTickerPicker tickers={filteredAllTickers} value={pairTickerB} onChange={setPairTickerB} label="Ticker B" />
+                  <button
+                    className="self-end mb-0.5 px-2 py-1 text-[10px] font-mono border border-border rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+                    onClick={openPairChart}
+                    title="Open the A/B ratio with the full Charts-tab indicator suite"
+                    data-testid="osc-pair-chart"
+                  >
+                    Chart
+                  </button>
                 </>
               )}
               <div className="flex flex-col gap-0.5">
@@ -1665,6 +1688,14 @@ export default function Oscillators() {
                   <span className="text-[10px] font-mono text-muted-foreground pb-1" title="Stochastic uses high=low=close on the ratio (close-only stochastic).">
                     Ratio: <span className="text-foreground font-bold">{pairTickerA || "A"}/{pairTickerB || "B"}</span>
                   </span>
+                  <button
+                    className="mb-0.5 px-2 py-1 text-[10px] font-mono border border-border rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+                    onClick={openPairChart}
+                    title="Open the A/B ratio with the full Charts-tab indicator suite"
+                    data-testid="osc-pair-chart-alt"
+                  >
+                    Chart
+                  </button>
                 </div>
               )}
               {mode === "pairCombo" && (
@@ -2091,6 +2122,19 @@ export default function Oscillators() {
             )}
           </div>
         </>
+      )}
+
+      {/* A/B ratio detail — shared chart stack with the full indicator suite. */}
+      {pairChartSeries !== null && (
+        <PairSeriesDetailOverlay
+          onBack={() => setPairChartSeries(null)}
+          heading={`${pairTickerA} / ${pairTickerB}`}
+          subtitle="Price ratio (optimizer input series)"
+          series={pairChartSeries}
+          seriesTitle={`Ratio: ${pairTickerA} / ${pairTickerB} — Price`}
+          storageKey="reit-viz:osc-pair-indicators"
+          testid="osc-pair-detail"
+        />
       )}
     </div>
   );

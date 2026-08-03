@@ -231,6 +231,115 @@ const Z_REF_LINES = [
   { value: -2, color: "rgba(34,197,94,0.3)", style: 2 },
 ];
 
+// ── Generic full-screen series detail overlay ──
+// Heading + Now/z chips + the PairDetailCharts stack, with the rolling-z
+// companion computed internally (population σ, min 30 obs; zWindow=Infinity →
+// expanding) and indicator picks persisted to localStorage. Lets pages whose
+// pair/derived series need the indicator suite (Oscillators, RS Engine) skip
+// the overlay plumbing entirely.
+export function PairSeriesDetailOverlay({ onBack, heading, subtitle, series, seriesTitle, zWindow = 252, zTitle = "Z-Score (rolling 1Y window)", refLines, storageKey, testid, fmt }: {
+  onBack: () => void;
+  heading: string;
+  subtitle?: string;
+  /** undefined = loading, [] = no data */
+  series: { time: string; value: number }[] | undefined;
+  seriesTitle: string;
+  zWindow?: number;
+  zTitle?: string;
+  refLines?: { value: number; color: string; style: number; label?: string }[];
+  storageKey: string;
+  testid: string;
+  fmt?: (v: number) => string;
+}) {
+  const [indicators, setIndicators] = useState<Record<string, ActiveIndicators>>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify(indicators)); } catch {}
+  }, [storageKey, indicators]);
+
+  const zData = useMemo(() => {
+    const s = series ?? [];
+    const n = s.length;
+    if (n < 30) return { z: [] as { time: string; value: number | null }[], lastZ: null as number | null };
+    const pre = new Float64Array(n + 1);
+    const pre2 = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      pre[i + 1] = pre[i] + s[i].value;
+      pre2[i + 1] = pre2[i] + s[i].value * s[i].value;
+    }
+    const z = s.map((pt, i) => {
+      const lo = Number.isFinite(zWindow) ? Math.max(0, i - zWindow + 1) : 0;
+      const cnt = i - lo + 1;
+      if (cnt < 30) return { time: pt.time, value: null as number | null };
+      const mean = (pre[i + 1] - pre[lo]) / cnt;
+      const sd = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[lo]) / cnt - mean * mean));
+      if (sd < 1e-9) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (pt.value - mean) / sd };
+    });
+    let lastZ: number | null = null;
+    for (let i = z.length - 1; i >= 0; i--) {
+      if (z[i].value != null) { lastZ = z[i].value; break; }
+    }
+    return { z, lastZ };
+  }, [series, zWindow]);
+
+  const now = series?.length ? series[series.length - 1].value : null;
+  const fmtVal = fmt ?? ((v: number) => v.toFixed(4));
+  return (
+    <div className="fixed inset-0 z-[60] bg-background flex flex-col" data-testid={testid}>
+      <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+        <button
+          className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent"
+          onClick={onBack}
+          data-testid={`${testid}-back`}
+        >
+          <ChevronLeft className="w-3 h-3" /> Back
+        </button>
+        <div className="text-sm font-bold font-mono">{heading}</div>
+        {subtitle && <span className="text-xs text-muted-foreground">{subtitle}</span>}
+        <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+          {now != null && (
+            <span className="border border-border/30 rounded px-2 py-1">
+              <span className="text-muted-foreground">Now </span>
+              <span className="font-bold">{fmtVal(now)}</span>
+            </span>
+          )}
+          {zData.lastZ != null && (
+            <span className="border border-border/30 rounded px-2 py-1">
+              <span className="text-muted-foreground">z </span>
+              <span className={`font-bold ${zData.lastZ >= 0 ? "text-red-400" : "text-emerald-400"}`}>
+                {zData.lastZ.toFixed(2)}
+              </span>
+            </span>
+          )}
+        </div>
+      </div>
+      {series === undefined ? (
+        <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">Loading…</div>
+      ) : series.length >= 30 ? (
+        <PairDetailCharts
+          ratioSeries={series}
+          zScoreSeries={zData.z}
+          ratioTitle={`${seriesTitle} (${series.length} pts)`}
+          zScoreTitle={zTitle}
+          ratioRefLines={refLines}
+          indicatorsMap={indicators}
+          onChangeIndicatorsMap={setIndicators}
+        />
+      ) : (
+        <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+          Insufficient overlapping history for this pair.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Exported for the Heatmap Pair Matrix detail overlay (same contract).
 export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap, ratioRefLines }: PairRatioChartProps) {
   const { registerChart, unregisterChart, registerSeries } = usePairChartSync("pr-ratio", "__pairRatioCharts");

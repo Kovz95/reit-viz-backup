@@ -10,7 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Settings, Loader2, Download } from "lucide-react";
+import { Settings, Loader2, Download, LineChart } from "lucide-react";
+import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
+import { PairSeriesDetailOverlay } from "@/pages/PairRatios";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { driverScan } from "@/lib/driverScan";
 import { Play as PlayIcon } from "@/lib/icons";
@@ -718,6 +720,19 @@ function PerMetricEdge({ a, b, aSym, bSym }: { a: SnapshotRow; b: SnapshotRow; a
 
 function PairConvictionPanel({ a, b, aSym, bSym, snapshot }: { a: SnapshotRow | undefined; b: SnapshotRow | undefined; aSym: string; bSym: string; snapshot: SnapshotRow[] }) {
   void snapshot;
+  // A/B ratio chart overlay: null = closed, undefined = loading, [] = no data.
+  const [ratioChart, setRatioChart] = useState<{ time: string; value: number }[] | undefined | null>(null);
+  const openChart = async () => {
+    setRatioChart(undefined);
+    try {
+      const d = await getYahooPairsRatio(aSym, bSym);
+      setRatioChart(
+        d ? d.dates.map((t, i) => ({ time: t, value: d.ratio[i] })).filter((p) => Number.isFinite(p.value)) : [],
+      );
+    } catch {
+      setRatioChart([]);
+    }
+  };
   if (!a || !b) {
     return (
       <div className="bg-card border rounded-md p-4 text-sm text-muted-foreground">
@@ -731,7 +746,17 @@ function PairConvictionPanel({ a, b, aSym, bSym, snapshot }: { a: SnapshotRow | 
   const conviction = absDiff > 25 ? "Strong" : absDiff > 10 ? "Moderate" : "Weak";
   return (
     <div className="bg-card border rounded-md p-4 space-y-3">
-      <h3 className="font-semibold">Pair Conviction</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold">Pair Conviction</h3>
+        <button
+          className="flex items-center gap-1 px-2 py-1 text-[11px] rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+          onClick={openChart}
+          title="Open the A/B price ratio with the full Charts-tab indicator suite"
+          data-testid="rse-pair-chart"
+        >
+          <LineChart className="w-3 h-3" /> Chart
+        </button>
+      </div>
       <div className="text-center py-3 bg-muted/30 rounded">
         <div className="text-2xl font-bold">{direction}</div>
         <div className="text-sm text-muted-foreground mt-1">
@@ -748,6 +773,19 @@ function PairConvictionPanel({ a, b, aSym, bSym, snapshot }: { a: SnapshotRow | 
         ))}
       </div>
       <PerMetricEdge a={a} b={b} aSym={aSym} bSym={bSym} />
+
+      {/* A/B ratio detail — shared chart stack with the full indicator suite. */}
+      {ratioChart !== null && (
+        <PairSeriesDetailOverlay
+          onBack={() => setRatioChart(null)}
+          heading={`${aSym} / ${bSym}`}
+          subtitle="Price ratio"
+          series={ratioChart}
+          seriesTitle={`Ratio: ${aSym} / ${bSym} — Price`}
+          storageKey="reit-viz:rse-pair-indicators"
+          testid="rse-pair-detail"
+        />
+      )}
     </div>
   );
 }
