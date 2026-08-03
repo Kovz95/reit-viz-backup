@@ -55,7 +55,10 @@ import {
   Group,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
 } from "lucide-react";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -706,6 +709,11 @@ export default function Ranking() {
     });
   }, []);
 
+  // Pairs-mode in-page detail (row click): selected pair + indicator
+  // selections (persisted; chart keys pr-ratio / pr-z).
+  const [pairDetail, setPairDetail] = useState<{ a: string; b: string } | null>(null);
+  const [pairDetailIndicators, setPairDetailIndicators] = useState<Record<string, ActiveIndicators>>({});
+
   const serializeRanking = useCallback(() => ({
     rankMode,
     metrics,
@@ -728,7 +736,8 @@ export default function Ranking() {
     groupBy,
     metricWeights,
     metricDirections,
-  }), [rankMode, metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, attrPeriod, memTemplates, colVis, groupBy, metricWeights, metricDirections]);
+    pairDetailIndicators,
+  }), [rankMode, metrics, sortCol, sortDir, classFilters, manualTickers, avgDays, customDays, dateInput, sparklineLookback, showRevisions, revMetric, showAttribution, attrWindow, attrBasis, attrPeriod, memTemplates, colVis, groupBy, metricWeights, metricDirections, pairDetailIndicators]);
 
   const restoreRanking = useCallback((state: any) => {
     if (state.rankMode !== undefined) setRankMode(state.rankMode);
@@ -752,6 +761,7 @@ export default function Ranking() {
     if (state.groupBy !== undefined) setGroupBy(state.groupBy);
     if (state.metricWeights !== undefined) setMetricWeights(state.metricWeights);
     if (state.metricDirections !== undefined) setMetricDirections(state.metricDirections);
+    if (state.pairDetailIndicators !== undefined) setPairDetailIndicators(state.pairDetailIndicators);
   }, []);
 
   useWorkspaceTab("ranking", serializeRanking, restoreRanking);
@@ -925,6 +935,41 @@ export default function Ranking() {
     }
     return rows;
   }, [rankMode, pairLegs, pairCloses, tickersMetaAll]);
+
+  // Pairs-mode detail series: ratio (from the already-cached leg closes) +
+  // EXPANDING z with SAMPLE σ (n−1) — the same convention as the table's
+  // Ratio Z (full-history window), so the z chart's last value equals the
+  // row's Ratio Z. Warm-up (< PAIR_MIN_POINTS obs) renders as whitespace.
+  const pairDetailData = useMemo(() => {
+    if (!pairDetail || !pairCloses) return null;
+    const ca = pairCloses.get(pairDetail.a);
+    const cb = pairCloses.get(pairDetail.b);
+    if (!ca || !cb) return null;
+    const r = ratioSeries(ca, cb);
+    if (r.length < PAIR_MIN_POINTS) return { ratio: [] as TimeValue[], z: [] as { time: string; value: number | null }[], lastZ: null as number | null };
+    const n = r.length;
+    const pre = new Float64Array(n + 1);
+    const pre2 = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      pre[i + 1] = pre[i] + r[i].value;
+      pre2[i + 1] = pre2[i] + r[i].value * r[i].value;
+    }
+    const z = r.map((pt, i) => {
+      const cnt = i + 1;
+      if (cnt < PAIR_MIN_POINTS) return { time: pt.time, value: null as number | null };
+      const mean = pre[i + 1] / cnt;
+      // Sample variance (n−1), matching pairRawRows' ratioZ.
+      const variance = Math.max(0, (pre2[i + 1] - cnt * mean * mean) / (cnt - 1));
+      const std = Math.sqrt(variance);
+      if (!(std > 0)) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (pt.value - mean) / std };
+    });
+    let lastZ: number | null = null;
+    for (let i = z.length - 1; i >= 0; i--) {
+      if (z[i].value != null) { lastZ = z[i].value; break; }
+    }
+    return { ratio: r, z, lastZ };
+  }, [pairDetail, pairCloses]);
 
   // The rawRows actually consumed by the composite pipeline below.
   const effectiveRawRows = rankMode === "pairs" ? pairRawRows : rawRows;
@@ -1995,8 +2040,10 @@ export default function Ranking() {
                 const isPair = row.ticker.includes("/");
                 const openRow = () => {
                   if (isPair) {
+                    // In-page ratio+z detail (indicators); "Open in Pairs"
+                    // inside keeps the deep-dive hand-off.
                     const [la, lb] = row.ticker.split("/");
-                    navigateToPairs(la, lb);
+                    setPairDetail({ a: la, b: lb });
                   } else {
                     navigateToChart(row.ticker);
                   }
@@ -2248,6 +2295,65 @@ export default function Ranking() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Pairs-mode in-page detail — same chart stack (full indicator suite)
+          as the other pair surfaces; "Open in Pairs" keeps the deep-dive. */}
+      {rankMode === "pairs" && pairDetail && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="rank-pair-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] gap-1"
+              onClick={() => setPairDetail(null)}
+              data-testid="rank-pair-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </Button>
+            <div className="text-sm font-bold font-mono text-purple-400">{pairDetail.a} / {pairDetail.b}</div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] gap-1"
+              onClick={() => navigateToPairs(pairDetail.a, pairDetail.b)}
+              title={`Open ${pairDetail.a} / ${pairDetail.b} in the Pairs deep-dive`}
+              data-testid="rank-pair-detail-open-pairs"
+            >
+              <ExternalLink className="w-3 h-3" /> Open in Pairs
+            </Button>
+            <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+              {pairDetailData?.ratio.length ? (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Ratio </span>
+                  <span className="font-bold">{pairDetailData.ratio[pairDetailData.ratio.length - 1].value.toFixed(4)}</span>
+                </span>
+              ) : null}
+              {pairDetailData?.lastZ != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Ratio Z </span>
+                  <span className={`font-bold ${pairDetailData.lastZ >= 0 ? "text-red-400" : "text-emerald-400"}`}>
+                    {pairDetailData.lastZ.toFixed(2)}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+          {pairDetailData && pairDetailData.ratio.length > 0 ? (
+            <PairDetailCharts
+              ratioSeries={pairDetailData.ratio}
+              zScoreSeries={pairDetailData.z}
+              ratioTitle={`Ratio: ${pairDetail.a} / ${pairDetail.b} — Price (${pairDetailData.ratio.length} pts)`}
+              zScoreTitle="Ratio Z (expanding full-history window, sample σ — matches table)"
+              indicatorsMap={pairDetailIndicators}
+              onChangeIndicatorsMap={setPairDetailIndicators}
+            />
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+              {pairDetailData ? "Insufficient overlapping history for this pair." : "Loading…"}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

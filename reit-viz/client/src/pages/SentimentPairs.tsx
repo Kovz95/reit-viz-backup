@@ -6,7 +6,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getMetricSeries, TimeValue } from "@/lib/dataService";
-import { X, Plus } from "lucide-react";
+import { X, Plus, ChevronLeft, ExternalLink } from "lucide-react";
+import { navigateToPairs } from "@/lib/navigateToPairs";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 
 const STORAGE_KEY = "reit-viz:sentiment-pairs";
 
@@ -73,6 +76,8 @@ interface GapStats {
   spark: number[];
   curA: number | null;
   curB: number | null;
+  /** Full dated gap series — feeds the in-page detail charts. */
+  series: TimeValue[];
 }
 
 /** Current / Δ1M(21 obs) / Δ3M(63 obs) / ~1Y sparkline from the gap series. */
@@ -97,6 +102,7 @@ function gapStats(gap: TimeValue[], legA: TimeValue[], legB: TimeValue[]): GapSt
     spark,
     curA: last(legA),
     curB: last(legB),
+    series: gap,
   };
 }
 
@@ -169,7 +175,7 @@ interface PairData {
   buyMissing: string[]; // legs with no ratings data
 }
 
-function GapSection({ title, hint, stats, missing, posIsBad, digits, legA, legB, unit }: {
+function GapSection({ title, hint, stats, missing, posIsBad, digits, legA, legB, unit, onOpen }: {
   title: string;
   hint: string;
   stats: GapStats | null;
@@ -179,6 +185,8 @@ function GapSection({ title, hint, stats, missing, posIsBad, digits, legA, legB,
   legA: string;
   legB: string;
   unit: string;
+  /** Opens the in-page detail (gap series + rolling z + indicators). */
+  onOpen?: () => void;
 }) {
   return (
     <div className="flex-1 min-w-[220px]">
@@ -193,7 +201,12 @@ function GapSection({ title, hint, stats, missing, posIsBad, digits, legA, legB,
         </div>
       ) : (
         <>
-          <div className="flex items-end gap-3">
+          <div
+            className={`flex items-end gap-3 ${onOpen ? "cursor-zoom-in" : ""}`}
+            onClick={onOpen}
+            title={onOpen ? "Open the gap history (chart + rolling z + indicators)" : undefined}
+            data-testid={`sentpair-open-${legA}-${legB}-${posIsBad ? "si" : "buy"}`}
+          >
             <GapValue value={stats.cur} posIsBad={posIsBad} digits={digits} className="text-lg leading-none" />
             <GapSparkline data={stats.spark} upIsBad={posIsBad} />
           </div>
@@ -218,7 +231,18 @@ function GapSection({ title, hint, stats, missing, posIsBad, digits, legA, legB,
   );
 }
 
-function PairCard({ pair, onRemove }: { pair: Pair; onRemove: () => void }) {
+/** What the in-page detail overlay renders (which pair + which gap). */
+export interface GapDetailSel {
+  a: string;
+  b: string;
+  kind: "si" | "buy";
+  title: string;
+  posIsBad: boolean;
+  digits: number;
+  stats: GapStats;
+}
+
+function PairCard({ pair, onRemove, onOpenDetail }: { pair: Pair; onRemove: () => void; onOpenDetail: (sel: GapDetailSel) => void }) {
   const { a, b } = pair;
   const { data, isLoading } = useQuery<PairData>({
     queryKey: ["/sentiment-pair-gaps", a, b],
@@ -303,6 +327,7 @@ function PairCard({ pair, onRemove }: { pair: Pair; onRemove: () => void }) {
             legA={a}
             legB={b}
             unit="%"
+            onOpen={data.si ? () => onOpenDetail({ a, b, kind: "si", title: `SI gap (${a} − ${b})`, posIsBad: true, digits: 2, stats: data.si! }) : undefined}
           />
           <GapSection
             title={`Buy% gap (${a} − ${b})`}
@@ -314,6 +339,7 @@ function PairCard({ pair, onRemove }: { pair: Pair; onRemove: () => void }) {
             legA={a}
             legB={b}
             unit="%"
+            onOpen={data.buy ? () => onOpenDetail({ a, b, kind: "buy", title: `Buy% gap (${a} − ${b})`, posIsBad: false, digits: 1, stats: data.buy! }) : undefined}
           />
         </div>
       )}
@@ -329,6 +355,43 @@ export default function SentimentPairs() {
   const [pairs, setPairs] = useState<Pair[]>(loadPairs);
   const [input, setInput] = useState("");
   const [inputError, setInputError] = useState<string | null>(null);
+  // In-page gap detail (sparkline click) + its indicator selections
+  // (persisted next to the pins; chart keys pr-ratio / pr-z).
+  const [detail, setDetail] = useState<GapDetailSel | null>(null);
+  const [detailIndicators, setDetailIndicators] = useState<Record<string, ActiveIndicators>>(() => {
+    try {
+      const raw = localStorage.getItem("reit-viz:sentpair-indicators");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  });
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:sentpair-indicators", JSON.stringify(detailIndicators)); } catch {}
+  }, [detailIndicators]);
+
+  // Rolling ~1Y (252-obs) z of the gap — the cards show pp deltas, not z, so
+  // this is the standard companion chart rather than a table-matching stat.
+  const detailZ = useMemo(() => {
+    if (!detail) return [];
+    const s = detail.stats.series;
+    const n = s.length;
+    const WIN = 252;
+    const pre = new Float64Array(n + 1);
+    const pre2 = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      pre[i + 1] = pre[i] + s[i].value;
+      pre2[i + 1] = pre2[i] + s[i].value * s[i].value;
+    }
+    return s.map((pt, i) => {
+      const lo = Math.max(0, i - WIN + 1);
+      const cnt = i - lo + 1;
+      if (cnt < 30) return { time: pt.time, value: null as number | null };
+      const mean = (pre[i + 1] - pre[lo]) / cnt;
+      const std = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[lo]) / cnt - mean * mean));
+      if (!(std > 0)) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (pt.value - mean) / std };
+    });
+  }, [detail]);
 
   useEffect(() => {
     try {
@@ -413,11 +476,60 @@ export default function SentimentPairs() {
         ) : (
           <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(480px, 1fr))" }}>
             {pairs.map((p, i) => (
-              <PairCard key={`${p.a}/${p.b}`} pair={p} onRemove={() => removePair(i)} />
+              <PairCard key={`${p.a}/${p.b}`} pair={p} onRemove={() => removePair(i)} onOpenDetail={setDetail} />
             ))}
           </div>
         )}
       </div>
+
+      {/* In-page gap detail — same chart stack (full indicator suite) as the
+          other pair surfaces; "Open in Pairs" keeps the price deep-dive. */}
+      {detail && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="sentpair-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent"
+              onClick={() => setDetail(null)}
+              data-testid="sentpair-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+            <div className="text-sm font-bold font-mono">{detail.a} / {detail.b}</div>
+            <span className="text-xs text-muted-foreground">{detail.title}</span>
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded border border-border/50 text-[11px] text-foreground/80 hover:text-foreground hover:bg-accent"
+              onClick={() => navigateToPairs(detail.a, detail.b)}
+              title={`Open ${detail.a} / ${detail.b} in the Pairs deep-dive (price ratio)`}
+              data-testid="sentpair-detail-open-pairs"
+            >
+              <ExternalLink className="w-3 h-3" /> Open in Pairs
+            </button>
+            <div className="flex items-center gap-2 ml-auto text-[11px] font-mono">
+              <span className="border border-border/30 rounded px-2 py-1">
+                <span className="text-muted-foreground">Now </span>
+                <GapValue value={detail.stats.cur} posIsBad={detail.posIsBad} digits={detail.digits} />
+              </span>
+              <span className="border border-border/30 rounded px-2 py-1">
+                <span className="text-muted-foreground">Δ1M </span>
+                <GapValue value={detail.stats.d1m} posIsBad={detail.posIsBad} digits={detail.digits} />
+              </span>
+              <span className="border border-border/30 rounded px-2 py-1">
+                <span className="text-muted-foreground">Δ3M </span>
+                <GapValue value={detail.stats.d3m} posIsBad={detail.posIsBad} digits={detail.digits} />
+              </span>
+            </div>
+          </div>
+          <PairDetailCharts
+            ratioSeries={detail.stats.series}
+            zScoreSeries={detailZ}
+            ratioTitle={`${detail.title} — pp (${detail.stats.series.length} pts)`}
+            zScoreTitle="Gap z-score (rolling 1Y window)"
+            ratioRefLines={[{ value: 0, color: "rgba(148,163,184,0.4)", style: 2 }]}
+            indicatorsMap={detailIndicators}
+            onChangeIndicatorsMap={setDetailIndicators}
+          />
+        </div>
+      )}
     </div>
   );
 }
