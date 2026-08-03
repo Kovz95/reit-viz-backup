@@ -34,7 +34,9 @@ import { Download } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { TrendingUp } from "lucide-react";
 import { TrendingDown } from "lucide-react";
-import { X, Calendar, Maximize2, Minimize2, CandlestickChart } from "lucide-react";
+import { X, Calendar, Maximize2, Minimize2, CandlestickChart, ChevronLeft, LineChart } from "lucide-react";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import { useLocation } from "wouter";
 const XIcon = X;
 import { useUniverseDefaults } from "@/lib/universeDefaults";
@@ -239,6 +241,11 @@ export default function PremiumDiscount() {
   const stateRestoredRef = useRef(false);
 
   // ── Workspace tab persistence ────────────────────────────────────────────
+  // In-page series detail (per-chart expand): which chart + indicator
+  // selections (persisted in the workspace; chart keys pr-ratio / pr-z).
+  const [pdDetail, setPdDetail] = useState<string | null>(null);
+  const [pdDetailIndicators, setPdDetailIndicators] = useState<Record<string, ActiveIndicators>>({});
+
   const captureState = useCallback(() => ({
     target,
     dimension,
@@ -268,11 +275,13 @@ export default function PremiumDiscount() {
     similarMinGap,
     scatterView,
     rvBand,
+    pdDetailIndicators,
   }), [
     target, dimension, valMetric, growthMetric, pinDate, periodFilter, rollWindow, rollLag,
     showEarnings, compareMode, peerTicker, peerValueOverride, groupADim, groupAValue, groupBDim,
     groupBValue, groupAKind, groupBKind, groupABasketId, groupBBasketId, basketId,
     basketAggregation, visibleCharts, similarN, similarExclusion, similarMinGap, scatterView, rvBand,
+    pdDetailIndicators,
   ]);
 
   const applyState = useCallback((data: any) => {
@@ -314,6 +323,7 @@ export default function PremiumDiscount() {
     if (typeof data.similarExclusion === "number" && data.similarExclusion >= 0 && data.similarExclusion <= 1000) setSimilarExclusion(data.similarExclusion);
     if (typeof data.similarMinGap === "number" && data.similarMinGap >= 0 && data.similarMinGap <= 504) setSimilarMinGap(data.similarMinGap);
     if (typeof data.rvBand === "number" && data.rvBand >= 0.05 && data.rvBand <= 2) setRvBand(data.rvBand);
+    if (data.pdDetailIndicators !== undefined) setPdDetailIndicators(data.pdDetailIndicators);
     stateRestoredRef.current = true;
   }, []);
 
@@ -1249,6 +1259,47 @@ export default function PremiumDiscount() {
     };
   }, [premiumSeries, growthSeries, closesA, closesB, similarN, similarExclusion, similarMinGap]);
 
+  // ── In-page series detail (chart expand → PairDetailCharts + indicators) ──
+  const pdDetailData = useMemo(() => {
+    if (!pdDetail) return null;
+    const zeroRef = [{ value: 0, color: "rgba(148,163,184,0.4)", style: 2 }];
+    const defs: Record<string, { title: string; series: { time: string; value: number }[]; refLines?: { value: number; color: string; style: number }[]; fmt: (v: number) => string }> = {
+      premium: { title: `Premium / Discount (%) — ${valMetric}`, series: premiumSeries, refLines: zeroRef, fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` },
+      growth: { title: `Growth Differential (pp) — ${growthMetric}`, series: growthSeries, refLines: zeroRef, fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}pp` },
+      ratio: { title: "Premium ÷ Growth Diff (ratio)", series: ratioSeries, refLines: zeroRef, fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}×` },
+      relReturn: { title: "Relative Total Return (%)", series: relReturnSeries, refLines: zeroRef, fmt: (v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` },
+      relRatio: { title: "Relative Price Ratio", series: relRatioSeries, refLines: [{ value: 1, color: "rgba(148,163,184,0.4)", style: 2 }], fmt: (v) => v.toFixed(4) },
+      rawRatio: { title: "Raw Price Ratio (A/B)", series: rawRatioSeries, fmt: (v) => v.toFixed(4) },
+    };
+    const def = defs[pdDetail];
+    if (!def || def.series.length < 30) return def ? { ...def, z: [] as { time: string; value: number | null }[], lastZ: null as number | null } : null;
+    // Rolling 1Y (252-obs) z companion — this page's charts carry no single
+    // table z to match, so this is the standard dislocation lens.
+    const s = def.series;
+    const n = s.length;
+    const pre = new Float64Array(n + 1);
+    const pre2 = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      pre[i + 1] = pre[i] + s[i].value;
+      pre2[i + 1] = pre2[i] + s[i].value * s[i].value;
+    }
+    const WIN = 252;
+    const z = s.map((pt, i) => {
+      const lo = Math.max(0, i - WIN + 1);
+      const cnt = i - lo + 1;
+      if (cnt < 30) return { time: pt.time, value: null as number | null };
+      const mean = (pre[i + 1] - pre[lo]) / cnt;
+      const std = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[lo]) / cnt - mean * mean));
+      if (!(std > 0)) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (pt.value - mean) / std };
+    });
+    let lastZ: number | null = null;
+    for (let i = z.length - 1; i >= 0; i--) {
+      if (z[i].value != null) { lastZ = z[i].value; break; }
+    }
+    return { ...def, z, lastZ };
+  }, [pdDetail, premiumSeries, growthSeries, ratioSeries, relReturnSeries, relRatioSeries, rawRatioSeries, valMetric, growthMetric]);
+
   // ── Crosshair value maps ───────────────────────────────────────────────────
   const premiumMap = useMemo(() => { const m = new Map<string, number>(); for (const p of premiumSeries) m.set(p.time, p.value); return m; }, [premiumSeries]);
   const growthMap2 = useMemo(() => { const m = new Map<string, number>(); for (const p of growthSeries) m.set(p.time, p.value); return m; }, [growthSeries]);
@@ -1955,6 +2006,17 @@ export default function PremiumDiscount() {
       {maximizedChart === id ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
     </button>
   );
+  // Opens the shared indicator detail (series + rolling z + full indicator suite).
+  const detailBtn = (id: string) => (
+    <button
+      className="p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent flex-shrink-0"
+      onClick={() => setPdDetail(id)}
+      title="Open with indicators (full chart + rolling z + Charts-tab indicator suite)"
+      data-testid={`pd-detail-${id}`}
+    >
+      <LineChart className="w-3 h-3" />
+    </button>
+  );
 
   // Jump to the Charts tab: ticker-vs-ticker pairings open as an A/B ratio
   // (pair-remap hand-off); all other compare modes open the target with its
@@ -2500,7 +2562,7 @@ export default function PremiumDiscount() {
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? premiumMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`} color="text-amber-300" testId="hover-premium" />
                 <span className="text-foreground">{valMetric}</span>
-                {maxBtn("premium")}
+                {detailBtn("premium")}{maxBtn("premium")}
               </div>
             </div>
             <div ref={premiumContainerRef} className="flex-1 min-h-0" data-testid="chart-premium" />
@@ -2513,7 +2575,7 @@ export default function PremiumDiscount() {
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? growthMap2.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}pp`} color="text-sky-300" testId="hover-growth" />
                 <span className="text-foreground">{growthMetric}</span>
-                {maxBtn("growth")}
+                {detailBtn("growth")}{maxBtn("growth")}
               </div>
             </div>
             <div ref={growthContainerRef} className="flex-1 min-h-0" data-testid="chart-growth" />
@@ -2526,7 +2588,7 @@ export default function PremiumDiscount() {
               <div className="flex items-center gap-2 text-[10px] font-mono">
                 <HoverValue hoverTime={crosshairTime} value={crosshairTime != null ? ratioMap.get(crosshairTime) : undefined} format={(v) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}×`} color="text-violet-300" testId="hover-ratio" />
                 <span className="text-purple-300" title="Dropped when |Δg| < 0.5pp or |ratio| > 50">{ratioSeries.length} pts</span>
-                {maxBtn("ratio")}
+                {detailBtn("ratio")}{maxBtn("ratio")}
               </div>
             </div>
             <div ref={ratioContainerRef} className="flex-1 min-h-0" data-testid="chart-ratio" />
@@ -2593,7 +2655,7 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A vs peer median" : compareMode === "ticker" ? `A vs ${peerTicker || "—"}` : `${groupALabel} vs ${groupBLabel}`}
                   </span>
                 )}
-                {maxBtn("relReturn")}
+                {detailBtn("relReturn")}{maxBtn("relReturn")}
               </div>
             </div>
             <div className="flex-1 min-h-0 relative">
@@ -2621,7 +2683,7 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A / peer median" : compareMode === "ticker" ? `A / ${peerTicker || "—"}` : `${groupALabel} / ${groupBLabel}`}
                   </span>
                 )}
-                {maxBtn("relRatio")}
+                {detailBtn("relRatio")}{maxBtn("relRatio")}
               </div>
             </div>
             <div className="flex-1 min-h-0 relative">
@@ -2649,7 +2711,7 @@ export default function PremiumDiscount() {
                     {compareMode === "peer" ? "A / peer median" : compareMode === "ticker" ? `A / ${peerTicker || "—"}` : `${groupALabel} / ${groupBLabel}`}
                   </span>
                 )}
-                {maxBtn("rawRatio")}
+                {detailBtn("rawRatio")}{maxBtn("rawRatio")}
               </div>
             </div>
             <div ref={rawRatioContainerRef} className="flex-1 min-h-0" data-testid="chart-raw-ratio" />
@@ -2839,6 +2901,57 @@ export default function PremiumDiscount() {
             onClose={() => setShowBasketEditor(false)}
             initialBasketId={basketId || undefined}
           />
+        </div>
+      )}
+
+      {/* In-page series detail — shared PairDetailCharts stack (full indicator
+          suite) for any of the derived-series charts. The inline dashboard
+          keeps its bespoke charts (verdict histogram, dual-corr, earnings
+          markers); this is the "open with indicators" lens on one series. */}
+      {pdDetail && pdDetailData && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="pd-series-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent"
+              onClick={() => setPdDetail(null)}
+              data-testid="pd-series-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+            <div className="text-sm font-bold font-mono">{target || "—"}</div>
+            <span className="text-xs text-muted-foreground">{pdDetailData.title}</span>
+            <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+              {pdDetailData.series.length > 0 && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Now </span>
+                  <span className="font-bold">{pdDetailData.fmt(pdDetailData.series[pdDetailData.series.length - 1].value)}</span>
+                </span>
+              )}
+              {pdDetailData.lastZ != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">z (1Y) </span>
+                  <span className={`font-bold ${pdDetailData.lastZ >= 0 ? "text-red-400" : "text-emerald-400"}`}>
+                    {pdDetailData.lastZ.toFixed(2)}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+          {pdDetailData.series.length >= 30 ? (
+            <PairDetailCharts
+              ratioSeries={pdDetailData.series}
+              zScoreSeries={pdDetailData.z}
+              ratioTitle={`${pdDetailData.title} (${pdDetailData.series.length} pts)`}
+              zScoreTitle="Z-Score (rolling 1Y window)"
+              ratioRefLines={pdDetailData.refLines}
+              indicatorsMap={pdDetailIndicators}
+              onChangeIndicatorsMap={setPdDetailIndicators}
+            />
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+              Insufficient history for this series.
+            </div>
+          )}
         </div>
       )}
     </div>
