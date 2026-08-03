@@ -25,14 +25,9 @@ import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
-import { useGridColor } from "@/lib/gridPref";
-import {
-  createChart,
-  CrosshairMode,
-  ColorType,
-  LineSeries,
-} from "lightweight-charts";
-import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
+import { MiniChart, PairsIndicatorsPanel, usePairChartSync } from "@/pages/Pairs";
+import type { ActiveIndicators } from "@/components/ChartPane";
+import { TrendingUp } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,31 +204,11 @@ function computePairRatios(
 }
 
 // ---------------------------------------------------------------------------
-// Chart options
-// ---------------------------------------------------------------------------
-const CHART_OPTIONS = {
-  layout: {
-    background: { type: ColorType.Solid, color: "transparent" },
-    textColor: "#7a8a9e",
-    fontSize: 9,
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  grid: {
-    vertLines: { color: "rgba(255,255,255,0.03)" },
-    horzLines: { color: "rgba(255,255,255,0.03)" },
-  },
-  crosshair: { mode: CrosshairMode.Normal },
-  rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
-  timeScale: {
-    borderColor: "rgba(255,255,255,0.08)",
-    timeVisible: false,
-    ...PANE_TIME_SCALE,
-  },
-  ...PANE_HANDLERS,
-};
-
-// ---------------------------------------------------------------------------
-// PairRatioChart component
+// PairRatioChart component — the detail view's ratio + z charts are the SAME
+// MiniChart the Compare (/pairs) tab uses, so the full Charts-tab indicator
+// suite (panel, sub-panes with resize/maximize/hide/close, patterns, fractal,
+// registry overlays) works here too. Range/crosshair sync + pan/zoom
+// preservation come with MiniChart/usePairChartSync.
 // ---------------------------------------------------------------------------
 interface PairRatioChartProps {
   ratioSeries: { time: string; value: number }[];
@@ -242,154 +217,73 @@ interface PairRatioChartProps {
   zScoreTitle: string;
 }
 
+const EMPTY_PR_INDICATORS: ActiveIndicators = {};
+
+// Same 0/±2σ dashed guides the old bespoke z chart drew.
+const Z_REF_LINES = [
+  { value: 0, color: "rgba(148,163,184,0.4)", style: 2 },
+  { value: 2, color: "rgba(239,68,68,0.3)", style: 2 },
+  { value: -2, color: "rgba(34,197,94,0.3)", style: 2 },
+];
+
 function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: PairRatioChartProps) {
-  const ratioRef = useRef<HTMLDivElement>(null);
-  const zScoreRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<any[]>([]);
-  const seriesRef = useRef<any[]>([]);
-  const isSyncingRef = useRef(false);
-  const gridColor = useGridColor("rgba(255,255,255,0.03)");
-  // Preserve pan/zoom across the recreate this effect does on data/theme changes.
-  const ratioView = useRef(makeViewPreserver());
-  const zView = useRef(makeViewPreserver());
+  const { registerChart, unregisterChart, registerSeries } = usePairChartSync("pr-ratio", "__pairRatioCharts");
+  const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  const [indicatorChartId, setIndicatorChartId] = useState("pr-ratio");
+  const [showIndicators, setShowIndicators] = useState(false);
+  const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
 
-  useEffect(() => {
-    const ratioEl = ratioRef.current;
-    const zScoreEl = zScoreRef.current;
-    if (!ratioEl || !zScoreEl || ratioSeries.length === 0) return;
-
-    chartsRef.current.forEach((c) => {
-      try { c.remove(); } catch {}
-    });
-    chartsRef.current = [];
-    seriesRef.current = [];
-
-    const charts: any[] = [];
-    const allSeries: any[] = [];
-
-    const chart1 = createChart(ratioEl, {
-      ...CHART_OPTIONS,
-      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
-      width: ratioEl.clientWidth,
-      height: ratioEl.clientHeight || 300,
-    });
-    const rSeries = (chart1 as any).addSeries(LineSeries, {
-      color: "#0ea5e9",
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerRadius: 3,
-    });
-    rSeries.setData(ratioSeries.map((p) => ({ time: p.time, value: p.value })));
-    charts.push(chart1);
-    allSeries.push(rSeries);
-
-    const chart2 = createChart(zScoreEl, {
-      ...CHART_OPTIONS,
-      grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
-      width: zScoreEl.clientWidth,
-      height: zScoreEl.clientHeight || 300,
-    });
-    const zSeries = (chart2 as any).addSeries(LineSeries, {
-      color: "#0ea5e9",
-      lineWidth: 1.5,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerRadius: 3,
-    });
-    // Warm-up bars (value null) become whitespace so both charts share one axis.
-    zSeries.setData(zScoreSeries.map((p) => (p.value == null ? { time: p.time } : { time: p.time, value: p.value })));
-
-    for (const [level, color] of [
-      [0, "rgba(148,163,184,0.4)"],
-      [2, "rgba(239,68,68,0.3)"],
-      [-2, "rgba(34,197,94,0.3)"],
-    ] as [number, string][]) {
-      const bandSeries = (chart2 as any).addSeries(LineSeries, {
-        color,
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        lineStyle: 2,
-      });
-      bandSeries.setData(zScoreSeries.map((p) => ({ time: p.time, value: level })));
-    }
-
-    charts.push(chart2);
-    allSeries.push(zSeries);
-    chartsRef.current = charts;
-    seriesRef.current = allSeries;
-
-    charts.forEach((chart, idx) => {
-      chart.timeScale().subscribeVisibleLogicalRangeChange((range: any) => {
-        if (isSyncingRef.current || !range) return;
-        isSyncingRef.current = true;
-        charts.forEach((other, otherIdx) => {
-          if (otherIdx !== idx) {
-            try { other.timeScale().setVisibleLogicalRange(range); } catch {}
-          }
-        });
-        isSyncingRef.current = false;
-      });
-      // Only real pointer moves (param.sourceEvent) propagate — programmatic
-      // crosshair sets from the other chart arrive asynchronously and would
-      // echo back, flickering the hovered chart's horizontal line.
-      chart.subscribeCrosshairMove((param: any) => {
-        if (isSyncingRef.current) return;
-        if (!param.sourceEvent) return;
-        isSyncingRef.current = true;
-        charts.forEach((other, otherIdx) => {
-          if (otherIdx !== idx) {
-            try {
-              if (param.time) {
-                other.setCrosshairPosition(NaN, param.time, allSeries[otherIdx]);
-              } else {
-                other.clearCrosshairPosition();
-              }
-            } catch {}
-          }
-        });
-        isSyncingRef.current = false;
-      });
-    });
-
-    // Reframe only when the underlying series change; theme toggles keep the view.
-    ratioView.current.applyView(chart1, seriesFingerprint(ratioSeries));
-    zView.current.applyView(chart2, seriesFingerprint(zScoreSeries));
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (ratioEl.clientWidth > 0) chart1.applyOptions({ width: ratioEl.clientWidth });
-      if (zScoreEl.clientWidth > 0) chart2.applyOptions({ width: zScoreEl.clientWidth });
-    });
-    resizeObserver.observe(ratioEl);
-    resizeObserver.observe(zScoreEl);
-
-    return () => {
-      resizeObserver.disconnect();
-      try { ratioView.current.capture(chart1); } catch {}
-      try { zView.current.capture(chart2); } catch {}
-      charts.forEach((c) => {
-        try { c.remove(); } catch {}
-      });
-      chartsRef.current = [];
-      seriesRef.current = [];
-    };
-  }, [ratioSeries, zScoreSeries, gridColor]);
+  const panelCharts = [
+    { id: "pr-ratio", title: "Ratio" },
+    { id: "pr-z", title: "Z-Score" },
+  ];
+  const chartProps = (id: string) => ({
+    id,
+    color: "#0ea5e9",
+    height: 300,
+    useFlexHeight: true,
+    activeIndicators: indicatorsMap[id] || EMPTY_PR_INDICATORS,
+    onMaximize: setMaximizedChart,
+    isMaximized: maximizedChart === id,
+    onRegisterChart: registerChart,
+    onUnregisterChart: unregisterChart,
+    onRegisterSeries: registerSeries,
+    onChangeIndicators: (i: ActiveIndicators) => setIndicatorsMap((prev) => ({ ...prev, [id]: i })),
+  });
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-3">
-      <div className="border border-border/30 rounded overflow-hidden">
-        <div className="px-3 py-1.5 bg-card/50 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          {ratioTitle}
+    <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+        <div className="flex justify-end">
+          <Button
+            variant={showIndicators ? "default" : "outline"}
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            onClick={() => setShowIndicators((v) => !v)}
+            data-testid="pair-ratios-indicators-toggle"
+          >
+            <TrendingUp className="w-3 h-3" /> Indicators
+          </Button>
         </div>
-        <div ref={ratioRef} style={{ width: "100%", height: 300 }} />
-      </div>
-      <div className="border border-border/30 rounded overflow-hidden">
-        <div className="px-3 py-1.5 bg-card/50 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-          {zScoreTitle}
+        <div className="border border-border/30 rounded overflow-hidden flex flex-col" style={{ height: 380 }}>
+          <MiniChart data={ratioSeries} title={ratioTitle} {...chartProps("pr-ratio")} />
         </div>
-        <div ref={zScoreRef} style={{ width: "100%", height: 300 }} />
+        <div className="border border-border/30 rounded overflow-hidden flex flex-col" style={{ height: 380 }}>
+          <MiniChart data={zScoreSeries} title={zScoreTitle} refLines={Z_REF_LINES} {...chartProps("pr-z")} />
+        </div>
       </div>
+      {showIndicators && (
+        <PairsIndicatorsPanel
+          charts={panelCharts}
+          indicatorsMap={indicatorsMap}
+          activeChartId={indicatorChartId}
+          onSelectChart={setIndicatorChartId}
+          onChangeIndicators={(chartId, indicators) =>
+            setIndicatorsMap((prev) => ({ ...prev, [chartId]: indicators }))
+          }
+          onClose={() => setShowIndicators(false)}
+        />
+      )}
     </div>
   );
 }

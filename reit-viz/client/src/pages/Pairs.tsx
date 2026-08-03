@@ -105,6 +105,104 @@ const LOOKBACK_OPTIONS = [
 // Stable empty indicators object — avoids re-creating {} on every render
 const EMPTY_INDICATORS: ActiveIndicators = {};
 
+// ── Shared chart registry + logical-range/crosshair sync harness ──
+// Used by this page's chart grid AND the Pair Ratios detail view (same
+// MiniChart register/unregister contract). Logical-range (bar index) sync so
+// charts with different data start points align; only real pointer moves
+// (param.sourceEvent) propagate the crosshair — programmatic sets echo back
+// asynchronously and would flicker the hovered chart's horizontal line.
+export function usePairChartSync(refChartId = "prices", debugKey?: string) {
+  const chartsMapRef = useRef(new Map<string, IChartApi>());
+  const seriesMapRef = useRef(new Map<string, ISeriesApi<any>>());
+  const syncingRef = useRef(false);
+  const syncHandlersRef = useRef(new Map<string, { rangeHandler: (r: any) => void; crosshairHandler: (p: any) => void }>());
+
+  const setupSync = useCallback((id: string, chart: IChartApi) => {
+    // No edge clamping — the Charts tab (ChartArea pane sync) syncs the raw
+    // range and lets you pan freely into whitespace; a clamp here fought the
+    // drag and made the chart lock near the data edges.
+    const rangeHandler = () => {
+      if (syncingRef.current) return;
+      const logicalRange = chart.timeScale().getVisibleLogicalRange();
+      if (!logicalRange) return;
+      syncingRef.current = true;
+      chartsMapRef.current.forEach((other, otherId) => {
+        if (otherId !== id) {
+          try { other.timeScale().setVisibleLogicalRange(logicalRange); } catch {}
+        }
+      });
+      // Clear synchronously: LWC fires range callbacks synchronously, so echo
+      // events are gated above, and setting an identical range fires no event
+      // (ping-pong converges). A rAF-delayed clear here swallowed the SECOND
+      // range-set of a chart rebuild (setData default range, then savedRange
+      // restore in the same tick) — siblings kept the junk default range until
+      // the next manual pan.
+      syncingRef.current = false;
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
+
+    const crosshairHandler = (param: any) => {
+      if (syncingRef.current) return;
+      if (!param.sourceEvent) return;
+      syncingRef.current = true;
+      chartsMapRef.current.forEach((other, otherId) => {
+        if (otherId !== id) {
+          try {
+            if (param.time) {
+              const otherSeries = seriesMapRef.current.get(otherId);
+              if (otherSeries) {
+                other.setCrosshairPosition(NaN, param.time, otherSeries);
+              }
+            } else {
+              other.clearCrosshairPosition();
+            }
+          } catch {}
+        }
+      });
+      syncingRef.current = false;
+    };
+    chart.subscribeCrosshairMove(crosshairHandler);
+
+    syncHandlersRef.current.set(id, { rangeHandler, crosshairHandler });
+  }, []);
+
+  const registerChart = useCallback((id: string, chart: IChartApi, _dataLength?: number) => {
+    chartsMapRef.current.set(id, chart);
+    if (debugKey) (window as any)[debugKey] = chartsMapRef.current; // debug hook (e2e range assertions)
+    setupSync(id, chart);
+    // After a short delay, sync this chart to the reference chart's time range
+    // so charts with different data start points align on initial load.
+    requestAnimationFrame(() => {
+      const entries = Array.from(chartsMapRef.current.entries());
+      if (entries.length < 2) return;
+      const refEntry = entries.find(([eid]) => eid === refChartId) || entries[0];
+      if (refEntry[0] === id) return; // Don't sync to self
+      try {
+        const refRange = refEntry[1].timeScale().getVisibleLogicalRange();
+        if (refRange) chart.timeScale().setVisibleLogicalRange(refRange);
+      } catch {}
+    });
+  }, [setupSync, refChartId, debugKey]);
+
+  const unregisterChart = useCallback((id: string) => {
+    const handlers = syncHandlersRef.current.get(id);
+    const chart = chartsMapRef.current.get(id);
+    if (handlers && chart) {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(handlers.rangeHandler); } catch {}
+      try { chart.unsubscribeCrosshairMove(handlers.crosshairHandler); } catch {}
+    }
+    syncHandlersRef.current.delete(id);
+    chartsMapRef.current.delete(id);
+    seriesMapRef.current.delete(id);
+  }, []);
+
+  const registerSeries = useCallback((id: string, series: ISeriesApi<any>) => {
+    seriesMapRef.current.set(id, series);
+  }, []);
+
+  return { registerChart, unregisterChart, registerSeries };
+}
+
 // Expanding-window mean ± k·σ envelope (used for "expanding" bands on Z charts).
 // Emits a point once at least `minPeriods` finite values have accumulated.
 function expandingMeanStdBands(
@@ -849,7 +947,8 @@ interface PairsData {
 }
 
 // ── Pairs Indicators Panel (mirrors Charts IndicatorsPanel exactly) ──
-function PairsIndicatorsPanel({
+// Exported for the Pair Ratios detail view (same charts/indicatorsMap contract).
+export function PairsIndicatorsPanel({
   charts,
   indicatorsMap,
   activeChartId,
@@ -1804,6 +1903,7 @@ function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
 function PairsSubIndicatorChart({
   type,
   closeData,
+  axisTimes,
   activeIndicators,
   parentChart,
   parentSeries,
@@ -1819,6 +1919,9 @@ function PairsSubIndicatorChart({
 }: {
   type: PairsSubChartType;
   closeData: DataPoint[];
+  /** Full parent axis (incl. whitespace warm-up bars) for the spacer series;
+   *  defaults to closeData's times. */
+  axisTimes?: string[];
   activeIndicators: ActiveIndicators;
   parentChart: IChartApi | null;
   parentSeries: ISeriesApi<any> | null;
@@ -1910,7 +2013,7 @@ function PairsSubIndicatorChart({
         crosshairMarkerVisible: false,
         autoscaleInfoProvider: () => null,
       });
-      spacer.setData(closeData.map((d) => ({ time: d.time as Time })));
+      spacer.setData((axisTimes ?? closeData.map((d) => String(d.time))).map((t) => ({ time: t as Time })));
     } catch {}
 
     // ── Derived overlay pane: MACD/RSI/ROC/Autocorr ON another indicator
@@ -2368,7 +2471,7 @@ function PairsSubIndicatorChart({
       setHoverReadout(null);
       try { chart.remove(); } catch {}
     };
-  }, [closeData, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome, overlayDef, sourceData, onPrimaryData]);
+  }, [closeData, axisTimes, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome, overlayDef, sourceData, onPrimaryData]);
 
   // Resize
   useEffect(() => {
@@ -2463,7 +2566,10 @@ function PairsSubIndicatorChart({
 }
 
 // ── MiniChart with indicator support + maximize button ──
-function MiniChart({
+// Exported for the Pair Ratios detail view. `data` may contain null values
+// (warm-up bars) — they render as whitespace so several charts share one
+// logical axis; indicators compute on the finite subset.
+export function MiniChart({
   data,
   title,
   color,
@@ -2485,7 +2591,7 @@ function MiniChart({
   onRemove,
   onChangeIndicators,
 }: {
-  data: DataPoint[];
+  data: { time: string; value: number | null }[];
   title: string;
   color: string;
   height: number;
@@ -2538,6 +2644,13 @@ function MiniChart({
   // Serialize activeIndicators to a stable string so the effect only fires when values actually change
   const indicatorsKey = useMemo(() => JSON.stringify(activeIndicators), [activeIndicators]);
 
+  // Null warm-up values render as whitespace on the main series (shared axis);
+  // every indicator/pattern/fractal computation runs on the finite subset.
+  const finiteData: DataPoint[] = useMemo(
+    () => data.filter((d): d is DataPoint => d.value != null && Number.isFinite(d.value)),
+    [data],
+  );
+
   // ── Pattern Recognition (same engine + window-event bus as ChartPane, keyed
   // by this chart's string id). Settings live in localStorage; a nonce forces
   // recomputation on settings-changed / rescan for this chart.
@@ -2558,7 +2671,7 @@ function MiniChart({
     const s = getPatternSettings(id);
     // Pairs plots are line series — detect on flat bars (o=h=l=c), the same
     // degradation every other OHLC consumer on this page uses.
-    const flat = data.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
+    const flat = finiteData.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
     const empty = { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[], bars: flat };
     if (!s.enabled) return empty;
     let detectionBars = flat;
@@ -2600,7 +2713,7 @@ function MiniChart({
     return { patterns, relevant, bars: detectionBars };
     // patternNonce forces re-read of localStorage settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, id, patternNonce]);
+  }, [finiteData, id, patternNonce]);
 
   // Publish results to the PatternsPanel (badge count + most-relevant list).
   useEffect(() => {
@@ -2659,7 +2772,7 @@ function MiniChart({
       lastValueVisible: true,
       crosshairMarkerRadius: 3,
     });
-    mainSeries.setData(data.map((d) => ({ time: d.time as Time, value: d.value })));
+    mainSeries.setData(data.map((d) => (d.value == null ? { time: d.time as Time } : { time: d.time as Time, value: d.value })));
     mainSeriesRef.current = mainSeries;
     onRegisterSeries(id, mainSeries);
     readoutMeta.set(mainSeries, { label: title, color });
@@ -2719,7 +2832,10 @@ function MiniChart({
     }
 
     // ── Indicators on main data ──
-    if (data.length > 0) {
+    if (finiteData.length > 0) {
+      // Shadow: every indicator/overlay/fractal computation in this block runs
+      // on the finite subset (null warm-up bars excluded).
+      const data = finiteData;
       // SMA (one line per period)
       for (const p of indicatorPeriods(activeIndicators.sma)) {
         const smaData = computeSMA(data, p);
@@ -3053,6 +3169,14 @@ function MiniChart({
     // restore the pre-rebuild view so pan/zoom/scroll survive indicator & UI toggles.
     if (dataChanged || !savedRangeRef.current) {
       chart.timeScale().fitContent();
+      // Flex containers can report a narrow width at mount, clamping this fit
+      // to a tail window (and de-syncing sibling charts); refit once after
+      // layout settles.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (chartRef.current === chart) {
+          try { chart.timeScale().fitContent(); } catch {}
+        }
+      }));
     } else {
       try { chart.timeScale().setVisibleLogicalRange(savedRangeRef.current); }
       catch { chart.timeScale().fitContent(); }
@@ -3106,6 +3230,10 @@ function MiniChart({
       });
     } catch {}
   }, [logScale]);
+
+  // Full axis (incl. whitespace warm-up bars) for the sub-panes' spacer, so
+  // their logical axes stay identical to the parent's.
+  const axisTimes = useMemo(() => data.map((d) => String(d.time)), [data]);
 
   // Hidden sub-panes unmount (state stays enabled) — same as the Charts tab.
   const hiddenSubSet = new Set(activeIndicators.hiddenSubCharts ?? []);
@@ -3286,7 +3414,8 @@ function MiniChart({
           <div key={sc} className={hiddenWhileMax ? "hidden" : "contents"}>
             <PairsSubIndicatorChart
               type={sc}
-              closeData={data}
+              closeData={finiteData}
+              axisTimes={axisTimes}
               activeIndicators={activeIndicators}
               parentChart={chartRef.current}
               parentSeries={mainSeriesRef.current}
@@ -3587,100 +3716,9 @@ export default function Pairs() {
   }, []);
 
   // ── Sync infrastructure ──
-  const chartsMapRef = useRef(new Map<string, IChartApi>());
-  const seriesMapRef = useRef(new Map<string, ISeriesApi<any>>());
-  const syncingRef = useRef(false);
-  const syncHandlersRef = useRef(new Map<string, { rangeHandler: (r: any) => void; crosshairHandler: (p: any) => void }>());
-  const dataLengthsRef = useRef(new Map<string, number>());
-
-  const registerChart = useCallback((id: string, chart: IChartApi, dataLength?: number) => {
-    chartsMapRef.current.set(id, chart);
-    if (dataLength != null) dataLengthsRef.current.set(id, dataLength);
-    (window as any).__pairCharts = chartsMapRef.current; // debug hook (e2e range assertions, same as __chartsPanes)
-    setupSync(id, chart);
-    // After a short delay, sync this chart to the first registered chart's time range
-    // This ensures charts with different data start points align on initial load
-    requestAnimationFrame(() => {
-      const entries = Array.from(chartsMapRef.current.entries());
-      if (entries.length < 2) return;
-      // Use the "prices" chart as reference, or fall back to the first chart
-      const refEntry = entries.find(([eid]) => eid === "prices") || entries[0];
-      if (refEntry[0] === id) return; // Don't sync to self
-      try {
-        const refRange = refEntry[1].timeScale().getVisibleLogicalRange();
-        if (refRange) chart.timeScale().setVisibleLogicalRange(refRange);
-      } catch {}
-    });
-  }, []);
-
-  const unregisterChart = useCallback((id: string) => {
-    const handlers = syncHandlersRef.current.get(id);
-    const chart = chartsMapRef.current.get(id);
-    if (handlers && chart) {
-      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(handlers.rangeHandler); } catch {}
-      try { chart.unsubscribeCrosshairMove(handlers.crosshairHandler); } catch {}
-    }
-    syncHandlersRef.current.delete(id);
-    chartsMapRef.current.delete(id);
-    seriesMapRef.current.delete(id);
-    dataLengthsRef.current.delete(id);
-  }, []);
-
-  const registerSeries = useCallback((id: string, series: ISeriesApi<any>) => {
-    seriesMapRef.current.set(id, series);
-  }, []);
-
-  const setupSync = useCallback((id: string, chart: IChartApi) => {
-    // Scroll/zoom sync using LOGICAL range (bar indices) so charts
-    // with different data start points align correctly without feedback loops.
-    // No edge clamping — the Charts tab (ChartArea pane sync) syncs the raw
-    // range and lets you pan freely into whitespace; a clamp here fought the
-    // drag and made the chart lock near the data edges.
-    const rangeHandler = () => {
-      if (syncingRef.current) return;
-      const logicalRange = chart.timeScale().getVisibleLogicalRange();
-      if (!logicalRange) return;
-
-      syncingRef.current = true;
-      chartsMapRef.current.forEach((other, otherId) => {
-        if (otherId !== id) {
-          try { other.timeScale().setVisibleLogicalRange(logicalRange); } catch {}
-        }
-      });
-      // Use rAF to clear the flag after all sync callbacks have fired
-      requestAnimationFrame(() => { syncingRef.current = false; });
-    };
-    chart.timeScale().subscribeVisibleLogicalRangeChange(rangeHandler);
-
-    // Crosshair sync. Only real pointer moves (param.sourceEvent present)
-    // propagate: programmatic setCrosshairPosition from another chart fires
-    // this callback asynchronously — after syncingRef is already false — and
-    // would echo a NaN-price crosshair back onto the hovered chart, making its
-    // horizontal line flicker as the mouse moves.
-    const crosshairHandler = (param: any) => {
-      if (syncingRef.current) return;
-      if (!param.sourceEvent) return;
-      syncingRef.current = true;
-      chartsMapRef.current.forEach((other, otherId) => {
-        if (otherId !== id) {
-          try {
-            if (param.time) {
-              const otherSeries = seriesMapRef.current.get(otherId);
-              if (otherSeries) {
-                other.setCrosshairPosition(NaN, param.time, otherSeries);
-              }
-            } else {
-              other.clearCrosshairPosition();
-            }
-          } catch {}
-        }
-      });
-      syncingRef.current = false;
-    };
-    chart.subscribeCrosshairMove(crosshairHandler);
-
-    syncHandlersRef.current.set(id, { rangeHandler, crosshairHandler });
-  }, []);
+  // Chart registry + range/crosshair sync (shared hook — also used by the
+  // Pair Ratios detail view).
+  const { registerChart, unregisterChart, registerSeries } = usePairChartSync("prices", "__pairCharts");
 
   // Ticker list
   const { data: tickers } = useQuery<TickerMeta[]>({
