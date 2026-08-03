@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -3990,39 +3990,13 @@ export default function Pairs() {
 
         {/* Basket quick presets */}
         {baskets.length >= 2 && (
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-7 px-2 text-[10px] gap-1" data-testid="pairs-basket-presets-btn">
-                <Star className="w-3 h-3" />
-                Quick
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[260px] p-0" align="start">
-              <div className="px-3 py-2 border-b border-border">
-                <span className="text-[11px] font-semibold">Basket Quick Presets</span>
-              </div>
-              <div className="py-1 max-h-[300px] overflow-y-auto">
-                {baskets.map((a, u) =>
-                  baskets.slice(u + 1).map((k) => (
-                    <button
-                      key={`${a.id}_${k.id}`}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-accent/50 transition-colors text-muted-foreground"
-                      onClick={() => {
-                        setTickerA(`BASKET:${a.id}`);
-                        setTickerB(`BASKET:${k.id}`);
-                      }}
-                      data-testid={`pair-spec-a-basket-${a.id}`}
-                    >
-                      <Star className="w-3 h-3 flex-shrink-0 text-amber-400" />
-                      <span className="font-mono text-foreground">{a.name}</span>
-                      <span className="text-muted-foreground">/</span>
-                      <span className="font-mono text-foreground">{k.name}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-            </PopoverContent>
-          </Popover>
+          <BasketQuickPresets
+            baskets={baskets}
+            onPick={(aId, bId) => {
+              setTickerA(`BASKET:${aId}`);
+              setTickerB(`BASKET:${bId}`);
+            }}
+          />
         )}
 
         {baskets.length >= 2 && <div className="h-5 w-px bg-border mx-1" />}
@@ -4624,6 +4598,81 @@ export default function Pairs() {
   );
 }
 
+// Basket quick presets: every basket-vs-basket pair, filterable, in a large popover
+function BasketQuickPresets({
+  baskets,
+  onPick,
+}: {
+  baskets: Basket[];
+  onPick: (aId: string, bId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const pairs = useMemo(() => {
+    const out: { a: Basket; b: Basket }[] = [];
+    baskets.forEach((a, u) => {
+      baskets.slice(u + 1).forEach((b) => out.push({ a, b }));
+    });
+    const q = filter.trim().toLowerCase();
+    if (!q) return out;
+    return out.filter(
+      ({ a, b }) => a.name.toLowerCase().includes(q) || b.name.toLowerCase().includes(q)
+    );
+  }, [baskets, filter]);
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setFilter("");
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-8 px-3 text-xs gap-1.5" data-testid="pairs-basket-presets-btn">
+          <Star className="w-3.5 h-3.5 text-amber-400" />
+          Quick Pairs
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[400px] p-0" align="start">
+        <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+          <span className="text-xs font-semibold">Basket Quick Presets</span>
+          <span className="text-[10px] text-muted-foreground">{pairs.length} pairs</span>
+        </div>
+        <div className="px-2 py-1.5 border-b border-border/50">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter baskets..."
+            className="h-7 text-xs"
+            data-testid="pairs-basket-presets-filter"
+          />
+        </div>
+        <div className="py-1 max-h-[60vh] overflow-y-auto">
+          {pairs.length === 0 && (
+            <div className="px-3 py-3 text-xs text-muted-foreground">No matching pairs.</div>
+          )}
+          {pairs.map(({ a, b }) => (
+            <button
+              key={`${a.id}_${b.id}`}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs hover:bg-accent/50 transition-colors text-muted-foreground"
+              onClick={() => {
+                onPick(a.id, b.id);
+                setOpen(false);
+              }}
+              data-testid={`pair-spec-a-basket-${a.id}`}
+            >
+              <Star className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" />
+              <span className="font-mono text-foreground truncate">{a.name}</span>
+              <span className="text-muted-foreground flex-shrink-0">/</span>
+              <span className="font-mono text-foreground truncate">{b.name}</span>
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // Ticker picker with searchable combobox
 function TickerPicker({
   value,
@@ -4639,12 +4688,32 @@ function TickerPicker({
   testId: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  // Collapsed by default so the ticker list is reachable without scrolling
+  // past every basket; expansion is remembered across sessions.
+  const [basketsOpen, setBasketsOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem("reit-viz:pairs-picker-baskets-open") === "1"; } catch { return false; }
+  });
+  const toggleBaskets = () => {
+    setBasketsOpen((v) => {
+      try { localStorage.setItem("reit-viz:pairs-picker-baskets-open", v ? "0" : "1"); } catch {}
+      return !v;
+    });
+  };
+  const searching = query.trim().length > 0;
+  const showBasketItems = baskets.length > 0 && (basketsOpen || searching);
   const isBasket = value.startsWith("BASKET:");
   const basketId = isBasket ? value.slice(7) : null;
   const selectedBasket = basketId ? baskets.find((b) => b.id === basketId) : null;
   const displayValue = selectedBasket ? selectedBasket.name : value || "Select...";
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setQuery("");
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -4660,11 +4729,32 @@ function TickerPicker({
       </PopoverTrigger>
       <PopoverContent className="w-[440px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search ticker or basket..." className="h-8 text-xs" />
+          <CommandInput
+            placeholder="Search ticker or basket..."
+            className="h-8 text-xs"
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList className="max-h-[300px]">
             <CommandEmpty>No match found.</CommandEmpty>
-            {baskets.length > 0 && (
-              <CommandGroup heading="Baskets">
+            {baskets.length > 0 && !searching && (
+              <button
+                type="button"
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold text-muted-foreground hover:bg-accent/50 transition-colors border-b border-border/50"
+                onClick={toggleBaskets}
+                data-testid={`${testId}-baskets-toggle`}
+              >
+                {basketsOpen ? (
+                  <ChevronDown className="w-3 h-3 flex-shrink-0" />
+                ) : (
+                  <ChevronRight className="w-3 h-3 flex-shrink-0" />
+                )}
+                <Star className="w-3 h-3 text-amber-400 flex-shrink-0" />
+                Baskets ({baskets.length})
+              </button>
+            )}
+            {showBasketItems && (
+              <CommandGroup heading={searching ? "Baskets" : undefined}>
                 {baskets.map((b) => (
                   <CommandItem
                     key={b.id}
