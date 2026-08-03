@@ -35,7 +35,11 @@ import {
   ArrowDown,
   Download,
   Grid3X3,
+  ChevronLeft,
+  ExternalLink,
 } from "lucide-react";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 
 // ── Column definitions ──
 
@@ -281,6 +285,10 @@ export default function Heatmap() {
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const [trailingDays, setTrailingDays] = useState(250);
   const [customDaysInput, setCustomDaysInput] = useState("");
+  // Pair Matrix in-page detail: selected pair (transient) + its indicator
+  // selections (persisted; keys pr-ratio / pr-z, same as Pair Ratios).
+  const [matrixPair, setMatrixPair] = useState<{ a: string; b: string } | null>(null);
+  const [matrixIndicators, setMatrixIndicators] = useState<Record<string, ActiveIndicators>>({});
 
   const serializeHeatmap = useCallback(() => ({
     viewMode,
@@ -292,7 +300,8 @@ export default function Heatmap() {
     classFilters: serializeClassFilters(classFilters),
     manualTickers: [...manualTickers],
     trailingDays, peerScope, minZ, asOfOffset,
-  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays, peerScope, minZ, asOfOffset]);
+    matrixIndicators,
+  }), [viewMode, sortCol, sortDir, reference, displayMode, groupBy, classFilters, manualTickers, trailingDays, peerScope, minZ, asOfOffset, matrixIndicators]);
 
   const restoreHeatmap = useCallback((state: any) => {
     // Whitelist: the render branches are "matrix" and "metrics", so an unknown value
@@ -314,6 +323,7 @@ export default function Heatmap() {
     if (state.peerScope === "group" || state.peerScope === "universe") setPeerScope(state.peerScope);
     if (typeof state.minZ === "number") setMinZ(state.minZ);
     if (typeof state.asOfOffset === "number") setAsOfOffset(state.asOfOffset);
+    if (state.matrixIndicators !== undefined) setMatrixIndicators(state.matrixIndicators);
   }, []);
 
   useWorkspaceTab("heatmap", serializeHeatmap, restoreHeatmap);
@@ -668,6 +678,56 @@ export default function Heatmap() {
       .slice(0, 40);
     return { tickers, rows, top };
   }, [closeSeriesMap, matrixTickers, trailingDays, displayMode, asOfOffset]);
+
+  // ── Pair Matrix detail: full joined ratio series + rolling z matching the
+  // cell methodology EXACTLY (raw ratio, window = trailingDays INCLUDING the
+  // current bar, population σ, min 20 obs — see historicalZScore) so the z
+  // chart's last value equals the clicked cell. As-of replay truncates first.
+  const matrixDetail = useMemo(() => {
+    if (!matrixPair || !closeSeriesMap) return null;
+    const { a, b } = matrixPair;
+    const sa = closeSeriesMap.get(a);
+    const sb = closeSeriesMap.get(b);
+    if (!sa || !sb) return null;
+    const mb = new Map<string, number>();
+    for (let i = 0; i < sb.times.length; i++) mb.set(sb.times[i], sb.closes[i]);
+    const times: string[] = [];
+    const ratios: number[] = [];
+    for (let i = 0; i < sa.times.length; i++) {
+      const ca = sa.closes[i];
+      const cb = mb.get(sa.times[i]);
+      if (cb !== undefined && cb !== 0 && Number.isFinite(ca) && Number.isFinite(cb)) {
+        const r = ca / cb;
+        if (Number.isFinite(r)) { times.push(sa.times[i]); ratios.push(r); }
+      }
+    }
+    const n = asOfOffset > 0 ? Math.max(0, ratios.length - asOfOffset) : ratios.length;
+    const t = times.slice(0, n);
+    const r = ratios.slice(0, n);
+    if (r.length < 20) return { a, b, ratioSeries: [], zSeries: [], lastZ: null as number | null, current: null as number | null };
+    const ratioSeries = t.map((time, i) => ({ time, value: r[i] }));
+    const win = trailingDays > 0 ? trailingDays : r.length;
+    const pre = new Float64Array(r.length + 1);
+    const pre2 = new Float64Array(r.length + 1);
+    for (let i = 0; i < r.length; i++) {
+      pre[i + 1] = pre[i] + r[i];
+      pre2[i + 1] = pre2[i] + r[i] * r[i];
+    }
+    const zSeries = t.map((time, i) => {
+      const s = Math.max(0, i - win + 1);
+      const cnt = i - s + 1;
+      if (cnt < 20) return { time, value: null as number | null };
+      const mean = (pre[i + 1] - pre[s]) / cnt;
+      const std = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[s]) / cnt - mean * mean));
+      if (std < 1e-9) return { time, value: null as number | null };
+      return { time, value: (r[i] - mean) / std };
+    });
+    let lastZ: number | null = null;
+    for (let i = zSeries.length - 1; i >= 0; i--) {
+      if (zSeries[i].value != null) { lastZ = zSeries[i].value; break; }
+    }
+    return { a, b, ratioSeries, zSeries, lastZ, current: r[r.length - 1] };
+  }, [matrixPair, closeSeriesMap, trailingDays, asOfOffset]);
 
   const toggleSort = useCallback((key: string) => {
     if (sortCol === key) {
@@ -1131,8 +1191,8 @@ export default function Heatmap() {
                         data-testid={`heatmap-matrix-cell-${cell.a}-${cell.b}`}
                         className={`px-1 py-1 text-right font-mono tabular-nums whitespace-nowrap ${cell.diag ? "bg-muted/20" : "cursor-pointer hover:ring-1 hover:ring-inset hover:ring-primary/60"}`}
                         style={{ backgroundColor: cell.bg }}
-                        title={cell.title}
-                        onClick={cell.diag ? undefined : () => navigateToPairs(cell.a, cell.b)}
+                        title={cell.title ? `${cell.title}\nClick: in-page ratio + z detail (indicators); "Open in Pairs" from there for the deep-dive` : cell.title}
+                        onClick={cell.diag ? undefined : () => setMatrixPair({ a: cell.a, b: cell.b })}
                       >
                         {cell.text}
                       </td>
@@ -1159,9 +1219,9 @@ export default function Heatmap() {
             {matrixData.top.filter(e => !hideXcal || !e.cross).slice(0, 20).map(e => (
               <div
                 key={`${e.a}-${e.b}`}
-                onClick={() => navigateToPairs(e.a, e.b)}
+                onClick={() => setMatrixPair({ a: e.a, b: e.b })}
                 className="flex items-center gap-1.5 px-1 py-0.5 rounded cursor-pointer hover:bg-accent/30 text-[11px] font-mono"
-                title={`Open ${e.a}/${e.b} in Pairs · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""} · ${e.cross ? "cross-calendar pair (mixed markets) — half-life unreliable" : e.hl != null ? `mean-reversion half-life ≈ ${Math.round(e.hl)} days` : "no mean reversion (trending / structurally broken — don't fade)"}`}
+                title={`Open ${e.a}/${e.b} detail · ratio z ${e.z.toFixed(2)}${e.pct != null ? ` · pctile ${e.pct.toFixed(0)}%` : ""} · ${e.cross ? "cross-calendar pair (mixed markets) — half-life unreliable" : e.hl != null ? `mean-reversion half-life ≈ ${Math.round(e.hl)} days` : "no mean reversion (trending / structurally broken — don't fade)"}`}
               >
                 <span className={`truncate flex-1 ${e.cross ? "text-amber-300/80" : "text-foreground/85"}`}>{e.a}/{e.b}{e.cross ? "†" : ""}</span>
                 <span className={`tabular-nums w-9 text-right ${e.z >= 0 ? "text-emerald-400" : "text-red-400"}`}>{e.z >= 0 ? "+" : ""}{e.z.toFixed(1)}</span>
@@ -1175,6 +1235,71 @@ export default function Heatmap() {
             <div className="px-1 pt-1 text-[9px] text-muted-foreground">† cross-calendar — HL unreliable</div>
           </div>
         )}
+        </div>
+      )}
+
+      {/* Pair Matrix in-page detail — same ratio+z chart stack (full indicator
+          suite) as the Pair Ratios page; "Open in Pairs" keeps the deep-dive. */}
+      {viewMode === "matrix" && matrixPair && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="heatmap-pair-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] gap-1"
+              onClick={() => setMatrixPair(null)}
+              data-testid="heatmap-pair-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </Button>
+            <div className="text-sm font-bold font-mono">{matrixPair.a} / {matrixPair.b}</div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] gap-1"
+              onClick={() => navigateToPairs(matrixPair.a, matrixPair.b)}
+              title={`Open ${matrixPair.a} / ${matrixPair.b} in the Pairs deep-dive`}
+              data-testid="heatmap-pair-detail-open-pairs"
+            >
+              <ExternalLink className="w-3 h-3" /> Open in Pairs
+            </Button>
+            <div className="flex items-center gap-2 ml-auto">
+              {matrixDetail?.current != null && (
+                <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
+                  <span className="text-muted-foreground">Ratio: </span>
+                  <span className="font-mono font-bold">{matrixDetail.current.toFixed(4)}</span>
+                </div>
+              )}
+              {matrixDetail?.lastZ != null && (
+                <div className="border border-border/30 rounded px-2 py-1 text-[10px]">
+                  <span className="text-muted-foreground">Z ({trailingDays}d): </span>
+                  {/* Same convention as the dislocations list: positive z = emerald (A rich / B cheap) */}
+                  <span className={`font-mono font-bold ${matrixDetail.lastZ >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {matrixDetail.lastZ.toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {asOfOffset > 0 && (
+                <div className="border border-amber-500/40 rounded px-2 py-1 text-[10px] text-amber-400">
+                  as of ~{asOfOffset}d ago
+                </div>
+              )}
+            </div>
+          </div>
+          {matrixDetail && matrixDetail.ratioSeries.length > 0 ? (
+            <PairDetailCharts
+              ratioSeries={matrixDetail.ratioSeries}
+              zScoreSeries={matrixDetail.zSeries}
+              ratioTitle={`Ratio: ${matrixPair.a} / ${matrixPair.b} — Price (${matrixDetail.ratioSeries.length} pts)`}
+              zScoreTitle={`Z-Score (rolling ${trailingDays}d raw-ratio z — matches matrix cell)`}
+              indicatorsMap={matrixIndicators}
+              onChangeIndicatorsMap={setMatrixIndicators}
+            />
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+              {matrixDetail ? "Insufficient overlapping history for this pair." : "Loading…"}
+            </div>
+          )}
         </div>
       )}
 

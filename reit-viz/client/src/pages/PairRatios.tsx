@@ -229,7 +229,8 @@ const Z_REF_LINES = [
   { value: -2, color: "rgba(34,197,94,0.3)", style: 2 },
 ];
 
-function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap }: PairRatioChartProps) {
+// Exported for the Heatmap Pair Matrix detail overlay (same contract).
+export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap }: PairRatioChartProps) {
   const { registerChart, unregisterChart, registerSeries } = usePairChartSync("pr-ratio", "__pairRatioCharts");
   const setIndicatorsMap = onChangeIndicatorsMap;
   const [indicatorChartId, setIndicatorChartId] = useState("pr-ratio");
@@ -835,7 +836,7 @@ export default function PairRatios() {
             </div>
           </div>
           {detailChartData ? (
-            <PairRatioChart
+            <PairDetailCharts
               ratioSeries={detailChartData.fullRatio}
               zScoreSeries={detailChartData.fullZ}
               indicatorsMap={detailIndicatorsMap}
