@@ -12,7 +12,8 @@ import { hrpCluster } from "@/lib/hrp";
 import { PENDING_DISLOC_PRESET_KEY, PENDING_PAIR_TEMPLATE_KEY } from "@/components/CommandPalette";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
-import { fetchMacroCatalog } from "@/lib/macroStatic";
+import { fetchMacroCatalog, resolveSeriesDataStatic } from "@/lib/macroStatic";
+import { PairDetailCharts } from "@/pages/PairRatios";
 import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlationEngine";
 import type { CorrFrequency, LegTransform } from "@/lib/correlationEngine";
 import ChartPane from "@/components/ChartPane";
@@ -830,6 +831,64 @@ function DislocationScanPanel({
   const [showAll, setShowAll] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  // In-page pair detail (chart button on a row): ratio + expanding log-spread z
+  // (matches the row's Spread z) with the full indicator suite.
+  const [dislocDetail, setDislocDetail] = useState<DislocationRow | null>(null);
+  const [dislocIndicators, setDislocIndicators] = useState<Record<string, ActiveIndicators>>(() => {
+    try {
+      const raw = localStorage.getItem("reit-viz:disloc-indicators");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  });
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:disloc-indicators", JSON.stringify(dislocIndicators)); } catch {}
+  }, [dislocIndicators]);
+
+  const { data: dislocDetailData } = useQuery({
+    queryKey: ["disloc-detail", dislocDetail?.a, dislocDetail?.b],
+    enabled: !!dislocDetail,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      // Same loader + join the scan itself uses, so the z matches the row.
+      const [sa, sb] = await Promise.all([
+        resolveSeriesDataStatic(`${dislocDetail!.a}:close`),
+        resolveSeriesDataStatic(`${dislocDetail!.b}:close`),
+      ]);
+      const mb = new Map((sb || []).filter((p: any) => Number.isFinite(p.value) && p.value > 0).map((p: any) => [p.time, p.value]));
+      const ratio: { time: string; value: number }[] = [];
+      const logR: number[] = [];
+      for (const p of sa || []) {
+        const bv = mb.get(p.time);
+        if (bv == null || !Number.isFinite(p.value) || p.value <= 0) continue;
+        ratio.push({ time: String(p.time), value: p.value / bv });
+        logR.push(Math.log(p.value / bv));
+      }
+      // Expanding z of the LOG spread, population σ — statsOf() over full
+      // history at the last bar, i.e. the row's Spread z.
+      const n = logR.length;
+      const pre = new Float64Array(n + 1);
+      const pre2 = new Float64Array(n + 1);
+      for (let i = 0; i < n; i++) {
+        pre[i + 1] = pre[i] + logR[i];
+        pre2[i + 1] = pre2[i] + logR[i] * logR[i];
+      }
+      const z = ratio.map((pt, i) => {
+        const cnt = i + 1;
+        if (cnt < 30) return { time: pt.time, value: null as number | null };
+        const mean = pre[i + 1] / cnt;
+        const sd = Math.sqrt(Math.max(0, pre2[i + 1] / cnt - mean * mean));
+        if (sd < 1e-9) return { time: pt.time, value: null as number | null };
+        return { time: pt.time, value: (logR[i] - mean) / sd };
+      });
+      let lastZ: number | null = null;
+      for (let i = z.length - 1; i >= 0; i--) {
+        if (z[i].value != null) { lastZ = z[i].value; break; }
+      }
+      return { ratio, z, lastZ };
+    },
+  });
+
   // ── Scope filters (same 8 dropdowns as everywhere else) ──
   const [clsFilters, setClsFilters] = useState<ClassFilters>(() =>
     last?.clsFilters ? deserializeClassFilters(last.clsFilters) : emptyClassFilters()
@@ -1506,6 +1565,14 @@ function DislocationScanPanel({
                           >
                             BT
                           </button>
+                          <button
+                            data-testid={`disloc-chart-${i}`}
+                            className="px-1.5 py-0.5 text-[9px] border border-border/40 rounded text-muted-foreground hover:bg-primary/20 hover:border-primary/50 hover:text-primary transition-colors"
+                            title="In-page ratio + spread-z detail with the full indicator suite"
+                            onClick={() => setDislocDetail(r)}
+                          >
+                            Chart
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1523,6 +1590,79 @@ function DislocationScanPanel({
           </div>
         )}
       </div>
+
+      {/* In-page pair detail — shared PairDetailCharts stack (full indicator
+          suite); the expanding log-spread z matches the row's Spread z. */}
+      {dislocDetail && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="disloc-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent"
+              onClick={() => setDislocDetail(null)}
+              data-testid="disloc-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+            <div className="text-sm font-bold font-mono">{dislocDetail.a} / {dislocDetail.b}</div>
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded font-mono"
+              style={{ color: KIND_CHIP[dislocDetail.kind].color, backgroundColor: `${KIND_CHIP[dislocDetail.kind].color}22` }}
+            >
+              {KIND_CHIP[dislocDetail.kind].label}
+            </span>
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded border border-border/50 text-[11px] text-foreground/80 hover:text-foreground hover:bg-accent"
+              onClick={() => { const d = dislocDetail; setDislocDetail(null); onPin(d.a, d.b); }}
+              title="Open this pair on the Pairwise tab (with TF Divergence)"
+              data-testid="disloc-detail-pin"
+            >
+              <Pin className="w-3 h-3" /> Pairwise
+            </button>
+            <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+              {dislocDetailData?.ratio.length ? (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Ratio </span>
+                  <span className="font-bold">{dislocDetailData.ratio[dislocDetailData.ratio.length - 1].value.toFixed(4)}</span>
+                </span>
+              ) : null}
+              {dislocDetailData?.lastZ != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Spread z </span>
+                  <span className={`font-bold ${dislocDetailData.lastZ >= 0 ? "text-red-400" : "text-emerald-400"}`}>
+                    {dislocDetailData.lastZ.toFixed(2)}
+                  </span>
+                </span>
+              )}
+              {dislocDetail.spreadHalfLife != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">HL </span>
+                  <span>{dislocDetail.spreadHalfLife}d</span>
+                </span>
+              )}
+            </div>
+          </div>
+          {dislocDetailData ? (
+            dislocDetailData.ratio.length >= 30 ? (
+              <PairDetailCharts
+                ratioSeries={dislocDetailData.ratio}
+                zScoreSeries={dislocDetailData.z}
+                ratioTitle={`Ratio: ${dislocDetail.a} / ${dislocDetail.b} — Price (${dislocDetailData.ratio.length} pts)`}
+                zScoreTitle="Log-spread z (expanding full-history window — matches Spread z)"
+                indicatorsMap={dislocIndicators}
+                onChangeIndicatorsMap={setDislocIndicators}
+              />
+            ) : (
+              <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+                Insufficient overlapping history for this pair.
+              </div>
+            )
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

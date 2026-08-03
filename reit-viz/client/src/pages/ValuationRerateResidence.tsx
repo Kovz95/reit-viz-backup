@@ -22,7 +22,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowUpDown, Info, LineChart, X, ChevronLeft } from "lucide-react";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import {
   LOOKBACKS, getRerateMetric, buildRerateRow, computeCriticalLevels, impliedMoveToMultiple,
   type RerateRow, type RerateMetric, type CriticalLevel, type CriticalLevels,
@@ -172,6 +174,53 @@ export default function ValuationRerateResidence() {
   const [sortMetric, setSortMetric] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [detail, setDetail] = useState<{ meta: TickerMetaLite; cell: Cell; metric: RerateMetric } | null>(null);
+  // Modal's "Chart + Indicators" (pair rows): series overlay + persisted picks.
+  const [detailCharts, setDetailCharts] = useState(false);
+  const [detailIndicators, setDetailIndicators] = usePersistedState<Record<string, ActiveIndicators>>("reit-viz:vrr:detail-indicators", {});
+
+  // Refetch the pair's metric-ratio series (the modal's Cell only retains a
+  // dateless `trailing` array) using the SAME recipe as the row queries:
+  // pairMode+price basis → close ratio, otherwise the metric's own ratio.
+  const detailKey = detail && detailCharts && detail.meta.legA && detail.meta.legB
+    ? { a: detail.meta.legA, b: detail.meta.legB, k: pairMode && pairBasis === "price" ? "close" : detail.metric.key }
+    : null;
+  const { data: detailChartData } = useQuery({
+    queryKey: ["vrr-detail-charts", detailKey?.a, detailKey?.b, detailKey?.k, basis, lookbackDays],
+    enabled: !!detailKey,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const [sA, sB] = await Promise.all([
+        getMetricSeries(detailKey!.a, detailKey!.k).catch(() => []),
+        getMetricSeries(detailKey!.b, detailKey!.k).catch(() => []),
+      ]);
+      const ratio = ratioSeries(sA, sB);
+      const n = ratio.length;
+      if (n < 30) return { ratio, z: [] as { time: string; value: number | null }[], lastZ: null as number | null };
+      // z in the SAME reference frame as the table: expanding vs full history,
+      // or rolling `lookbackDays` window (population σ, min 30 obs).
+      const pre = new Float64Array(n + 1);
+      const pre2 = new Float64Array(n + 1);
+      for (let i = 0; i < n; i++) {
+        pre[i + 1] = pre[i] + ratio[i].value;
+        pre2[i + 1] = pre2[i] + ratio[i].value * ratio[i].value;
+      }
+      const win = basis === "expanding" ? Number.POSITIVE_INFINITY : lookbackDays;
+      const z = ratio.map((pt, i) => {
+        const lo = Number.isFinite(win) ? Math.max(0, i - (win as number) + 1) : 0;
+        const cnt = i - lo + 1;
+        if (cnt < 30) return { time: pt.time, value: null as number | null };
+        const mean = (pre[i + 1] - pre[lo]) / cnt;
+        const sd = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[lo]) / cnt - mean * mean));
+        if (sd < 1e-9) return { time: pt.time, value: null as number | null };
+        return { time: pt.time, value: (pt.value - mean) / sd };
+      });
+      let lastZ: number | null = null;
+      for (let i = z.length - 1; i >= 0; i--) {
+        if (z[i].value != null) { lastZ = z[i].value; break; }
+      }
+      return { ratio, z, lastZ };
+    },
+  });
 
   // Critical levels for the open detail row — reuse the table's precomputed value in
   // Critical mode, else compute on demand so the modal shows them in % Move mode too.
@@ -946,6 +995,16 @@ export default function ValuationRerateResidence() {
                       <LineChart className="w-3 h-3" /> Pairs
                     </button>
                   )}
+                  {detail.meta.legA && detail.meta.legB && (
+                    <button
+                      onClick={() => setDetailCharts(true)}
+                      className="text-[11px] px-2 py-1 rounded bg-muted hover:bg-muted/70 flex items-center gap-1"
+                      title="In-page ratio + z charts with the full Charts-tab indicator suite"
+                      data-testid="vrr-detail-charts-btn"
+                    >
+                      <LineChart className="w-3 h-3" /> Chart + Indicators
+                    </button>
+                  )}
                   <button onClick={() => setDetail(null)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
                 </div>
               </div>
@@ -1063,6 +1122,69 @@ export default function ValuationRerateResidence() {
           </div>
         );
       })()}
+
+      {/* Pair-row "Chart + Indicators" overlay (above the modal) — shared
+          PairDetailCharts stack; z uses the table's reference frame. */}
+      {detail && detailCharts && detail.meta.legA && detail.meta.legB && (
+        <div className="fixed inset-0 z-[60] bg-background flex flex-col" data-testid="vrr-detail-charts">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent"
+              onClick={() => setDetailCharts(false)}
+              data-testid="vrr-detail-charts-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+            <div className="text-sm font-bold font-mono text-purple-300">{detail.meta.legA} / {detail.meta.legB}</div>
+            <span className="text-xs text-muted-foreground">
+              {pairMode && pairBasis === "price" ? "Price ratio" : `${detail.metric.label} ratio`} · {basis === "trailing" ? `trailing ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label}` : "expanding history"}
+            </span>
+            <button
+              onClick={() => navigateToPairs(detail.meta.legA!, detail.meta.legB!)}
+              className="text-[11px] px-2 py-1 rounded bg-muted hover:bg-muted/70 flex items-center gap-1"
+              title="Open in the Pairs deep-dive"
+            >
+              <LineChart className="w-3 h-3" /> Pairs
+            </button>
+            <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+              {detailChartData?.ratio.length ? (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Now </span>
+                  <span className="font-bold">{detailChartData.ratio[detailChartData.ratio.length - 1].value.toFixed(4)}</span>
+                </span>
+              ) : null}
+              {detailChartData?.lastZ != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-muted-foreground">z </span>
+                  <span className={`font-bold ${detailChartData.lastZ >= 0 ? "text-red-400" : "text-emerald-400"}`}>
+                    {detailChartData.lastZ.toFixed(2)}
+                  </span>
+                </span>
+              )}
+            </div>
+          </div>
+          {detailChartData ? (
+            detailChartData.ratio.length >= 30 ? (
+              <PairDetailCharts
+                ratioSeries={detailChartData.ratio}
+                zScoreSeries={detailChartData.z}
+                ratioTitle={`${pairMode && pairBasis === "price" ? "Price" : detail.metric.label} ratio: ${detail.meta.legA} / ${detail.meta.legB} (${detailChartData.ratio.length} pts)`}
+                zScoreTitle={`Z-Score (${basis === "expanding" ? "expanding history" : `rolling ${LOOKBACKS.find((l) => l.days === lookbackDays)?.label} window`})`}
+                indicatorsMap={detailIndicators}
+                onChangeIndicatorsMap={setDetailIndicators}
+              />
+            ) : (
+              <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+                Insufficient overlapping history for this pair.
+              </div>
+            )
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-muted-foreground text-sm">
+              Loading…
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
