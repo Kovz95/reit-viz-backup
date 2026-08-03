@@ -13,6 +13,10 @@ import { P as PlayIcon } from "@/lib/play";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
 import { inferRerateMetric } from "@/lib/valuationRerate";
 import { isCrossCalendar } from "@/lib/tickerMarket";
+import { navigateToPairs } from "@/lib/navigateToPairs";
+import { ChevronLeft, ExternalLink } from "lucide-react";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 
 // Curated metrics always offered; unioned at runtime with the loaded universe.
 const ALL_METRICS_BASE = [
@@ -144,6 +148,8 @@ interface PairResult {
   source?: string;   // "workbook" | "yahoo" — both legs always share one calendar
   crossCal?: boolean; // legs trade on different market calendars (US vs -GB, …) → noisy
   error?: string;    // "no data for <leg>" | "insufficient overlap" | "mixed price calendars…"
+  /** FULL joined ratio series (pre window-slice) — feeds the in-page detail charts. */
+  ratio?: { time: string; value: number }[];
 }
 
 function computeTailStats(returns: number[]): PairTailStats {
@@ -283,6 +289,7 @@ async function computePairResult(pairKey: string, windowKey: string, bins: numbe
     asOf: sliced[sliced.length - 1]?.time,
     source: mixedCalendar ? `${legA.source}×${legB.source} calendars` : legA.source,
     crossCal: isCrossCalendar(a, b),
+    ratio: ratioSeries,
   };
 }
 
@@ -304,7 +311,7 @@ function fmtRetPct(v: number): string {
   return Number.isFinite(v) ? `${(v * 100).toFixed(2)}%` : "—";
 }
 
-function PairCard({ p }: { p: PairResult }) {
+function PairCard({ p, onOpen }: { p: PairResult; onOpen?: (key: string) => void }) {
   if (p.error || !p.dist || !p.tail) {
     return (
       <div
@@ -334,8 +341,9 @@ function PairCard({ p }: { p: PairResult }) {
   return (
     <div
       data-testid={`dist-pair-card-${p.a}-${p.b}`}
-      title={`${p.a}/${p.b} · ${r.n} daily log returns${p.asOf ? ` · as of ${p.asOf}` : ""}${p.source ? ` · ${p.source} prices` : ""}${p.crossCal ? " · CROSS-CALENDAR pair (mixed markets) — the ratio is non-synchronous, so these tail stats are unreliable" : ""}`}
-      className={`bg-card/30 rounded p-1.5 transition-colors border ${p.crossCal ? "border-amber-500/40 hover:border-amber-500/70" : "border-border/40 hover:border-border/70"}`}
+      title={`${p.a}/${p.b} · ${r.n} daily log returns${p.asOf ? ` · as of ${p.asOf}` : ""}${p.source ? ` · ${p.source} prices` : ""}${p.crossCal ? " · CROSS-CALENDAR pair (mixed markets) — the ratio is non-synchronous, so these tail stats are unreliable" : ""}${onOpen ? "\nClick: in-page ratio + return-z detail (indicators)" : ""}`}
+      className={`bg-card/30 rounded p-1.5 transition-colors border ${onOpen ? "cursor-pointer " : ""}${p.crossCal ? "border-amber-500/40 hover:border-amber-500/70" : "border-border/40 hover:border-border/70"}`}
+      onClick={onOpen ? () => onOpen(p.key) : undefined}
     >
       <div className="flex items-baseline justify-between mb-1">
         <div className="flex items-baseline gap-1.5">
@@ -881,6 +889,68 @@ export default function Distributions() {
   const [pairResults, setPairResults] = useState<PairResult[]>([]);
   const [pairRunning, setPairRunning] = useState(false);
   const pairRunIdRef = useRef(0);
+  // In-page pair detail (card click): selected key + indicator selections
+  // (persisted in localStorage next to the pins; keys pr-ratio / pr-z).
+  const [pairDetailKey, setPairDetailKey] = useState<string | null>(null);
+  const [pairDetailIndicators, setPairDetailIndicators] = useState<Record<string, ActiveIndicators>>(() => {
+    try {
+      const raw = localStorage.getItem("reit-viz:dist-pair-indicators");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  });
+  useEffect(() => {
+    try { localStorage.setItem("reit-viz:dist-pair-indicators", JSON.stringify(pairDetailIndicators)); } catch {}
+  }, [pairDetailIndicators]);
+
+  // Detail series: full ratio + rolling z of DAILY LOG RETURNS computed with
+  // the card's exact methodology (window = sliceByYears date cutoff anchored at
+  // each bar, returns INSIDE the slice incl. the current one, population σ,
+  // min 30 obs) — the z chart's last value equals the card's z.
+  const pairDetail = useMemo(() => {
+    if (!pairDetailKey) return null;
+    const p = pairResults.find((r) => r.key === pairDetailKey);
+    if (!p) return null;
+    const ratio = p.ratio ?? [];
+    if (ratio.length < 31) return { p, ratioSeries: [] as { time: string; value: number }[], zSeries: [] as { time: string; value: number | null }[], lastZ: null as number | null };
+    const years = WINDOW_YEARS[windowKey];
+    const n = ratio.length;
+    const ret: (number | null)[] = new Array(n).fill(null);
+    for (let i = 1; i < n; i++) {
+      const r0 = ratio[i - 1].value, r1 = ratio[i].value;
+      if (r0 > 0 && r1 > 0 && Number.isFinite(r0) && Number.isFinite(r1)) ret[i] = Math.log(r1 / r0);
+    }
+    const ps = new Float64Array(n + 1);
+    const ps2 = new Float64Array(n + 1);
+    const pc = new Int32Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      const v = ret[i];
+      ps[i + 1] = ps[i] + (v ?? 0);
+      ps2[i + 1] = ps2[i] + (v != null ? v * v : 0);
+      pc[i + 1] = pc[i] + (v != null ? 1 : 0);
+    }
+    const ts = ratio.map((r) => new Date(r.time).getTime());
+    let j = 0;
+    const zSeries = ratio.map((pt, i) => {
+      if (years !== null) {
+        const cutoff = ts[i] - years * 365 * MS_PER_DAY;
+        while (j < i && ts[j] < cutoff) j++;
+      }
+      const lo = (years !== null ? j : 0) + 1; // first return index inside the slice
+      const v = ret[i];
+      const cnt = i + 1 >= lo ? pc[i + 1] - pc[lo] : 0;
+      if (v == null || cnt < 30) return { time: pt.time, value: null as number | null };
+      const mean = (ps[i + 1] - ps[lo]) / cnt;
+      const sd = Math.sqrt(Math.max(0, (ps2[i + 1] - ps2[lo]) / cnt - mean * mean));
+      if (!(sd > 0)) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (v - mean) / sd };
+    });
+    let lastZ: number | null = null;
+    for (let i = zSeries.length - 1; i >= 0; i--) {
+      if (zSeries[i].value != null) { lastZ = zSeries[i].value; break; }
+    }
+    return { p, ratioSeries: ratio, zSeries, lastZ };
+  }, [pairDetailKey, pairResults, windowKey]);
 
   useEffect(() => {
     try { localStorage.setItem("reit-viz:dist-pairs", JSON.stringify(pairs)); } catch {}
@@ -1451,7 +1521,7 @@ export default function Distributions() {
                 className="grid gap-2 p-2"
                 style={{ gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))" }}
               >
-                {pairResults.map(p => <PairCard key={p.key} p={p} />)}
+                {pairResults.map(p => <PairCard key={p.key} p={p} onOpen={p.error ? undefined : setPairDetailKey} />)}
               </div>
             )}
           </>
@@ -1490,6 +1560,69 @@ export default function Distributions() {
         )}
         {mode === "metric" && reference === "history" && view === "box" && results.length > 0 && <BoxView results={sortedResults} metric={selectedMetric} />}
       </div>
+
+      {/* Pair Ratio in-page detail — same ratio+z chart stack (full indicator
+          suite) as Pair Ratios / Heatmap matrix; z = rolling return-z matching
+          the card. "Open in Pairs" keeps the deep-dive. */}
+      {mode === "pair" && pairDetailKey && pairDetail && (
+        <div className="fixed inset-0 z-50 bg-background flex flex-col" data-testid="dist-pair-detail">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0">
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-foreground/70 hover:text-foreground hover:bg-accent"
+              onClick={() => setPairDetailKey(null)}
+              data-testid="dist-pair-detail-back"
+            >
+              <ChevronLeft className="w-3 h-3" /> Back
+            </button>
+            <div className="text-sm font-bold font-mono">{pairDetail.p.a} / {pairDetail.p.b}</div>
+            {pairDetail.p.crossCal && (
+              <span className="font-mono text-[9px] text-amber-400/90 border border-amber-500/40 rounded px-1" title="Cross-calendar (mixed markets) — non-synchronous ratio">†cal?</span>
+            )}
+            <button
+              className="flex items-center gap-1 px-2 py-1 rounded border border-border/50 text-[11px] text-foreground/80 hover:text-foreground hover:bg-accent"
+              onClick={() => navigateToPairs(pairDetail.p.a, pairDetail.p.b)}
+              title={`Open ${pairDetail.p.a} / ${pairDetail.p.b} in the Pairs deep-dive`}
+              data-testid="dist-pair-detail-open-pairs"
+            >
+              <ExternalLink className="w-3 h-3" /> Open in Pairs
+            </button>
+            <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
+              {pairDetail.p.dist && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-foreground/50">last ret </span>
+                  <span className={zClass(pairDetail.p.dist.z)}>{fmtRetPct(pairDetail.p.dist.current)}</span>
+                </span>
+              )}
+              {pairDetail.lastZ != null && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-foreground/50">ret z ({windowKey}) </span>
+                  <span className={`font-bold ${zClass(pairDetail.lastZ)}`}>{pairDetail.lastZ.toFixed(2)}</span>
+                </span>
+              )}
+              {pairDetail.p.tail && (
+                <span className="border border-border/30 rounded px-2 py-1">
+                  <span className="text-foreground/50">Ann.σ </span>
+                  <span>{fmtRetPct(pairDetail.p.tail.annVol)}</span>
+                </span>
+              )}
+            </div>
+          </div>
+          {pairDetail.ratioSeries.length > 0 ? (
+            <PairDetailCharts
+              ratioSeries={pairDetail.ratioSeries}
+              zScoreSeries={pairDetail.zSeries}
+              ratioTitle={`Ratio: ${pairDetail.p.a} / ${pairDetail.p.b} — Price (${pairDetail.ratioSeries.length} pts)`}
+              zScoreTitle={`Daily log-return z (rolling ${windowKey} window — matches card z)`}
+              indicatorsMap={pairDetailIndicators}
+              onChangeIndicatorsMap={setPairDetailIndicators}
+            />
+          ) : (
+            <div className="flex items-center justify-center flex-1 text-foreground/50 font-mono text-xs">
+              Insufficient overlapping history for this pair.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
