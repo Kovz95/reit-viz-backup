@@ -218,6 +218,8 @@ interface PairRatioChartProps {
   /** Lifted to the page + persisted in the workspace (keys: pr-ratio / pr-z). */
   indicatorsMap: Record<string, ActiveIndicators>;
   onChangeIndicatorsMap: (updater: (prev: Record<string, ActiveIndicators>) => Record<string, ActiveIndicators>) => void;
+  /** Optional static guides on the TOP chart (e.g. Div Spread's mean/±σ/±2σ). */
+  ratioRefLines?: { value: number; color: string; style: number; label?: string }[];
 }
 
 const EMPTY_PR_INDICATORS: ActiveIndicators = {};
@@ -230,7 +232,7 @@ const Z_REF_LINES = [
 ];
 
 // Exported for the Heatmap Pair Matrix detail overlay (same contract).
-export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap }: PairRatioChartProps) {
+export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap, ratioRefLines }: PairRatioChartProps) {
   const { registerChart, unregisterChart, registerSeries } = usePairChartSync("pr-ratio", "__pairRatioCharts");
   const setIndicatorsMap = onChangeIndicatorsMap;
   const [indicatorChartId, setIndicatorChartId] = useState("pr-ratio");
@@ -270,7 +272,7 @@ export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScore
           </Button>
         </div>
         <div className="border border-border/30 rounded overflow-hidden flex flex-col" style={{ height: 380 }}>
-          <MiniChart data={ratioSeries} title={ratioTitle} {...chartProps("pr-ratio")} />
+          <MiniChart data={ratioSeries} title={ratioTitle} refLines={ratioRefLines} {...chartProps("pr-ratio")} />
         </div>
         <div className="border border-border/30 rounded overflow-hidden flex flex-col" style={{ height: 380 }}>
           <MiniChart data={zScoreSeries} title={zScoreTitle} refLines={Z_REF_LINES} {...chartProps("pr-z")} />

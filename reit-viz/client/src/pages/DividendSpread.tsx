@@ -4,17 +4,15 @@ import { useAppContext } from "@/lib/useAppContext";
 import { makeDefaultFilters, serializeFilters, deserializeFilters } from "@/lib/classFilters";
 import { useWorkspaceState } from "@/lib/useWorkspaceState";
 import { useQuery } from "@tanstack/react-query";
-import { createChart, ColorType, LineSeries, PriceScaleMode, CrosshairMode } from "lightweight-charts";
-import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import { ChevronLeft, TrendingUp, TrendingDown, Download, ExternalLink, ArrowUpDown, Zap } from "lucide-react";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import ClassificationFilters from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { navigateToTicker } from "@/lib/navigateToTicker";
-import ExportMenu from "@/components/ExportMenu";
-import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import { PairDetailCharts } from "@/pages/PairRatios";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import { fetchWorkbookTickers } from "@/lib/fetchWorkbookTickers";
 import { fetchGlobalDatesList } from "@/lib/fetchGlobalDatesList";
 import { fetchMonthlySeasonality } from "@/lib/fetchMonthlySeasonality";
@@ -335,118 +333,55 @@ interface SpreadDetailProps {
   treasuryLabel: string;
   /** Overrides the "Dividend Yield − {treasury} Spread" caption (used by A vs B mode). */
   spreadLabel?: string;
-  /** Overrides the export filename label (used by A vs B mode). */
-  exportLabel?: string;
   /** When omitted, the Back button is hidden (A vs B mode renders inline, no table to go back to). */
   onBack?: () => void;
+  /** Trailing window (bars) the row's mean/σ/z were computed over — drives the rolling-z chart. */
+  lookback: number;
+  /** Indicator selections — lifted to the page + persisted (keys pr-ratio / pr-z). */
+  indicatorsMap: Record<string, ActiveIndicators>;
+  onChangeIndicatorsMap: (updater: (prev: Record<string, ActiveIndicators>) => Record<string, ActiveIndicators>) => void;
 }
 
-function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: SpreadDetailProps) {
-  const [logScale, setLogScale] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<any>(null);
-  const gridColor = useGridColor("rgba(255,255,255,0.03)");
-  // Preserve pan/zoom across the recreate this effect does on row/theme changes.
-  const viewRef = useRef(makeViewPreserver());
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || row.spreadSeries.length < 2) return;
-    const chart = createChart(el, {
-      width: el.clientWidth,
-      height: el.clientHeight,
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "rgba(156,163,175,0.9)",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: gridColor },
-        horzLines: { color: gridColor },
-      },
-      crosshair: {
-        // Normal (not the Magnet default): the horizontal line follows the
-        // mouse instead of hiding whenever the cursor isn't on a data point.
-        mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(255,255,255,0.15)", width: 1 },
-        horzLine: { color: "rgba(255,255,255,0.15)", width: 1 },
-      },
-      rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: false, ...PANE_TIME_SCALE },
-      ...PANE_HANDLERS,
+// Detail = the shared PairDetailCharts stack (spread + rolling z with the full
+// Charts-tab indicator suite; per-chart LOG/export/maximize live on each chart).
+function SpreadDetail({ row, treasuryLabel, spreadLabel, onBack, lookback, indicatorsMap, onChangeIndicatorsMap }: SpreadDetailProps) {
+  // Rolling z of the spread with the TABLE's methodology: window = trailing
+  // `lookback` bars ending at (and including) each bar, population σ — the
+  // last value equals the row's Z. Warm-up (<20 obs) renders as whitespace.
+  const zSeries = useMemo(() => {
+    const s = row.spreadSeries;
+    const n = s.length;
+    const pre = new Float64Array(n + 1);
+    const pre2 = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      pre[i + 1] = pre[i] + s[i].value;
+      pre2[i + 1] = pre2[i] + s[i].value * s[i].value;
+    }
+    return s.map((pt, i) => {
+      const lo = Math.max(0, i - lookback + 1);
+      const cnt = i - lo + 1;
+      if (cnt < Math.min(20, lookback)) return { time: pt.time, value: null as number | null };
+      const mean = (pre[i + 1] - pre[lo]) / cnt;
+      const std = Math.sqrt(Math.max(0, (pre2[i + 1] - pre2[lo]) / cnt - mean * mean));
+      if (!(std > 0)) return { time: pt.time, value: null as number | null };
+      return { time: pt.time, value: (pt.value - mean) / std };
     });
-    chartRef.current = chart;
-    chart.addSeries(LineSeries, {
-      color: "rgba(14, 165, 233, 0.9)",
-      lineWidth: 2,
-      priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(2) + "%" },
-    }).setData(row.spreadSeries.map(s => ({ time: s.time, value: s.value })));
+  }, [row.spreadSeries, lookback]);
 
-    if (row.mean !== null) {
-      chart.addSeries(LineSeries, {
-        color: "rgba(14, 165, 233, 0.35)",
-        lineWidth: 1,
-        lineStyle: 2,
-        priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(2) + "%" },
-        crosshairMarkerVisible: false,
-        lastValueVisible: true,
-      }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! })));
+  // Same mean/±1σ/±2σ guides the old single chart drew (full-window row stats).
+  const spreadRefLines = useMemo(() => {
+    if (row.mean === null) return undefined;
+    const lines = [{ value: row.mean, color: "rgba(14,165,233,0.35)", style: 2 }];
+    if (row.std !== null) {
+      lines.push(
+        { value: row.mean + row.std, color: "rgba(14,165,233,0.15)", style: 2 },
+        { value: row.mean - row.std, color: "rgba(14,165,233,0.15)", style: 2 },
+        { value: row.mean + 2 * row.std, color: "rgba(239,68,68,0.15)", style: 3 },
+        { value: row.mean - 2 * row.std, color: "rgba(239,68,68,0.15)", style: 3 },
+      );
     }
-
-    if (row.mean !== null && row.std !== null) {
-      chart.addSeries(LineSeries, {
-        color: "rgba(14, 165, 233, 0.15)",
-        lineWidth: 1,
-        lineStyle: 2,
-        crosshairMarkerVisible: false,
-        lastValueVisible: false,
-      }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! + row.std! })));
-      chart.addSeries(LineSeries, {
-        color: "rgba(14, 165, 233, 0.15)",
-        lineWidth: 1,
-        lineStyle: 2,
-        crosshairMarkerVisible: false,
-        lastValueVisible: false,
-      }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! - row.std! })));
-      chart.addSeries(LineSeries, {
-        color: "rgba(239, 68, 68, 0.15)",
-        lineWidth: 1,
-        lineStyle: 3,
-        crosshairMarkerVisible: false,
-        lastValueVisible: false,
-      }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! + 2 * row.std! })));
-      chart.addSeries(LineSeries, {
-        color: "rgba(239, 68, 68, 0.15)",
-        lineWidth: 1,
-        lineStyle: 3,
-        crosshairMarkerVisible: false,
-        lastValueVisible: false,
-      }).setData(row.spreadSeries.map(s => ({ time: s.time, value: row.mean! - 2 * row.std! })));
-    }
-
-    viewRef.current.applyView(chart, seriesFingerprint(row.spreadSeries));
-    const handleResize = () => {
-      if (el) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    };
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(el);
-    return () => {
-      resizeObserver.disconnect();
-      viewRef.current.capture(chart);
-      chart.remove();
-    };
-  }, [row, gridColor]);
-
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (chart) {
-      try {
-        chart.priceScale("right").applyOptions({
-          mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-        });
-      } catch {}
-    }
-  }, [logScale]);
+    return lines;
+  }, [row.mean, row.std]);
 
   return (
     <div className="flex flex-col h-full" data-testid="spread-detail">
@@ -477,23 +412,17 @@ function SpreadDetail({ row, treasuryLabel, spreadLabel, exportLabel, onBack }: 
           <span className={zScoreClass(row.zScore)}>Z: {row.zScore?.toFixed(2)}</span>
           <span className={pctileClass(row.histPctile)}>Pctile: {row.histPctile?.toFixed(0)}%</span>
         </div>
-        <Button
-          variant={logScale ? "default" : "ghost"}
-          size="sm"
-          className="h-6 px-1.5 text-[10px] font-mono font-bold"
-          onClick={() => setLogScale(!logScale)}
-          data-testid="spread-log-scale"
-          title="Toggle logarithmic price scale"
-        >
-          LOG
-        </Button>
         <GridProminenceToggle />
-        <ExportMenu
-          getChart={() => chartRef.current}
-          label={exportLabel ?? `DivSpread_${row.ticker}_vs_${treasuryLabel}`}
-        />
       </div>
-      <div ref={containerRef} className="flex-1 min-h-0" />
+      <PairDetailCharts
+        ratioSeries={row.spreadSeries}
+        zScoreSeries={zSeries}
+        ratioTitle={`${spreadLabel ?? `Dividend Yield − ${treasuryLabel} Spread`} (%) — ${row.ticker}`}
+        zScoreTitle={`Z-Score (rolling ${lookback}d window — matches table)`}
+        ratioRefLines={spreadRefLines}
+        indicatorsMap={indicatorsMap}
+        onChangeIndicatorsMap={onChangeIndicatorsMap}
+      />
     </div>
   );
 }
@@ -511,6 +440,9 @@ export default function DividendSpread() {
   const [classFilters, setClassFilters] = useState(makeDefaultFilters);
   const [manualTickers, setManualTickers] = useState(new Set<string>());
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  // Detail-view indicator selections (spread + z charts; keys pr-ratio / pr-z),
+  // shared by treasury detail and pair mode — persisted in the workspace.
+  const [detailIndicators, setDetailIndicators] = useState<Record<string, ActiveIndicators>>({});
   const basketScope = useBasketScope("reit-viz:basket-scope:spread");
 
   const treasuryLabel = TREASURY_OPTIONS.find(t => t.id === treasuryId)?.label ?? treasuryId;
@@ -528,8 +460,9 @@ export default function DividendSpread() {
       classFilters: serializeFilters(classFilters),
       manualTickers: [...manualTickers],
       selectedTicker,
+      detailIndicators,
     }),
-    [mode, pairA, pairB, treasuryId, lookback, sortCol, sortDir, search, classFilters, manualTickers, selectedTicker]
+    [mode, pairA, pairB, treasuryId, lookback, sortCol, sortDir, search, classFilters, manualTickers, selectedTicker, detailIndicators]
   );
 
   const setState = useCallback((s: any) => {
@@ -544,6 +477,7 @@ export default function DividendSpread() {
     if (s.classFilters !== undefined) setClassFilters(deserializeFilters(s.classFilters));
     if (s.manualTickers !== undefined) setManualTickers(new Set(s.manualTickers));
     if (s.selectedTicker !== undefined) setSelectedTicker(s.selectedTicker);
+    if (s.detailIndicators !== undefined) setDetailIndicators(s.detailIndicators);
   }, []);
 
   useWorkspaceState("dividendSpread", getState, setState);
@@ -690,6 +624,9 @@ export default function DividendSpread() {
         row={detailRow}
         treasuryLabel={treasuryLabel}
         onBack={() => setSelectedTicker(null)}
+        lookback={lookback}
+        indicatorsMap={detailIndicators}
+        onChangeIndicatorsMap={setDetailIndicators}
       />
     );
   }
@@ -822,7 +759,9 @@ export default function DividendSpread() {
               row={pairRow}
               treasuryLabel={treasuryLabel}
               spreadLabel={`${pairA} − ${pairB} yield spread (pp)`}
-              exportLabel={`DivSpread_${pairA}_vs_${pairB}`}
+              lookback={lookback}
+              indicatorsMap={detailIndicators}
+              onChangeIndicatorsMap={setDetailIndicators}
             />
           ) : (
             <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
@@ -915,7 +854,12 @@ export default function DividendSpread() {
                     <td className={`px-2 py-1 text-right font-mono tabular-nums ${pctileClass(row.histPctile)}`}>
                       {row.histPctile !== null ? `${row.histPctile.toFixed(0)}%` : "—"}
                     </td>
-                    <td className="px-1 py-1">
+                    <td
+                      className="px-1 py-1 cursor-zoom-in"
+                      onClick={e => { e.stopPropagation(); setSelectedTicker(row.ticker); }}
+                      title={`Open ${row.ticker}'s spread history (chart + rolling z + indicators). Row click opens the ticker page.`}
+                      data-testid={`spread-trail-${row.ticker}`}
+                    >
                       <SparklineCanvas
                         values={row.sparkValues}
                         mean={row.mean}
