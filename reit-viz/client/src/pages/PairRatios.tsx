@@ -215,6 +215,9 @@ interface PairRatioChartProps {
   zScoreSeries: { time: string; value: number | null }[];
   ratioTitle: string;
   zScoreTitle: string;
+  /** Lifted to the page + persisted in the workspace (keys: pr-ratio / pr-z). */
+  indicatorsMap: Record<string, ActiveIndicators>;
+  onChangeIndicatorsMap: (updater: (prev: Record<string, ActiveIndicators>) => Record<string, ActiveIndicators>) => void;
 }
 
 const EMPTY_PR_INDICATORS: ActiveIndicators = {};
@@ -226,9 +229,9 @@ const Z_REF_LINES = [
   { value: -2, color: "rgba(34,197,94,0.3)", style: 2 },
 ];
 
-function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle }: PairRatioChartProps) {
+function PairRatioChart({ ratioSeries, zScoreSeries, ratioTitle, zScoreTitle, indicatorsMap, onChangeIndicatorsMap }: PairRatioChartProps) {
   const { registerChart, unregisterChart, registerSeries } = usePairChartSync("pr-ratio", "__pairRatioCharts");
-  const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  const setIndicatorsMap = onChangeIndicatorsMap;
   const [indicatorChartId, setIndicatorChartId] = useState("pr-ratio");
   const [showIndicators, setShowIndicators] = useState(false);
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
@@ -433,6 +436,10 @@ export default function PairRatios() {
   }, [allTickers]);
   const metricLabel = useCallback((v: string) => METRIC_LABELS[v] ?? v, []);
 
+  // Detail-view indicator selections (per chart id: pr-ratio / pr-z) — lifted
+  // here so they persist in the workspace like the Compare tab's.
+  const [detailIndicatorsMap, setDetailIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+
   const getState = useCallback(
     () => ({
       metric,
@@ -448,8 +455,9 @@ export default function PairRatios() {
       vfChg90,
       vfMean,
       vfStd,
+      detailIndicators: detailIndicatorsMap,
     }),
-    [metric, lookback, zThreshold, sortBy, showZScore, filterMode, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd]
+    [metric, lookback, zThreshold, sortBy, showZScore, filterMode, searchQuery, vfZScore, vfRatio, vfChg30, vfChg90, vfMean, vfStd, detailIndicatorsMap]
   );
 
   const restoreState = useCallback((saved: any) => {
@@ -466,6 +474,7 @@ export default function PairRatios() {
     if (saved?.vfChg90) setVfChg90(saved.vfChg90);
     if (saved?.vfMean) setVfMean(saved.vfMean);
     if (saved?.vfStd) setVfStd(saved.vfStd);
+    if (saved?.detailIndicators) setDetailIndicatorsMap(saved.detailIndicators);
   }, []);
 
   const universeSig = useUniverseSignature();
@@ -829,6 +838,8 @@ export default function PairRatios() {
             <PairRatioChart
               ratioSeries={detailChartData.fullRatio}
               zScoreSeries={detailChartData.fullZ}
+              indicatorsMap={detailIndicatorsMap}
+              onChangeIndicatorsMap={setDetailIndicatorsMap}
               ratioTitle={`Ratio: ${selectedPair.tickerA} / ${selectedPair.tickerB} — ${metricLabel(metric)} (${detailChartData.fullRatio.length} pts)`}
               zScoreTitle={`Z-Score (±2σ bands — ${lookback === "all" ? "full-history" : `rolling ${LOOKBACK_OPTIONS.find((o) => o.value === lookback)?.label}`} log-z, matches table)`}
             />
