@@ -502,7 +502,6 @@ function DriverScanResults({
 // ── Driver scan panel (main area) ──
 function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (specA: string, specB: string, window: number) => void }) {
   const [ticker, setTicker] = useState("SPG");
-  const [tickerOpen, setTickerOpen] = useState(false);
   const [targetMode, setTargetMode] = useState("1d");
   const [includeMacro, setIncludeMacro] = useState(true);
   const [includeFund, setIncludeFund] = useState(true);
@@ -591,46 +590,15 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
       <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
         <div className="space-y-0.5">
           <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Ticker</div>
-          <Popover open={tickerOpen} onOpenChange={setTickerOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-7 w-[100px] justify-between px-2 text-[11px] font-mono" data-testid="driver-ticker-selector">
-                <span>{ticker || "Pick…"}</span>
-                <ChevronsUpDown className="w-3 h-3 opacity-50 flex-shrink-0 ml-1" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-[420px] p-0" align="start">
-              <Command>
-                <CommandInput placeholder="Search ticker…" className="h-7 text-[11px]" />
-                <CommandList className="max-h-[200px]">
-                  <CommandEmpty>No ticker found.</CommandEmpty>
-                  <CommandGroup>
-                    {tickers.map(t => (
-                      <CommandItem key={t.ticker} value={`${t.ticker} ${t.name}`} onSelect={() => { setTicker(t.ticker); setTickerOpen(false); }} className="text-[11px]">
-                        <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${ticker === t.ticker ? "opacity-100" : "opacity-0"}`} />
-                        <span className="font-mono font-bold mr-1 whitespace-nowrap">{t.ticker}</span>
-                        <span className="text-muted-foreground flex-1 min-w-0 truncate text-[10px]" title={t.name}>{t.name}</span>
-                      </CommandItem>
-                    ))}
-                    {ticker && !tickers.find(t => t.ticker === ticker) && (
-                      <CommandItem value={ticker} onSelect={() => setTickerOpen(false)} className="text-[11px]">
-                        <span className="font-mono font-bold text-amber-400">{ticker}</span>
-                        <span className="text-muted-foreground ml-1 text-[10px]">(custom)</span>
-                      </CommandItem>
-                    )}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-              <div className="border-t border-border/30 p-1.5">
-                <Input
-                  className="h-6 text-[11px] font-mono"
-                  placeholder="Type ticker (e.g. LMT)…"
-                  value={ticker}
-                  onChange={e => setTicker(e.target.value.toUpperCase().trim())}
-                  onKeyDown={e => { if (e.key === "Enter") setTickerOpen(false); }}
-                />
-              </div>
-            </PopoverContent>
-          </Popover>
+          {/* Charts-carousel-style picker (classification chips + search + custom entry) */}
+          <div className="w-[140px]">
+            <TickerClassSelect
+              value={ticker}
+              onChange={setTicker}
+              tickers={tickers}
+              testId="driver-ticker-selector"
+            />
+          </div>
         </div>
 
         <div className="space-y-0.5">

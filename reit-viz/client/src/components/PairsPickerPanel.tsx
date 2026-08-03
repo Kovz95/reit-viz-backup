@@ -21,6 +21,7 @@ import {
 import {
   Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
 } from "@/components/ui/tooltip";
+import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 import type { PlottedSeries, PaneInfo } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
 import { getMetricSeries } from "@/lib/dataService";
@@ -287,20 +288,30 @@ function TickerPicker({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
+  // Same six-level classification chips as the Charts-tab ticker carousel.
+  const { classFilters, setClassFilters, classOptions, filtered, anyActive } =
+    useTickerClassFilter(tickerList);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="h-7 px-2 text-xs min-w-[70px] justify-between font-mono">
           {value || "Ticker"}
+          {anyActive && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[200px] p-0" align="start">
+      <PopoverContent className="w-auto min-w-[280px] max-w-[520px] p-0" align="start">
+        <ClassFilterRow
+          filters={classFilters}
+          onChange={setClassFilters}
+          options={classOptions}
+          testIdPrefix="pairs-panel-ticker"
+        />
         <Command>
           <CommandInput placeholder="Search..." className="h-8 text-xs" />
           <CommandList className="max-h-[220px]">
             <CommandEmpty>No ticker found.</CommandEmpty>
             <CommandGroup>
-              {tickerList.map((t) => (
+              {filtered.map((t) => (
                 <CommandItem
                   key={t.ticker}
                   value={`${t.ticker} ${t.name}`}

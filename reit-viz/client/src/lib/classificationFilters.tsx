@@ -8,6 +8,9 @@ export {
   emptyClassFilters,
   serializeClassFilters,
   deserializeClassFilters,
+  useTickerClassFilter,
+  ClassFilterRow,
+  FilterDropdown,
 } from "@/components/ClassificationFilters";
 
 export type { ClassFilters } from "@/components/ClassificationFilters";

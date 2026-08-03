@@ -17,6 +17,7 @@ import {
 import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
+import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 import type { PlottedSeries } from "@/pages/Dashboard";
 import type { TickerMeta } from "@shared/schema";
 import { getMetricSeries } from "@/lib/dataService";
@@ -54,6 +55,9 @@ export default function ChartsComparePanel({
   const [customDate, setCustomDate] = useState("");
   const [metricSearch, setMetricSearch] = useState("");
   const [metricPickerOpen, setMetricPickerOpen] = useState(false);
+  // Same six-level classification chips as the Charts-tab ticker carousel.
+  const { classFilters, setClassFilters, classOptions, filtered: filteredTickers } =
+    useTickerClassFilter(tickers);
 
   // Available metrics = whatever the loaded universe exposes + client-derived ones,
   // grouped by the shared categorizer (so new workbook metrics appear automatically).
@@ -223,13 +227,19 @@ export default function ChartsComparePanel({
             <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[440px] p-0" align="start">
+        <PopoverContent className="w-auto min-w-[440px] max-w-[560px] p-0" align="start">
+          <ClassFilterRow
+            filters={classFilters}
+            onChange={setClassFilters}
+            options={classOptions}
+            testIdPrefix="compare-ticker"
+          />
           <Command>
             <CommandInput placeholder="Search ticker..." className="h-8 text-xs" />
             <CommandList className="max-h-[250px]">
               <CommandEmpty>No ticker found.</CommandEmpty>
               <CommandGroup>
-                {tickers.map((t) => (
+                {filteredTickers.map((t) => (
                   <CommandItem
                     key={t.ticker}
                     value={`${t.ticker} ${t.name} ${t.subindustry}`}

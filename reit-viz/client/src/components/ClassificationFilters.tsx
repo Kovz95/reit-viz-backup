@@ -239,6 +239,85 @@ export function FilterDropdown({
   );
 }
 
+// ---- Reusable Charts-carousel-style classification filtering ----
+// One hook + one chip-row component so every ticker picker popover in the app
+// can offer the same six-level filter bar as the Charts ticker carousel.
+
+/** Local classification filter state + options/filtering derived from any ticker list. */
+export function useTickerClassFilter<T extends { ticker: string }>(tickers: T[]) {
+  const [classFilters, setClassFilters] = useState<ClassFilters>(() => emptyClassFilters());
+
+  const classOptions = useMemo(() => {
+    const opts: Record<string, Set<string>> = {};
+    for (const { key } of CLASSIFICATION_FIELDS) opts[key] = new Set();
+    for (const t of tickers || []) {
+      for (const { key } of CLASSIFICATION_FIELDS) {
+        const v = (t as any)[key];
+        if (v) opts[key].add(v);
+      }
+    }
+    const out: Record<string, string[]> = {};
+    for (const { key } of CLASSIFICATION_FIELDS) out[key] = [...opts[key]].sort();
+    return out as Record<ClassKey, string[]>;
+  }, [tickers]);
+
+  const filtered = useMemo(() => {
+    let out = tickers || [];
+    for (const { key } of CLASSIFICATION_FIELDS) {
+      const sel = classFilters[key];
+      if (sel.size > 0) out = out.filter((t) => sel.has((t as any)[key]));
+    }
+    return out;
+  }, [tickers, classFilters]);
+
+  const anyActive = Object.values(classFilters).some((s) => s.size > 0);
+
+  return { classFilters, setClassFilters, classOptions, filtered, anyActive };
+}
+
+/** The chip row rendered at the top of a picker popover. Fields with ≤1 unique
+ *  value are auto-hidden (matches the Charts carousel behavior). Renders
+ *  nothing when the ticker list carries no classification metadata. */
+export function ClassFilterRow({
+  filters,
+  onChange,
+  options,
+  testIdPrefix,
+}: {
+  filters: ClassFilters;
+  onChange: (f: ClassFilters) => void;
+  options: Record<string, string[]>;
+  testIdPrefix: string;
+}) {
+  const shown = CLASSIFICATION_FIELDS.filter((f) => (options[f.key]?.length ?? 0) > 1);
+  if (shown.length === 0) return null;
+  const anyActive = Object.values(filters).some((s) => s.size > 0);
+  return (
+    <div className="flex flex-wrap items-center gap-1 p-1.5 border-b border-border">
+      {shown.map((f) => (
+        <FilterDropdown
+          key={f.key}
+          label={f.label}
+          options={options[f.key] || []}
+          selected={filters[f.key] || new Set()}
+          onChange={(next) => onChange({ ...filters, [f.key]: next })}
+          testId={`${testIdPrefix}-filter-${f.key}`}
+        />
+      ))}
+      {anyActive && (
+        <button
+          onClick={() => onChange(emptyClassFilters())}
+          className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] text-muted-foreground hover:text-destructive"
+          data-testid={`${testIdPrefix}-filter-clear`}
+        >
+          <X className="w-2.5 h-2.5" />
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ---- Manual ticker add component ----
 function ManualTickerAdd({
   tickerMeta,

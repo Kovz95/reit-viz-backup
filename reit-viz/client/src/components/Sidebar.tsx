@@ -5,6 +5,7 @@ import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import { indicatorPeriods, PANE_OVERLAY_TYPES, overlayPaneLabel, type ActiveIndicators } from "@/components/ChartPane";
 import { getIndicatorDef } from "@/lib/indicatorRegistry";
+import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 
 /** Compact badges for a pane's enabled indicators (Current Layout list).
  *  `subChart` is set for indicators that render as their own subplot — those
@@ -431,6 +432,8 @@ export default function Sidebar({
   // Series ticker picker (independent of carousel activeTicker)
   const [seriesTicker, setSeriesTicker] = useState<string>("");
   const [seriesTickerOpen, setSeriesTickerOpen] = useState(false);
+  // Classification chips for the Pick Series ticker popover (Charts-carousel style).
+  const seriesClf = useTickerClassFilter(tickers);
 
   // Sync seriesTicker when activeTicker changes (so preset views keep working)
   useEffect(() => {
@@ -1128,13 +1131,19 @@ export default function Sidebar({
                     <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto min-w-[260px] max-w-[480px] p-0" align="start">
+                <PopoverContent className="w-auto min-w-[260px] max-w-[520px] p-0" align="start">
+                  <ClassFilterRow
+                    filters={seriesClf.classFilters}
+                    onChange={seriesClf.setClassFilters}
+                    options={seriesClf.classOptions}
+                    testIdPrefix="series-ticker"
+                  />
                   <Command>
                     <CommandInput placeholder="Search ticker..." className="h-8 text-xs" />
                     <CommandList className="max-h-[250px]">
                       <CommandEmpty>No ticker found.</CommandEmpty>
                       <CommandGroup>
-                        {tickers.map(t => (
+                        {seriesClf.filtered.map(t => (
                           <CommandItem
                             key={t.ticker}
                             value={`${t.ticker} ${t.name} ${t.subindustry}`}
@@ -2403,13 +2412,6 @@ function PairsFormulaSection({
     [presetsTick],
   );
 
-  const tickerNames = useMemo(() => tickers.map((t) => t.ticker).sort(), [tickers]);
-  const nameByTicker = useMemo(() => {
-    const m = new Map<string, string>();
-    tickers.forEach((t) => m.set(t.ticker, t.name || ""));
-    return m;
-  }, [tickers]);
-
   const outputDef = useMemo(() => DERIVED_DEFS.find((d) => d.type === output), [output]);
   const needsZWin = !!outputDef && PF_DERIVED_NEEDS_WIN[output];
 
@@ -2666,53 +2668,6 @@ function PairsFormulaSection({
   // Categorized grouping of the available metrics for the picker dropdown.
   const metricCategories = useMemo(() => groupMetricsRecord(metricOptions), [metricOptions]);
 
-  const LegPicker = ({
-    value, onChange, testId, open, setOpen,
-  }: {
-    value: string; onChange: (v: string) => void; testId: string;
-    open: boolean; setOpen: (b: boolean) => void;
-  }) => (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-6 flex-1 justify-between px-2 text-[11px] font-mono w-full"
-          data-testid={testId}
-        >
-          <span className={value ? "" : "text-muted-foreground font-sans"}>
-            {value || "Pick ticker"}
-          </span>
-          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[420px] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Search ticker..." className="h-7 text-[11px]" />
-          <CommandList className="max-h-[260px]">
-            <CommandEmpty>No ticker found.</CommandEmpty>
-            <CommandGroup>
-              {tickerNames.map((t) => (
-                <CommandItem
-                  key={t}
-                  value={`${t} ${nameByTicker.get(t) || ""}`}
-                  onSelect={() => { onChange(t); setOpen(false); }}
-                  className="text-[11px]"
-                >
-                  <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${value === t ? "opacity-100" : "opacity-0"}`} />
-                  <span className="font-mono font-bold mr-1 whitespace-nowrap">{t}</span>
-                  <span className="text-muted-foreground text-[10px] flex-1 min-w-0 truncate" title={nameByTicker.get(t)}>
-                    {nameByTicker.get(t)}
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-
   const MetricPicker = ({
     value, onChange, testId,
   }: { value: string; onChange: (v: string) => void; testId: string }) => (
@@ -2769,7 +2724,7 @@ function PairsFormulaSection({
           {mode === "arithmetic" ? "Series A" : "Leg A"}
         </div>
         <div className="flex items-stretch gap-1">
-          <LegPicker value={legA} onChange={setLegA} testId="pf-leg-a" open={legAOpen} setOpen={setLegAOpen} />
+          <LegPicker value={legA} onChange={setLegA} testId="pf-leg-a" open={legAOpen} setOpen={setLegAOpen} tickers={tickers} />
         </div>
         <MetricPicker value={metricA} onChange={setMetricA} testId="pf-metric-a" />
       </div>
@@ -2817,7 +2772,7 @@ function PairsFormulaSection({
             {mode === "arithmetic" ? "Series B" : "Leg B"}
           </div>
           <div className="flex items-stretch gap-1">
-            <LegPicker value={legB} onChange={setLegB} testId="pf-leg-b" open={legBOpen} setOpen={setLegBOpen} />
+            <LegPicker value={legB} onChange={setLegB} testId="pf-leg-b" open={legBOpen} setOpen={setLegBOpen} tickers={tickers} />
           </div>
           <MetricPicker value={metricB} onChange={setMetricB} testId="pf-metric-b" />
         </div>
@@ -3275,5 +3230,69 @@ function SectionHeader({
         }`}
       />
     </button>
+  );
+}
+
+// Pairs & Formula leg picker — module-level (not inline in the section render)
+// so the classification-chip filter state survives parent re-renders.
+function LegPicker({
+  value, onChange, testId, open, setOpen, tickers,
+}: {
+  value: string; onChange: (v: string) => void; testId: string;
+  open: boolean; setOpen: (b: boolean) => void;
+  tickers: TickerMeta[];
+}) {
+  const sorted = useMemo(
+    () => [...tickers].sort((a, b) => a.ticker.localeCompare(b.ticker)),
+    [tickers],
+  );
+  // Same six-level classification chips as the Charts-tab ticker carousel.
+  const { classFilters, setClassFilters, classOptions, filtered } = useTickerClassFilter(sorted);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 flex-1 justify-between px-2 text-[11px] font-mono w-full"
+          data-testid={testId}
+        >
+          <span className={value ? "" : "text-muted-foreground font-sans"}>
+            {value || "Pick ticker"}
+          </span>
+          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto min-w-[420px] max-w-[560px] p-0" align="start">
+        <ClassFilterRow
+          filters={classFilters}
+          onChange={setClassFilters}
+          options={classOptions}
+          testIdPrefix={testId}
+        />
+        <Command>
+          <CommandInput placeholder="Search ticker..." className="h-7 text-[11px]" />
+          <CommandList className="max-h-[260px]">
+            <CommandEmpty>No ticker found.</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((t) => (
+                <CommandItem
+                  key={t.ticker}
+                  value={`${t.ticker} ${t.name || ""}`}
+                  onSelect={() => { onChange(t.ticker); setOpen(false); }}
+                  className="text-[11px]"
+                >
+                  <Check className={`w-3 h-3 mr-1 flex-shrink-0 ${value === t.ticker ? "opacity-100" : "opacity-0"}`} />
+                  <span className="font-mono font-bold mr-1 whitespace-nowrap">{t.ticker}</span>
+                  <span className="text-muted-foreground text-[10px] flex-1 min-w-0 truncate" title={t.name}>
+                    {t.name}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

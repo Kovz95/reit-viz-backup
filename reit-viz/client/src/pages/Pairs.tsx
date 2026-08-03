@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, Filter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -90,6 +90,7 @@ import type { IndicatorOverlay } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
+import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 import { useBaskets } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
 import { isBasketTicker, extractBasketId, basketDisplayName } from "@/lib/basketUtils";
@@ -4689,6 +4690,9 @@ function TickerPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Same six-level classification chips as the Charts-tab ticker carousel.
+  const { classFilters, setClassFilters, classOptions, filtered: filteredTickers, anyActive } =
+    useTickerClassFilter(tickers);
   // Collapsed by default so the ticker list is reachable without scrolling
   // past every basket; expansion is remembered across sessions.
   const [basketsOpen, setBasketsOpen] = useState<boolean>(() => {
@@ -4724,10 +4728,19 @@ function TickerPicker({
           data-testid={testId}
         >
           <span className="truncate">{displayValue}</span>
-          <ChevronsUpDown className="w-3 h-3 ml-1 opacity-50 flex-shrink-0" />
+          <span className="flex items-center gap-0.5 ml-1 flex-shrink-0">
+            {anyActive && <Filter className="w-2.5 h-2.5 text-primary" />}
+            <ChevronsUpDown className="w-3 h-3 opacity-50" />
+          </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[440px] p-0" align="start">
+      <PopoverContent className="w-auto min-w-[440px] max-w-[560px] p-0" align="start">
+        <ClassFilterRow
+          filters={classFilters}
+          onChange={setClassFilters}
+          options={classOptions}
+          testIdPrefix={testId}
+        />
         <Command>
           <CommandInput
             placeholder="Search ticker or basket..."
@@ -4781,7 +4794,7 @@ function TickerPicker({
               </CommandGroup>
             )}
             <CommandGroup heading="Tickers">
-              {tickers.map((t) => (
+              {filteredTickers.map((t) => (
                 <CommandItem
                   key={t.ticker}
                   value={`${t.ticker} ${t.name}`}

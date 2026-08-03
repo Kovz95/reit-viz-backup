@@ -1,7 +1,10 @@
 // Reconstructed from recovered-bundle/UnifiedTickerPicker-D927mSvl.js on 2025-01-31
 
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 
+// Callers usually pass full TickerMeta objects; classification fields (economy,
+// sector, …) are read structurally when present to power the chip filter row.
 interface TickerEntry {
   ticker: string;
   name?: string;
@@ -47,9 +50,14 @@ function UnifiedTickerPicker({
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, []);
 
+  // Same six-level classification chips as the Charts-tab ticker carousel
+  // (auto-hidden when the caller's list carries no classification metadata).
+  const { classFilters, setClassFilters, classOptions, filtered: classFiltered } =
+    useTickerClassFilter(tickers ?? []);
+
   const filteredTickers = useMemo(() => {
     const query = inputValue.trim().toLowerCase();
-    const safe = (tickers ?? []).filter((t) => t && typeof t.ticker === "string");
+    const safe = classFiltered.filter((t) => t && typeof t.ticker === "string");
     return query
       ? safe
           .filter(
@@ -59,7 +67,7 @@ function UnifiedTickerPicker({
           )
           .slice(0, 50)
       : safe.slice(0, 50);
-  }, [tickers, inputValue]);
+  }, [classFiltered, inputValue]);
 
   const isInUniverse = useMemo(
     () => tickers.some((t) => (t?.ticker ?? "").toUpperCase() === (value || "").toUpperCase()),
@@ -129,7 +137,15 @@ function UnifiedTickerPicker({
             className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[260px] focus:outline-none focus:ring-1 focus:ring-primary"
           />
           {open && (
-            <div className="absolute z-50 mt-0.5 left-0 w-[440px] max-h-[280px] overflow-auto bg-popover border border-border rounded shadow-lg">
+            <div className="absolute z-50 mt-0.5 left-0 w-[440px] bg-popover border border-border rounded shadow-lg">
+              {/* Chip row sits outside the scroll container so its menus aren't clipped */}
+              <ClassFilterRow
+                filters={classFilters}
+                onChange={setClassFilters}
+                options={classOptions}
+                testIdPrefix="unified-ticker"
+              />
+              <div className="max-h-[280px] overflow-auto">
               {filteredTickers.length === 0 ? (
                 <div className="px-2 py-1.5 text-[11px] font-mono text-muted-foreground">
                   {"No workbook match. Press Enter to use"}{" "}
@@ -186,6 +202,7 @@ function UnifiedTickerPicker({
                     </span>
                   </button>
                 )}
+              </div>
             </div>
           )}
         </div>
