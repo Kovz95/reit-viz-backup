@@ -404,13 +404,14 @@ function getTickerCurrentROCFormatted(ticker: TickerResult, cfg: RocConfig | und
 
 // ─── Downsample weekly helper ─────────────────────────────────────────────────
 
-function downsampleWeeklyLocal(prices: number[], dates: string[]): { prices: number[]; weekIndex: number[] } {
+function downsampleWeeklyLocal(prices: number[], dates: string[], mode?: string): { prices: number[]; weekIndex: number[] } {
   const weekPrices: number[] = [];
   const weekIndex: number[] = [];
   let lastWeek = "";
   let lastPrice = NaN;
   let lastIdx = -1;
   const getWeek = (d: string): string => {
+    if (mode === "monthly") return (d || "").slice(0, 7);
     const dt = new Date(d + "T00:00:00Z");
     if (isNaN(dt.getTime())) return d;
     const thu = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
@@ -734,11 +735,11 @@ export default function ROCOptimizer() {
         if (effectiveFreq === "weekly" || effectiveFreq === "monthly") {
           workingCloses = downsampled.closes;
           workingDates = downsampled.dates;
-        } else if (frequency === "weekly_on_daily") {
+        } else if (frequency.endsWith("_on_daily")) {
           workingCloses = closes;
           workingDates = priceDates;
-          weeklyData = downsampleWeeklyLocal(closes, priceDates);
-          if (weeklyData.prices.length < 60) continue;
+          weeklyData = downsampleWeeklyLocal(closes, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined);
+          if (weeklyData.prices.length < (frequency === "monthly_on_daily" ? 24 : 60)) continue;
         } else {
           workingCloses = closes;
           workingDates = priceDates;
@@ -801,8 +802,8 @@ export default function ROCOptimizer() {
         }[] = [];
 
         const startIdxCalc = (p: number) =>
-          frequency === "weekly_on_daily"
-            ? Math.max(p * 5, 21) + 126
+          frequency.endsWith("_on_daily")
+            ? Math.max(p * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126
             : effectiveFreq === "weekly" || frequency === "weekly" || effectiveFreq === "monthly"
             ? p + Math.ceil(126 / barMultiplier)
             : p + 126;
@@ -852,7 +853,7 @@ export default function ROCOptimizer() {
         for (const { cfg, startIdx, opts } of configsForType) {
           if (workingCloses.length <= startIdx + 5) continue;
           const optsWithPrecomputed = { ...opts } as any;
-          if (frequency === "weekly_on_daily" && weeklyData) {
+          if (frequency.endsWith("_on_daily") && weeklyData) {
             optsWithPrecomputed.precomputedROC = mapWeeklyToDaily(
               opts.period,
               weeklyData.prices,
@@ -950,7 +951,7 @@ export default function ROCOptimizer() {
 
         {
           const src =
-            frequency === "weekly_on_daily" && weeklyData ? weeklyData.prices : workingCloses;
+            frequency.endsWith("_on_daily") && weeklyData ? weeklyData.prices : workingCloses;
           const lastIdx = src.length - 1;
           const periodSet = new Set<number>();
           const slowSet = new Set<number>();
@@ -1388,11 +1389,11 @@ export default function ROCOptimizer() {
         if (effectiveFreq === "weekly" || effectiveFreq === "monthly") {
           workingCloses = downsampled.closes;
           workingDates = downsampled.dates;
-        } else if (frequency === "weekly_on_daily") {
+        } else if (frequency.endsWith("_on_daily")) {
           workingCloses = closes;
           workingDates = priceDates;
-          weeklyData = downsampleWeeklyLocal(closes, priceDates);
-          if (weeklyData.prices.length < 60) {
+          weeklyData = downsampleWeeklyLocal(closes, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined);
+          if (weeklyData.prices.length < (frequency === "monthly_on_daily" ? 24 : 60)) {
             setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
             continue;
           }
@@ -1480,7 +1481,7 @@ export default function ROCOptimizer() {
             threshold: gcfg.threshold,
             slopeLookback: gcfg.slopeLookback,
           };
-          if (frequency === "weekly_on_daily" && weeklyData) {
+          if (frequency.endsWith("_on_daily") && weeklyData) {
             gopts.precomputedROC = mapWeeklyToDaily(gcfg.period, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
             if (gcfg.slowPeriod !== undefined)
               gopts.precomputedSlowROC = mapWeeklyToDaily(gcfg.slowPeriod, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
@@ -1700,7 +1701,7 @@ export default function ROCOptimizer() {
         data.frequency === "daily" ||
         data.frequency === "weekly" ||
         data.frequency === "monthly" ||
-        data.frequency === "weekly_on_daily"
+        data.frequency.endsWith("_on_daily") || data.frequency === "monthly_on_daily"
       )
         setFrequency(data.frequency);
       else if (data.timeframe === "weekly" && data.frequency === undefined)

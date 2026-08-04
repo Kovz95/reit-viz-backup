@@ -347,7 +347,7 @@ function runBacktest(prices: number[], params: DualMAParams, barsPerYear = 252):
 /** Bars/year for annualization at the page's resampled frequency
  *  (weekly_on_daily produces weekly bars). */
 function barsPerYearFor(frequency: string): number {
-  return frequency === "monthly" ? 12 : frequency === "weekly" || frequency === "weekly_on_daily" ? 52 : 252;
+  return frequency.startsWith("monthly") ? 12 : frequency === "weekly" || frequency === "weekly_on_daily" ? 52 : 252;
 }
 
 // ── Grid search ──
@@ -562,7 +562,7 @@ export default function DualMAOptimizer() {
       if (typeof saved.evalSlopeLookback === "number") setSlopeLookback(saved.evalSlopeLookback);
       if (typeof saved.evalSlopeMinPct === "number") setSlopeMinPct(saved.evalSlopeMinPct);
       if (typeof saved.evalAllowShort === "boolean") setAllowShort(saved.evalAllowShort);
-      if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+      if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily" || saved.frequency === "monthly_on_daily") setFrequency(saved.frequency);
       if (saved.inputSelection && typeof saved.inputSelection === "object") {
         const sel = saved.inputSelection;
         if (sel.kind === "close") setInputSelection({ kind: "close" });
@@ -656,11 +656,11 @@ export default function DualMAOptimizer() {
         let series = prices;
         if (!isPair && priceDates && (frequency === "weekly" || frequency === "monthly")) {
           series = resampleWeekly({ dates: priceDates, closes: prices, adjCloses: prices }, frequency).closes;
-        } else if (!isPair && priceDates && frequency === "weekly_on_daily") {
-          series = weeklyDownsamplePrices(prices, priceDates).prices;
+        } else if (!isPair && priceDates && frequency.endsWith("_on_daily")) {
+          series = weeklyDownsamplePrices(prices, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined).prices;
         }
 
-        if (series.length < (frequency === "monthly" ? 24 : 50)) continue;
+        if (series.length < (frequency.startsWith("monthly") ? 24 : 50)) continue;
 
         const topResults = runGridSearch(series, gridCfg, topK, barsPerYearFor(isPair ? "daily" : frequency));
         if (topResults.length === 0) continue;
@@ -715,11 +715,11 @@ export default function DualMAOptimizer() {
 
       if (frequency === "weekly" || frequency === "monthly") {
         prices = resampleWeekly({ dates: priceDates, closes: prices, adjCloses: prices }, frequency).closes;
-      } else if (frequency === "weekly_on_daily") {
-        prices = weeklyDownsamplePrices(prices, priceDates).prices;
+      } else if (frequency.endsWith("_on_daily")) {
+        prices = weeklyDownsamplePrices(prices, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined).prices;
       }
 
-      if (prices.length < (frequency === "monthly" ? 24 : 50)) { setEvaluating(false); return; }
+      if (prices.length < (frequency.startsWith("monthly") ? 24 : 50)) { setEvaluating(false); return; }
 
       const result = runBacktest(prices, {
         biasMAType, biasLen, triggerMAType, triggerLen,

@@ -1769,7 +1769,7 @@ export default function RangeOptimizer() {
         saved.frequency === "daily" ||
         saved.frequency === "weekly" ||
         saved.frequency === "monthly" ||
-        saved.frequency === "weekly_on_daily"
+        saved.frequency === "weekly_on_daily" || saved.frequency === "monthly_on_daily"
       ) {
         setFrequency(saved.frequency);
       } else if (saved.timeframe === "weekly") {

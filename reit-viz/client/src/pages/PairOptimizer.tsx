@@ -332,7 +332,7 @@ export default function PairOptimizer() {
       // weekly_on_daily buckets weekly too — the expand-back-to-daily branch
       // below handles it (previously W/D collapsed to "daily" and that branch
       // was unreachable dead code).
-      const freqMode = freq === "weekly" || freq === "weekly_on_daily" ? "weekly" : freq === "monthly" ? "monthly" : "daily";
+      const freqMode = freq === "weekly" || freq === "weekly_on_daily" ? "weekly" : freq === "monthly" || freq === "monthly_on_daily" ? "monthly" : "daily";
       const overlapDates = overlapIndices.map((i) => dates[i]);
       let workingSeries: number[];
       let mapToDaily: (idx: number) => number;
@@ -343,7 +343,7 @@ export default function PairOptimizer() {
           freqMode
         );
         if (downsampled.closes.length < (freqMode === "monthly" ? 24 : 30)) return null;
-        if (freq === "weekly_on_daily") {
+        if (freq.endsWith("_on_daily")) {
           const mapped = new Array<number>(spreadSeries.length);
           let wi = 0;
           for (let di = 0; di < spreadSeries.length; di++) {

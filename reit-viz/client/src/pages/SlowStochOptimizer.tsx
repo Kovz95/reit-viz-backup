@@ -612,7 +612,7 @@ export default function SlowStochOptimizer() {
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
     if (saved.pairTickerB) setPairTickerB(saved.pairTickerB);
     if (Array.isArray(saved.basketTickers)) setBasketTickers(saved.basketTickers.filter((t: any) => typeof t === "string"));
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily" || saved.frequency === "monthly_on_daily") setFrequency(saved.frequency);
     else if ((saved.timeframe === "weekly" && saved.frequency === undefined) || (saved.barInterval === "weekly" && saved.frequency === undefined)) setFrequency("weekly");
     if (ALL_SIGNAL_KINDS.includes(saved.signalKind)) setSignalKind(saved.signalKind);
     if (ALL_GRID_SIZES.includes(saved.gridSize)) setGridSize(saved.gridSize);
@@ -698,16 +698,17 @@ export default function SlowStochOptimizer() {
             priceDates: ohlc.priceDates,
             globalIndices: ohlc.priceDates.map((d: string) => dmap.get(d) ?? -1),
           };
-        } else if (frequency === "weekly_on_daily" && mode !== "pair" && mode !== "pairCombo") {
+        } else if (frequency.endsWith("_on_daily") && mode !== "pair" && mode !== "pairCombo") {
           const daily = await fetchTickerSeries(item.ticker, "daily", globalDates, dateRange);
           if (!daily) return;
           // weeklyDownsamplePrices, NOT weeklyDownsample: (values, dates) ->
           // { prices, weekIndex }. The OHLCV downsampler returned a different
           // shape here and the ?? fallbacks silently produced garbage series.
-          const wkCloses = weeklyDownsamplePrices(daily.closes as any, daily.priceDates as any) as any;
-          const wkHighs = weeklyDownsamplePrices(daily.highs as any, daily.priceDates as any) as any;
-          const wkLows = weeklyDownsamplePrices(daily.lows as any, daily.priceDates as any) as any;
-          if ((wkCloses.prices ?? wkCloses)?.length < 52) return;
+          const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+          const wkCloses = weeklyDownsamplePrices(daily.closes as any, daily.priceDates as any, wodMode) as any;
+          const wkHighs = weeklyDownsamplePrices(daily.highs as any, daily.priceDates as any, wodMode) as any;
+          const wkLows = weeklyDownsamplePrices(daily.lows as any, daily.priceDates as any, wodMode) as any;
+          if ((wkCloses.prices ?? wkCloses)?.length < (wodMode ? 24 : 52)) return;
           const weekIdx = wkCloses.weekIndex ?? [];
           const volsWeekly = (() => {
             if (!daily.volumes) return [];

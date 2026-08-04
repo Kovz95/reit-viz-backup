@@ -427,18 +427,18 @@ export default function RSIRegimeOptimizer() {
         const rawPrices = prices;
         let weeklyExpanded: (number | null)[] | null = null;
         let computePrices: number[];
-        if (freqForCalc === "weekly_on_daily") {
+        if (freqForCalc.endsWith("_on_daily")) {
           // weeklyDownsamplePrices, NOT the OHLCV downsampler: this needs the
           // { prices, weekIndex } shape (the old call produced garbage and W/D
           // silently yielded zero signals).
-          weeklyExpanded = weeklyDownsamplePrices(prices, tickerDates) as any;
+          weeklyExpanded = weeklyDownsamplePrices(prices, tickerDates, freqForCalc === "monthly_on_daily" ? "monthly" : undefined) as any;
           computePrices = prices;
         } else {
           computePrices = (weekly as any).closes as number[];
         }
         const minLen = freqForResample === "weekly" ? 52 : freqForResample === "monthly" ? 24 : 252;
         if (
-          (freqForCalc === "weekly_on_daily" ? prices.length : computePrices.length) < minLen
+          (freqForCalc.endsWith("_on_daily") ? prices.length : computePrices.length) < minLen
         )
           continue;
 
@@ -446,7 +446,7 @@ export default function RSIRegimeOptimizer() {
 
         for (const period of RSI_PERIODS) {
           let rsiValues: (number | null)[];
-          if (freqForCalc === "weekly_on_daily" && weeklyExpanded) {
+          if (freqForCalc.endsWith("_on_daily") && weeklyExpanded) {
             const wRsi = computeRSI((weeklyExpanded as any).prices as number[], period);
             rsiValues = (resampleWeekly as any).expandWeeklyToDaily(
               wRsi.map((v: number | null) => (v === null ? NaN : v)),
@@ -457,7 +457,7 @@ export default function RSIRegimeOptimizer() {
             rsiValues = computeRSI(computePrices, period);
           }
 
-          const isWeeklyOnDaily = freqForCalc === "weekly_on_daily";
+          const isWeeklyOnDaily = freqForCalc.endsWith("_on_daily");
           const workLen = isWeeklyOnDaily ? prices.length : computePrices.length;
 
           if (signalMode === "zone") {
@@ -608,7 +608,7 @@ export default function RSIRegimeOptimizer() {
 
         const bestConfig = configs.reduce((a, b) => (a.bestScore > b.bestScore ? a : b));
         const currentRsiArr =
-          freqForCalc === "weekly_on_daily" && weeklyExpanded
+          freqForCalc.endsWith("_on_daily") && weeklyExpanded
             ? (() => {
                 const wRsi = computeRSI(weeklyExpanded as number[], bestConfig.config.rsiPeriod);
                 return (resampleWeekly as any).expandWeeklyToDaily(
@@ -871,8 +871,8 @@ export default function RSIRegimeOptimizer() {
       }
       const tickerDates = globalIndices.map((idx) => dates[idx] || "");
       let rsiValues: (number | null)[];
-      if (evalFreq === "weekly_on_daily") {
-        const wk = weeklyDownsamplePrices(prices, dailyDates);
+      if (evalFreq.endsWith("_on_daily")) {
+        const wk = weeklyDownsamplePrices(prices, dailyDates, evalFreq === "monthly_on_daily" ? "monthly" : undefined);
         const wRsi = computeRSI(wk.prices, evalRsiPeriod);
         rsiValues = ((resampleWeekly as any).expandWeeklyToDaily(
           wRsi.map((v: number | null) => (v === null ? NaN : v)),
@@ -1055,7 +1055,7 @@ export default function RSIRegimeOptimizer() {
         state.frequency === "daily" ||
         state.frequency === "weekly" ||
         state.frequency === "monthly" ||
-        state.frequency === "weekly_on_daily"
+        state.frequency === "weekly_on_daily" || state.frequency === "monthly_on_daily"
       )
         setFrequency(state.frequency);
       else if (state.timeframe === "weekly") setFrequency("weekly");

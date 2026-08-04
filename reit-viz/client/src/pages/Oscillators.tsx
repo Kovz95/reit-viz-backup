@@ -107,7 +107,7 @@ const or = getScoreWeights as any;
 const rr = createDateRange as any;
 const ar = (pickBestByRankMode as any);
 const kt = (ticker: string) => ticker?.startsWith?.("BASKET:") ?? false;
-const qe = (closes: number[], dates: string[]) => (weeklyDownsamplePrices as any)(closes, dates);
+const qe = (closes: number[], dates: string[], mode?: string) => (weeklyDownsamplePrices as any)(closes, dates, mode);
 const Vt = (arr: any[], weekIndex: number[], n: number) => (expandWeeklyToDaily as any)(arr, weekIndex, n);
 
 // The original hashed worker chunk was lost with the recovered bundle; the
@@ -489,7 +489,7 @@ export default function Oscillators() {
       }
 
       // EWO weekly_on_daily
-      if (frequency === "weekly_on_daily") {
+      if (frequency.endsWith("_on_daily")) {
         const accumulated: any[] = [];
         for (let idx = 0; idx < tickerList.length && !cancelRef.current; idx++) {
           const ticker = tickerList[idx];
@@ -507,10 +507,11 @@ export default function Oscillators() {
             const dailyLen = priceData.closes.length;
             if (dailyLen < 252) continue;
 
-            const wkCloses = qe(priceData.closes, priceData.priceDates);
-            const wkHighs = qe(priceData.highs, priceData.priceDates);
-            const wkLows = qe(priceData.lows, priceData.priceDates);
-            if (wkCloses.prices.length < 52) continue;
+            const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+            const wkCloses = qe(priceData.closes, priceData.priceDates, wodMode);
+            const wkHighs = qe(priceData.highs, priceData.priceDates, wodMode);
+            const wkLows = qe(priceData.lows, priceData.priceDates, wodMode);
+            if (wkCloses.prices.length < (wodMode ? 24 : 52)) continue;
 
             const rawDailyCloses = priceData.closes;
             const MA_LEN = 52;
@@ -542,7 +543,7 @@ export default function Oscillators() {
                   wkCloses.weekIndex,
                   dailyLen
                 ).map((v: number) => (Number.isFinite(v) ? v : null));
-                const warmup = Math.max(slow * 5, 21) + 126;
+                const warmup = Math.max(slow * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126;
 
                 for (const thr of EWO_THRESH_PCT) {
                   const thrLine = maDaily.map((v: number | null) => (v === null ? null : (thr / 100) * v));
@@ -823,12 +824,13 @@ export default function Oscillators() {
         let wkHighs: number[], wkLows: number[], wkCloses_: number[], weeklyObj: any | null = null;
         let wkData_daily: any | null = null, wkData_wod: any | null = null;
 
-        if (frequency === "weekly_on_daily") {
+        if (frequency.endsWith("_on_daily")) {
           if (dailyLen < 252) continue;
-          const wkC = qe(priceData.closes, priceData.priceDates);
-          const wkH = qe(priceData.highs, priceData.priceDates);
-          const wkL = qe(priceData.lows, priceData.priceDates);
-          if (wkC.prices.length < 52) continue;
+          const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+          const wkC = qe(priceData.closes, priceData.priceDates, wodMode);
+          const wkH = qe(priceData.highs, priceData.priceDates, wodMode);
+          const wkL = qe(priceData.lows, priceData.priceDates, wodMode);
+          if (wkC.prices.length < (wodMode ? 24 : 52)) continue;
           wkCloses_ = wkC.prices; wkHighs = wkH.prices; wkLows = wkL.prices;
           wkData_wod = wkC;
         } else {
@@ -851,7 +853,7 @@ export default function Oscillators() {
                   const { k: kLine, d: dLine } = Kt(wkHighs, wkLows, wkCloses_, kLen, sk, sd);
                   let kDaily: any[], dDaily: any[];
 
-                  if (frequency === "weekly_on_daily" && wkData_wod) {
+                  if (frequency.endsWith("_on_daily") && wkData_wod) {
                     const mapToDaily = (arr: any[]) => {
                       const mapped = arr.map((v: number | null) => (v === null ? NaN : v));
                       return Vt(mapped, wkData_wod.weekIndex, dailyLen).map((v: number) =>
@@ -866,8 +868,8 @@ export default function Oscillators() {
                   }
 
                   const warmup =
-                    frequency === "weekly_on_daily"
-                      ? Math.max((kLen + sk + sd) * 5, 21) + 126
+                    frequency.endsWith("_on_daily")
+                      ? Math.max((kLen + sk + sd) * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126
                       : ht === "weekly"
                       ? kLen + sk + sd + 26
                       : ht === "monthly"

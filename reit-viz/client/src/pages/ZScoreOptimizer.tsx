@@ -534,8 +534,8 @@ export default function ZScoreOptimizer() {
         if (effFreq === "weekly" || effFreq === "monthly") {
           metricSeries = resampled.dailyIndexMap.map((c: number) => metricVals[c]);
           priceSeries = resampled.adjCloses;
-        } else if (effFrequency === "weekly_on_daily") {
-          const wk = weeklyDownsamplePrices(metricVals, alignedDates);
+        } else if (effFrequency.endsWith("_on_daily") || effFrequency === "monthly_on_daily") {
+          const wk = weeklyDownsamplePrices(metricVals, alignedDates, effFrequency === "monthly_on_daily" ? "monthly" : undefined);
           metricSeries = expandWeeklyToDaily(wk.prices, wk.weekIndex, metricVals.length).map((w) => (Number.isNaN(w) ? metricVals[0] : w));
           priceSeries = priceVals;
         } else {
@@ -707,8 +707,8 @@ export default function ZScoreOptimizer() {
         indices = map.map((di) => indices[di]);
         priceVals = ds.closes as number[];
         dates = ds.dates as string[];
-      } else if (mode !== "pair" && frequency === "weekly_on_daily") {
-        const wk = weeklyDownsamplePrices(metricVals, dates);
+      } else if (mode !== "pair" && (frequency.endsWith("_on_daily") || frequency === "monthly_on_daily")) {
+        const wk = weeklyDownsamplePrices(metricVals, dates, frequency === "monthly_on_daily" ? "monthly" : undefined);
         metricVals = expandWeeklyToDaily(wk.prices, wk.weekIndex, metricVals.length).map((w) => (Number.isNaN(w) ? metricVals[0] : w));
       }
       const zScores = computeRollingZScores(metricVals, evalWindow);
@@ -804,7 +804,7 @@ export default function ZScoreOptimizer() {
     if (saved.expandedTicker !== undefined) setExpandedTicker(saved.expandedTicker);
     if (saved.sortBy) setSortBy(saved.sortBy);
     if (saved.signalType) setSignalType(saved.signalType);
-    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily") setFrequency(saved.frequency);
+    if (saved.frequency === "daily" || saved.frequency === "weekly" || saved.frequency === "monthly" || saved.frequency === "weekly_on_daily" || saved.frequency === "monthly_on_daily") setFrequency(saved.frequency);
     else if (saved.timeframe === "weekly") setFrequency("weekly");
   }, [setFrequency, setResults, setBasketMode, pairComboPicker]);
 

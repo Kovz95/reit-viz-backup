@@ -562,7 +562,7 @@ export default function ComboOptimizer() {
     if (Array.isArray(state.results)) setResults(state.results);
     if (state.expandedTicker !== undefined) setExpandedTicker(state.expandedTicker);
     if (state.evalResult !== undefined) setEvalResult(state.evalResult);
-    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "monthly" || state.frequency === "weekly_on_daily") {
+    if (state.frequency === "daily" || state.frequency === "weekly" || state.frequency === "monthly" || state.frequency === "weekly_on_daily" || state.frequency === "monthly_on_daily") {
       setFrequency(state.frequency);
     } else if (state.timeframe === "weekly" && state.frequency === undefined) {
       setFrequency("weekly");
@@ -690,7 +690,7 @@ export default function ComboOptimizer() {
           const dateIndexMap = new Map<string, number>();
           for (let i = 0; i < globalDates.length; i++) dateIndexMap.set(globalDates[i], i);
 
-          if ((frequency as string) === "weekly_on_daily") {
+          if ((frequency as string).endsWith("_on_daily")) {
             prices = rawPrices ?? [];
             highs  = basketData.highs;
             lows   = basketData.lows;
@@ -734,7 +734,7 @@ export default function ComboOptimizer() {
           const dateIndexMap = new Map<string, number>();
           for (let i = 0; i < globalDates.length; i++) dateIndexMap.set(globalDates[i], i);
 
-          if ((frequency as string) === "weekly_on_daily") {
+          if ((frequency as string).endsWith("_on_daily")) {
             prices = rawPrices ?? [];
             highs  = clippedHighs;
             lows   = clippedLows;
@@ -770,10 +770,10 @@ export default function ComboOptimizer() {
 
         // Compute indicator cache — for weekly_on_daily, compute on weekly-expanded version
         let indCache: IndicatorCache;
-        if ((frequency as string) === "weekly_on_daily" && rawPrices !== null) {
+        if ((frequency as string).endsWith("_on_daily") && rawPrices !== null) {
           // weeklyDownsamplePrices, NOT weeklyDownsample: this call needs the
           // { prices, weekIndex } price-series shape, not OHLCV buckets.
-          const weeklyResult = weeklyDownsamplePricesFn(rawPrices, dates) as any;
+          const weeklyResult = weeklyDownsamplePricesFn(rawPrices, dates, (frequency as string) === "monthly_on_daily" ? "monthly" : undefined) as any;
           const n = rawPrices.length;
           const weeklyCache = computeIndicators(weeklyResult.prices);
           const expandToDaily = (arr: (number | null)[]): (number | null)[] => {

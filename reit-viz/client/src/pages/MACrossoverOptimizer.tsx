@@ -881,6 +881,7 @@ const FREQUENCY_LABELS: Record<string, string> = {
   weekly: "Weekly",
   monthly: "Monthly",
   weekly_on_daily: "Weekly→Daily",
+  monthly_on_daily: "Monthly→Daily",
 };
 
 const FREQUENCY_TITLES: Record<string, string> = {
@@ -888,6 +889,7 @@ const FREQUENCY_TITLES: Record<string, string> = {
   weekly: "Down-sample to weekly bars, then compute MAs and signals on the weekly series.",
   monthly: "Down-sample to calendar-month bars, then compute MAs and signals on the monthly series.",
   weekly_on_daily: "Compute MAs on weekly bars, then project them back onto daily bars for daily-resolution signals.",
+  monthly_on_daily: "Compute MAs on calendar-month bars, then project them back onto daily bars for daily-resolution signals.",
 };
 
 // ── Component ──
@@ -1155,16 +1157,17 @@ export default function MACrossoverOptimizer() {
             workVol = wv;
           }
           if (workClose.length < 60) continue;
-        } else if (frequency === "weekly_on_daily") {
+        } else if (frequency.endsWith("_on_daily")) {
           workClose = closes;
           workHigh = highs;
           workLow = lows;
           workVol = volumes;
           workDates = priceDates;
           workGlobal = globalIndices;
-          wodWeekly = weeklyClose(closes, priceDates);
-          wodHighLow = weeklyHighLow(highs, lows, priceDates);
-          if (wodWeekly.prices.length < 60) continue;
+          const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+          wodWeekly = weeklyClose(closes, priceDates, wodMode);
+          wodHighLow = weeklyHighLow(highs, lows, priceDates, wodMode);
+          if (wodWeekly.prices.length < (wodMode ? 24 : 60)) continue;
         } else {
           workClose = closes;
           workHigh = highs;
@@ -1217,7 +1220,7 @@ export default function MACrossoverOptimizer() {
 
         const configs: any[] = [];
         const maForWork = (type: string, period: number): (number | null)[] => {
-          if (frequency === "weekly_on_daily" && wodWeekly) {
+          if (frequency.endsWith("_on_daily") && wodWeekly) {
             const weeklyMa = computeMA(wodWeekly.prices, period, type, {
               highs: wodHighLow?.highs,
               lows: wodHighLow?.lows,
@@ -1247,8 +1250,8 @@ export default function MACrossoverOptimizer() {
           });
         };
         const burnIn = (p: number) =>
-          frequency === "weekly_on_daily"
-            ? Math.max(p * 5, 21) + 126
+          frequency.endsWith("_on_daily")
+            ? Math.max(p * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126
             : frequency === "weekly" || frequency === "monthly"
             ? p + Math.ceil(126 / barMultiplier)
             : p + 126;
@@ -1496,9 +1499,9 @@ export default function MACrossoverOptimizer() {
         } else {
           const spec: IndicatorSpec = { kind: indicatorSource, period: indicatorSourcePeriod };
           const indSeries = applyIndicator(workClose, spec);
-          const wodInd = frequency === "weekly_on_daily" && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
+          const wodInd = frequency.endsWith("_on_daily") && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
           const indMA = (type: string, period: number): (number | null)[] => {
-            if (frequency === "weekly_on_daily" && wodWeekly && wodInd) {
+            if (frequency.endsWith("_on_daily") && wodWeekly && wodInd) {
               const weeklyMa = computeMA(wodInd, period, type, {
                 framaFC,
                 framaSC,
@@ -1716,9 +1719,9 @@ export default function MACrossoverOptimizer() {
           } else {
             const spec: IndicatorSpec = { kind: indicatorSource, period: indicatorSourcePeriod };
             const indSeries = applyIndicator(sigPrices, spec);
-            const wodInd = frequency === "weekly_on_daily" && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
+            const wodInd = frequency.endsWith("_on_daily") && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
             const indMA = ((type: string, period: number): (number | null)[] => {
-              if (frequency === "weekly_on_daily" && wodWeekly && wodInd) {
+              if (frequency.endsWith("_on_daily") && wodWeekly && wodInd) {
                 const weeklyMa = computeMA(wodInd, period, type, {
                   framaFC,
                   framaSC,
@@ -1962,10 +1965,11 @@ export default function MACrossoverOptimizer() {
           }
           workVol = wv;
         }
-      } else if (frequency === "weekly_on_daily") {
-        wodWeekly = weeklyClose(closes, priceDates);
-        wodHighLow = weeklyHighLow(highs, lows, priceDates);
-        if (wodWeekly.prices.length < 60) {
+      } else if (frequency.endsWith("_on_daily")) {
+        const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+        wodWeekly = weeklyClose(closes, priceDates, wodMode);
+        wodHighLow = weeklyHighLow(highs, lows, priceDates, wodMode);
+        if (wodWeekly.prices.length < (wodMode ? 24 : 60)) {
           setEvaluating(false);
           return;
         }
@@ -1985,7 +1989,7 @@ export default function MACrossoverOptimizer() {
       }
 
       const maForWork = (type: string, period: number): (number | null)[] => {
-        if (frequency === "weekly_on_daily" && wodWeekly) {
+        if (frequency.endsWith("_on_daily") && wodWeekly) {
           const weeklyMa = computeMA(wodWeekly.prices, period, type, {
             highs: wodHighLow?.highs,
             lows: wodHighLow?.lows,
@@ -2083,9 +2087,9 @@ export default function MACrossoverOptimizer() {
       } else {
         const spec: IndicatorSpec = { kind: indicatorSource, period: indicatorSourcePeriod };
         const indSeries = applyIndicator(workClose, spec);
-        const wodInd = frequency === "weekly_on_daily" && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
+        const wodInd = frequency.endsWith("_on_daily") && wodWeekly ? applyIndicator(wodWeekly.prices, spec) : null;
         const indMA = (() => {
-          if (frequency === "weekly_on_daily" && wodWeekly && wodInd) {
+          if (frequency.endsWith("_on_daily") && wodWeekly && wodInd) {
             const weeklyMa = computeMA(wodInd, evalFastPeriod, maType, {
               framaFC,
               framaSC,
@@ -2493,7 +2497,7 @@ export default function MACrossoverOptimizer() {
       if (typeof s.bandMax === "number") setBandMax(s.bandMax);
       if (typeof s.minHold === "number") setMinHold(s.minHold);
       if (s.signalType) setSignalType(s.signalType);
-      if (s.frequency === "daily" || s.frequency === "weekly" || s.frequency === "monthly" || s.frequency === "weekly_on_daily") setFrequency(s.frequency);
+      if (s.frequency === "daily" || s.frequency === "weekly" || s.frequency === "monthly" || s.frequency === "weekly_on_daily" || s.frequency === "monthly_on_daily") setFrequency(s.frequency);
       else if (s.timeframe === "weekly" && s.frequency === undefined) setFrequency("weekly");
       if (s.signalFamily === "slope" || s.signalFamily === "curvature" || s.signalFamily === "all" || s.signalFamily === "price_cross") setSignalFamily(s.signalFamily);
       if (typeof s.slopeLookback === "number") setSlopeLookback(s.slopeLookback);
@@ -2749,7 +2753,7 @@ export default function MACrossoverOptimizer() {
     const d = tr.currentDetailByConfig?.[label];
     if (!d) return null;
     const fmt = (x: any) => (x === undefined || !Number.isFinite(x) ? "–" : x >= 1e3 ? `$${x.toFixed(0)}` : x >= 10 ? `$${x.toFixed(2)}` : `$${x.toFixed(3)}`);
-    const fq = d.freq === "weekly" ? "weekly" : d.freq === "weekly_on_daily" ? "weekly→daily" : "daily";
+    const fq = d.freq === "weekly" ? "weekly" : d.freq === "monthly" ? "monthly" : d.freq === "weekly_on_daily" ? "weekly→daily" : d.freq === "monthly_on_daily" ? "monthly→daily" : "daily";
     return d.ma !== undefined && d.maType && d.fastPeriod !== undefined
       ? `${fmt(d.price)} vs ${d.maType}${d.fastPeriod} ${fmt(d.ma)} · ${fq}`
       : d.fastMA !== undefined && d.slowMA !== undefined && d.fastType && d.slowType
@@ -2907,7 +2911,7 @@ export default function MACrossoverOptimizer() {
               >
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Frequency</label>
                 <div className="flex gap-px">
-                  {["daily", "weekly", "monthly", "weekly_on_daily"].map((t) => (
+                  {["daily", "weekly", "monthly", "weekly_on_daily", "monthly_on_daily"].map((t) => (
                     <button
                       key={t}
                       data-testid={`eval-frequency-${t}`}

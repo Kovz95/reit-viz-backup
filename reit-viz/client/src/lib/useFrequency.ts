@@ -4,10 +4,10 @@
 
 import { useState, useMemo, createElement } from "react";
 
-export type Frequency = "daily" | "weekly" | "monthly" | "weekly_on_daily";
+export type Frequency = "daily" | "weekly" | "monthly" | "weekly_on_daily" | "monthly_on_daily";
 
 export function isValidFrequency(v: unknown): v is Frequency {
-  return v === "daily" || v === "weekly" || v === "monthly" || v === "weekly_on_daily";
+  return v === "daily" || v === "weekly" || v === "monthly" || v === "weekly_on_daily" || v === "monthly_on_daily";
 }
 
 export interface UseFrequencyResult {
@@ -22,6 +22,7 @@ const FREQ_OPTIONS: Array<{ value: Frequency; label: string; title?: string }> =
   { value: "weekly",           label: "W",   title: "Weekly bars" },
   { value: "monthly",          label: "M",   title: "Monthly bars" },
   { value: "weekly_on_daily",  label: "W/D", title: "Weekly signals evaluated on daily bars" },
+  { value: "monthly_on_daily", label: "M/D", title: "Monthly signals evaluated on daily bars" },
 ];
 
 /**

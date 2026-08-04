@@ -939,13 +939,14 @@ export default function HarsiOptimizer() {
       if (cancelRef.current) return;
       try {
         let data: any;
-        if ((frequency as string) === "weekly_on_daily" && runMode !== "pair" && runMode !== "pairCombo") {
+        if ((frequency as string).endsWith("_on_daily") && runMode !== "pair" && runMode !== "pairCombo") {
           const daily = await loadTickerData(ticker.ticker, "daily", dates, dateRange);
           if (!daily) return;
-          const wC = weeklyDownsampleD(daily.closes, daily.priceDates);
-          const wH = weeklyDownsampleD(daily.highs, daily.priceDates);
-          const wL = weeklyDownsampleD(daily.lows, daily.priceDates);
-          if (wC.prices.length < 52) return;
+          const wodMode = (frequency as string) === "monthly_on_daily" ? "monthly" : undefined;
+          const wC = weeklyDownsampleD(daily.closes, daily.priceDates, wodMode);
+          const wH = weeklyDownsampleD(daily.highs, daily.priceDates, wodMode);
+          const wL = weeklyDownsampleD(daily.lows, daily.priceDates, wodMode);
+          if (wC.prices.length < (wodMode ? 24 : 52)) return;
           const wVol = (() => {
             if (!daily.volumes) return [];
             const vol = daily.volumes;
@@ -1387,7 +1388,7 @@ export default function HarsiOptimizer() {
         state.frequency === "daily" ||
         state.frequency === "weekly" ||
         state.frequency === "monthly" ||
-        state.frequency === "weekly_on_daily"
+        state.frequency === "weekly_on_daily" || state.frequency === "monthly_on_daily"
       )
         setFrequency(state.frequency);
       else if (
