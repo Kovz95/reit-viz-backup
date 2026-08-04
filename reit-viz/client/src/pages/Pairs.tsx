@@ -1148,7 +1148,15 @@ export function PairsIndicatorsPanel({
         ] as [string, keyof ActiveIndicators, number[], number][]).map(([label, field, presets, defaultLen]) => (
           <MiniMaRow key={field} label={label} presets={presets} defaultLen={defaultLen}
             active={activeIndicators[field] as number | number[] | undefined}
-            onToggle={(v) => setIndicators({ ...activeIndicators, [field]: v })} />
+            onToggle={(v) => setIndicators({ ...activeIndicators, [field]: v })}
+            freq={activeIndicators.maFreq?.[field as keyof NonNullable<ActiveIndicators["maFreq"]>]}
+            onFreqChange={(f) => {
+              const key = field as keyof NonNullable<ActiveIndicators["maFreq"]>;
+              const next = { ...(activeIndicators.maFreq ?? {}) };
+              if (f === "chart") delete next[key];
+              else next[key] = f;
+              setIndicators({ ...activeIndicators, maFreq: Object.keys(next).length ? next : undefined });
+            }} />
         ))}
 
         {/* ───── Oscillators ───── */}
@@ -1590,9 +1598,13 @@ export function PairsIndicatorsPanel({
   );
 }
 
-function MiniMaRow({ label, presets, defaultLen, active, onToggle }: {
+function MiniMaRow({ label, presets, defaultLen, active, onToggle, freq, onFreqChange }: {
   label: string; presets: number[]; defaultLen: number;
   active: number | number[] | undefined; onToggle: (v: number[] | undefined) => void;
+  /** Compute frequency for this MA (weekly/monthly resample first — e.g. a
+   *  monthly SMA on the daily ratio chart). Charts-panel parity. */
+  freq?: "chart" | "weekly" | "monthly";
+  onFreqChange?: (f: "chart" | "weekly" | "monthly") => void;
 }) {
   const activeList = indicatorPeriods(active);
   const lastRef = useRef<number[]>(activeList.length ? activeList : [defaultLen]);
@@ -1611,6 +1623,19 @@ function MiniMaRow({ label, presets, defaultLen, active, onToggle }: {
           testid={`custom-${label.toLowerCase()}`}
           min={1}
         />
+        {onFreqChange && activeList.length > 0 && (
+          <select
+            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+            value={freq ?? "chart"}
+            onChange={(e) => onFreqChange(e.target.value as "chart" | "weekly" | "monthly")}
+            title={`Compute ${label} on the chart's bars, or on weekly/monthly resampled bars (e.g. monthly ${label} on the daily ratio)`}
+            data-testid={`pairs-freq-${label.toLowerCase()}`}
+          >
+            <option value="chart">Chart</option>
+            <option value="weekly">W</option>
+            <option value="monthly">M</option>
+          </select>
+        )}
       </div>
     </div>
   );
@@ -2749,6 +2774,7 @@ export function MiniChart({
     });
     chartRef.current = chart;
     onRegisterChart(id, chart, data.length);
+    try { (((window as any).__pairsCharts ||= new Set()) as Set<unknown>).add(chart); } catch {} // e2e hook (same pattern as ChartArea's __chartsPanes)
 
     // Record every series created so the global Labels/Px-line preference can
     // be applied at the end without touching each addSeries site.
@@ -2837,37 +2863,61 @@ export function MiniChart({
       // Shadow: every indicator/overlay/fractal computation in this block runs
       // on the finite subset (null warm-up bars excluded).
       const data = finiteData;
+      // Per-MA compute frequency (activeIndicators.maFreq, Charts parity):
+      // weekly/monthly resample the series first so a daily ratio chart can
+      // carry a monthly SMA — points land on period-end dates of the axis.
+      const maFreqSrcCache: Partial<Record<"weekly" | "monthly", typeof data>> = {};
+      const maSourceFor = (key: string): { src: typeof data; suffix: string } => {
+        const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
+        if (mf !== "weekly" && mf !== "monthly") return { src: data, suffix: "" };
+        if (!maFreqSrcCache[mf]) {
+          maFreqSrcCache[mf] = resampleIndicatorBars(
+            data.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
+            mf,
+          ).map((b) => ({ time: b.time, value: b.close })) as typeof data;
+        }
+        return { src: maFreqSrcCache[mf]!, suffix: mf === "weekly" ? "W" : "M" };
+      };
       // SMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.sma)) {
-        const smaData = computeSMA(data, p);
-        if (smaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: IC.sma, lineWidth: 1,
-            title: `SMA ${p}`, lineStyle: LineStyle.Dashed,
-          });
-          s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
+      {
+        const { src, suffix } = maSourceFor("sma");
+        for (const p of indicatorPeriods(activeIndicators.sma)) {
+          const smaData = computeSMA(src, p);
+          if (smaData.length > 0) {
+            const s = chart.addSeries(LineSeries, {
+              color: IC.sma, lineWidth: 1,
+              title: `SMA ${p}${suffix}`, lineStyle: LineStyle.Dashed,
+            });
+            s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
+          }
         }
       }
       // EMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.ema)) {
-        const emaData = computeEMA(data, p);
-        if (emaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: IC.ema, lineWidth: 1,
-            title: `EMA ${p}`,
-          });
-          s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
+      {
+        const { src, suffix } = maSourceFor("ema");
+        for (const p of indicatorPeriods(activeIndicators.ema)) {
+          const emaData = computeEMA(src, p);
+          if (emaData.length > 0) {
+            const s = chart.addSeries(LineSeries, {
+              color: IC.ema, lineWidth: 1,
+              title: `EMA ${p}${suffix}`,
+            });
+            s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
+          }
         }
       }
       // HMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.hma)) {
-        const hmaData = computeHMA(data, p);
-        if (hmaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: IC.hma, lineWidth: 2,
-            title: `HMA ${p}`,
-          });
-          s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
+      {
+        const { src, suffix } = maSourceFor("hma");
+        for (const p of indicatorPeriods(activeIndicators.hma)) {
+          const hmaData = computeHMA(src, p);
+          if (hmaData.length > 0) {
+            const s = chart.addSeries(LineSeries, {
+              color: IC.hma, lineWidth: 2,
+              title: `HMA ${p}${suffix}`,
+            });
+            s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
+          }
         }
       }
       // Extended MAs (WMA/DEMA/TEMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA) — same
@@ -2878,20 +2928,21 @@ export function MiniChart({
           ["kama", "KAMA", 2], ["frama", "FRAMA", 2], ["t3", "T3", 2],
           ["alma", "ALMA", 1], ["lsma", "LSMA", 1], ["slsma", "SLSMA", 2],
         ];
-        const closeVals = data.map((d) => d.value);
         for (const [field, maType, width] of EXTRA_MA) {
+          const { src, suffix } = maSourceFor(field as string);
+          const srcVals = src.map((d) => d.value);
           for (const p of indicatorPeriods(activeIndicators[field] as number | number[] | undefined)) {
-            const series = computeMaByType(closeVals, p, maType);
+            const series = computeMaByType(srcVals, p, maType);
             const maData: { time: Time; value: number }[] = [];
-            for (let i = 0; i < data.length; i++) {
+            for (let i = 0; i < src.length; i++) {
               const v = series[i];
-              if (v != null && Number.isFinite(v)) maData.push({ time: data[i].time as Time, value: v });
+              if (v != null && Number.isFinite(v)) maData.push({ time: src[i].time as Time, value: v });
             }
             if (maData.length > 0) {
               const s = chart.addSeries(LineSeries, {
                 color: (IC as any)[field] ?? "#94a3b8",
                 lineWidth: width as LineWidth,
-                title: `${maType} ${p}`,
+                title: `${maType} ${p}${suffix}`,
               });
               s.setData(maData);
             }
@@ -3215,6 +3266,7 @@ export function MiniChart({
       onCrosshairMove?.(id, null);
       setHoverReadout(null);
       onUnregisterChart(id);
+      try { ((window as any).__pairsCharts as Set<unknown> | undefined)?.delete(chart); } catch {}
       chart.remove();
       chartRef.current = null;
     };
