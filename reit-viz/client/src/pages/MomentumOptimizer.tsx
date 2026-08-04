@@ -401,11 +401,40 @@ export default function MomentumOptimizer() {
         ({ closes, priceDates, globalIndices, revValues, hasRevisions } = data);
       }
 
+      // Apply the frequency toggle (grid parity — Evaluate previously ignored
+      // it and always ran daily). W/M resample the series; W/D computes weekly
+      // momentum projected back onto daily bars (same as the grid path).
+      const evalFreqKey = runMode === "pair" ? "daily" : freqKey;
+      const evalActualFreq = (runMode === "pair" ? "daily" : frequency) as string;
+      let wodAgg: any = null;
+      if (evalFreqKey === "weekly" || evalFreqKey === "monthly") {
+        const ds = (weeklyDownsample as any)({ dates: priceDates, closes, adjCloses: closes }, evalFreqKey);
+        if ((ds.closes as number[]).length < (evalFreqKey === "monthly" ? 24 : 52)) { setEvalRunning(false); return; }
+        const map = ds.dailyIndexMap as number[];
+        revValues = map.map((di) => revValues[di]);
+        globalIndices = map.map((di) => globalIndices[di]);
+        closes = ds.closes as number[];
+        priceDates = ds.dates as string[];
+      } else if (evalActualFreq === "weekly_on_daily" && (weeklyDownsample as any).aggregate) {
+        wodAgg = (weeklyDownsample as any).aggregate(closes, priceDates);
+      }
+      const momFor = (lookback: number): (number | null)[] => {
+        if (wodAgg) {
+          const weeklyMom = computeMomentumReturn(wodAgg.prices, Math.max(1, Math.round(lookback / 5)));
+          return ((expandWeeklyToDaily as any)(
+            weeklyMom.map((v: number | null) => (v === null ? NaN : v)),
+            wodAgg.weekIndex,
+            closes.length
+          ) as number[]).map((v) => (Number.isNaN(v) ? null : v));
+        }
+        return computeMomentumReturn(closes, lookback);
+      };
+
       const side = evalSide === "long" ? "buy" : "sell";
       const signalIndices: number[] = [];
 
       if (signalMode === "momentum") {
-        const mom = computeMomentumReturn(closes, momentumLookback);
+        const mom = momFor(momentumLookback);
         let prevAbove: boolean | null = null;
         for (let i = momentumLookback; i < closes.length; i++) {
           const val = mom[i];
@@ -432,8 +461,11 @@ export default function MomentumOptimizer() {
           prevAbove = above;
         }
       } else {
-        const mom = computeMomentumReturn(closes, momentumLookback);
-        const window = 252;
+        const mom = momFor(momentumLookback);
+        const window =
+          evalFreqKey === "weekly" || evalActualFreq === "weekly_on_daily" ? 52
+          : evalFreqKey === "monthly" ? 12
+          : 252;
         const warmup = momentumLookback + window;
         let prevAbove: boolean | null = null;
         for (let i = warmup; i < closes.length; i++) {
@@ -468,7 +500,7 @@ export default function MomentumOptimizer() {
     }
   }, [runMode, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets,
       dateRange, signalMode, momentumLookback, evalThreshold, evalRevLookback, evalRevMetric,
-      evalSide, targetReturn, minHold, fetchSeriesData, filteredByUniverse]);
+      evalSide, targetReturn, minHold, fetchSeriesData, filteredByUniverse, frequency, freqKey]);
 
   const setupLabel = useMemo(() => {
     const hLabel = MOMENTUM_HORIZONS.find(h => h.days === momentumLookback)?.label ?? `${momentumLookback}d`;

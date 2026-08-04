@@ -1699,6 +1699,7 @@ export default function ROCOptimizer() {
       if (
         data.frequency === "daily" ||
         data.frequency === "weekly" ||
+        data.frequency === "monthly" ||
         data.frequency === "weekly_on_daily"
       )
         setFrequency(data.frequency);

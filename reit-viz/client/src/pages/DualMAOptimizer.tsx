@@ -224,7 +224,8 @@ function calcStats(
   trades: TradeRecord[],
   equity: Float64Array,
   position: Int8Array,
-  prices: number[]
+  prices: number[],
+  barsPerYear = 252
 ): BacktestStats {
   const n = trades.length;
   if (n === 0) {
@@ -245,7 +246,7 @@ function calcStats(
   const mid = Math.floor(sorted.length / 2);
   const medianRet = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   const totalReturn = equity[equity.length - 1] - 1;
-  const years = Math.max(0.001, prices.length / 252);
+  const years = Math.max(0.001, prices.length / barsPerYear);
   const annualReturn = (1 + totalReturn) ** (1 / years) - 1;
   let variance = 0;
   for (const r of rets) variance += (r - meanRet) ** 2;
@@ -274,7 +275,7 @@ function calcStats(
   };
 }
 
-function runBacktest(prices: number[], params: DualMAParams): BacktestResult {
+function runBacktest(prices: number[], params: DualMAParams, barsPerYear = 252): BacktestResult {
   const n = prices.length;
   const biasMa = computeMA(prices, params.biasLen, params.biasMAType as MAType, params.maOpts);
   const trigMa = computeMA(prices, params.triggerLen, params.triggerMAType as MAType, params.maOpts);
@@ -339,13 +340,19 @@ function runBacktest(prices: number[], params: DualMAParams): BacktestResult {
     equity[i] = curEquity;
   }
 
-  const stats = calcStats(trades, equity, position, prices);
+  const stats = calcStats(trades, equity, position, prices, barsPerYear);
   return { params, trades, equity: Array.from(equity), bias, position, stats };
+}
+
+/** Bars/year for annualization at the page's resampled frequency
+ *  (weekly_on_daily produces weekly bars). */
+function barsPerYearFor(frequency: string): number {
+  return frequency === "monthly" ? 12 : frequency === "weekly" || frequency === "weekly_on_daily" ? 52 : 252;
 }
 
 // ── Grid search ──
 
-function runGridSearch(prices: number[], cfg: GridConfig, topK = 50): ParamResult[] {
+function runGridSearch(prices: number[], cfg: GridConfig, topK = 50, barsPerYear = 252): ParamResult[] {
   const results: ParamResult[] = [];
   for (const biasMAType of cfg.biasMATypes)
     for (const biasLen of cfg.biasLens)
@@ -362,7 +369,7 @@ function runGridSearch(prices: number[], cfg: GridConfig, topK = 50): ParamResul
                     slopeMethod, slopeLookback, slopeMinPct, allowShort,
                     maOpts: cfg.maOpts,
                   };
-                  const result = runBacktest(prices, params);
+                  const result = runBacktest(prices, params, barsPerYear);
                   results.push({ params, stats: result.stats });
                 }
           }
@@ -655,7 +662,7 @@ export default function DualMAOptimizer() {
 
         if (series.length < (frequency === "monthly" ? 24 : 50)) continue;
 
-        const topResults = runGridSearch(series, gridCfg, topK);
+        const topResults = runGridSearch(series, gridCfg, topK, barsPerYearFor(isPair ? "daily" : frequency));
         if (topResults.length === 0) continue;
         out.push({ ticker: item.ticker, name: (item as any).name ?? item.ticker, topK: topResults });
         if (i % 5 === 0 || i === tickerList.length - 1) setResults([...out]);
@@ -717,7 +724,7 @@ export default function DualMAOptimizer() {
       const result = runBacktest(prices, {
         biasMAType, biasLen, triggerMAType, triggerLen,
         slopeMethod, slopeLookback, slopeMinPct, allowShort,
-      });
+      }, barsPerYearFor(frequency));
       setEvalResult(result);
     } catch {} finally {
       setEvaluating(false);

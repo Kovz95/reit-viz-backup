@@ -41,7 +41,7 @@ import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsample as resampleWeekly } from "@/lib/weeklyDownsample";
+import { weeklyDownsample as resampleWeekly, weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { getDailyIndexFromWeekly as getDailyIndexFromWeeklyFn } from "@/lib/getDailyIndexFromWeekly";
 const getDailyIndexFromWeekly = getDailyIndexFromWeeklyFn as any;
 import { fetchWorkbookSeriesForTicker as fetchWorkbookSeriesForTickerFn } from "@/lib/fetchWorkbookSeriesForTicker";
@@ -428,7 +428,10 @@ export default function RSIRegimeOptimizer() {
         let weeklyExpanded: (number | null)[] | null = null;
         let computePrices: number[];
         if (freqForCalc === "weekly_on_daily") {
-          weeklyExpanded = (resampleWeekly as any)(prices, tickerDates);
+          // weeklyDownsamplePrices, NOT the OHLCV downsampler: this needs the
+          // { prices, weekIndex } shape (the old call produced garbage and W/D
+          // silently yielded zero signals).
+          weeklyExpanded = weeklyDownsamplePrices(prices, tickerDates) as any;
           computePrices = prices;
         } else {
           computePrices = (weekly as any).closes as number[];
@@ -444,7 +447,7 @@ export default function RSIRegimeOptimizer() {
         for (const period of RSI_PERIODS) {
           let rsiValues: (number | null)[];
           if (freqForCalc === "weekly_on_daily" && weeklyExpanded) {
-            const wRsi = computeRSI(weeklyExpanded as number[], period);
+            const wRsi = computeRSI((weeklyExpanded as any).prices as number[], period);
             rsiValues = (resampleWeekly as any).expandWeeklyToDaily(
               wRsi.map((v: number | null) => (v === null ? NaN : v)),
               (weeklyExpanded as any).weekIndex,
@@ -848,8 +851,37 @@ export default function RSIRegimeOptimizer() {
         if (globalIndices.length < 252) return;
       }
 
+      // Apply the frequency toggle (grid parity — Evaluate previously ignored
+      // it and always ran daily). Weekly/monthly resample the series; W/D
+      // computes weekly RSI projected back onto daily bars.
+      const evalFreq = runMode === "pair" ? "daily" : (frequency as string);
+      const dailyDates = globalIndices.map((idx) => dates[idx] || "");
+      if (evalFreq === "weekly" || evalFreq === "monthly") {
+        const ds = (resampleWeekly as any)(
+          { dates: dailyDates, closes: prices, adjCloses: prices },
+          evalFreq
+        ) as any;
+        if ((ds.closes as number[]).length < (evalFreq === "monthly" ? 24 : 52)) {
+          setEvaluating(false);
+          return;
+        }
+        const remapped = (ds.dailyIndexMap as number[]).map((di) => globalIndices[di]);
+        prices = ds.closes as number[];
+        globalIndices = remapped;
+      }
       const tickerDates = globalIndices.map((idx) => dates[idx] || "");
-      const rsiValues = computeRSI(prices, evalRsiPeriod);
+      let rsiValues: (number | null)[];
+      if (evalFreq === "weekly_on_daily") {
+        const wk = weeklyDownsamplePrices(prices, dailyDates);
+        const wRsi = computeRSI(wk.prices, evalRsiPeriod);
+        rsiValues = ((resampleWeekly as any).expandWeeklyToDaily(
+          wRsi.map((v: number | null) => (v === null ? NaN : v)),
+          wk.weekIndex,
+          prices.length
+        ) as number[]).map((v) => (Number.isNaN(v) ? null : v));
+      } else {
+        rsiValues = computeRSI(prices, evalRsiPeriod);
+      }
       const signalIndices: number[] = [];
       const isTransition =
         evalSignalMode === "enter_oversold" ||
@@ -929,6 +961,7 @@ export default function RSIRegimeOptimizer() {
     basketTickers,
     basketMode,
     baskets,
+    frequency,
   ]);
 
   const evalSetupLabel = useMemo(() => {

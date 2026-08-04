@@ -765,7 +765,7 @@ function isoWeekKey(dateStr: string): string {
   return `${t.getUTCFullYear()}-W${String(e).padStart(2, "0")}`;
 }
 
-function weeklyHighLow(highs: number[], lows: number[], dates: string[]): { highs: number[]; lows: number[] } {
+function weeklyHighLow(highs: number[], lows: number[], dates: string[], mode?: string): { highs: number[]; lows: number[] } {
   const outHighs: number[] = [];
   const outLows: number[] = [];
   let cur = "";
@@ -773,7 +773,7 @@ function weeklyHighLow(highs: number[], lows: number[], dates: string[]): { high
   let lo = Infinity;
   let started = false;
   for (let i = 0; i < highs.length; i++) {
-    const wk = isoWeekKey(dates[i]);
+    const wk = mode === "monthly" ? (dates[i] || "").slice(0, 7) : isoWeekKey(dates[i]);
     if (wk !== cur) {
       if (started) {
         outHighs.push(hi);
@@ -794,14 +794,14 @@ function weeklyHighLow(highs: number[], lows: number[], dates: string[]): { high
   return { highs: outHighs, lows: outLows };
 }
 
-function weeklyClose(prices: number[], dates: string[]): { prices: number[]; weekIndex: number[] } {
+function weeklyClose(prices: number[], dates: string[], mode?: string): { prices: number[]; weekIndex: number[] } {
   const outPrices: number[] = [];
   const outIdx: number[] = [];
   let cur = "";
   let last = NaN;
   let lastIdx = -1;
   for (let i = 0; i < prices.length; i++) {
-    const wk = isoWeekKey(dates[i]);
+    const wk = mode === "monthly" ? (dates[i] || "").slice(0, 7) : isoWeekKey(dates[i]);
     if (wk !== cur) {
       if (lastIdx >= 0) {
         outPrices.push(last);
@@ -879,12 +879,14 @@ async function fetchTickerPriceData(
 const FREQUENCY_LABELS: Record<string, string> = {
   daily: "Daily",
   weekly: "Weekly",
+  monthly: "Monthly",
   weekly_on_daily: "Weekly→Daily",
 };
 
 const FREQUENCY_TITLES: Record<string, string> = {
   daily: "Compute MAs and detect signals on daily bars.",
   weekly: "Down-sample to weekly bars, then compute MAs and signals on the weekly series.",
+  monthly: "Down-sample to calendar-month bars, then compute MAs and signals on the monthly series.",
   weekly_on_daily: "Compute MAs on weekly bars, then project them back onto daily bars for daily-resolution signals.",
 };
 
@@ -1936,10 +1938,10 @@ export default function MACrossoverOptimizer() {
         workGlobal: number[];
       let wodWeekly: any = null;
       let wodHighLow: any = null;
-      if (frequency === "weekly") {
-        const wc = weeklyClose(closes, priceDates);
-        const whl = weeklyHighLow(highs, lows, priceDates);
-        if (wc.prices.length < 60) {
+      if (frequency === "weekly" || frequency === "monthly") {
+        const wc = weeklyClose(closes, priceDates, frequency);
+        const whl = weeklyHighLow(highs, lows, priceDates, frequency);
+        if (wc.prices.length < (frequency === "monthly" ? 24 : 60)) {
           setEvaluating(false);
           return;
         }
@@ -2905,7 +2907,7 @@ export default function MACrossoverOptimizer() {
               >
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Frequency</label>
                 <div className="flex gap-px">
-                  {["daily", "weekly", "weekly_on_daily"].map((t) => (
+                  {["daily", "weekly", "monthly", "weekly_on_daily"].map((t) => (
                     <button
                       key={t}
                       data-testid={`eval-frequency-${t}`}

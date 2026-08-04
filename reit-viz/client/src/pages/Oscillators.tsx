@@ -1018,7 +1018,21 @@ export default function Oscillators() {
       const priceData = await fetchTickerData(ticker, allDates);
       if (!priceData) { setIsEvaluating(false); return; }
 
-      const { closes, highs, lows, volumes, priceDates, globalIndices } = priceData;
+      let { closes, highs, lows, volumes, priceDates, globalIndices } = priceData;
+      // Apply the frequency toggle (grid parity — Evaluate previously ignored
+      // it and always computed stoch/EWO on daily bars).
+      const evalHt = mode === "pair" ? "daily" : ht;
+      if (evalHt === "weekly" || evalHt === "monthly") {
+        const ds = mo({ dates: priceDates, closes, adjCloses: closes, highs, lows }, evalHt) as any;
+        if ((ds.closes as number[]).length < (evalHt === "monthly" ? 24 : 52)) { setIsEvaluating(false); return; }
+        const map = ds.dailyIndexMap as number[];
+        globalIndices = globalIndices.length ? map.map((di: number) => globalIndices[di]) : globalIndices;
+        volumes = ds.volumes as number[];
+        closes = ds.closes as number[];
+        highs = ds.highs as number[];
+        lows = ds.lows as number[];
+        priceDates = ds.dates as string[];
+      }
       const datesArr = priceDates.length === closes.length ? priceDates : new Array(closes.length).fill("");
       const side = evalSide === "long" ? "buy" : "sell";
       const signalIndices: number[] = [];
@@ -1058,7 +1072,7 @@ export default function Oscillators() {
   }, [
     mode, pairTickerA, pairTickerB, selectedTicker, filteredAllTickers, subMode, stochSignalMode,
     stochK, stochSmoothK, stochSmoothD, stochOS, stochOB, ewoFast, ewoSlow, ewoThreshPct,
-    targetReturn, minHold, evalSide, dateRange,
+    targetReturn, minHold, evalSide, dateRange, ht,
   ]);
 
   const evalLabel = useMemo(() => {

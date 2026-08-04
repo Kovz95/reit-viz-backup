@@ -33,8 +33,10 @@ import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsample as weeklyDownsampleFn } from "@/lib/weeklyDownsample";
-const weeklyDownsampleD = weeklyDownsampleFn as any;
+import { weeklyDownsample as weeklyDownsampleFn, weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
+// weekly_on_daily helper: (values, dates) -> { prices, weekIndex } — the OHLCV
+// weeklyDownsample has a different signature/return shape and silently broke here.
+const weeklyDownsampleD = weeklyDownsamplePrices as any;
 import { fetchWorkbookSeriesForTicker as fetchWorkbookSeriesForTickerFn } from "@/lib/fetchWorkbookSeriesForTicker";
 const fetchWorkbookSeriesForTicker = fetchWorkbookSeriesForTickerFn as any;
 import { P as PresetBar } from "@/components/PresetBar";

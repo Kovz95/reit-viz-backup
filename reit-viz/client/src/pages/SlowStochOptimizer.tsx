@@ -33,7 +33,7 @@ import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
-import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { weeklyDownsample, weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
 import { B as BasketPicker } from "@/components/BasketPicker";
@@ -701,9 +701,12 @@ export default function SlowStochOptimizer() {
         } else if (frequency === "weekly_on_daily" && mode !== "pair" && mode !== "pairCombo") {
           const daily = await fetchTickerSeries(item.ticker, "daily", globalDates, dateRange);
           if (!daily) return;
-          const wkCloses = weeklyDownsample(daily.closes as any, daily.priceDates as any) as any;
-          const wkHighs = weeklyDownsample(daily.highs as any, daily.priceDates as any) as any;
-          const wkLows = weeklyDownsample(daily.lows as any, daily.priceDates as any) as any;
+          // weeklyDownsamplePrices, NOT weeklyDownsample: (values, dates) ->
+          // { prices, weekIndex }. The OHLCV downsampler returned a different
+          // shape here and the ?? fallbacks silently produced garbage series.
+          const wkCloses = weeklyDownsamplePrices(daily.closes as any, daily.priceDates as any) as any;
+          const wkHighs = weeklyDownsamplePrices(daily.highs as any, daily.priceDates as any) as any;
+          const wkLows = weeklyDownsamplePrices(daily.lows as any, daily.priceDates as any) as any;
           if ((wkCloses.prices ?? wkCloses)?.length < 52) return;
           const weekIdx = wkCloses.weekIndex ?? [];
           const volsWeekly = (() => {

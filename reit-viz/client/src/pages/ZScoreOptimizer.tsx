@@ -696,6 +696,21 @@ export default function ZScoreOptimizer() {
         dates = indices.map((i) => globalDates[i] || "");
       }
 
+      // Apply the frequency toggle (grid parity — Evaluate previously ignored
+      // it and always ran on daily bars regardless of the D/W/M/W-D setting).
+      const effEvalFreq = mode === "pair" ? "daily" : freqKey;
+      if (effEvalFreq === "weekly" || effEvalFreq === "monthly") {
+        const ds = resampleWeekly({ dates, closes: priceVals, adjCloses: priceVals }, effEvalFreq);
+        if ((ds.closes as number[]).length < (effEvalFreq === "monthly" ? 24 : 52)) { setEvaluating(false); return; }
+        const map = ds.dailyIndexMap as unknown as number[];
+        metricVals = map.map((di) => metricVals[di]);
+        indices = map.map((di) => indices[di]);
+        priceVals = ds.closes as number[];
+        dates = ds.dates as string[];
+      } else if (mode !== "pair" && frequency === "weekly_on_daily") {
+        const wk = weeklyDownsamplePrices(metricVals, dates);
+        metricVals = expandWeeklyToDaily(wk.prices, wk.weekIndex, metricVals.length).map((w) => (Number.isNaN(w) ? metricVals[0] : w));
+      }
       const zScores = computeRollingZScores(metricVals, evalWindow);
       const doBreakout = evalSignalType === "breakout" || evalSignalType === "both";
       const doReversion = evalSignalType === "reversion" || evalSignalType === "both";
@@ -734,7 +749,7 @@ export default function ZScoreOptimizer() {
     } finally {
       setEvaluating(false);
     }
-  }, [mode, selectedTicker, pairTickerA, pairTickerB, tickers, selectedMetric, evalSignalType, evalWindow, evalThreshold, evalSide, targetReturn, evalHold, dateRange, basketTickers, basketMode, baskets]);
+  }, [mode, selectedTicker, pairTickerA, pairTickerB, tickers, selectedMetric, evalSignalType, evalWindow, evalThreshold, evalSide, targetReturn, evalHold, dateRange, basketTickers, basketMode, baskets, frequency, freqKey]);
 
   const evalLabel = useMemo(() => {
     const t = `±${Math.abs(evalThreshold).toFixed(1)}σ`;

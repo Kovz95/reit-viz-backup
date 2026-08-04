@@ -16,7 +16,7 @@ import { getTickerRaw } from "@/lib/dataService";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { refreshTickerData } from "@/lib/dataService";
 import { isBasketTicker, defaultInputSelection } from "@/lib/optimizerInputSeries";
-import { weeklyDownsample as weeklyDownsampleFn } from "@/lib/weeklyDownsample";
+import { weeklyDownsample as weeklyDownsampleFn, weeklyDownsamplePrices as weeklyDownsamplePricesFn } from "@/lib/weeklyDownsample";
 const expandWeeklyToDailyRaw = (weeklyDownsampleFn as any).expandWeeklyToDaily ?? ((arr: any, idx: any, n: any) => arr);
 import { getDailyIndexFromWeekly as getDailyIndexFromWeeklyFn } from "@/lib/getDailyIndexFromWeekly";
 import { computeForwardProfile } from "@/lib/forwardReturns";
@@ -771,7 +771,9 @@ export default function ComboOptimizer() {
         // Compute indicator cache — for weekly_on_daily, compute on weekly-expanded version
         let indCache: IndicatorCache;
         if ((frequency as string) === "weekly_on_daily" && rawPrices !== null) {
-          const weeklyResult = weeklyDownsample(rawPrices, dates) as any;
+          // weeklyDownsamplePrices, NOT weeklyDownsample: this call needs the
+          // { prices, weekIndex } price-series shape, not OHLCV buckets.
+          const weeklyResult = weeklyDownsamplePricesFn(rawPrices, dates) as any;
           const n = rawPrices.length;
           const weeklyCache = computeIndicators(weeklyResult.prices);
           const expandToDaily = (arr: (number | null)[]): (number | null)[] => {
