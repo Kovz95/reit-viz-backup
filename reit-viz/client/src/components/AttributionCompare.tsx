@@ -66,8 +66,9 @@ interface AttributionCompareProps {
   period: BasisPeriod;
   windowDays: number;
   rollingDays: number;
-  /** "weekly" samples one point per ISO week; Rolling then counts weeks. */
-  freq?: "daily" | "weekly";
+  /** "weekly"/"monthly" sample one point per ISO week / calendar month;
+   *  Rolling then counts bars of that frequency. */
+  freq?: "daily" | "weekly" | "monthly";
   displaySymbol: (sym: string) => string;
   resolveBasket: (id: string) => AttributionBasketLike | undefined;
   onOpenSingle: (sym: string) => void;
@@ -155,8 +156,8 @@ export default function AttributionCompare({
     const res = cacheRef.current.get(sym);
     if (res === undefined) return { sym, name, color, failed: false, loading: true, cum: [], roll: [], row: null };
     if (res === null) return { sym, name, color, failed: true, loading: false, cum: [], roll: [], row: null };
-    const aligned = freq === "weekly" ? resampleAlignedWeekly(res.aligned) : res.aligned;
-    const effWindow = freq === "weekly" && windowDays > 0 ? Math.max(2, Math.round(windowDays / 5)) : windowDays;
+    const aligned = freq !== "daily" ? resampleAlignedWeekly(res.aligned, freq) : res.aligned;
+    const effWindow = freq !== "daily" && windowDays > 0 ? Math.max(2, Math.round(windowDays / (freq === "monthly" ? 21 : 5))) : windowDays;
     const startIdx = getStartIndex(aligned.dates, effWindow);
     return {
       sym, name, color, failed: false, loading: false, basis: res.basis,

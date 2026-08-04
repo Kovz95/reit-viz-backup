@@ -19,19 +19,20 @@ interface Props {
   symbolLabel: string;
   basisLabel: string;
   rollingDays: number;
-  freqUnit: "day" | "week";
+  freqUnit: "day" | "week" | "month";
   onClose: () => void;
 }
 
 export default function AttributionBacktestModal({ aligned, symbolLabel, basisLabel, rollingDays, freqUnit, onClose }: Props) {
-  const unit = freqUnit === "week" ? "w" : "d";
+  const unit = freqUnit === "week" ? "w" : freqUnit === "month" ? "mo" : "d";
   const [params, setParams] = useState<AttrBtParams>(() => ({
     ...DEFAULT_ATTR_BT,
     rollingDays,
-    // Bars of the supplied series — weekly bars get weekly-scale horizons.
-    horizons: freqUnit === "week" ? [4, 13, 26] : DEFAULT_ATTR_BT.horizons,
-    primaryHorizon: freqUnit === "week" ? 13 : DEFAULT_ATTR_BT.primaryHorizon,
-    stepDays: freqUnit === "week" ? 1 : DEFAULT_ATTR_BT.stepDays,
+    // Bars of the supplied series — weekly/monthly bars get horizons at the
+    // same calendar marks (1M / 3M / 6M).
+    horizons: freqUnit === "week" ? [4, 13, 26] : freqUnit === "month" ? [1, 3, 6] : DEFAULT_ATTR_BT.horizons,
+    primaryHorizon: freqUnit === "week" ? 13 : freqUnit === "month" ? 3 : DEFAULT_ATTR_BT.primaryHorizon,
+    stepDays: freqUnit === "week" || freqUnit === "month" ? 1 : DEFAULT_ATTR_BT.stepDays,
   }));
 
   const result = useMemo(() => {

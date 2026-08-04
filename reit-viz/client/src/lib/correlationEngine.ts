@@ -8,9 +8,9 @@ import { downsampleSeries, dateOfTimestamp } from "./chartFrequency";
 import { fetchIntradayBars } from "./fetchIntradayBars";
 
 /** Bar frequency for pairwise correlation. Hourly uses Yahoo 60-min bars
- *  (epoch-second time keys as strings); weekly downsamples daily to
- *  last-value-per-ISO-week. */
-export type CorrFrequency = "hourly" | "daily" | "weekly";
+ *  (epoch-second time keys as strings); weekly/monthly downsample daily to
+ *  last-value-per-ISO-week / per-calendar-month. */
+export type CorrFrequency = "hourly" | "daily" | "weekly" | "monthly";
 
 /** Optional per-leg technical-indicator transform, applied to the resolved
  *  series (any metric, any frequency) BEFORE alignment — lets the pairwise
@@ -578,8 +578,8 @@ function fillDailyOntoAxisStrict(daily: DataPoint[], axisTimes: number[]): DataP
 async function applyFrequency(
   specA: string, specB: string, dataA: DataPoint[], dataB: DataPoint[], freq: CorrFrequency
 ): Promise<{ a: DataPoint[]; b: DataPoint[] } | { error: string }> {
-  if (freq === "weekly") {
-    return { a: downsampleSeries(dataA, "weekly"), b: downsampleSeries(dataB, "weekly") };
+  if (freq === "weekly" || freq === "monthly") {
+    return { a: downsampleSeries(dataA, freq), b: downsampleSeries(dataB, freq) };
   }
   if (freq !== "hourly") return { a: dataA, b: dataB };
 

@@ -303,11 +303,12 @@ export async function loadBasisAlignedAny(
   return { basis: ra.basis, aligned };
 }
 
-/** Resample aligned daily data to weekly bars (last observation per ISO week,
- *  carrying that week's final trading date). The P = M × E identity survives
- *  pointwise sampling untouched. */
-export function resampleAlignedWeekly(a: AlignedData): AlignedData {
+/** Resample aligned daily data to weekly (default) or calendar-month bars —
+ *  last observation per bucket, carrying that bucket's final trading date.
+ *  The P = M × E identity survives pointwise sampling untouched. */
+export function resampleAlignedWeekly(a: AlignedData, mode: "weekly" | "monthly" = "weekly"): AlignedData {
   const keyOf = (t: string): string => {
+    if (mode === "monthly") return t.slice(0, 7);
     const d = new Date(t.slice(0, 10) + "T00:00:00Z");
     if (Number.isNaN(d.getTime())) return t;
     const day = (d.getUTCDay() + 6) % 7; // Mon=0

@@ -678,7 +678,7 @@ export function TickerSearchSelect({ options, value, valueLabel, onChange }: {
 
 interface SinglePanelProps {
   activeTickerLabel: string;
-  freqUnit: "day" | "week";
+  freqUnit: "day" | "week" | "month";
   tickerOptions: TickerOption[];
   activeTicker: string;
   setActiveTicker: (t: string) => void;
@@ -966,9 +966,10 @@ export default function Attribution() {
   const [basisPeriod, setBasisPeriod] = useState<BasisPeriod>("FY2");
   const [windowDays, setWindowDays] = useState(252);
   const [rollingDays, setRollingDays] = useState(21);
-  // Chart/decomposition frequency: weekly samples one point per ISO week and
-  // makes the Rolling number mean weeks instead of trading days.
-  const [attrFreq, setAttrFreq] = useState<"daily" | "weekly">("daily");
+  // Chart/decomposition frequency: weekly/monthly sample one point per ISO
+  // week / calendar month and make the Rolling number mean bars of that
+  // frequency instead of trading days.
+  const [attrFreq, setAttrFreq] = useState<"daily" | "weekly" | "monthly">("daily");
   const [aligned, setAligned] = useState<AlignedData | null>(null);
   // Universe-table filters (classification + country/exchange)
   const [classFilters, setClassFilters] = useState(emptyClassFilters());
@@ -1018,7 +1019,7 @@ export default function Attribution() {
     if (typeof c?.basisPeriod === "string" && c.basisPeriod) setBasisPeriod(c.basisPeriod);
     if (Number.isFinite(c?.windowDays)) setWindowDays(c.windowDays);
     if (Number.isFinite(c?.rollingDays)) setRollingDays(c.rollingDays);
-    if (c?.attrFreq === "daily" || c?.attrFreq === "weekly") setAttrFreq(c.attrFreq);
+    if (c?.attrFreq === "daily" || c?.attrFreq === "weekly" || c?.attrFreq === "monthly") setAttrFreq(c.attrFreq);
     if (typeof c?.activeTicker === "string" && c.activeTicker) setActiveTicker(c.activeTicker);
     if (typeof c?.basketId === "string") setBasketId(c.basketId);
     if (typeof c?.sortKey === "string" && c.sortKey) setSortKey(c.sortKey);
@@ -1156,10 +1157,12 @@ export default function Attribution() {
   // from trading days to bars; the Rolling number then means BARS of the
   // chosen frequency (21 = 21 weeks on weekly).
   const alignedView = useMemo(
-    () => (aligned && attrFreq === "weekly" ? resampleAlignedWeekly(aligned) : aligned),
+    () => (aligned && attrFreq !== "daily" ? resampleAlignedWeekly(aligned, attrFreq) : aligned),
     [aligned, attrFreq],
   );
-  const effWindowDays = attrFreq === "weekly" && windowDays > 0 ? Math.max(2, Math.round(windowDays / 5)) : windowDays;
+  const effWindowDays = attrFreq !== "daily" && windowDays > 0
+    ? Math.max(2, Math.round(windowDays / (attrFreq === "monthly" ? 21 : 5)))
+    : windowDays;
   const cumPath = useMemo(() => alignedView ? buildCumulativePath(alignedView, getStartIndex(alignedView.dates, effWindowDays)) : [], [alignedView, effWindowDays]);
   const rollingPath = useMemo(() => alignedView ? buildRollingPath(alignedView, getStartIndex(alignedView.dates, effWindowDays), rollingDays) : [], [alignedView, effWindowDays, rollingDays]);
   const summary: AttributionSummary | null = useMemo(() => {
@@ -1321,15 +1324,15 @@ export default function Attribution() {
             <div className="flex items-center gap-1">
               <span className="text-[10px] text-muted-foreground">Freq:</span>
               <div className="flex items-center gap-0.5 border border-border rounded">
-                {(["daily", "weekly"] as const).map(f => (
+                {(["daily", "weekly", "monthly"] as const).map(f => (
                   <button
                     key={f}
                     onClick={() => setAttrFreq(f)}
                     className={`px-1.5 py-0.5 text-[10px] ${attrFreq === f ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-                    title={f === "weekly" ? "One point per week — Rolling counts weeks" : "Daily bars — Rolling counts trading days"}
+                    title={f === "weekly" ? "One point per week — Rolling counts weeks" : f === "monthly" ? "One point per calendar month — Rolling counts months" : "Daily bars — Rolling counts trading days"}
                     data-testid={`attr-freq-${f}`}
                   >
-                    {f === "daily" ? "D" : "W"}
+                    {f === "daily" ? "D" : f === "weekly" ? "W" : "M"}
                   </button>
                 ))}
               </div>
@@ -1337,7 +1340,7 @@ export default function Attribution() {
               <div className="flex items-center gap-0.5 border border-border rounded">
                 {ROLLING_OPTIONS.map(o => (
                   <button key={o.label} onClick={() => setRollingDays(o.days)} className={`px-1.5 py-0.5 text-[10px] ${rollingDays === o.days ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
-                    {attrFreq === "weekly" ? `${o.days}w` : o.label}
+                    {attrFreq === "weekly" ? `${o.days}w` : attrFreq === "monthly" ? `${o.days}mo` : o.label}
                   </button>
                 ))}
               </div>
@@ -1345,10 +1348,10 @@ export default function Attribution() {
                 type="number"
                 min={2}
                 max={1000}
-                placeholder={attrFreq === "weekly" ? "custom w" : "custom d"}
+                placeholder={attrFreq === "weekly" ? "custom w" : attrFreq === "monthly" ? "custom mo" : "custom d"}
                 defaultValue={ROLLING_OPTIONS.some(o => o.days === rollingDays) ? "" : rollingDays}
                 className={`w-[64px] bg-transparent border rounded px-1 py-0.5 text-[10px] ${ROLLING_OPTIONS.some(o => o.days === rollingDays) ? "border-border" : "border-primary text-primary"}`}
-                title={`Custom rolling window in ${attrFreq === "weekly" ? "weeks" : "trading days"}`}
+                title={`Custom rolling window in ${attrFreq === "weekly" ? "weeks" : attrFreq === "monthly" ? "months" : "trading days"}`}
                 data-testid="attr-rolling-custom"
                 onBlur={e => {
                   const v = parseInt(e.target.value);
@@ -1435,7 +1438,7 @@ export default function Attribution() {
             activeTickerLabel={activeTickerLabel}
             setActiveTicker={setActiveTicker}
             aligned={alignedView}
-            freqUnit={attrFreq === "weekly" ? "week" : "day"}
+            freqUnit={attrFreq === "weekly" ? "week" : attrFreq === "monthly" ? "month" : "day"}
             cumPath={cumPath}
             rollingPath={rollingPath}
             summary={summary}
@@ -1545,7 +1548,7 @@ export default function Attribution() {
           symbolLabel={activeTickerLabel}
           basisLabel={getBasisDef(resolvedBasis, basisPeriod).label}
           rollingDays={rollingDays}
-          freqUnit={attrFreq === "weekly" ? "week" : "day"}
+          freqUnit={attrFreq === "weekly" ? "week" : attrFreq === "monthly" ? "month" : "day"}
           onClose={() => setShowBacktest(false)}
         />
       )}

@@ -230,6 +230,7 @@ const CORR_FREQS: { value: CorrFrequency; label: string }[] = [
   { value: "hourly", label: "1H" },
   { value: "daily", label: "D" },
   { value: "weekly", label: "W" },
+  { value: "monthly", label: "M" },
 ];
 
 // Short tags for per-leg indicator transforms (RSI14(SPG:close) etc.)
@@ -3146,7 +3147,7 @@ export default function Correlation() {
     setCorrTransformA(sanitizeTransform(tpl.transformA));
     setCorrTransformB(sanitizeTransform(tpl.transformB));
     if (["returns", "changes", "levels"].includes(tpl.corrMode)) setCorrMode(tpl.corrMode);
-    if (["hourly", "daily", "weekly"].includes(tpl.corrFreq)) setCorrFreq(tpl.corrFreq);
+    if (["hourly", "daily", "weekly", "monthly"].includes(tpl.corrFreq)) setCorrFreq(tpl.corrFreq);
     if (typeof tpl.corrWindow === "string") setCorrWindow(tpl.corrWindow);
     if (typeof tpl.corrLag === "string") setCorrLag(tpl.corrLag);
     if (Array.isArray(tpl.visibleWindows)) setVisibleWindows(new Set(tpl.visibleWindows.filter((w) => Number.isFinite(w))));
@@ -3254,7 +3255,7 @@ export default function Correlation() {
     if (state.corrPanesVisible === "all" || (typeof state.corrPanesVisible === "number" && state.corrPanesVisible >= 1)) {
       setCorrPanesVisible(state.corrPanesVisible);
     }
-    if (state.corrFreq === "hourly" || state.corrFreq === "daily" || state.corrFreq === "weekly") {
+    if (state.corrFreq === "hourly" || state.corrFreq === "daily" || state.corrFreq === "weekly" || state.corrFreq === "monthly") {
       setCorrFreq(state.corrFreq);
     }
     if (["1Y", "3Y", "5Y", "YTD", "all"].includes(state.corrTimeRange)) setCorrTimeRange(state.corrTimeRange);
@@ -3612,6 +3613,12 @@ export default function Correlation() {
               {corrFreq === "weekly" && (
                 <div className="text-[9px] text-muted-foreground leading-snug">
                   Last value per ISO week. Windows are in weeks.
+                </div>
+              )}
+              {corrFreq === "monthly" && (
+                <div className="text-[9px] text-muted-foreground leading-snug">
+                  Last value per calendar month. Windows are in months — prefer shorter windows
+                  (e.g. 12/24/36 via the custom input); 252 monthly bars is 21 years of history.
                 </div>
               )}
             </div>

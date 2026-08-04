@@ -5,6 +5,9 @@
 //  - weekly: Friday-ending bars derived from adjusted daily; a trailing
 //            PARTIAL week is dropped — an inflection may only exist on a
 //            completed weekly bar (no lookahead). dailyDates = week-end date.
+//  - monthly: calendar-month bars derived from adjusted daily; a trailing
+//            PARTIAL month is dropped by the same no-lookahead rule.
+//            dailyDates = month-end trading date.
 //  - hourly: server intraday store (raw closes — fine for ≤1M horizons, small
 //            ex-div bias on longer ones). Symbols with < MIN_HOURLY_BARS bars
 //            return null so pages can show a "no usable hourly data" badge.
@@ -33,11 +36,26 @@ export interface SlopeSeriesData {
 const MIN_HOURLY_BARS = 250;
 const MAX_HOURLY_DAYS = 3650;
 
+/** True when no Mon–Fri calendar day of the bar's month remains after it —
+ *  the monthly analog of the "last bar is a Friday" completed-week check
+ *  (shares its holiday blind spot: a month ending on a weekday holiday is
+ *  treated as still forming and dropped). */
+function isMonthComplete(dateStr: string): boolean {
+  const d = new Date(dateStr + "T00:00:00Z");
+  if (isNaN(d.getTime())) return false;
+  for (let nxt = new Date(d.getTime() + 86400000); nxt.getUTCMonth() === d.getUTCMonth(); nxt = new Date(nxt.getTime() + 86400000)) {
+    const dow = nxt.getUTCDay();
+    if (dow !== 0 && dow !== 6) return false;
+  }
+  return true;
+}
+
 /** Approximate bars per year, for event-frequency stats. */
 export const BARS_PER_YEAR: Record<SlopeFreq, number> = {
   hourly: 252 * 6.5,
   daily: 252,
   weekly: 52,
+  monthly: 12,
 };
 
 /** Forward horizons in BARS per frequency, with display labels. */
@@ -49,6 +67,10 @@ export const SLOPE_HORIZONS: Record<SlopeFreq, Array<{ bars: number; label: stri
   weekly: [
     { bars: 1, label: "1W" }, { bars: 2, label: "2W" }, { bars: 4, label: "1M" },
     { bars: 8, label: "2M" }, { bars: 13, label: "3M" }, { bars: 26, label: "6M" },
+  ],
+  monthly: [
+    { bars: 1, label: "1M" }, { bars: 2, label: "2M" }, { bars: 3, label: "3M" },
+    { bars: 6, label: "6M" }, { bars: 12, label: "1Y" },
   ],
   // 6.5 trading hours per day.
   hourly: [
@@ -156,12 +178,20 @@ export async function loadSlopeSeries(symbol: string, freq: SlopeFreq): Promise<
     lows: daily.lows,
     opens: daily.opens,
     volumes: daily.volumes ?? [],
-  });
-  // Drop a trailing partial week — weeklyDownsample flushes it, so a non-Friday
-  // final bar means "this week, still forming" (same rule as mtfData).
+  }, freq === "monthly" ? "monthly" : undefined);
+  // Drop a trailing partial bucket — weeklyDownsample flushes it, so an
+  // incomplete final bar means "this period, still forming" (same rule as
+  // mtfData). Weekly: last bar must be a Friday. Monthly: no weekday of the
+  // same month may remain after the last bar.
   let end = w.dates.length;
   const lastEnd = w.dates[end - 1];
-  if (lastEnd && new Date(lastEnd + "T00:00:00Z").getUTCDay() !== 5) end--;
+  if (lastEnd) {
+    if (freq === "monthly") {
+      if (!isMonthComplete(lastEnd)) end--;
+    } else if (new Date(lastEnd + "T00:00:00Z").getUTCDay() !== 5) {
+      end--;
+    }
+  }
   if (end < 2) return null;
   return {
     freq,

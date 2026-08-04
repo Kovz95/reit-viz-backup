@@ -42,6 +42,7 @@ const FREQS: Array<{ key: SlopeFreq; label: string }> = [
   { key: "hourly", label: "Hourly" },
   { key: "daily", label: "Daily" },
   { key: "weekly", label: "Weekly" },
+  { key: "monthly", label: "Monthly" },
 ];
 
 type ScanScope = "universe" | "list" | "pairs" | "combos";
@@ -1369,7 +1370,7 @@ export default function MaSlope() {
           horizon; Score shrinks the edge by √(min(n,40)/40).
         </div>
         <div>
-          Weekly bars only count once the week has closed (no lookahead); hourly uses raw (unadjusted) closes — small
+          Weekly/monthly bars only count once the period has closed (no lookahead); hourly uses raw (unadjusted) closes — small
           ex-div bias on multi-week horizons. A/B pair symbols run the slope on the adjusted-close ratio (LONG↑ = long
           A / short B; ratios move roughly half as much as outright prices, so expect smaller edges). A grid of {MA_TYPES.length}×{DEFAULT_PERIODS.length} configs will produce
           a handful of spuriously significant rows by chance — with the holdout split on, ranking sees only the train

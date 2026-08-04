@@ -19,7 +19,7 @@ import { computeMaByType, type MaType, type MaOptions } from "@/lib/maEngine";
 export type SlopeMeasure = "diff" | "regress" | "kalman";
 export type SlopeNormalization = "ma" | "atr";
 export type SlopeThresholdMode = "mad" | "tstat";
-export type SlopeFreq = "hourly" | "daily" | "weekly";
+export type SlopeFreq = "hourly" | "daily" | "weekly" | "monthly";
 
 export interface MaSlopeParams {
   maType: MaType;
