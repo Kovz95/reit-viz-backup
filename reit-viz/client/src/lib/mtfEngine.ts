@@ -205,7 +205,7 @@ export function conjunctionEntries(states: (boolean | null)[][]): {
   return { entries, state };
 }
 
-const TF_RANK = { H: 0, D: 1, W: 2 } as const;
+const TF_RANK = { H: 0, D: 1, W: 2, M: 3 } as const;
 
 /**
  * Unordered pairs of instances with TF ≥ base, excluding same-family-same-TF

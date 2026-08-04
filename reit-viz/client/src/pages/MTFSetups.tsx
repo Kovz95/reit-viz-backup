@@ -48,11 +48,12 @@ import {
 import { Play, Loader2, Layers, LineChart, ChevronDown, ChevronRight, Flame } from "lucide-react";
 import { PagePresets } from "@/components/PagePresets";
 
-const TF_LABEL: Record<Timeframe, string> = { H: "Hourly", D: "Daily", W: "Weekly" };
+const TF_LABEL: Record<Timeframe, string> = { H: "Hourly", D: "Daily", W: "Weekly", M: "Monthly" };
 const TF_CHIP_CLASS: Record<Timeframe, string> = {
   H: "border-amber-500/40 bg-amber-500/10 text-amber-400",
   D: "border-sky-500/40 bg-sky-500/10 text-sky-400",
   W: "border-violet-500/40 bg-violet-500/10 text-violet-400",
+  M: "border-rose-500/40 bg-rose-500/10 text-rose-400",
 };
 
 type ScanScope = "single" | "universe" | "list" | "pair" | "combos";
@@ -302,9 +303,9 @@ export default function MTFSetups() {
   const liveGrid = useMemo(() => {
     if (!bundle || !gridOpen) return [];
     return MTF_CONDITIONS.map((def) => {
-      const cells = (["H", "D", "W"] as Timeframe[]).map((tf) => {
+      const cells = (["H", "D", "W", "M"] as Timeframe[]).map((tf) => {
         if (!def.tfs.includes(tf)) return null;
-        const tfs = tf === "H" ? bundle.hourly : tf === "D" ? bundle.daily : bundle.weekly;
+        const tfs = tf === "H" ? bundle.hourly : tf === "D" ? bundle.daily : tf === "W" ? bundle.weekly : bundle.monthly;
         if (!tfs) return { on: null as boolean | null, value: null as string | null };
         const states = def.compute(tfs);
         return { on: states[states.length - 1], value: def.liveValue?.(tfs) ?? null };
@@ -535,7 +536,7 @@ export default function MTFSetups() {
             testIdPrefix="mtf-presets"
           />
           <span className="text-[10px] text-muted-foreground">
-            Cross-timeframe confluence: which hourly/daily/weekly condition combos predicted moves, and what's on right now.
+            Cross-timeframe confluence: which hourly/daily/weekly/monthly condition combos predicted moves, and what's on right now.
           </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-[11px]">
@@ -724,7 +725,7 @@ export default function MTFSetups() {
                 </span>
               )}
               <span className="text-[9px] text-muted-foreground ml-auto">
-                H: last cached bar (≤20 min delay){bundle.lastWeeklyComplete ? "" : " · W: forming week (partial; backtests use completed weeks only)"}
+                H: last cached bar (≤20 min delay){bundle.lastWeeklyComplete ? "" : " · W: forming week (partial; backtests use completed weeks only)"}{bundle.lastMonthlyComplete ? "" : " · M: forming month (partial; backtests use completed months only)"}
               </span>
             </div>
             {gridOpen && (
@@ -733,7 +734,7 @@ export default function MTFSetups() {
                 <thead>
                   <tr className="text-muted-foreground">
                     <th className="text-left pr-4 py-0.5">Condition</th>
-                    {(["H", "D", "W"] as Timeframe[]).map((tf) => (
+                    {(["H", "D", "W", "M"] as Timeframe[]).map((tf) => (
                       <th key={tf} className="text-center px-3 py-0.5">{TF_LABEL[tf]}</th>
                     ))}
                   </tr>
@@ -943,7 +944,7 @@ export default function MTFSetups() {
                       data-testid={`mtf-custom-leg-${i}`}
                     >
                       <option value="">{i < 2 ? `Condition ${i + 1}…` : "Condition 3 (optional)…"}</option>
-                      {(["H", "D", "W"] as Timeframe[])
+                      {(["H", "D", "W", "M"] as Timeframe[])
                         .filter((tf) => tf !== "H" || effectiveBase === "H")
                         .map((tf) => (
                           <optgroup key={tf} label={TF_LABEL[tf]}>
@@ -1043,7 +1044,7 @@ export default function MTFSetups() {
         <div className="px-3 py-2 text-[9px] text-muted-foreground border-t border-border">
           Hourly bars: Yahoo 60m caps at ≤729 days, but the server stores every bar it has ever fetched, so hourly history accumulates
           over time (and goes back years immediately when an FMP key is configured server-side). Raw unadjusted closes (small return bias
-          across ex-dividend dates), regular session only, up to ~20 min stale. Higher-timeframe conditions use only completed daily/weekly
+          across ex-dividend dates), regular session only, up to ~20 min stale. Higher-timeframe conditions use only completed daily/weekly/monthly
           bars — no lookahead. Some symbols (esp. non-US) have thin hourly data and fall back to Daily base. Pair scopes scan the A/B ratio;
           per-bar ratio highs/lows are approximations (only stochastic-family conditions read them).
         </div>

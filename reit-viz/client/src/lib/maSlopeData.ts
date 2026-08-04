@@ -16,7 +16,7 @@
 // the Charts page as day markers regardless of frequency.
 
 import { fetchIntradayBars, type IntradayBar } from "@/lib/fetchIntradayBars";
-import { fetchDailyAnySymbol, ratioOhlc, type DailySeriesInput } from "@/lib/mtfData";
+import { fetchDailyAnySymbol, ratioOhlc, isMonthComplete, type DailySeriesInput } from "@/lib/mtfData";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { dateOfTimestamp } from "@/lib/chartFrequency";
 import type { SlopeFreq } from "@/lib/maSlope";
@@ -35,20 +35,6 @@ export interface SlopeSeriesData {
 
 const MIN_HOURLY_BARS = 250;
 const MAX_HOURLY_DAYS = 3650;
-
-/** True when no Mon–Fri calendar day of the bar's month remains after it —
- *  the monthly analog of the "last bar is a Friday" completed-week check
- *  (shares its holiday blind spot: a month ending on a weekday holiday is
- *  treated as still forming and dropped). */
-function isMonthComplete(dateStr: string): boolean {
-  const d = new Date(dateStr + "T00:00:00Z");
-  if (isNaN(d.getTime())) return false;
-  for (let nxt = new Date(d.getTime() + 86400000); nxt.getUTCMonth() === d.getUTCMonth(); nxt = new Date(nxt.getTime() + 86400000)) {
-    const dow = nxt.getUTCDay();
-    if (dow !== 0 && dow !== 6) return false;
-  }
-  return true;
-}
 
 /** Approximate bars per year, for event-frequency stats. */
 export const BARS_PER_YEAR: Record<SlopeFreq, number> = {

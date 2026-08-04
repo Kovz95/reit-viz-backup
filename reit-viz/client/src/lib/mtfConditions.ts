@@ -1,6 +1,6 @@
 // Multi-Timeframe Setups — condition catalog.
 //
-// A condition is a boolean STATE series on one timeframe (H/D/W): "RSI(14)
+// A condition is a boolean STATE series on one timeframe (H/D/W/M): "RSI(14)
 // > 70", "close below SMA200", "MACD bearish", … The engine combines
 // conditions across timeframes/indicators into setups (conjunctions) and
 // backtests their turn-on edges. Indicators compute once per TfSeries via a
@@ -289,7 +289,9 @@ const last = <T>(arr: T[]): T => arr[arr.length - 1];
 
 // ── The catalog ─────────────────────────────────────────────────────────────
 
-const HDW: Timeframe[] = ["H", "D", "W"];
+// All timeframes. The "range" family stays D/W — its 252-bar window would
+// need 21 years of monthly bars before emitting a state.
+const HDW: Timeframe[] = ["H", "D", "W", "M"];
 
 export const MTF_CONDITIONS: ConditionDef[] = [
   { id: "rsi_ob", label: "RSI(14) > 70", family: "rsi", tfs: HDW,
@@ -519,7 +521,7 @@ for (const p of [50, 200]) {
 // ── Instances + projection ──────────────────────────────────────────────────
 
 function tfSeriesOf(bundle: MtfBundle, tf: Timeframe): TfSeries | null {
-  return tf === "H" ? bundle.hourly : tf === "D" ? bundle.daily : bundle.weekly;
+  return tf === "H" ? bundle.hourly : tf === "D" ? bundle.daily : tf === "W" ? bundle.weekly : bundle.monthly;
 }
 
 /** All condition instances available for this bundle (hourly ones only when hourly data exists). */
@@ -562,8 +564,12 @@ export function computeConditionMatrix(
       baseTf === "H"
         ? inst.tf === "D"
           ? bundle.hourlyToDaily
-          : bundle.hourlyToWeekly
-        : bundle.dailyToWeekly;
+          : inst.tf === "W"
+            ? bundle.hourlyToWeekly
+            : bundle.hourlyToMonthly
+        : inst.tf === "W"
+          ? bundle.dailyToWeekly
+          : bundle.dailyToMonthly;
     const projected: (boolean | null)[] = new Array(n);
     for (let i = 0; i < n; i++) {
       const j = map[i];

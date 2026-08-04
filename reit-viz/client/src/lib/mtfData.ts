@@ -1,8 +1,9 @@
 // Multi-Timeframe Setups — data bundle + alignment maps.
 //
 // Builds hourly (Yahoo 60m, ≤729 days, raw closes) / daily (adjusted) /
-// weekly (Friday-ending, derived from daily) series for one ticker, plus the
-// completed-bar alignment maps the MTF engine projects conditions through.
+// weekly (Friday-ending) / monthly (calendar-month, both derived from daily)
+// series for one ticker, plus the completed-bar alignment maps the MTF engine
+// projects conditions through.
 //
 // THE correctness rule: a higher-timeframe condition evaluated on a lower-
 // timeframe bar may use only COMPLETED higher-TF bars. Today's daily RSI is
@@ -22,7 +23,7 @@ import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { dateOfTimestamp } from "@/lib/chartFrequency";
 import type { DataPoint, OhlcBar } from "@/lib/indicators";
 
-export type Timeframe = "H" | "D" | "W";
+export type Timeframe = "H" | "D" | "W" | "M";
 
 export interface TfSeries {
   tf: Timeframe;
@@ -41,20 +42,31 @@ export interface MtfBundle {
   hourly: TfSeries | null;
   daily: TfSeries;
   weekly: TfSeries;
+  monthly: TfSeries;
   /** Per weekly bar, its end (last daily) date. */
   weeklyEndDates: string[];
   /** Per weekly bar, the daily index of its end bar. */
   weeklyDailyIndexMap: number[];
   /** Does the final weekly bar end on a Friday (i.e. is it complete)? */
   lastWeeklyComplete: boolean;
+  /** Per monthly bar, its end (last daily) date. */
+  monthlyEndDates: string[];
+  /** Per monthly bar, the daily index of its end bar. */
+  monthlyDailyIndexMap: number[];
+  /** Does the final monthly bar end the calendar month (i.e. is it complete)? */
+  lastMonthlyComplete: boolean;
   /** UTC calendar date per hourly bar. */
   hourlyDates: string[];
   /** Last COMPLETED daily idx per hourly bar (-1 = none yet). */
   hourlyToDaily: Int32Array;
   /** Last COMPLETED weekly idx per hourly bar (-1 = none yet). */
   hourlyToWeekly: Int32Array;
+  /** Last COMPLETED monthly idx per hourly bar (-1 = none yet). */
+  hourlyToMonthly: Int32Array;
   /** Last USABLE weekly idx per daily bar (-1 = none yet). */
   dailyToWeekly: Int32Array;
+  /** Last USABLE monthly idx per daily bar (-1 = none yet). */
+  dailyToMonthly: Int32Array;
 }
 
 const MIN_HOURLY_BARS = 250; // below this, hourly analysis is meaningless
@@ -187,6 +199,20 @@ export async function buildPairMtfBundle(a: string, b: string): Promise<MtfBundl
   return assembleBundle(label, daily, hourly);
 }
 
+/** True when no Mon–Fri calendar day of the bar's month remains after it —
+ *  the monthly analog of the "last bar is a Friday" completed-week check
+ *  (shares its holiday blind spot: a month ending on a weekday holiday is
+ *  treated as still forming). */
+export function isMonthComplete(dateStr: string): boolean {
+  const d = new Date(dateStr + "T00:00:00Z");
+  if (isNaN(d.getTime())) return false;
+  for (let nxt = new Date(d.getTime() + 86400000); nxt.getUTCMonth() === d.getUTCMonth(); nxt = new Date(nxt.getTime() + 86400000)) {
+    const dow = nxt.getUTCDay();
+    if (dow !== 0 && dow !== 6) return false;
+  }
+  return true;
+}
+
 /** Field-wise ratio bar; null when any input is non-positive/non-finite. */
 export function ratioOhlc(
   ao: number, ah: number, al: number, ac: number,
@@ -225,6 +251,21 @@ function assembleBundle(label: string, daily0: DailySeriesInput, hourlyBars: Int
   // so a non-Friday final bar means "this week, still forming".
   const lastWeeklyComplete = !!lastEnd && new Date(lastEnd + "T00:00:00Z").getUTCDay() === 5;
 
+  // Monthly derived the same way (calendar-month buckets).
+  const m = weeklyDownsample({
+    dates: daily0.dates,
+    closes: dCloses,
+    adjCloses: dCloses,
+    highs: daily0.highs,
+    lows: daily0.lows,
+    opens: daily0.opens,
+    volumes: daily0.volumes ?? [],
+  }, "monthly");
+  const monthly = mkTf("M", m.dates, m.opens, m.highs, m.lows, m.closes);
+  const monthlyEndDates = m.dates;
+  const monthlyDailyIndexMap = m.dailyIndexMap;
+  const lastMonthlyComplete = isMonthComplete(monthlyEndDates[monthlyEndDates.length - 1] ?? "");
+
   // Hourly (may be unavailable/thin — Yahoo 60m, raw closes).
   let hourly: TfSeries | null = null;
   let hourlyDates: string[] = [];
@@ -243,30 +284,39 @@ function assembleBundle(label: string, daily0: DailySeriesInput, hourlyBars: Int
 
   // ── Alignment maps (completed bars only) ──
   const usableWeeklyLast = lastWeeklyComplete ? weeklyEndDates.length - 1 : weeklyEndDates.length - 2;
+  const usableMonthlyLast = lastMonthlyComplete ? monthlyEndDates.length - 1 : monthlyEndDates.length - 2;
 
   const hourlyToDaily = new Int32Array(hourlyDates.length);
   const hourlyToWeekly = new Int32Array(hourlyDates.length);
+  const hourlyToMonthly = new Int32Array(hourlyDates.length);
   {
     let di = -1;
     let wi = -1;
+    let mi = -1;
     for (let h = 0; h < hourlyDates.length; h++) {
       const day = hourlyDates[h];
       while (di + 1 < daily.keys.length && daily.keys[di + 1] < day) di++;
       while (wi + 1 <= usableWeeklyLast && weeklyEndDates[wi + 1] < day) wi++;
+      while (mi + 1 <= usableMonthlyLast && monthlyEndDates[mi + 1] < day) mi++;
       hourlyToDaily[h] = di;
       hourlyToWeekly[h] = wi;
+      hourlyToMonthly[h] = mi;
     }
   }
 
-  // Daily→weekly: a weekly bar becomes usable AT its own Friday close (the
-  // weekly close IS that day's daily close — matches expandWeeklyToDaily),
-  // but a trailing partial week is never usable.
+  // Daily→weekly/monthly: a higher-TF bar becomes usable AT its own end-day
+  // close (the period close IS that day's daily close — matches
+  // expandWeeklyToDaily), but a trailing partial period is never usable.
   const dailyToWeekly = new Int32Array(daily.keys.length);
+  const dailyToMonthly = new Int32Array(daily.keys.length);
   {
     let wi = -1;
+    let mi = -1;
     for (let i = 0; i < daily.keys.length; i++) {
       while (wi + 1 <= usableWeeklyLast && weeklyDailyIndexMap[wi + 1] <= i) wi++;
+      while (mi + 1 <= usableMonthlyLast && monthlyDailyIndexMap[mi + 1] <= i) mi++;
       dailyToWeekly[i] = wi;
+      dailyToMonthly[i] = mi;
     }
   }
 
@@ -290,12 +340,18 @@ function assembleBundle(label: string, daily0: DailySeriesInput, hourlyBars: Int
     hourly,
     daily,
     weekly,
+    monthly,
     weeklyEndDates,
     weeklyDailyIndexMap,
     lastWeeklyComplete,
+    monthlyEndDates,
+    monthlyDailyIndexMap,
+    lastMonthlyComplete,
     hourlyDates,
     hourlyToDaily,
     hourlyToWeekly,
+    hourlyToMonthly,
     dailyToWeekly,
+    dailyToMonthly,
   };
 }
