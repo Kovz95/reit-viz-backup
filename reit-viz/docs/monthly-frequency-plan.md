@@ -66,7 +66,7 @@ Extend the state union to include `"monthly"`, add the button, pass `timeframe` 
 
 ### 3d. MTF Setups (`pages/MTFSetups.tsx` + `lib/mtfEngine.ts` / `lib/mtfData.ts`) — currently H/D/W
 - This is a cross-timeframe **confluence** engine; adding monthly means a 4th confluence layer, monthly-onto-daily forward-fill maps (strict-`<`, no lookahead — same rule as the existing weekly maps in `mtfData.ts:211-224`), and UI weights.
-- **Recommend: defer / optional.** Monthly signals update ~12×/year; confluence value is low relative to the plumbing cost. Include only if you actually want monthly-trend gating; if so, it's a forward-fill map addition, not a redesign.
+- ~~**Recommend: defer / optional.**~~ **DONE 2026-08-04 (phase 4):** monthly TfSeries + `hourlyToMonthly`/`dailyToMonthly` completed-bar maps in the bundle, `@M` condition instances for every family except "range" (252-bar window impractical on months), Current-Setup grid Monthly column + custom-combo M legs. `isMonthComplete` lives in `mtfData.ts` (shared with MA Slope).
 
 ---
 
