@@ -46,6 +46,7 @@ import {
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { downsampleSeries, downsampleOhlc } from "@/lib/chartFrequency";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
@@ -1532,6 +1533,34 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const [logScale, setLogScale] = useState(false);
   const [dataTransform, setDataTransform] = useState<DataTransform>("raw");
   const [zScoreWindow, setZScoreWindow] = useState<number>(0); // 0 = expanding, >0 = rolling
+  // ── Per-pane display frequency ──────────────────────────────────────────────
+  // Downsample THIS pane's series (and candles) to weekly/monthly period-end
+  // points on the shared time axis — e.g. a monthly metric pane under a daily
+  // price pane. Coarser-only: a target at/below the chart's own bar frequency
+  // (or an hourly epoch axis) degrades to the chart's bars, mirroring maFreq.
+  const [paneFreq, setPaneFreq] = useState<"chart" | "weekly" | "monthly">("chart");
+  const paneFreqEff = useMemo(
+    () =>
+      paneFreq !== "chart" &&
+      chartBarsPerIndicatorBar((chartConfig as { frequency?: string })?.frequency, paneFreq) > 1
+        ? paneFreq
+        : null,
+    [paneFreq, chartConfig],
+  );
+  const freqPaneSeries = useMemo(
+    () =>
+      paneFreqEff
+        ? paneSeries.map((s: any) => ({ ...s, data: downsampleSeries((s.data ?? []) as any, paneFreqEff) }))
+        : paneSeries,
+    [paneSeries, paneFreqEff],
+  );
+  const freqOhlcData = useMemo(
+    () =>
+      paneFreqEff && Array.isArray(ohlcData) && ohlcData.length > 0
+        ? downsampleOhlc(ohlcData as any, paneFreqEff)
+        : ohlcData,
+    [ohlcData, paneFreqEff],
+  );
   // Track data fingerprint so we only fitContent when actual series data changes,
   // not on indicator/marker/transform toggles that cause scroll bounce-back
   const prevDataFingerprintRef = useRef<string>("");
@@ -2943,13 +2972,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const chart = chartRef.current;
     if (!chart || !chartReady) return;
 
-    // Apply data transform to all series
+    // Apply data transform to all series (freqPaneSeries = per-pane display
+    // frequency already applied; identical to paneSeries when paneFreq="chart").
     const transformedPaneSeries = dataTransform === "raw"
-      ? paneSeries
-      : paneSeries.map(s => ({
+      ? freqPaneSeries
+      : freqPaneSeries.map(s => ({
           ...s,
           data: applyTransform(s.data, dataTransform, zScoreWindow || undefined),
         }));
+    const paneOhlcData = freqOhlcData;
 
     // Determine if this pane has the active ticker's close/ohlc
     const hasClose = transformedPaneSeries.some(s => s.metric === "close" && s.ticker === activeTicker);
@@ -2970,7 +3001,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
     }
     // Only keep ohlc if candlestick mode AND raw transform
-    if (ohlcData && activeTicker && chartConfig.chartType === "candlestick" && hasClose && dataTransform === "raw") {
+    if (paneOhlcData && activeTicker && chartConfig.chartType === "candlestick" && hasClose && dataTransform === "raw") {
       currentIds.add(`${activeTicker}:ohlc`);
     }
     // Remove ohlc key if not candlestick or if transformed
@@ -2994,7 +3025,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Add OHLC candlestick if this pane has the close series AND chart type is candlestick
     // (only in raw mode — candlestick doesn't make sense for z-score/percentile)
-    if (ohlcData && activeTicker && chartConfig.chartType === "candlestick" && hasClose && dataTransform === "raw") {
+    if (paneOhlcData && activeTicker && chartConfig.chartType === "candlestick" && hasClose && dataTransform === "raw") {
       const key = `${activeTicker}:ohlc`;
       if (!seriesMapRef.current.has(key)) {
         const closeKey = `${activeTicker}:close`;
@@ -3010,10 +3041,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           wickUpColor: "#22c55e",
           wickDownColor: "#ef4444",
         });
-        cs.setData(ohlcData);
+        cs.setData(paneOhlcData);
         seriesMapRef.current.set(key, cs);
       } else {
-        try { seriesMapRef.current.get(key)!.setData(ohlcData); } catch {}
+        try { seriesMapRef.current.get(key)!.setData(paneOhlcData); } catch {}
       }
     }
 
@@ -3052,7 +3083,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (
         ps.metric === "close" &&
         chartConfig.chartType === "candlestick" &&
-        ohlcData &&
+        paneOhlcData &&
         ps.ticker === activeTicker &&
         dataTransform === "raw"
       ) {
@@ -3222,10 +3253,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const maSourceFor = (key: string): { src: typeof closeData; suffix: string } => {
         const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
         if (mf !== "weekly" && mf !== "monthly") return { src: closeData, suffix: "" };
-        // A target at/below the chart's own bar frequency (or an hourly epoch
-        // axis) is a no-op — compute on chart bars and drop the W/M suffix so
-        // e.g. "weekly SMA" on a monthly chart doesn't mislabel monthly data.
-        if (chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, mf) <= 1) {
+        // A target at/below the PANE's effective bar frequency (chart freq, or
+        // the per-pane display freq when set; hourly epoch axes too) is a
+        // no-op — compute on the pane's bars and drop the W/M suffix so e.g.
+        // "weekly SMA" on a monthly pane doesn't mislabel monthly data.
+        if (chartBarsPerIndicatorBar(paneFreqEff ?? (chartConfig as { frequency?: string }).frequency, mf) <= 1) {
           return { src: closeData, suffix: "" };
         }
         if (!maFreqSrcCache[mf]) {
@@ -3275,7 +3307,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       ];
       for (const [field, maType, width, color] of EXTRA_MA) {
         const { src, suffix } = maSourceFor(field as string);
-        const srcVals = src.map((d) => d.value as number);
+        const srcVals = src.map((d: any) => d.value as number);
         indicatorPeriods(activeIndicators[field] as number | number[] | undefined).forEach((period, pi) => {
           const series = computeMaByType(srcVals, period, maType);
           const maData: { time: Time; value: number }[] = [];
@@ -3350,17 +3382,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       }
 
       // ── Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku, Kalman, CUSUM, HMM) ──
-      // OHLC-based overlays compute on the `ohlcData` prop (the candlestick
+      // OHLC-based overlays compute on the `paneOhlcData` prop (the candlestick
       // bars). Close-only overlays (worksOnCloseOnly) also run on ratio /
       // derived panes via synthesized o=h=l=c bars — same rule as the
       // sub-pane indicators.
       {
-        const realBars: OhlcBar[] = Array.isArray(ohlcData) && ohlcData.length > 0 ? (ohlcData as OhlcBar[]) : [];
+        const realBars: OhlcBar[] = Array.isArray(paneOhlcData) && paneOhlcData.length > 0 ? (paneOhlcData as OhlcBar[]) : [];
         const closeBars: OhlcBar[] = realBars.length > 0
           ? realBars
           : closeData
-              .filter((d) => Number.isFinite(d.value))
-              .map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
+              .filter((d: any) => Number.isFinite(d.value))
+              .map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value }));
         const octx = {
           chart,
           colors: IC as unknown as Record<string, string>,
@@ -3396,20 +3428,26 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       lookbackAnchorRef.current = null;
       if (activeIndicators.showLookbackWindow !== false) {
         const lbEntries: LookbackEntry[] = [];
+        // Per-pane display frequency: indicator periods count PANE bars, and
+        // one pane bar spans paneBarMult chart-axis bars — scale every span.
+        // Indicator compute-freq multipliers are then relative to the PANE's
+        // bar frequency, not the chart's.
+        const paneBarMult = paneFreqEff ? chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, paneFreqEff) : 1;
+        const lbBaseFreq = paneFreqEff ?? (chartConfig as { frequency?: string }).frequency;
         const pushLb = (bars: unknown, color: string, label: string) => {
           if (typeof bars === "number" && Number.isFinite(bars) && bars > 1) {
-            lbEntries.push({ bars: Math.round(bars), color, label });
+            lbEntries.push({ bars: Math.round(bars * paneBarMult), color, label });
           }
         };
         for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
           // A weekly/monthly maFreq means the period counts RESAMPLED bars —
           // scale to chart bars so the line marks the real span.
-          const maMult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.maFreq?.[k]);
+          const maMult = chartBarsPerIndicatorBar(lbBaseFreq, activeIndicators.maFreq?.[k]);
           for (const p of indicatorPeriods((activeIndicators as any)[k])) {
             pushLb(p * maMult, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
           }
         }
-        const rsiMult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.rsiFreq);
+        const rsiMult = chartBarsPerIndicatorBar(lbBaseFreq, activeIndicators.rsiFreq);
         for (const p of indicatorPeriods(activeIndicators.rsi)) {
           pushLb(p * rsiMult, (IC as any).rsi ?? "#a855f7", "RSI");
         }
@@ -3429,7 +3467,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
           // A weekly/monthly compute-freq override means period/window count
           // RESAMPLED bars — scale to chart bars so the line marks the real span.
-          const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, st.freq);
+          const mult = chartBarsPerIndicatorBar(lbBaseFreq, st.freq);
           if (barsKey) pushLb(p[barsKey] * mult, (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
         }
         const lbAnchor = seriesMapRef.current.values().next().value;
@@ -3590,11 +3628,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // pivots into resistance/support lines, projected forward to the as-of bar.
     if (
       activeIndicators.fractalLines &&
-      Array.isArray(ohlcData) &&
-      ohlcData.length > 0
+      Array.isArray(paneOhlcData) &&
+      paneOhlcData.length > 0
     ) {
       const { n, anchorDate, timeframe } = activeIndicators.fractalLines;
-      const daily = (ohlcData as any[])
+      const daily = (paneOhlcData as any[])
         .filter((b) => b && typeof b.time === "string")
         .map((b) => ({ time: b.time as string, high: Number(b.high), low: Number(b.low) }));
       // Weekly/Monthly: collapse each period's daily bars into one (high=max,
@@ -3828,7 +3866,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // new metric, data refresh), NOT when indicators/markers/transforms toggle.
     // This prevents the scroll "bounce-back" where the user pans the chart and
     // it snaps back to full range on the next render.
-    const dataFingerprint = paneSeries.map(s => `${s.id}:${s.data.length}:${s.visible}`).join("|") + `|ohlc:${ohlcData?.length ?? 0}|transform:${dataTransform}|win:${zScoreWindow}`;
+    const dataFingerprint = paneSeries.map(s => `${s.id}:${s.data.length}:${s.visible}`).join("|") + `|ohlc:${paneOhlcData?.length ?? 0}|transform:${dataTransform}|win:${zScoreWindow}|pfreq:${paneFreq}`;
     if (dataFingerprint !== prevDataFingerprintRef.current) {
       prevDataFingerprintRef.current = dataFingerprint;
       // Fit to this pane's REAL data extent rather than chart.fitContent(), which
@@ -3842,8 +3880,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             realTimes.push(s.data[0].time, s.data[s.data.length - 1].time);
           }
         }
-        if (ohlcData?.length) {
-          realTimes.push(ohlcData[0].time, ohlcData[ohlcData.length - 1].time);
+        if (paneOhlcData?.length) {
+          realTimes.push(paneOhlcData[0].time, paneOhlcData[paneOhlcData.length - 1].time);
         }
         if (spacerSeriesRef.current && realTimes.length) {
           realTimes.sort();
@@ -3861,7 +3899,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, ohlcData, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, freqPaneSeries, ohlcData, freqOhlcData, paneFreq, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // Toolbar "Labels" toggle: hide/show the right-axis last-value badges +
   // price lines on every series in this pane. Runs AFTER the render effect
@@ -4659,6 +4697,30 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           >
             <Info className="w-3 h-3 inline" />
           </span>
+        </div>
+        {/* Per-pane display frequency: THIS pane's series at chart / weekly /
+            monthly bars (period-end points on the shared axis). Only coarser
+            than the chart's own frequency has an effect. */}
+        <div className="flex items-center gap-px ml-0.5">
+          {(["chart", "weekly", "monthly"] as const).map((f) => (
+            <button
+              key={f}
+              className={`text-[9px] font-mono font-bold px-1 py-0.5 rounded transition-colors ${
+                paneFreq === f
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background/80 text-muted-foreground/60 hover:text-muted-foreground"
+              }`}
+              onClick={() => setPaneFreq(f)}
+              title={
+                f === "chart"
+                  ? "This pane at the chart's own bar frequency"
+                  : `Downsample this pane to ${f === "weekly" ? "weekly" : "calendar-month"} period-end bars (no effect unless the chart frequency is finer)`
+              }
+              data-testid={`chart-pane-${paneId}-freq-${f}`}
+            >
+              {f === "chart" ? "C" : f === "weekly" ? "W" : "M"}
+            </button>
+          ))}
         </div>
         <ExportMenu
           getChart={() => chartRef.current}
