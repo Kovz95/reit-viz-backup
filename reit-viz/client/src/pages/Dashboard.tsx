@@ -45,6 +45,10 @@ export interface PlottedSeries {
    *  normally move overlays to the left axis — for series whose magnitudes
    *  must stay directly comparable (e.g. attribution components). */
   sharedScale?: boolean;
+  /** Per-series display frequency: downsample THIS series to weekly/monthly
+   *  period-end points on the shared axis (overrides the pane's C/W/M chip;
+   *  coarser-than-chart only). Absent = the pane/chart frequency. */
+  freq?: "weekly" | "monthly";
   paneIndex: number;
   data: { time: string; value: number }[];
   visible: boolean;
@@ -2049,7 +2053,7 @@ export default function Dashboard() {
     );
   }, []);
 
-  const updateSeries = useCallback((id: string, updates: Partial<Pick<PlottedSeries, "color" | "lineWidth" | "lineStyle">>) => {
+  const updateSeries = useCallback((id: string, updates: Partial<Pick<PlottedSeries, "color" | "lineWidth" | "lineStyle" | "freq">>) => {
     // Persist to module-level map so style survives component re-mounts
     const existing = seriesStyleOverrides.get(id) || {};
     seriesStyleOverrides.set(id, { ...existing, ...updates });

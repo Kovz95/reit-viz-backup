@@ -1547,20 +1547,35 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         : null,
     [paneFreq, chartConfig],
   );
-  const freqPaneSeries = useMemo(
-    () =>
-      paneFreqEff
-        ? paneSeries.map((s: any) => ({ ...s, data: downsampleSeries((s.data ?? []) as any, paneFreqEff) }))
-        : paneSeries,
-    [paneSeries, paneFreqEff],
+  // Per-SERIES display frequency: a series' own `freq` (Sidebar Series Style
+  // popover, persisted) overrides the pane chip; the pane chip is the default
+  // for series without one. Both are coarser-than-chart only.
+  const seriesFreqEff = useCallback(
+    (s: any): "weekly" | "monthly" | null => {
+      const sf = s?.freq === "weekly" || s?.freq === "monthly" ? s.freq : null;
+      const f = sf ?? paneFreqEff;
+      return f && chartBarsPerIndicatorBar((chartConfig as { frequency?: string })?.frequency, f) > 1 ? f : null;
+    },
+    [paneFreqEff, chartConfig],
   );
-  const freqOhlcData = useMemo(
-    () =>
-      paneFreqEff && Array.isArray(ohlcData) && ohlcData.length > 0
-        ? downsampleOhlc(ohlcData as any, paneFreqEff)
-        : ohlcData,
-    [ohlcData, paneFreqEff],
-  );
+  const freqPaneSeries = useMemo(() => {
+    let changed = false;
+    const out = paneSeries.map((s: any) => {
+      const f = seriesFreqEff(s);
+      if (!f) return s;
+      changed = true;
+      return { ...s, data: downsampleSeries((s.data ?? []) as any, f) };
+    });
+    return changed ? out : paneSeries;
+  }, [paneSeries, seriesFreqEff]);
+  const freqOhlcData = useMemo(() => {
+    // Candles follow the close series' own frequency when set, else the pane chip.
+    const closeS = paneSeries.find((s: any) => s.metric === "close" && s.ticker === activeTicker);
+    const f = closeS ? seriesFreqEff(closeS) : paneFreqEff;
+    return f && Array.isArray(ohlcData) && ohlcData.length > 0
+      ? downsampleOhlc(ohlcData as any, f)
+      : ohlcData;
+  }, [ohlcData, paneSeries, activeTicker, seriesFreqEff, paneFreqEff]);
   // Track data fingerprint so we only fitContent when actual series data changes,
   // not on indicator/marker/transform toggles that cause scroll bounce-back
   const prevDataFingerprintRef = useRef<string>("");
@@ -3219,6 +3234,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     const primarySeries = transformedPaneSeries.find((s) => s.visible && s.data.length > 0);
     if (primarySeries && primarySeries.data.length > 0) {
       const closeData = primarySeries.data;
+      // Effective display frequency of the series indicators compute on
+      // (series-level freq wins over the pane chip; null = chart bars).
+      const primaryFreqEff = seriesFreqEff(primarySeries);
       // Short label for indicator titles so you know what series the indicator is computed on
       const baseLabel = primarySeries.metric === "close" ? "" : ` (${primarySeries.metric})`;
 
@@ -3253,11 +3271,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const maSourceFor = (key: string): { src: typeof closeData; suffix: string } => {
         const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
         if (mf !== "weekly" && mf !== "monthly") return { src: closeData, suffix: "" };
-        // A target at/below the PANE's effective bar frequency (chart freq, or
-        // the per-pane display freq when set; hourly epoch axes too) is a
-        // no-op — compute on the pane's bars and drop the W/M suffix so e.g.
-        // "weekly SMA" on a monthly pane doesn't mislabel monthly data.
-        if (chartBarsPerIndicatorBar(paneFreqEff ?? (chartConfig as { frequency?: string }).frequency, mf) <= 1) {
+        // A target at/below the primary series' effective bar frequency
+        // (chart freq, or the per-series/pane display freq; hourly epoch axes
+        // too) is a no-op — compute on the series' bars and drop the W/M
+        // suffix so e.g. "weekly SMA" on a monthly series isn't mislabeled.
+        if (chartBarsPerIndicatorBar(primaryFreqEff ?? (chartConfig as { frequency?: string }).frequency, mf) <= 1) {
           return { src: closeData, suffix: "" };
         }
         if (!maFreqSrcCache[mf]) {
@@ -3428,12 +3446,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       lookbackAnchorRef.current = null;
       if (activeIndicators.showLookbackWindow !== false) {
         const lbEntries: LookbackEntry[] = [];
-        // Per-pane display frequency: indicator periods count PANE bars, and
-        // one pane bar spans paneBarMult chart-axis bars — scale every span.
-        // Indicator compute-freq multipliers are then relative to the PANE's
-        // bar frequency, not the chart's.
-        const paneBarMult = paneFreqEff ? chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, paneFreqEff) : 1;
-        const lbBaseFreq = paneFreqEff ?? (chartConfig as { frequency?: string }).frequency;
+        // Per-series/pane display frequency: indicator periods count the
+        // primary series' bars, and one such bar spans paneBarMult chart-axis
+        // bars — scale every span. Indicator compute-freq multipliers are
+        // then relative to that bar frequency, not the chart's.
+        const paneBarMult = primaryFreqEff ? chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, primaryFreqEff) : 1;
+        const lbBaseFreq = primaryFreqEff ?? (chartConfig as { frequency?: string }).frequency;
         const pushLb = (bars: unknown, color: string, label: string) => {
           if (typeof bars === "number" && Number.isFinite(bars) && bars > 1) {
             lbEntries.push({ bars: Math.round(bars * paneBarMult), color, label });
@@ -3866,7 +3884,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     // new metric, data refresh), NOT when indicators/markers/transforms toggle.
     // This prevents the scroll "bounce-back" where the user pans the chart and
     // it snaps back to full range on the next render.
-    const dataFingerprint = paneSeries.map(s => `${s.id}:${s.data.length}:${s.visible}`).join("|") + `|ohlc:${paneOhlcData?.length ?? 0}|transform:${dataTransform}|win:${zScoreWindow}|pfreq:${paneFreq}`;
+    const dataFingerprint = paneSeries.map(s => `${s.id}:${s.data.length}:${s.visible}:${(s as any).freq ?? ""}`).join("|") + `|ohlc:${paneOhlcData?.length ?? 0}|transform:${dataTransform}|win:${zScoreWindow}|pfreq:${paneFreq}`;
     if (dataFingerprint !== prevDataFingerprintRef.current) {
       prevDataFingerprintRef.current = dataFingerprint;
       // Fit to this pane's REAL data extent rather than chart.fitContent(), which
@@ -3899,7 +3917,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
 
     // Notify parent about current series map for crosshair sync
     onSeriesMapUpdate?.(paneId, seriesMapRef.current);
-  }, [paneSeries, freqPaneSeries, ohlcData, freqOhlcData, paneFreq, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
+  }, [paneSeries, freqPaneSeries, ohlcData, freqOhlcData, paneFreq, seriesFreqEff, activeTicker, chartConfig, activeIndicators, chartReady, earningsDates, exDivDates, macroEventLines, fyBoundaryLines, dataTransform, zScoreWindow, showQuarterShading, colorByData, IC, IC_W, IC_S, IC_O, IC_G, detectorOhlc, autoTrendlineResults, srLevelResults, fibLevelResults, patternResults, patternBars]);
 
   // Toolbar "Labels" toggle: hide/show the right-axis last-value badges +
   // price lines on every series in this pane. Runs AFTER the render effect
@@ -4590,8 +4608,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return out;
   }, [activeIndicators, chartConfig, IC]);
 
-  // Close data for sub-charts: use the first visible series data
-  const primaryForSub = paneSeries.find((s) => s.visible && s.data.length > 0);
+  // Close data for sub-charts: use the first visible series data — from the
+  // frequency view, so a weekly/monthly pane's RSI/MACD sub-charts compute on
+  // the same bars the pane displays.
+  const primaryForSub = freqPaneSeries.find((s: any) => s.visible && s.data.length > 0);
   const subCloseData = primaryForSub ? primaryForSub.data : [];
   const subBaseLabel = primaryForSub && primaryForSub.metric !== "close" ? ` (${primaryForSub.metric})` : "";
 

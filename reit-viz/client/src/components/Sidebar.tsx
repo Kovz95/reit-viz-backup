@@ -183,7 +183,7 @@ interface SidebarProps {
   onReorderPanes: (fromId: number, toId: number) => void;
   onClearAll: () => void;
   onToggleVisibility: (id: string) => void;
-  onUpdateSeries: (id: string, updates: Partial<Pick<PlottedSeries, "color" | "lineWidth" | "lineStyle">>) => void;
+  onUpdateSeries: (id: string, updates: Partial<Pick<PlottedSeries, "color" | "lineWidth" | "lineStyle" | "freq">>) => void;
   onClose: () => void;
   chartConfig: ChartConfig;
   onChartConfigChange: (c: ChartConfig) => void;
@@ -1679,6 +1679,30 @@ export default function Sidebar({
                                       data-testid={`linestyle-${st.value}-${s.id}`}
                                     >
                                       {st.preview}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              {/* Per-series display frequency */}
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-muted-foreground" title="Downsample this series to weekly/monthly period-end points (overrides the pane's C/W/M chip; needs a finer chart frequency)">Frequency</label>
+                                <div className="flex items-center gap-1">
+                                  {([
+                                    { value: undefined, label: "Chart" },
+                                    { value: "weekly", label: "Weekly" },
+                                    { value: "monthly", label: "Monthly" },
+                                  ] as const).map((f) => (
+                                    <button
+                                      key={f.label}
+                                      className={`flex-1 h-7 rounded text-[10px] font-mono transition-all ${
+                                        (s.freq ?? undefined) === f.value
+                                          ? "bg-primary text-primary-foreground"
+                                          : "bg-accent hover:bg-accent/80 text-muted-foreground"
+                                      }`}
+                                      onClick={() => onUpdateSeries(s.id, { freq: f.value })}
+                                      data-testid={`series-freq-${f.value ?? "chart"}-${s.id}`}
+                                    >
+                                      {f.label}
                                     </button>
                                   ))}
                                 </div>

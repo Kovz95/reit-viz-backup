@@ -80,6 +80,7 @@ import type { ActiveIndicators } from "@/components/ChartPane";
 import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays, SectionHeader } from "@/components/IndicatorsPanel";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { downsampleSeries } from "@/lib/chartFrequency";
 import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
 import { getPatternSettings } from "@/lib/patternSettings";
 import PatternsPanel from "@/components/PatternsPanel";
@@ -2596,14 +2597,14 @@ function PairsSubIndicatorChart({
 // (warm-up bars) — they render as whitespace so several charts share one
 // logical axis; indicators compute on the finite subset.
 export function MiniChart({
-  data,
+  data: dataProp,
   title,
   color,
   height,
   useFlexHeight,
   refLines,
   refBands,
-  secondaryData,
+  secondaryData: secondaryDataProp,
   secondaryColor,
   secondaryLabel,
   id,
@@ -2653,6 +2654,23 @@ export function MiniChart({
     items: { label: string; value: number; color: string }[];
   } | null>(null);
   const [logScale, setLogScale] = useState(false);
+  // Per-chart display frequency (Charts-pane parity): downsample this chart's
+  // main + secondary series to weekly/monthly period-end points. Pair charts
+  // are daily-based, so W/M always resample. Ref bands stay at native
+  // resolution (context lines). Shadows the props so the whole body — chart
+  // series, indicators, fingerprints — rides the downsampled data.
+  const [chartFreq, setChartFreq] = useState<"chart" | "weekly" | "monthly">("chart");
+  const data = useMemo(
+    () => (chartFreq === "chart" ? dataProp : (downsampleSeries(dataProp as any, chartFreq) as typeof dataProp)),
+    [dataProp, chartFreq],
+  );
+  const secondaryData = useMemo(
+    () =>
+      secondaryDataProp && chartFreq !== "chart"
+        ? (downsampleSeries(secondaryDataProp as any, chartFreq) as typeof secondaryDataProp)
+        : secondaryDataProp,
+    [secondaryDataProp, chartFreq],
+  );
   const [chrome] = useChartChrome();
   // Counter that increments when chart + main series are ready, to trigger re-render
   // so sub-charts receive the actual parentChart/parentSeries refs (not null).
@@ -3390,6 +3408,24 @@ export function MiniChart({
           </span>
         )}
         <div className="flex-1" />
+        {/* Per-chart display frequency (daily source -> weekly/monthly bars) */}
+        <div className="flex items-center gap-px" onClick={(e) => e.stopPropagation()}>
+          {(["chart", "weekly", "monthly"] as const).map((f) => (
+            <button
+              key={f}
+              className={`text-[9px] font-mono font-bold px-1 py-0.5 rounded transition-colors ${
+                chartFreq === f
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground/60 hover:text-muted-foreground bg-transparent"
+              }`}
+              onClick={() => setChartFreq(f)}
+              title={f === "chart" ? "Native (daily) bars" : `Downsample this chart to ${f === "weekly" ? "weekly" : "calendar-month"} period-end bars`}
+              data-testid={`pairs-chart-${id}-freq-${f}`}
+            >
+              {f === "chart" ? "D" : f === "weekly" ? "W" : "M"}
+            </button>
+          ))}
+        </div>
         <button
           className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded transition-colors ${
             logScale
