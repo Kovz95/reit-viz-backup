@@ -218,6 +218,10 @@ export interface ActiveIndicators {
   /** RSI compute frequency — weekly/monthly resample the closes first
    *  (weekly RSI on a daily chart). Default the chart's own bars. */
   rsiFreq?: "chart" | "weekly" | "monthly";
+  /** Per-MA-type compute frequency — weekly/monthly resample the closes first
+   *  (e.g. monthly SMA overlaid on a daily chart; points land on period-end
+   *  dates of the chart axis). Absent/"chart" = the pane's own bars. */
+  maFreq?: Partial<Record<"sma" | "ema" | "hma" | "wma" | "dema" | "tema" | "kama" | "frama" | "t3" | "alma" | "lsma" | "slsma", "chart" | "weekly" | "monthly">>;
   // MA overlays: one period or a list (one line per period — see indicatorPeriods).
   sma?: number | number[];
   ema?: number | number[];
@@ -3204,21 +3208,37 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       };
 
       // ── SMA / EMA / HMA (one line per period — see indicatorPeriods) ──
+      // Per-MA compute frequency (activeIndicators.maFreq): weekly/monthly
+      // resample the closes first so a daily chart can carry a monthly SMA —
+      // same pattern as rsiFreq (points on period-end dates of the chart axis).
+      const maFreqSrcCache: Partial<Record<"weekly" | "monthly", typeof closeData>> = {};
+      const maSourceFor = (key: string): { src: typeof closeData; suffix: string } => {
+        const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
+        if (mf !== "weekly" && mf !== "monthly") return { src: closeData, suffix: "" };
+        if (!maFreqSrcCache[mf]) {
+          maFreqSrcCache[mf] = resampleIndicatorBars(
+            closeData.map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
+            mf,
+          ).map((b) => ({ time: b.time as unknown as Time, value: b.close })) as typeof closeData;
+        }
+        return { src: maFreqSrcCache[mf]!, suffix: mf === "weekly" ? "W" : "M" };
+      };
       const CORE_MA: Array<["sma" | "ema" | "hma", string, (d: typeof closeData, p: number) => typeof closeData]> = [
         ["sma", "SMA", computeSMA],
         ["ema", "EMA", computeEMA],
         ["hma", "HMA", computeHMA],
       ];
       for (const [key, name, compute] of CORE_MA) {
+        const { src, suffix } = maSourceFor(key);
         indicatorPeriods(activeIndicators[key]).forEach((p, pi) => {
-          const maData = compute(closeData, p);
+          const maData = compute(src, p);
           if (maData.length === 0) return;
           const grad = !!IC_G[key];
           const base = shadeHex(IC[key], pi);
           const s = chart.addSeries(LineSeries, {
             color: withOpacity(base, IC_O[key]),
             lineWidth: IC_W[key] as any,
-            title: `${name} ${p}${baseLabel}`,
+            title: `${name} ${p}${suffix}${baseLabel}`,
             lineStyle: maLineStyle(IC_S[key]),
             lineVisible: !grad,
           });
@@ -3240,14 +3260,15 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         ["lsma", "LSMA", 1, IC.lsma],
         ["slsma", "SLSMA", 2, IC.slsma],
       ];
-      const closeVals = closeData.map((d) => d.value as number);
       for (const [field, maType, width, color] of EXTRA_MA) {
+        const { src, suffix } = maSourceFor(field as string);
+        const srcVals = src.map((d) => d.value as number);
         indicatorPeriods(activeIndicators[field] as number | number[] | undefined).forEach((period, pi) => {
-          const series = computeMaByType(closeVals, period, maType);
+          const series = computeMaByType(srcVals, period, maType);
           const maData: { time: Time; value: number }[] = [];
-          for (let i = 0; i < closeData.length; i++) {
+          for (let i = 0; i < src.length; i++) {
             const v = series[i];
-            if (v != null && Number.isFinite(v)) maData.push({ time: closeData[i].time, value: v as number });
+            if (v != null && Number.isFinite(v)) maData.push({ time: src[i].time, value: v as number });
           }
           if (maData.length > 0) {
             const grad = !!IC_G[field];
@@ -3255,7 +3276,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             const s = chart.addSeries(LineSeries, {
               color: withOpacity(base, IC_O[field]),
               lineWidth: (IC_W[field] ?? width) as any,
-              title: `${maType} ${period}${baseLabel}`,
+              title: `${maType} ${period}${suffix}${baseLabel}`,
               lineStyle: maLineStyle(IC_S[field]),
               lineVisible: !grad,
             });
@@ -3368,8 +3389,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           }
         };
         for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
+          // A weekly/monthly maFreq means the period counts RESAMPLED bars —
+          // scale to chart bars so the line marks the real span.
+          const maMult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.maFreq?.[k]);
           for (const p of indicatorPeriods((activeIndicators as any)[k])) {
-            pushLb(p, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
+            pushLb(p * maMult, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
           }
         }
         const rsiMult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, activeIndicators.rsiFreq);

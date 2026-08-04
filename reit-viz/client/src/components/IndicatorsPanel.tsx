@@ -306,12 +306,18 @@ function MaRow({
   defaultLen,
   active,
   onToggle,
+  freq,
+  onFreqChange,
 }: {
   label: string;
   presets: number[];
   defaultLen: number;
   active: number | number[] | undefined;
   onToggle: (val: number[] | undefined) => void;
+  /** Compute frequency for this MA (weekly/monthly resample the closes first
+   *  — e.g. a monthly SMA overlaid on a daily chart). */
+  freq?: "chart" | "weekly" | "monthly";
+  onFreqChange?: (f: "chart" | "weekly" | "monthly") => void;
 }) {
   const activeList = indicatorPeriods(active);
   // Remember the last non-empty selection so the on/off switch restores it.
@@ -349,6 +355,19 @@ function MaRow({
           testid={`custom-${label.toLowerCase()}`}
           min={1}
         />
+        {onFreqChange && activeList.length > 0 && (
+          <select
+            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+            value={freq ?? "chart"}
+            onChange={(e) => onFreqChange(e.target.value as "chart" | "weekly" | "monthly")}
+            title={`Compute ${label} on the chart's bars, or on weekly/monthly resampled bars (e.g. monthly ${label} on a daily chart)`}
+            data-testid={`freq-${label.toLowerCase()}`}
+          >
+            <option value="chart">Chart</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        )}
       </div>
     </div>
   );
@@ -776,6 +795,18 @@ export default function IndicatorsPanel({
 
   const activeTicker = panes.find((p) => p.id === selectedPaneId)?.ticker ?? null;
 
+  // Per-MA compute-frequency props for MaRow (monthly SMA on a daily chart, …).
+  // "chart" clears the override so the stored map stays sparse.
+  const maFreqProps = (key: keyof NonNullable<ActiveIndicators["maFreq"]>) => ({
+    freq: activeIndicators.maFreq?.[key],
+    onFreqChange: (f: "chart" | "weekly" | "monthly") => {
+      const next = { ...(activeIndicators.maFreq ?? {}) };
+      if (f === "chart") delete next[key];
+      else next[key] = f;
+      setActiveIndicators({ ...activeIndicators, maFreq: Object.keys(next).length ? next : undefined });
+    },
+  });
+
   // Copy the current pane's indicators to every pane (one-time, atomic).
   const copyToAll = () => {
     onApplyToAllPanes(activeIndicators);
@@ -965,6 +996,7 @@ export default function IndicatorsPanel({
               defaultLen={50}
               active={activeIndicators.sma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, sma: v })}
+              {...maFreqProps("sma")}
             />
 
             <MaRow
@@ -973,6 +1005,7 @@ export default function IndicatorsPanel({
               defaultLen={21}
               active={activeIndicators.ema}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, ema: v })}
+              {...maFreqProps("ema")}
             />
 
             <MaRow
@@ -981,6 +1014,7 @@ export default function IndicatorsPanel({
               defaultLen={20}
               active={activeIndicators.hma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, hma: v })}
+              {...maFreqProps("hma")}
             />
 
             <MaRow
@@ -989,6 +1023,7 @@ export default function IndicatorsPanel({
               defaultLen={20}
               active={activeIndicators.wma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, wma: v })}
+              {...maFreqProps("wma")}
             />
 
             <MaRow
@@ -997,6 +1032,7 @@ export default function IndicatorsPanel({
               defaultLen={21}
               active={activeIndicators.dema}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, dema: v })}
+              {...maFreqProps("dema")}
             />
 
             <MaRow
@@ -1005,6 +1041,7 @@ export default function IndicatorsPanel({
               defaultLen={21}
               active={activeIndicators.tema}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, tema: v })}
+              {...maFreqProps("tema")}
             />
 
             <MaRow
@@ -1013,6 +1050,7 @@ export default function IndicatorsPanel({
               defaultLen={20}
               active={activeIndicators.kama}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, kama: v })}
+              {...maFreqProps("kama")}
             />
 
             <MaRow
@@ -1021,6 +1059,7 @@ export default function IndicatorsPanel({
               defaultLen={26}
               active={activeIndicators.frama}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, frama: v })}
+              {...maFreqProps("frama")}
             />
 
             <MaRow
@@ -1029,6 +1068,7 @@ export default function IndicatorsPanel({
               defaultLen={10}
               active={activeIndicators.t3}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, t3: v })}
+              {...maFreqProps("t3")}
             />
 
             <MaRow
@@ -1037,6 +1077,7 @@ export default function IndicatorsPanel({
               defaultLen={21}
               active={activeIndicators.alma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, alma: v })}
+              {...maFreqProps("alma")}
             />
 
             <MaRow
@@ -1045,6 +1086,7 @@ export default function IndicatorsPanel({
               defaultLen={25}
               active={activeIndicators.lsma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, lsma: v })}
+              {...maFreqProps("lsma")}
             />
 
             <MaRow
@@ -1053,6 +1095,7 @@ export default function IndicatorsPanel({
               defaultLen={25}
               active={activeIndicators.slsma}
               onToggle={(v) => setActiveIndicators({ ...activeIndicators, slsma: v })}
+              {...maFreqProps("slsma")}
             />
 
             <FindBestMAPanel
