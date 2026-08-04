@@ -85,7 +85,7 @@ Extend the state union to include `"monthly"`, add the button, pass `timeframe` 
 - Drive each changed page headless (standalone Vite → 5001 API, CDP) with probes that **block POSTs to /api/workspaces + /api/custom-charts**.
 - Golden checks per surface: monthly bar count ≈ daily count / 21; last monthly close === last daily close; a known month's high/low match the max/min of that month's dailies.
 - ZScore fix gets a before/after check: monthly run must produce different (fewer-bar) results than daily.
-- Charts tab: no code change expected — just confirm M renders on price + sub-indicator panes and the spacer axis follows (per the 08e417d gotcha: sub-charts must use spacerTimes).
+- Charts tab: no code change expected — just confirm M renders on price + sub-indicator panes and the spacer axis follows (per the 08e417d gotcha: sub-charts must use spacerTimes). **Verified 2026-08-04 local + prod** (`verify-charts-monthly.mjs`): monthly bars average 29.7 calendar days/bar, both panes share one 204-bar monthly axis, daily regression 1.41 d/bar, no console errors.
 - Prod verify after deploy (standing rule).
 
 ---
