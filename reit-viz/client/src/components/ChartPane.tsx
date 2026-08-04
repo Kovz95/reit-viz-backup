@@ -668,8 +668,15 @@ function SubIndicatorChart({
     const rsiPeriods = indicatorPeriods(activeIndicators.rsi);
     if (type === "rsi" && rsiPeriods.length > 0) {
       // Optional weekly/monthly compute frequency: resample closes first so a
-      // daily chart can show a weekly RSI (points on period-end dates).
-      const rsiFreq = activeIndicators.rsiFreq;
+      // daily chart can show a weekly RSI (points on period-end dates). A
+      // target at/below the chart's own bar frequency is a no-op — treat it
+      // as "chart" so the title doesn't carry a misleading W/M suffix.
+      const rsiFreqRaw = activeIndicators.rsiFreq;
+      const rsiFreq =
+        (rsiFreqRaw === "weekly" || rsiFreqRaw === "monthly") &&
+        chartBarsPerIndicatorBar(frequency, rsiFreqRaw) > 1
+          ? rsiFreqRaw
+          : undefined;
       const rsiInput =
         rsiFreq === "weekly" || rsiFreq === "monthly"
           ? resampleIndicatorBars(
@@ -3215,6 +3222,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const maSourceFor = (key: string): { src: typeof closeData; suffix: string } => {
         const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
         if (mf !== "weekly" && mf !== "monthly") return { src: closeData, suffix: "" };
+        // A target at/below the chart's own bar frequency (or an hourly epoch
+        // axis) is a no-op — compute on chart bars and drop the W/M suffix so
+        // e.g. "weekly SMA" on a monthly chart doesn't mislabel monthly data.
+        if (chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, mf) <= 1) {
+          return { src: closeData, suffix: "" };
+        }
         if (!maFreqSrcCache[mf]) {
           maFreqSrcCache[mf] = resampleIndicatorBars(
             closeData.map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
