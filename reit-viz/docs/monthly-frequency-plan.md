@@ -31,6 +31,13 @@ What's actually missing or broken is below.
 
 ## 2. Phase 2 — Cheap wins: pages where monthly "just works" once the UI passes it
 
+> **Resolved 2026-08-04 — these surfaces turned out to be ORPHANED.** None of the three
+> is routed or mounted anywhere; only their detection functions (`detectTrendlines`,
+> `detectSRLevels`, configs) are imported by ChartPane and `/levels`. The live routed
+> surface is **LevelsAndTrendlines at `/levels`, which already had full monthly support**
+> (UI option + `weeklyDownsample(…, timeframe)` + minBars 24). The M button + literal fix
+> was still applied to all three orphans for parity in case they are ever re-mounted.
+
 These three surfaces have a Daily/Weekly toggle and a compute path that already calls `weeklyDownsample` — but with the string literal `"weekly"` instead of the state variable. Each fix = add an M button + change one literal.
 
 | Surface | Toggle UI | Hardcoded literal |

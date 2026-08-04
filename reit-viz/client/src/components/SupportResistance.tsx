@@ -444,9 +444,10 @@ export default function SupportResistance() {
           currentPrice = closes[closes.length - 1];
         }
 
-        if (timeframe === "weekly") {
-          const wk = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows } as any, "weekly");
-          if (wk.closes.length < 40) { failures.push({ ticker: item.ticker, reason: `only ${wk.closes.length} weekly bars (need 40)` }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
+        if (timeframe === "weekly" || timeframe === "monthly") {
+          const wk = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows } as any, timeframe);
+          const minBars = timeframe === "monthly" ? 24 : 40;
+          if (wk.closes.length < minBars) { failures.push({ ticker: item.ticker, reason: `only ${wk.closes.length} ${timeframe} bars (need ${minBars})` }); setProgress({ current: i + 1, total: tickerItems.length }); continue; }
           dates = wk.dates; closes = wk.closes; highs = wk.highs; lows = wk.lows; currentPrice = closes[closes.length - 1];
         }
 
@@ -574,8 +575,8 @@ export default function SupportResistance() {
         <div className="flex flex-col gap-0.5">
           <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Frequency</label>
           <div className="flex gap-px">
-            {["daily", "weekly"].map(f => (
-              <button key={f} data-testid={`sr-freq-${f}`} className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${timeframe === f ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`} onClick={() => setTimeframe(f)} disabled={running}>{f === "daily" ? "Daily" : "Weekly"}</button>
+            {["daily", "weekly", "monthly"].map(f => (
+              <button key={f} data-testid={`sr-freq-${f}`} className={`text-[10px] font-mono font-bold px-2 py-1 rounded transition-colors ${timeframe === f ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground border border-border"}`} onClick={() => setTimeframe(f)} disabled={running}>{f === "daily" ? "Daily" : f === "weekly" ? "Weekly" : "Monthly"}</button>
             ))}
           </div>
         </div>

@@ -937,11 +937,12 @@ export function TrendlinesSubPanel(): ReactElement {
         }
 
         let lastPrice = closes[closes.length - 1];
-        if (timeframe === "weekly") {
+        if (timeframe === "weekly" || timeframe === "monthly") {
           const origDates = dates, origRaw = rawCloses.slice();
-          const wk = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows } as any, "weekly");
-          if (wk.closes.length < 30) {
-            failures.push({ ticker: item.ticker, reason: `only ${wk.closes.length} weekly bars (need 30)` });
+          const wk = weeklyDownsample({ dates, closes, adjCloses: closes, highs, lows } as any, timeframe);
+          const minBars = timeframe === "monthly" ? 24 : 30;
+          if (wk.closes.length < minBars) {
+            failures.push({ ticker: item.ticker, reason: `only ${wk.closes.length} ${timeframe} bars (need ${minBars})` });
             setProgress({ current: i + 1, total: tickerItems.length }); continue;
           }
           dates = wk.dates; closes = wk.closes; highs = wk.highs; lows = wk.lows; lastPrice = closes[closes.length - 1];
@@ -1155,6 +1156,7 @@ export function TrendlinesSubPanel(): ReactElement {
             <span className="text-[9px] text-muted-foreground uppercase ml-3">Freq</span>
             <button data-testid="tl-freq-daily" onClick={() => setTimeframe("daily")} className={`px-1.5 py-0.5 rounded text-[10px] ${timeframe === "daily" ? "bg-cyan-500/20 text-cyan-400" : "bg-muted text-muted-foreground hover:text-foreground"}`}>Daily</button>
             <button data-testid="tl-freq-weekly" onClick={() => setTimeframe("weekly")} className={`px-1.5 py-0.5 rounded text-[10px] ${timeframe === "weekly" ? "bg-cyan-500/20 text-cyan-400" : "bg-muted text-muted-foreground hover:text-foreground"}`}>Weekly</button>
+            <button data-testid="tl-freq-monthly" onClick={() => setTimeframe("monthly")} className={`px-1.5 py-0.5 rounded text-[10px] ${timeframe === "monthly" ? "bg-cyan-500/20 text-cyan-400" : "bg-muted text-muted-foreground hover:text-foreground"}`}>Monthly</button>
           </div>
         </div>
 
