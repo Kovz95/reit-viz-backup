@@ -115,11 +115,12 @@ export function resampleWeekly(
   bars: any,
   mode?: string
 ): any {
-  // Match the bundle's resampler (Ss/Uk): ONLY "weekly" downsamples; every other
-  // mode ("daily", "weekly_on_daily", undefined) returns the input unchanged with
-  // an identity dailyIndexMap. Previously this always downsampled, which corrupted
-  // daily-mode optimizer runs.
-  if (mode === "weekly") {
+  // ONLY "weekly"/"monthly" downsample; every other mode ("daily",
+  // "weekly_on_daily", undefined) returns the input unchanged with an identity
+  // dailyIndexMap. Previously this always downsampled, which corrupted
+  // daily-mode optimizer runs — and before 2026-08 "monthly" fell through to
+  // the identity branch, so monthly optimizer runs silently used daily bars.
+  if (mode === "weekly" || mode === "monthly") {
     return weeklyDownsample(bars, mode);
   }
   // Identity (daily) — normalise to parallel arrays with a 1:1 dailyIndexMap.

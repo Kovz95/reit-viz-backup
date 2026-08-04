@@ -16,15 +16,6 @@ import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
 
-// Monthly downsample for this page's date-less price arrays: last close of each
-// 21-trading-bar block (~1 calendar month). The page never retains real dates
-// across its four price sources, so calendar-month bucketing isn't available.
-function monthlyStride(prices: number[]): number[] {
-  const out: number[] = [];
-  for (let i = 20; i < prices.length; i += 21) out.push(prices[i]);
-  if ((prices.length - 1) % 21 !== 20 && prices.length > 0) out.push(prices[prices.length - 1]);
-  return out;
-}
 import { weeklyDownsamplePrices } from "@/lib/weeklyDownsample";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { B as BasketTickerPill } from "@/components/BasketTickerPill";
@@ -629,6 +620,7 @@ export default function DualMAOptimizer() {
         const pA = isPair ? (item.pairA ?? pairTickerA) : "";
         const pB = isPair ? (item.pairB ?? pairTickerB) : "";
         let prices: number[] | null = null;
+        let priceDates: string[] | null = null;
 
         if (isPair) {
           const allDates = dates.length ? dates : await getDates();
@@ -638,27 +630,27 @@ export default function DualMAOptimizer() {
           const ohlc = await getBasketOhlc(basketObj, dateRange);
           if (!ohlc || ohlc.closes.length < 50) continue;
           prices = ohlc.closes;
+          priceDates = ohlc.dates;
         } else if (inputSelection.kind === "workbook") {
           const ws = await getWorkbookSeries(item.ticker, inputSelection, { dateRange });
           if (!ws || ws.closes.length < 50) continue;
           prices = ws.closes;
+          priceDates = ws.dates;
         } else {
           const raw = await fetchTickerOHLCV(item.ticker);
           if (!raw || raw.adjCloses.length < 50) continue;
-          prices = filterByDateRange(raw, dateRange).adjCloses;
+          const filtered = filterByDateRange(raw, dateRange);
+          prices = filtered.adjCloses;
+          priceDates = filtered.dates;
         }
 
         if (!prices) continue;
 
         let series = prices;
-        if (!isPair && frequency === "monthly") {
-          series = monthlyStride(prices);
-        } else if (!isPair && frequency === "weekly") {
-          const fakeDates = prices.map((_, idx) => `d${idx}`);
-          series = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
-        } else if (!isPair && frequency === "weekly_on_daily") {
-          const fakeDates = prices.map((_, idx) => `d${idx}`);
-          series = weeklyDownsamplePrices(prices, fakeDates).prices;
+        if (!isPair && priceDates && (frequency === "weekly" || frequency === "monthly")) {
+          series = resampleWeekly({ dates: priceDates, closes: prices, adjCloses: prices }, frequency).closes;
+        } else if (!isPair && priceDates && frequency === "weekly_on_daily") {
+          series = weeklyDownsamplePrices(prices, priceDates).prices;
         }
 
         if (series.length < (frequency === "monthly" ? 24 : 50)) continue;
@@ -679,6 +671,7 @@ export default function DualMAOptimizer() {
     setEvalResult(null);
     try {
       let prices: number[];
+      let priceDates: string[];
 
       if (mode === "basket") {
         if (basketTickers.length === 0) { setEvaluating(false); return; }
@@ -687,11 +680,14 @@ export default function DualMAOptimizer() {
           const ohlc = await getBasketOhlc(bkt, dateRange);
           if (!ohlc || ohlc.closes.length < 50) { setEvaluating(false); return; }
           prices = ohlc.closes;
+          priceDates = ohlc.dates;
         } else {
           const first = basketTickers[0];
           const raw = await fetchTickerOHLCV(first);
           if (!raw || raw.adjCloses.length < 50) { setEvaluating(false); return; }
-          prices = filterByDateRange(raw, dateRange).adjCloses;
+          const filtered = filterByDateRange(raw, dateRange);
+          prices = filtered.adjCloses;
+          priceDates = filtered.dates;
         }
       } else {
         const ticker = evalTicker || selectedTicker || filteredTickers[0]?.ticker;
@@ -700,21 +696,20 @@ export default function DualMAOptimizer() {
           const ws = await getWorkbookSeries(ticker, inputSelection, { dateRange });
           if (!ws || ws.closes.length < 50) { setEvaluating(false); return; }
           prices = ws.closes;
+          priceDates = ws.dates;
         } else {
           const raw = await fetchTickerOHLCV(ticker);
           if (!raw || raw.adjCloses.length < 50) { setEvaluating(false); return; }
-          prices = filterByDateRange(raw, dateRange).adjCloses;
+          const filtered = filterByDateRange(raw, dateRange);
+          prices = filtered.adjCloses;
+          priceDates = filtered.dates;
         }
       }
 
-      if (frequency === "monthly") {
-        prices = monthlyStride(prices);
-      } else if (frequency === "weekly") {
-        const fakeDates = prices.map((_, i) => `d${i}`);
-        prices = resampleWeekly({ dates: fakeDates, closes: prices, adjCloses: prices }, "weekly").closes;
+      if (frequency === "weekly" || frequency === "monthly") {
+        prices = resampleWeekly({ dates: priceDates, closes: prices, adjCloses: prices }, frequency).closes;
       } else if (frequency === "weekly_on_daily") {
-        const fakeDates = prices.map((_, i) => `d${i}`);
-        prices = weeklyDownsamplePrices(prices, fakeDates).prices;
+        prices = weeklyDownsamplePrices(prices, priceDates).prices;
       }
 
       if (prices.length < (frequency === "monthly" ? 24 : 50)) { setEvaluating(false); return; }
