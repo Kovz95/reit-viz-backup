@@ -65,10 +65,12 @@ const Ft = detectSignals as any;
 const Kt = computeForwardProfileOsc as any;
 const wo = summarizeSignalsOsc as any;
 const hr = buildBacktestResult as any;
-const yr = EvaluatorPanelResult as any;
-const vo = EvaluatorPanelLoader as any;
-// Declare custom JSX element names so TypeScript accepts them
-declare global { namespace JSX { interface IntrinsicElements { yr: any; vo: any; } } }
+// UPPERCASE aliases: lowercase JSX tags (<yr>, <vo>) render as inert DOM
+// elements, not React components — the Evaluate results panel never rendered
+// while these were lowercase (the old IntrinsicElements declaration just
+// silenced the type error instead of surfacing the bug).
+const EvalResultPanel = EvaluatorPanelResult as any;
+const EvalHitPanel = EvaluatorPanelLoader as any;
 const kr = WorkerPool as any;
 const gr = getYahooPairsRatio as any;
 const br = PresetBar as any;
@@ -204,6 +206,8 @@ export default function Oscillators() {
   const [viewMode, setViewMode] = useState("optimize");
   const [evalSide, setEvalSide] = useState("long");
   const [evalResult, setEvalResult] = useState<any>(null);
+  /** Why the last Evaluate produced nothing (bad ticker / no data) — was a silent no-op. */
+  const [evalNote, setEvalNote] = useState<string | null>(null);
   const [evalPriceContext, setEvalPriceContext] = useState<any>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
   // Stoch eval params
@@ -1006,17 +1010,25 @@ export default function Oscillators() {
     setIsEvaluating(true);
     setEvalResult(null);
     setEvalPriceContext(null);
+    setEvalNote(null);
     try {
       const allDates = await xo();
       const ticker =
         mode === "pair" ? "__PAIR__" : mode === "single" ? selectedTicker : filteredAllTickers[0]?.ticker ?? "";
       if (mode === "pair" && (!pairTickerA || !pairTickerB || pairTickerA === pairTickerB)) {
+        setEvalNote("Pick two different tickers for the pair first.");
         setIsEvaluating(false);
         return;
       }
-      if (!ticker) { setIsEvaluating(false); return; }
+      if (!ticker) { setEvalNote("Pick a ticker first."); setIsEvaluating(false); return; }
       const priceData = await fetchTickerData(ticker, allDates);
-      if (!priceData) { setIsEvaluating(false); return; }
+      if (!priceData) {
+        // Previously a SILENT no-op — a bad symbol (or <252 bars of history)
+        // made the button appear dead.
+        setEvalNote(`No usable price data for ${ticker} (need ≥252 daily bars in the selected range).`);
+        setIsEvaluating(false);
+        return;
+      }
 
       let { closes, highs, lows, volumes, priceDates, globalIndices } = priceData;
       // Apply the frequency toggle (grid parity — Evaluate previously ignored
@@ -1507,9 +1519,14 @@ export default function Oscillators() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-4 space-y-3">
-            <yr result={evalResult} loading={isEvaluating} setupLabel={evalLabel} tickerLabel={evalTickerLabel} />
+            {evalNote && !evalResult && !isEvaluating && (
+              <div className="text-[11px] font-mono text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-3 py-2" data-testid="osc-eval-note">
+                {evalNote}
+              </div>
+            )}
+            <EvalResultPanel result={evalResult} loading={isEvaluating} setupLabel={evalLabel} tickerLabel={evalTickerLabel} />
             {evalResult && evalPriceContext && evalResult.profiles.length >= 10 ? (
-              <vo
+              <EvalHitPanel
                 ticker={evalPriceContext.mode === "pair" ? evalPriceContext.pairLegA || "" : selectedTicker || filteredAllTickers[0]?.ticker || ""}
                 priceContext={evalPriceContext}
                 signals={evalResult.profiles}
@@ -2112,7 +2129,7 @@ export default function Oscillators() {
                                         </table>
                                         {isOpen && e.priceContext && cat.profiles ? (
                                           <div className="mt-2">
-                                            <vo
+                                            <EvalHitPanel
                                               ticker={e.priceContext.mode === "pair" && e.priceContext.pairLegA || e.ticker}
                                               priceContext={e.priceContext}
                                               signals={cat.profiles}
