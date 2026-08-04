@@ -254,6 +254,17 @@ export default function RatesForward() {
   const [fittedSeries, setFittedSeries] = useState<RateSeries[]>([]); // THREEFF10
   const [vnqSeries, setVnqSeries] = useState<RateSeries[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // Score-history observation frequency (persisted).
+  const [scoreFreq, setScoreFreq] = useState<"daily" | "weekly" | "monthly">(() => {
+    try {
+      const s = localStorage.getItem("reit-viz:rates-forward:score-freq");
+      return s === "daily" || s === "monthly" ? s : "weekly";
+    } catch { return "weekly"; }
+  });
+  const changeScoreFreq = (f: "daily" | "weekly" | "monthly") => {
+    setScoreFreq(f);
+    try { localStorage.setItem("reit-viz:rates-forward:score-freq", f); } catch {}
+  };
   const [error, setError] = useState<string | null>(null);
   const gridColor = useGridColor("rgba(82, 82, 91, 0.15)");
 
@@ -373,8 +384,9 @@ export default function RatesForward() {
     twoTenChange30d: twoTenInfo?.d30 ?? null,
   }), [forwardScenarios, spot3m, twoYearInfo, tenDecompInfo, twoTenInfo]);
 
-  // Weekly score history
-  const weeklyScoreHistory = useMemo(() => {
+  // Score history at the selected observation frequency (daily = every bar;
+  // weekly/monthly = last observation per ISO week / calendar month).
+  const scoreHistory = useMemo(() => {
     const dgs2 = allSeries["DGS2"] ?? [];
     const dgs3mo = allSeries["DGS3MO"] ?? [];
     if (!dgs2.length || !dgs3mo.length || !expSeries.length || !tpSeries.length || !twoTenSpread.length) return [];
@@ -383,7 +395,20 @@ export default function RatesForward() {
     const ttMap = new Map(twoTenSpread.map(p => [p.time, p.value]));
     const horizons = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 7, 10];
     const cutoff = subtractDays(dgs2[dgs2.length - 1].time, 365 * 10);
-    const sampled = dgs2.filter(p => p.time >= cutoff).filter((_, i) => i % 5 === 0);
+    const inRange = dgs2.filter(p => p.time >= cutoff);
+    const isoWeekKey = (t: string): string => {
+      const d = new Date(t + "T00:00:00Z");
+      const day = (d.getUTCDay() + 6) % 7; // Mon=0
+      d.setUTCDate(d.getUTCDate() - day);
+      return d.toISOString().slice(0, 10);
+    };
+    const periodKey = (t: string) => (scoreFreq === "monthly" ? t.slice(0, 7) : isoWeekKey(t));
+    const sampled = scoreFreq === "daily"
+      ? inRange
+      : inRange.filter((p, i) => {
+          const next = inRange[i + 1];
+          return !next || periodKey(next.time) !== periodKey(p.time);
+        });
     const results: RateSeries[] = [];
     for (const pt of sampled) {
       const d = pt.time;
@@ -409,17 +434,17 @@ export default function RatesForward() {
       results.push({ time: d, value: +score.score.toFixed(1) });
     }
     return results;
-  }, [allSeries, expSeries, tpSeries, twoTenSpread]);
+  }, [allSeries, expSeries, tpSeries, twoTenSpread, scoreFreq]);
 
   const scoreStats = useMemo<ScoreStats | null>(() => {
-    if (!weeklyScoreHistory.length) return null;
-    const vals = weeklyScoreHistory.map(p => p.value);
+    if (!scoreHistory.length) return null;
+    const vals = scoreHistory.map(p => p.value);
     const sorted = [...vals].sort((a, b) => a - b);
     const pct = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
     const today = vals[vals.length - 1];
     const pctRank = vals.filter(v => v < today).length / vals.length * 100;
-    return { min: sorted[0], max: sorted[sorted.length - 1], p25: pct(0.25), p50: pct(0.5), p75: pct(0.75), today, percentile: pctRank, points: vals.length, startDate: weeklyScoreHistory[0].time };
-  }, [weeklyScoreHistory]);
+    return { min: sorted[0], max: sorted[sorted.length - 1], p25: pct(0.25), p50: pct(0.5), p75: pct(0.75), today, percentile: pctRank, points: vals.length, startDate: scoreHistory[0].time };
+  }, [scoreHistory]);
 
   const cutImplied = useMemo<CutImplied | null>(() => {
     if (!forwardScenarios || spot3m == null) return null;
@@ -433,7 +458,7 @@ export default function RatesForward() {
 
   // Chart: Score history
   useEffect(() => {
-    if (!scoreHistoryRef.current || !weeklyScoreHistory.length) return;
+    if (!scoreHistoryRef.current || !scoreHistory.length) return;
     const el = scoreHistoryRef.current;
     const chart = createChart(el, {
       ...makeChartOptions(gridColor), width: el.clientWidth, height: 280,
@@ -442,7 +467,7 @@ export default function RatesForward() {
       rightPriceScale: { visible: true, borderVisible: false },
     });
     if (vnqSeries.length) {
-      const startDate = weeklyScoreHistory[0].time;
+      const startDate = scoreHistory[0].time;
       const vnqFiltered = vnqSeries.filter(p => p.time >= startDate);
       if (vnqFiltered.length) {
         const base = vnqFiltered[0].value;
@@ -456,18 +481,18 @@ export default function RatesForward() {
       bottomLineColor: "#f43f5e", bottomFillColor1: "rgba(244, 63, 94, 0.05)", bottomFillColor2: "rgba(244, 63, 94, 0.35)",
       lineWidth: 2, priceFormat: { type: "price" as const, precision: 0, minMove: 1 }, priceScaleId: "right", title: "Score",
     });
-    scoreSeries.setData(weeklyScoreHistory.map(p => ({ time: p.time, value: p.value })));
+    scoreSeries.setData(scoreHistory.map(p => ({ time: p.time, value: p.value })));
     scoreSeries.createPriceLine({ price: 50, color: "rgba(16, 185, 129, 0.6)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "+50 Activated" });
     scoreSeries.createPriceLine({ price: 20, color: "rgba(16, 185, 129, 0.35)", lineStyle: 3, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: 0, color: "rgba(161, 161, 170, 0.4)", lineStyle: 0, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -20, color: "rgba(244, 63, 94, 0.35)", lineStyle: 3, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -50, color: "rgba(244, 63, 94, 0.6)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "−50 Suppressed" });
-    scoreView.current.applyView(chart, seriesFingerprint(weeklyScoreHistory, vnqSeries));
+    scoreView.current.applyView(chart, seriesFingerprint(scoreHistory, vnqSeries));
     scoreChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (scoreHistoryRef.current) chart.applyOptions({ width: scoreHistoryRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); scoreView.current.capture(chart); chart.remove(); scoreChartRef.current = null; };
-  }, [weeklyScoreHistory, vnqSeries, gridColor]);
+  }, [scoreHistory, vnqSeries, gridColor]);
 
   // Chart: 2Y Treasury
   useEffect(() => {
@@ -666,20 +691,35 @@ export default function RatesForward() {
         </div>
 
         {/* Score history chart */}
-        {weeklyScoreHistory.length > 0 && (
+        {scoreHistory.length > 0 && (
           <div className="rounded-lg border border-border bg-card p-4" data-testid="panel-score-history">
             <div className="flex items-start justify-between mb-3 gap-4 flex-wrap">
               <div>
-                <h2 className="text-sm font-semibold text-foreground">Convexity Activation Score — History</h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm font-semibold text-foreground">Convexity Activation Score — History</h2>
+                  <div className="flex gap-px rounded border border-border overflow-hidden">
+                    {(["daily", "weekly", "monthly"] as const).map((f) => (
+                      <button
+                        key={f}
+                        onClick={() => changeScoreFreq(f)}
+                        className={`px-1.5 py-0.5 text-[10px] font-mono ${scoreFreq === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        title={f === "daily" ? "Score at every daily observation (slower)" : `Score at the last observation of each ${f === "weekly" ? "ISO week" : "calendar month"}`}
+                        data-testid={`rates-score-freq-${f}`}
+                      >
+                        {f === "daily" ? "D" : f === "weekly" ? "W" : "M"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Same composite formula applied weekly across the last {scoreStats ? Math.round((Date.now() - new Date(scoreStats.startDate).getTime()) / (365 * 86400e3)) : 10} years. Score on right axis (green above 0 = convexity bias, red below = rates-selling-off). VNQ rebased to 100 on left axis (violet).
+                  Same composite formula applied {scoreFreq === "daily" ? "daily" : scoreFreq === "weekly" ? "weekly" : "monthly"} across the last {scoreStats ? Math.round((Date.now() - new Date(scoreStats.startDate).getTime()) / (365 * 86400e3)) : 10} years. Score on right axis (green above 0 = convexity bias, red below = rates-selling-off). VNQ rebased to 100 on left axis (violet).
                 </p>
               </div>
               {scoreStats && (
                 <div className="flex gap-3 text-xs flex-wrap">
                   <StatCard label="Today" value={<span data-testid="score-today">{scoreStats.today >= 0 ? "+" : ""}{scoreStats.today.toFixed(0)}</span>} sub={`${scoreStats.percentile.toFixed(0)}th pct`} />
                   <StatCard label="10y range" value={`${scoreStats.min >= 0 ? "+" : ""}${scoreStats.min.toFixed(0)} to ${scoreStats.max >= 0 ? "+" : ""}${scoreStats.max.toFixed(0)}`} sub={`median ${scoreStats.p50 >= 0 ? "+" : ""}${scoreStats.p50.toFixed(0)}`} />
-                  <StatCard label="25/75 band" value={`${scoreStats.p25 >= 0 ? "+" : ""}${scoreStats.p25.toFixed(0)} to ${scoreStats.p75 >= 0 ? "+" : ""}${scoreStats.p75.toFixed(0)}`} sub={`${scoreStats.points} weekly obs`} />
+                  <StatCard label="25/75 band" value={`${scoreStats.p25 >= 0 ? "+" : ""}${scoreStats.p25.toFixed(0)} to ${scoreStats.p75 >= 0 ? "+" : ""}${scoreStats.p75.toFixed(0)}`} sub={`${scoreStats.points} ${scoreFreq} obs`} />
                 </div>
               )}
             </div>
