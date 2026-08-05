@@ -52,18 +52,14 @@ import "@/lib/tva";
 // ── Constants ──
 
 const CANDIDATE_WINDOWS = [21, 42, 63, 126, 189, 252, 378, 504, 756, 1260];
-const WINDOW_LABELS: Record<number, string> = {
-  21: "21d (1M)",
-  42: "42d (2M)",
-  63: "63d (3M)",
-  126: "126d (6M)",
-  189: "189d (9M)",
-  252: "252d (1Y)",
-  378: "378d (1.5Y)",
-  504: "504d (2Y)",
-  756: "756d (3Y)",
-  1260: "1260d (5Y)",
-};
+/** Window label in the active bar frequency's units + calendar equivalent
+ *  (windows are BAR counts — "21" means 21 weekly bars in weekly mode). */
+function windowLabelFor(w: number, frequency: string): string {
+  const unit = frequency === "weekly" ? "w" : frequency === "monthly" ? "mo" : "d";
+  const months = frequency === "weekly" ? w / 4.33 : frequency === "monthly" ? w : w / 21;
+  const cal = months >= 12 ? `${(months / 12).toFixed(1).replace(/\.0$/, "")}Y` : `${Math.max(1, Math.round(months))}M`;
+  return `${w}${unit} (${cal})`;
+}
 
 const METRICS = [
   "close",
@@ -941,7 +937,7 @@ export default function ZScoreOptimizer() {
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Window</label>
                 <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={evalWindow} onChange={(e) => setEvalWindow(Number(e.target.value))}>
-                  {CANDIDATE_WINDOWS.map((e) => <option key={e} value={e}>{WINDOW_LABELS[e] || `${e}d`}</option>)}
+                  {CANDIDATE_WINDOWS.map((e) => <option key={e} value={e}>{windowLabelFor(e, frequency)}</option>)}
                 </select>
               </div>
               <div className="flex flex-col gap-0.5">
@@ -1192,7 +1188,7 @@ export default function ZScoreOptimizer() {
                       <tr className="bg-card">
                         <th className="text-left px-2 py-1 text-muted-foreground font-bold sticky left-0 bg-card z-10 border-r border-border">Ticker</th>
                         {heatmapData.windows.map((e) => (
-                          <th key={e} className="text-center px-2 py-1 text-muted-foreground font-bold whitespace-nowrap">{WINDOW_LABELS[e] || `${e}d`}</th>
+                          <th key={e} className="text-center px-2 py-1 text-muted-foreground font-bold whitespace-nowrap">{windowLabelFor(e, frequency)}</th>
                         ))}
                         <th className="text-center px-2 py-1 text-muted-foreground font-bold">Best</th>
                       </tr>
@@ -1208,7 +1204,7 @@ export default function ZScoreOptimizer() {
                                 {r !== null ? r : "–"}
                               </td>
                             ))}
-                            <td className="text-center px-2 py-1 text-foreground font-bold">{tr ? WINDOW_LABELS[tr.bestWindow] || `${tr.bestWindow}d` : "–"}</td>
+                            <td className="text-center px-2 py-1 text-foreground font-bold">{tr ? windowLabelFor(tr.bestWindow, frequency) : "–"}</td>
                           </tr>
                         );
                       })}
@@ -1255,7 +1251,7 @@ export default function ZScoreOptimizer() {
                           <span className="text-xs font-mono font-bold text-foreground">{e.ticker}</span>
                           <span className="text-[10px] font-mono text-muted-foreground">{e.name}</span>
                           <span className="ml-auto text-[10px] font-mono">
-                            Best: <span className="text-primary font-bold">{WINDOW_LABELS[e.bestWindow] || `${e.bestWindow}d`}</span>{" "}Score: <span className="inline-block px-1 py-0 rounded font-bold" style={{ backgroundColor: scoreColor(e.bestScore), color: scoreTextColor(e.bestScore) }}>{e.bestScore}</span>
+                            Best: <span className="text-primary font-bold">{windowLabelFor(e.bestWindow, frequency)}</span>{" "}Score: <span className="inline-block px-1 py-0 rounded font-bold" style={{ backgroundColor: scoreColor(e.bestScore), color: scoreTextColor(e.bestScore) }}>{e.bestScore}</span>
                           </span>
                         </button>
                       )}
@@ -1290,7 +1286,7 @@ export default function ZScoreOptimizer() {
                                   <tr key={s.key} className={`${s.highlight ? "bg-primary/15 ring-1 ring-inset ring-primary/30" : signalType === "both" && x === 1 ? "bg-white/[0.02] border-b border-border/30" : "hover:bg-white/5"}`}>
                                     {x === 0 ? (
                                       <td className={`px-2 py-1 font-bold ${isBest ? "text-primary" : "text-foreground"}`} rowSpan={signalType === "both" ? subRows.length : 1}>
-                                        {WINDOW_LABELS[r.window] || `${r.window}d`}{isBest && " ★"}
+                                        {windowLabelFor(r.window, frequency)}{isBest && " ★"}
                                       </td>
                                     ) : null}
                                     {signalType === "both" && <td className={`text-center px-2 py-1 font-bold ${s.label === "REV" ? "text-amber-400" : "text-blue-400"}`}>{s.label}</td>}
@@ -1331,10 +1327,10 @@ export default function ZScoreOptimizer() {
                         const r = e.results.find((n) => n.window === e.bestWindow);
                         if (!r) return null;
                         const panels: { key: string; label: string; profiles: ForwardReturnProfile[]; direction: "buy" | "sell"; title: string }[] = [];
-                        if (r.buyProfiles && r.buyProfiles.length >= 10) panels.push({ key: `${e.ticker}::brk-buy`, label: `Buy BRK (${r.buyProfiles.length})`, profiles: r.buyProfiles, direction: "buy", title: `${WINDOW_LABELS[e.bestWindow] || e.bestWindow + "d"} — Buy Breakout` });
-                        if (r.sellProfiles && r.sellProfiles.length >= 10) panels.push({ key: `${e.ticker}::brk-sell`, label: `Sell BRK (${r.sellProfiles.length})`, profiles: r.sellProfiles, direction: "sell", title: `${WINDOW_LABELS[e.bestWindow] || e.bestWindow + "d"} — Sell Breakout` });
-                        if (r.buyRevProfiles && r.buyRevProfiles.length >= 10) panels.push({ key: `${e.ticker}::rev-buy`, label: `Buy REV (${r.buyRevProfiles.length})`, profiles: r.buyRevProfiles, direction: "buy", title: `${WINDOW_LABELS[e.bestWindow] || e.bestWindow + "d"} — Buy Reversion` });
-                        if (r.sellRevProfiles && r.sellRevProfiles.length >= 10) panels.push({ key: `${e.ticker}::rev-sell`, label: `Sell REV (${r.sellRevProfiles.length})`, profiles: r.sellRevProfiles, direction: "sell", title: `${WINDOW_LABELS[e.bestWindow] || e.bestWindow + "d"} — Sell Reversion` });
+                        if (r.buyProfiles && r.buyProfiles.length >= 10) panels.push({ key: `${e.ticker}::brk-buy`, label: `Buy BRK (${r.buyProfiles.length})`, profiles: r.buyProfiles, direction: "buy", title: `${windowLabelFor(e.bestWindow, frequency)} — Buy Breakout` });
+                        if (r.sellProfiles && r.sellProfiles.length >= 10) panels.push({ key: `${e.ticker}::brk-sell`, label: `Sell BRK (${r.sellProfiles.length})`, profiles: r.sellProfiles, direction: "sell", title: `${windowLabelFor(e.bestWindow, frequency)} — Sell Breakout` });
+                        if (r.buyRevProfiles && r.buyRevProfiles.length >= 10) panels.push({ key: `${e.ticker}::rev-buy`, label: `Buy REV (${r.buyRevProfiles.length})`, profiles: r.buyRevProfiles, direction: "buy", title: `${windowLabelFor(e.bestWindow, frequency)} — Buy Reversion` });
+                        if (r.sellRevProfiles && r.sellRevProfiles.length >= 10) panels.push({ key: `${e.ticker}::rev-sell`, label: `Sell REV (${r.sellRevProfiles.length})`, profiles: r.sellRevProfiles, direction: "sell", title: `${windowLabelFor(e.bestWindow, frequency)} — Sell Reversion` });
                         if (panels.length === 0) return null;
                         return (
                           <div className="mt-2 px-2">

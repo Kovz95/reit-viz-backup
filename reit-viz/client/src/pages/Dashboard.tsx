@@ -75,6 +75,9 @@ export interface PaneInfo {
   id: number;
   label: string;
   ticker?: string; // primary ticker for this pane (for OHLC)
+  /** Per-pane display frequency (C/W/M header chip) — persisted with the
+   *  workspace so mixed-frequency layouts survive reloads. */
+  freq?: "chart" | "weekly" | "monthly";
 }
 
 // Preset view definitions
@@ -2115,6 +2118,9 @@ export default function Dashboard() {
         <ChartArea
           plottedSeries={plottedSeries}
           panes={panes}
+          onPaneFreqChange={(paneId: number, f: "chart" | "weekly" | "monthly") =>
+            setPanes((prev) => prev.map((p) => (p.id === paneId ? { ...p, freq: f === "chart" ? undefined : f } : p)))
+          }
           activeTicker={activeTicker}
           activeTickerLabel={activeTicker ? tickerDisplayName(activeTicker) : null}
           chartConfig={chartConfig}
@@ -2188,7 +2194,7 @@ export default function Dashboard() {
             />
           }
         />
-        <DataTable plottedSeries={plottedSeries} crosshairTime={crosshairTime} />
+        <DataTable plottedSeries={plottedSeries} crosshairTime={crosshairTime} frequency={chartConfig.frequency} panes={panes} />
       </div>
     </div>
   );

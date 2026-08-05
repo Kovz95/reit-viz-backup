@@ -126,6 +126,8 @@ interface Annotation {
 interface ChartAreaProps {
   plottedSeries: PlottedSeries[];
   panes: PaneInfo[];
+  /** Persist a pane's C/W/M display-frequency chip into pane state. */
+  onPaneFreqChange?: (paneId: number, f: "chart" | "weekly" | "monthly") => void;
   activeTicker: string | null;
   /** Display label for activeTicker (resolves BASKET:<id> to the basket name). */
   activeTickerLabel?: string | null;
@@ -235,6 +237,7 @@ const CAROUSEL_CLASS_FIELDS = [
 export default function ChartArea({
   plottedSeries,
   panes,
+  onPaneFreqChange,
   activeTicker,
   activeTickerLabel,
   chartConfig,
@@ -2800,6 +2803,8 @@ export default function ChartArea({
                   }}
                   paneId={pane.id}
                   paneLabel={pane.label}
+                  paneFreqProp={pane.freq}
+                  onPaneFreqChange={onPaneFreqChange ? (f: "chart" | "weekly" | "monthly") => onPaneFreqChange(pane.id, f) : undefined}
                   series={paneSeriesView}
                   ohlcData={paneOhlc}
                   activeTicker={paneTicker}

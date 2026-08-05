@@ -1,14 +1,22 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { ChevronUp, ChevronDown, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { PlottedSeries } from "@/pages/Dashboard";
+import type { PlottedSeries, PaneInfo } from "@/pages/Dashboard";
+import { downsampleSeries } from "@/lib/chartFrequency";
 
 interface DataTableProps {
   plottedSeries: PlottedSeries[];
   crosshairTime?: string | null;
+  /** Chart bar frequency — weekly/monthly collapse the table to period-end
+   *  rows matching the displayed bars (hourly keeps daily rows, known gap). */
+  frequency?: string;
+  /** Pane info so per-pane C/W/M chips are honored per series. */
+  panes?: PaneInfo[];
 }
 
-export default function DataTable({ plottedSeries, crosshairTime }: DataTableProps) {
+const FREQ_RANK: Record<string, number> = { daily: 0, weekly: 1, monthly: 2 };
+
+export default function DataTable({ plottedSeries, crosshairTime, frequency, panes }: DataTableProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [sortAsc, setSortAsc] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -16,22 +24,33 @@ export default function DataTable({ plottedSeries, crosshairTime }: DataTablePro
 
   const visibleSeries = plottedSeries.filter((s) => s.visible);
 
+  // Rows follow the DISPLAYED bars: chart weekly/monthly collapses every
+  // series; a coarser per-series or per-pane freq collapses that column.
+  const chartF = frequency === "weekly" || frequency === "monthly" ? frequency : "daily";
+  const effDataFor = (s: PlottedSeries): { time: string; value: number }[] => {
+    const paneF = panes?.find((p) => p.id === s.paneIndex)?.freq;
+    const cand = [s.freq, paneF, chartF === "daily" ? undefined : chartF].filter(
+      (f): f is "weekly" | "monthly" => f === "weekly" || f === "monthly"
+    );
+    const eff = cand.sort((a, b) => FREQ_RANK[b] - FREQ_RANK[a])[0];
+    return eff && FREQ_RANK[eff] > 0 ? (downsampleSeries(s.data as any, eff) as any) : s.data;
+  };
+
   // Build unified date table
   const tableData = useMemo(() => {
     if (visibleSeries.length === 0) return [];
+    const effData = visibleSeries.map(effDataFor);
 
     // Collect all unique dates
     const dateSet = new Set<string>();
-    for (const s of visibleSeries) {
-      for (const d of s.data) dateSet.add(d.time);
-    }
+    for (const d of effData.flat()) dateSet.add(d.time);
     const allDates = Array.from(dateSet).sort();
     if (!sortAsc) allDates.reverse();
 
     // Build lookup maps
-    const maps = visibleSeries.map((s) => {
+    const maps = effData.map((data) => {
       const m = new Map<string, number>();
-      for (const d of s.data) m.set(d.time, d.value);
+      for (const d of data) m.set(d.time, d.value);
       return m;
     });
 
@@ -39,7 +58,7 @@ export default function DataTable({ plottedSeries, crosshairTime }: DataTablePro
       date,
       values: maps.map((m) => m.get(date) ?? null),
     }));
-  }, [visibleSeries, sortAsc]);
+  }, [visibleSeries, sortAsc, frequency, panes]);
 
   // Auto-scroll to the crosshair row when it changes
   useEffect(() => {

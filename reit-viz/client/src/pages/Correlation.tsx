@@ -2927,12 +2927,12 @@ function SeriesPicker({
 // ── MAIN CORRELATION PAGE ──
 // ═══════════════════════════════════════════════════════════════
 const ROLLING_WINDOWS = [30, 60, 120, 252] as const;
-const ROLLING_WINDOW_LABELS: Record<number, string> = {
-  30: "30d",
-  60: "60d",
-  120: "120d",
-  252: "252d (1Y)",
-};
+/** Rolling-window preset label in the active bar frequency's units. */
+function rollingWindowLabel(w: number, freq: string): string {
+  const unit = freq === "hourly" ? "h" : freq === "weekly" ? "w" : freq === "monthly" ? "mo" : "d";
+  const ann = freq === "daily" && w === 252 ? " (1Y)" : freq === "monthly" && w >= 12 ? ` (${(w / 12).toFixed(0)}Y)` : "";
+  return `${w}${unit}${ann}`;
+}
 
 export default function Correlation() {
   const [activeTab, setActiveTab] = useState<"pairwise" | "matrix" | "drivers" | "dislocations">("pairwise");
@@ -3722,7 +3722,7 @@ export default function Correlation() {
                   />
                   <span className="flex items-center gap-1.5 text-[11px]">
                     <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: MULTI_WINDOW_COLORS[w] }} />
-                    {ROLLING_WINDOW_LABELS[w]}
+                    {rollingWindowLabel(w, corrFreq)}
                   </span>
                 </label>
               ))}

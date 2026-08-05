@@ -331,6 +331,11 @@ export interface ChartPaneHandle {
 interface ChartPaneProps {
   paneId: number;
   paneLabel: string;
+  /** Persisted per-pane display frequency (from PaneInfo.freq); when provided
+   *  with onPaneFreqChange the C/W/M chip is controlled and survives reloads.
+   *  Absent (e.g. Correlation's reuse) -> local uncontrolled state. */
+  paneFreqProp?: "chart" | "weekly" | "monthly";
+  onPaneFreqChange?: (f: "chart" | "weekly" | "monthly") => void;
   series: PlottedSeries[];
   ohlcData: any;
   activeTicker: string | null;
@@ -1395,6 +1400,8 @@ function SubIndicatorChart({
 const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   paneId,
   paneLabel,
+  paneFreqProp,
+  onPaneFreqChange,
   series: paneSeries,
   ohlcData,
   activeTicker,
@@ -1538,7 +1545,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // points on the shared time axis — e.g. a monthly metric pane under a daily
   // price pane. Coarser-only: a target at/below the chart's own bar frequency
   // (or an hourly epoch axis) degrades to the chart's bars, mirroring maFreq.
-  const [paneFreq, setPaneFreq] = useState<"chart" | "weekly" | "monthly">("chart");
+  const [paneFreqLocal, setPaneFreqLocal] = useState<"chart" | "weekly" | "monthly">("chart");
+  const paneFreq = onPaneFreqChange ? (paneFreqProp ?? "chart") : paneFreqLocal;
+  const setPaneFreq = (f: "chart" | "weekly" | "monthly") => {
+    if (onPaneFreqChange) onPaneFreqChange(f);
+    else setPaneFreqLocal(f);
+  };
   const paneFreqEff = useMemo(
     () =>
       paneFreq !== "chart" &&

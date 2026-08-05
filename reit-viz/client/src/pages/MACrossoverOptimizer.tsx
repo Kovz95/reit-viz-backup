@@ -975,6 +975,26 @@ export default function MACrossoverOptimizer() {
   const [evaluating, setEvaluating] = useState(false);
   const [evalFastPeriod, setEvalFastPeriod] = useState(50);
   const [evalSlowPeriod, setEvalSlowPeriod] = useState(200);
+  // Frequency-aware Evaluate defaults: an SMA(200) on MONTHLY bars needs
+  // ~200 months of warmup (≈ the whole history) so 50/200 can never cross.
+  // When the eval frequency switches and the periods still sit at the OLD
+  // frequency's defaults, swap them to the new frequency's defaults — a
+  // user-customized pair is left alone.
+  const evalDefaultsFor = (f: string): [number, number] =>
+    f === "monthly" || f === "monthly_on_daily" ? [10, 21] : f === "weekly" ? [21, 50] : [50, 200];
+  const prevEvalFreqRef = useRef<string>(frequency as string);
+  useEffect(() => {
+    const prev = prevEvalFreqRef.current;
+    if (prev === (frequency as string)) return;
+    const [pf, ps] = evalDefaultsFor(prev);
+    if (evalFastPeriod === pf && evalSlowPeriod === ps) {
+      const [nf, ns] = evalDefaultsFor(frequency as string);
+      setEvalFastPeriod(nf);
+      setEvalSlowPeriod(ns);
+    }
+    prevEvalFreqRef.current = frequency as string;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frequency]);
   const [evalSlowMaType, setEvalSlowMaType] = useState("SMA");
   const abortRef = useRef(false);
   const restoredTickerRef = useRef(false);
