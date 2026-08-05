@@ -37,6 +37,7 @@ import {
   runUniversalSweep,
   refreshFiringStatus,
   DEFAULT_SWEEP_SETTINGS,
+  BAR_MODE_DEFAULTS,
   type SweepSettings,
   type SweepProgress,
   type QualifiedSetup,
@@ -107,10 +108,28 @@ const FAMILY_LABELS: Record<SignalFamily, string> = {
   pair: "Pairs",
 };
 
+/**
+ * Settings saved in W/M bar mode before the bar-denominated knobs became
+ * mode-aware still carry the daily values (a 10-bar cooldown = 10 MONTHS),
+ * which starve the sweep. Snap any knob still at the daily default over to
+ * its mode default.
+ */
+function migrateBarModeKnobs(s: SweepSettings): SweepSettings {
+  const mode = s.barMode ?? "daily";
+  if (mode === "daily") return s;
+  const from = BAR_MODE_DEFAULTS.daily;
+  const to = BAR_MODE_DEFAULTS[mode];
+  const out = { ...s };
+  for (const k of Object.keys(from) as (keyof typeof from)[]) {
+    if (out[k] === from[k]) (out as any)[k] = to[k];
+  }
+  return out;
+}
+
 function loadSettings(): SweepSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_SWEEP_SETTINGS, ...JSON.parse(raw) };
+    if (raw) return migrateBarModeKnobs({ ...DEFAULT_SWEEP_SETTINGS, ...JSON.parse(raw) });
   } catch {}
   return { ...DEFAULT_SWEEP_SETTINGS };
 }
@@ -233,6 +252,26 @@ export default function UniversalScreener() {
     setSettings((prev) => ({ ...prev, [k]: v }));
   }, []);
 
+  // Bar-mode change swaps the bar-denominated knobs to the new mode's
+  // defaults — but only those still sitting at the OLD mode's defaults, so a
+  // user-customized value survives the switch (mirrors the MA Crossover
+  // eval-defaults behavior).
+  const changeBarMode = useCallback((next: NonNullable<SweepSettings["barMode"]>) => {
+    setSettings((prev) => {
+      const prevMode = prev.barMode ?? "daily";
+      if (prevMode === next) return prev;
+      const from = BAR_MODE_DEFAULTS[prevMode];
+      const to = BAR_MODE_DEFAULTS[next];
+      const out: SweepSettings = { ...prev, barMode: next };
+      for (const k of Object.keys(from) as (keyof typeof from)[]) {
+        if (prev[k] === from[k]) (out as any)[k] = to[k];
+      }
+      // Monthly mode has no sub-month horizons.
+      if (next === "monthly" && ["1W", "2W"].includes(out.horizon)) out.horizon = "1M";
+      return out;
+    });
+  }, []);
+
   const toggleFamily = (f: SignalFamily) => {
     setSettings((prev) => ({
       ...prev,
@@ -328,7 +367,7 @@ export default function UniversalScreener() {
   }, [screenName, savedScreens, settings, universeMode, classifyDim, classifyVal, basketId, globalDim, globalDimVal, classFilters, classSearch, manualTickers, geo.state.nations, geo.state.exchanges]);
 
   const applyScreen = useCallback((s: SavedScreen) => {
-    setSettings({ ...DEFAULT_SWEEP_SETTINGS, ...s.settings });
+    setSettings(migrateBarModeKnobs({ ...DEFAULT_SWEEP_SETTINGS, ...s.settings }));
     setUniverseMode(s.universeMode);
     setClassifyDim(s.classifyDim);
     setClassifyVal(s.classifyVal);
@@ -735,7 +774,7 @@ export default function UniversalScreener() {
             })}
           <label className="flex items-center gap-1 text-muted-foreground" title="Bar frequency the sweep runs on: weekly/monthly resample every series (price + valuation) to period-end bars before detection, and horizons count calendar periods on those bars.">
             Bars
-            <select value={settings.barMode ?? "daily"} onChange={(e) => set("barMode", e.target.value as SweepSettings["barMode"])}
+            <select value={settings.barMode ?? "daily"} onChange={(e) => changeBarMode(e.target.value as NonNullable<SweepSettings["barMode"]>)}
               className="bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-bar-mode">
               <option value="daily">D</option>
               <option value="weekly">W</option>

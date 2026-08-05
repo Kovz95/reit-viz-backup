@@ -68,6 +68,24 @@ export interface SweepSettings {
   minYearsData: number;
 }
 
+/**
+ * Bar-denominated knobs per bar mode. The daily defaults are impossible on
+ * coarser bars — a 10-bar cooldown is 10 MONTHS in monthly mode, capping
+ * accepted signal frequency at ~1.2/yr, below the 4/yr floor, so a monthly
+ * sweep could never qualify anything. The UI swaps these on bar-mode change
+ * when the current values still sit at the old mode's defaults.
+ */
+export const BAR_MODE_DEFAULTS: Record<
+  "daily" | "weekly" | "monthly",
+  Pick<SweepSettings, "cooldown" | "firingLookbackBars" | "freqFloorPerYear" | "valuationFreqFloorPerYear" | "minOccurrences">
+> = {
+  daily: { cooldown: 10, firingLookbackBars: 5, freqFloorPerYear: 4, valuationFreqFloorPerYear: 2, minOccurrences: 8 },
+  weekly: { cooldown: 2, firingLookbackBars: 2, freqFloorPerYear: 2, valuationFreqFloorPerYear: 1, minOccurrences: 8 },
+  // Monthly floors are deliberately loose — even on 30-year tickers only a
+  // couple dozen combos ever fire on monthly bars, at ~0.25-0.7/yr.
+  monthly: { cooldown: 1, firingLookbackBars: 2, freqFloorPerYear: 0.25, valuationFreqFloorPerYear: 0.25, minOccurrences: 5 },
+};
+
 export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   mode: "single",
   barMode: "daily",

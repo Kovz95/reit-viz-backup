@@ -36,6 +36,14 @@ export interface SIBtParams {
   stepDays: number;
   minN: number;
   primaryHorizon: number;
+  /**
+   * Minimum joined bar count / sampling warm-up, in BARS. The historical
+   * defaults (120 / 60) are daily-calibrated — on monthly bars they demand
+   * 10 / 5 YEARS of signal history, which nulls the whole backtest, so the
+   * monthly presets must pass smaller floors.
+   */
+  minBars?: number;
+  warmupBars?: number;
 }
 
 export const DEFAULT_SI_BT: SIBtParams = {
@@ -77,7 +85,7 @@ export interface SIBacktestResult {
 }
 
 export function runSIVerdictBacktest(si: TV[], close: TV[], params: SIBtParams): SIBacktestResult | null {
-  const { pctileWindow, trendLookback, horizons, stepDays, minN, primaryHorizon } = params;
+  const { pctileWindow, trendLookback, horizons, stepDays, minN, primaryHorizon, minBars, warmupBars } = params;
   if (!horizons.length || trendLookback < 1) return null;
 
   // Inner-join on dates (both live on the same daily axis; SI is step-held).
@@ -90,13 +98,13 @@ export function runSIVerdictBacktest(si: TV[], close: TV[], params: SIBtParams):
     dates.push(p.time); siVals.push(p.value); closes.push(c);
   }
   const n = dates.length;
-  if (n < Math.max(120, trendLookback + Math.min(...horizons) + minN)) return null;
+  if (n < Math.max(minBars ?? 120, trendLookback + Math.min(...horizons) + minN)) return null;
 
   const pctiles = asOfPercentileSeries(siVals, "trailing", pctileWindow);
 
   const samples: SIBtSample[] = [];
   // Start once the trend lookback and a minimal percentile history exist.
-  const start = Math.max(trendLookback, 60);
+  const start = Math.max(trendLookback, warmupBars ?? 60);
   for (let i = start; i < n; i += Math.max(1, stepDays)) {
     const pctile = pctiles[i];
     if (!Number.isFinite(pctile)) continue;

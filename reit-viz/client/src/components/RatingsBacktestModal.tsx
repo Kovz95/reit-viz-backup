@@ -37,6 +37,8 @@ import { downsampleSeries } from "@/lib/chartFrequency";
 const MONTHLY_RATINGS_BT: SIBtParams = {
   pctileWindow: 24, hiPctile: 70, loPctile: 30, trendLookback: 3, deadband: 2,
   horizons: [1, 3, 6], stepDays: 1, minN: 8, primaryHorizon: 3,
+  // Monthly bars: the daily 120/60-bar floors would null every backtest.
+  minBars: 24, warmupBars: 12,
 };
 
 interface TV { time: string; value: number }
