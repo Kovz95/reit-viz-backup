@@ -215,11 +215,15 @@ export default function ShortInterest() {
   // context stats (trailing-3Y percentile + z-score of the latest reading).
   const { data: siHistory } = useQuery({
     queryKey: ["/si-sparklines"],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!siTickers) return {};
       const result: Record<string, { spark: number[]; pctile3Y: number | null; z3Y: number | null }> = {};
       await getDates();
       for (let i = 0; i < (siTickers as any[]).length; i += 20) {
+        // ~15 chunks x 20 series: without this, navigating away lets the loop
+        // keep flooding the browser's per-host connection pool, and the next
+        // page's queries queue behind it for minutes on a cold cache.
+        if (signal?.aborted) break;
         const chunk = (siTickers as any[]).slice(i, i + 20);
         await Promise.all(
           chunk.map(async (t: any) => {

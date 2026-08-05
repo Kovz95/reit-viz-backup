@@ -503,7 +503,14 @@ export default function MTFSetups() {
   );
   const hydrate = useCallback((s: any) => {
     if (typeof s?.ticker === "string" && s.ticker) setTicker(s.ticker);
-    if (s?.settings && typeof s.settings === "object") setSettings({ ...DEFAULT_MTF_SETTINGS, ...s.settings });
+    if (s?.settings && typeof s.settings === "object") {
+      const merged: MtfSettings = { ...DEFAULT_MTF_SETTINGS, ...s.settings };
+      // Presets saved before freqFloorPerYear existed inherit the daily
+      // default (2/yr), which qualifies nothing on a monthly base — backfill
+      // the base-appropriate floor.
+      if (s.settings.freqFloorPerYear == null) merged.freqFloorPerYear = defaultsForBase(merged.baseTf).freqFloorPerYear;
+      setSettings(merged);
+    }
     if (Array.isArray(s?.customLegs)) setCustomLegs([...s.customLegs, "", "", ""].slice(0, 3));
     if (s?.customDir === "long" || s?.customDir === "short") setCustomDir(s.customDir);
     if (typeof s?.onlyActive === "boolean") setOnlyActive(s.onlyActive);

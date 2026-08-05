@@ -26,6 +26,17 @@ export default function Setups({ initialFamily }: { initialFamily?: SetupsFamily
   const [family, setFamily] = useState<SetupsFamily>(initialFamily ?? "similar");
   const pinnedRef = useRef(initialFamily != null);
 
+  // Alias-route navigation re-renders this SAME instance — useState's initial
+  // value never re-applies, so /screener -> /mtf-setups showed the old family.
+  const lastInitialRef = useRef(initialFamily);
+  if (initialFamily !== lastInitialRef.current) {
+    lastInitialRef.current = initialFamily;
+    if (initialFamily != null && initialFamily !== family) {
+      pinnedRef.current = true;
+      setFamily(initialFamily);
+    }
+  }
+
   const serialize = useCallback(() => (pinnedRef.current ? {} : { family }), [family]);
   const restore = useCallback((s: any) => {
     if (!pinnedRef.current && s?.family && FAMILY_TABS.some((t) => t.id === s.family)) {

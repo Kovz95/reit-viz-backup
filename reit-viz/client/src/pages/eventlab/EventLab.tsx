@@ -36,6 +36,18 @@ export default function EventLab({ initialFamily }: { initialFamily?: EventLabFa
   // the prop is present so /performance etc. always land where they promise.
   const pinnedRef = useRef(initialFamily != null);
 
+  // Alias-route navigation re-renders this SAME instance — useState's initial
+  // value never re-applies, so /performance -> /price-action showed the old
+  // family. Sync on prop change (render-time state adjustment).
+  const lastInitialRef = useRef(initialFamily);
+  if (initialFamily !== lastInitialRef.current) {
+    lastInitialRef.current = initialFamily;
+    if (initialFamily != null && initialFamily !== family) {
+      pinnedRef.current = true;
+      setFamily(initialFamily);
+    }
+  }
+
   // While alias-pinned (user hasn't clicked a family tab), don't overwrite the
   // workspace-saved family — visiting /performance shouldn't change what
   // /event-lab restores to.

@@ -259,10 +259,13 @@ export default function Ratings() {
     queryKey: ["ratings-history"],
     enabled: !!rawData,
     staleTime: 5 * 60_000,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const out: Record<string, { spark: number[]; buyD1M: number | null; buyD3M: number | null; anD3M: number | null; pctile2Y: number | null }> = {};
       const list = (rawData ?? []).map((t) => t.ticker);
       for (let i = 0; i < list.length; i += 20) {
+        // Stop flooding the connection pool once the page is left — otherwise
+        // the next page's data queries queue behind ~900 stale series fetches.
+        if (signal?.aborted) break;
         await Promise.all(
           list.slice(i, i + 20).map(async (tk) => {
             try {

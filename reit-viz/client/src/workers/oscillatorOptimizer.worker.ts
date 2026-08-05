@@ -12,16 +12,19 @@
  * Protocol: in {type:"run"|"ewo", id?, ticker, name, closes, highs, lows,
  * params} → out {type:"result", id, result} | {type:"error", id, error}.
  */
-import { runEwoDailyScan, type EwoTask } from "@/lib/workerPool";
+import { runEwoDailyScan, runEwoCoarseScan, type EwoTask, type EwoCoarseTask } from "@/lib/workerPool";
 
 self.onmessage = async (e: MessageEvent) => {
-  const task = e.data as EwoTask & { type?: string; id?: number };
-  if (!task || (task.type !== "run" && task.type !== "ewo") || !Array.isArray((task as any).closes)) return;
+  const task = e.data as (EwoTask | EwoCoarseTask) & { type?: string; id?: number };
+  if (!task || !Array.isArray((task as any).closes)) return;
   try {
-    const result = await runEwoDailyScan(task, () => false);
-    (self as any).postMessage({ type: "result", id: task.id, result });
+    let result: any = null;
+    if (task.type === "coarse") result = await runEwoCoarseScan(task as EwoCoarseTask, () => false);
+    else if (task.type === "run" || task.type === "ewo") result = await runEwoDailyScan(task as EwoTask, () => false);
+    else return;
+    (self as any).postMessage({ type: "result", id: (task as any).id, result });
   } catch (err: any) {
-    (self as any).postMessage({ type: "error", id: task.id, error: String(err?.message ?? err) });
+    (self as any).postMessage({ type: "error", id: (task as any).id, error: String(err?.message ?? err) });
   }
 };
 

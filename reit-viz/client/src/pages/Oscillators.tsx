@@ -488,12 +488,35 @@ export default function Oscillators() {
         return;
       }
 
-      // EWO weekly_on_daily
-      if (frequency.endsWith("_on_daily")) {
+      // EWO coarse modes (W, M, W/D, M/D) — same real worker pool as the
+      // daily sweep; the kernels live in lib/workerPool.runEwoCoarseScan.
+      // (These loops used to run inline on the main thread and froze the UI
+      // for the duration of a ~15k-config sweep.)
+      {
+        workerPoolRef.current?.terminate();
+        const concurrency = Math.min(Math.max(2, navigator.hardwareConcurrency || 4), 8);
+        const { RealWorkerPool } = await import("@/lib/realWorkerPool");
+        const pool = new RealWorkerPool(() => createOscWorker(), concurrency);
+        workerPoolRef.current = pool;
+
+        const variant = frequency.endsWith("_on_daily") ? "wod" : "period";
+        const coarseMode = frequency.startsWith("monthly") ? "monthly" : "weekly";
+        const ewoParams = {
+          ewoFast: EWO_FAST_PARAMS,
+          ewoSlow: EWO_SLOW_PARAMS,
+          ewoThresholdPct: EWO_THRESH_PCT,
+          targetReturn,
+          returnMode,
+          bandMin,
+          bandMax,
+          minHold,
+        };
+
         const accumulated: any[] = [];
-        for (let idx = 0; idx < tickerList.length && !cancelRef.current; idx++) {
-          const ticker = tickerList[idx];
-          setProgress({ current: idx + 1, total: tickerList.length });
+        let doneCount = 0;
+
+        const tasks = tickerList.map(async (ticker: any) => {
+          if (cancelRef.current) return;
           try {
             const priceData = combinedBasket
               ? await wt(combinedBasket, dateRange).then((d: any) =>
@@ -502,305 +525,81 @@ export default function Oscillators() {
                     : null
                 )
               : await fetchTickerData(ticker.ticker, allDates);
+            if (!priceData || cancelRef.current) return;
 
-            if (!priceData) continue;
-            const dailyLen = priceData.closes.length;
-            if (dailyLen < 252) continue;
-
-            const wodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
-            const wkCloses = qe(priceData.closes, priceData.priceDates, wodMode);
-            const wkHighs = qe(priceData.highs, priceData.priceDates, wodMode);
-            const wkLows = qe(priceData.lows, priceData.priceDates, wodMode);
-            if (wkCloses.prices.length < (wodMode ? 24 : 52)) continue;
-
-            const rawDailyCloses = priceData.closes;
-            const MA_LEN = 52;
-            const maWeekly = new Array(wkCloses.prices.length).fill(null);
-            let sum = 0; let cnt = 0;
-            for (let i = 0; i < wkCloses.prices.length; i++) {
-              sum += wkCloses.prices[i]; cnt++;
-              if (i >= MA_LEN) { sum -= wkCloses.prices[i - MA_LEN]; cnt--; }
-              if (cnt > 0) maWeekly[i] = sum / cnt;
-            }
-            const recentWk = wkCloses.prices.slice(-MA_LEN);
-            const avgWk = recentWk.reduce((a: number, b: number) => a + b, 0) / Math.max(recentWk.length, 1);
-
-            const configs: any[] = [];
-            const isBand = returnMode === "band";
-            const bandObj = isBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
-
-            for (const fast of EWO_FAST_PARAMS) {
-              for (const slow of EWO_SLOW_PARAMS) {
-                if (fast >= slow) continue;
-                const ewoVals = at(wkHighs.prices, wkLows.prices, fast, slow).map((v: number | null) =>
-                  v === null ? NaN : v
-                );
-                const ewoDaily = Vt(ewoVals, wkCloses.weekIndex, dailyLen).map((v: number) =>
-                  Number.isFinite(v) ? v : null
-                );
-                const maDaily = Vt(
-                  maWeekly.map((v: number | null) => (v === null ? NaN : v)),
-                  wkCloses.weekIndex,
-                  dailyLen
-                ).map((v: number) => (Number.isFinite(v) ? v : null));
-                const warmup = Math.max(slow * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126;
-
-                for (const thr of EWO_THRESH_PCT) {
-                  const thrLine = maDaily.map((v: number | null) => (v === null ? null : (thr / 100) * v));
-                  const signals = Ft(ewoDaily, thrLine, warmup);
-                  const buyProfiles: any[] = [];
-                  const sellProfiles: any[] = [];
-                  let lastIdx = -1;
-                  for (const sig of signals) {
-                    if (minHold > 0 && sig.index < lastIdx) continue;
-                    if (sig.index < 0 || sig.index >= dailyLen) continue;
-                    const profile = Lt(rawDailyCloses, sig.index, targetReturn, sig.direction, bandObj, minHold);
-                    sig.direction === "buy" ? buyProfiles.push(profile) : sellProfiles.push(profile);
-                    if (minHold > 0) lastIdx = sig.index + minHold;
-                  }
-                  const buySummary = Ve(buyProfiles, "buy");
-                  const sellSummary = Ve(sellProfiles, "sell");
-                  const buyComposite = He(buySummary, "buy", isBand);
-                  const sellComposite = He(sellSummary, "sell", isBand);
-                  const cats = [
-                    { category: "buy", label: SIGNAL_LABELS.buy.label, description: SIGNAL_LABELS.buy.description, summary: buySummary, composite: buyComposite, profiles: buyProfiles },
-                    { category: "sell", label: SIGNAL_LABELS.sell.label, description: SIGNAL_LABELS.sell.description, summary: sellSummary, composite: sellComposite, profiles: sellProfiles },
-                  ];
-                  const best = cats.reduce((a, b) => (a.composite.score > b.composite.score ? a : b), cats[0]);
-                  configs.push({
-                    configLabel: `EWO(${fast},${slow}) thr ${thr}%`,
-                    configKey: `${fast}_${slow}_${thr}`,
-                    categories: cats,
-                    bestCategory: best.category,
-                    bestScore: best.composite.score,
-                  });
-                }
-              }
-            }
-
-            if (configs.length === 0) continue;
-            const TOP_N = 6;
-            const sorted = [...configs].sort((a, b) => b.bestScore - a.bestScore);
-            const topKeys = new Set(sorted.slice(0, TOP_N).map((c) => c.configKey));
-            for (const c of configs) {
-              if (!topKeys.has(c.configKey)) {
-                for (const cat of c.categories) cat.profiles = undefined;
-              }
-            }
-            const bestCfg = configs.reduce((a, b) => (a.bestScore > b.bestScore ? a : b));
-            const parts = bestCfg.configKey.split("_");
-            const [bFast, bSlow, bThr] = [Number(parts[0]), Number(parts[1]), Number(parts[2])];
-            const ewoLast = at(wkHighs.prices, wkLows.prices, bFast, bSlow);
-            const lastVal = ewoLast[ewoLast.length - 1];
-            const prevVal = ewoLast[ewoLast.length - 2] ?? null;
-            const currentValue = lastVal !== null ? Math.round(lastVal * 1000) / 1000 : null;
-            let currentValuePct: number | null = null;
-            if (lastVal !== null) {
-              const slice = wkCloses.prices.slice(-bSlow);
-              const avg = slice.reduce((a: number, b: number) => a + b, 0) / Math.max(slice.length, 1);
-              if (avg > 0) currentValuePct = Math.round((lastVal / avg) * 1000) / 10;
-            }
-            const thrAbs = (bThr / 100) * avgWk;
-            let currentSignal = "None";
-            if (lastVal !== null) {
-              if (lastVal > thrAbs) currentSignal = thrAbs > 0 ? "Above +Thr" : "Above 0";
-              else if (lastVal < -thrAbs) currentSignal = thrAbs > 0 ? "Below -Thr" : "Below 0";
-              else currentSignal = "In Zone";
-              if (prevVal !== null) {
-                if (thrAbs === 0) {
-                  if (prevVal <= 0 && lastVal > 0) currentSignal = "→ Cross Up";
-                  else if (prevVal >= 0 && lastVal < 0) currentSignal = "→ Cross Down";
-                } else {
-                  if (prevVal <= thrAbs && lastVal > thrAbs) currentSignal = "→ Cross +Thr";
-                  else if (prevVal >= -thrAbs && lastVal < -thrAbs) currentSignal = "→ Cross -Thr";
-                }
-              }
-            }
-
-            const tickerLabel =
+            const label =
               ticker.ticker === "__PAIR__"
                 ? `${pairTickerA}/${pairTickerB}`
                 : (ticker.ticker.startsWith("__PAIR__:") && ticker.name) || ticker.ticker;
 
-            accumulated.push({
-              ticker: tickerLabel,
+            const workerResult = await pool.run({
+              type: "coarse",
+              variant,
+              mode: coarseMode,
+              ticker: label,
               name: ticker.name,
-              configs,
-              bestConfigLabel: bestCfg.configLabel,
-              bestCategory: SIGNAL_LABELS[bestCfg.bestCategory as keyof typeof SIGNAL_LABELS]?.label ?? bestCfg.bestCategory,
-              bestScore: bestCfg.bestScore,
-              priceContext: {
-                prices: priceData.closes,
-                highs: priceData.highs,
-                lows: priceData.lows,
-                volumes: priceData.volumes,
-                dates: priceData.priceDates,
-                globalIndices: priceData.globalIndices,
-                benchmarkPrices: null,
-                mode: mode === "pair" || mode === "pairCombo" ? "pair" : "single",
-                pairLegA: mode === "pairCombo" ? ticker.pairA : mode === "pair" ? pairTickerA : undefined,
-                pairLegB: mode === "pairCombo" ? ticker.pairB : mode === "pair" ? pairTickerB : undefined,
-              },
-              currentSignal,
-              currentValue,
-              currentValuePct,
+              closes: priceData.closes,
+              highs: priceData.highs,
+              lows: priceData.lows,
+              dates: priceData.priceDates,
+              params: ewoParams,
             });
-            if (idx % 3 === 0 || idx === tickerList.length - 1) setResults([...accumulated]);
-          } catch {}
-        }
-        setResults(accumulated);
+            if (!workerResult) return;
+
+            const pairMeta = {
+              benchmarkPrices: null,
+              mode: mode === "pair" || mode === "pairCombo" ? "pair" : "single",
+              pairLegA: mode === "pairCombo" ? ticker.pairA : mode === "pair" ? pairTickerA : undefined,
+              pairLegB: mode === "pairCombo" ? ticker.pairB : mode === "pair" ? pairTickerB : undefined,
+            };
+            const priceContext =
+              variant === "wod"
+                ? {
+                    prices: priceData.closes,
+                    highs: priceData.highs,
+                    lows: priceData.lows,
+                    volumes: priceData.volumes,
+                    dates: priceData.priceDates,
+                    globalIndices: priceData.globalIndices,
+                    ...pairMeta,
+                  }
+                : {
+                    prices: workerResult.weekly.closes,
+                    highs: workerResult.weekly.highs,
+                    lows: workerResult.weekly.lows,
+                    volumes: workerResult.weekly.volumes,
+                    dates: workerResult.weekly.dates,
+                    globalIndices: workerResult.weekly.dailyIndexMap.map((x: number) => priceData.globalIndices[x] ?? -1),
+                    ...pairMeta,
+                  };
+
+            accumulated.push({
+              ticker: workerResult.ticker,
+              name: workerResult.name,
+              configs: workerResult.configs,
+              bestConfigLabel: workerResult.bestConfigLabel,
+              bestCategory: SIGNAL_LABELS[workerResult.bestCategory as keyof typeof SIGNAL_LABELS]?.label ?? workerResult.bestCategory,
+              bestScore: workerResult.bestScore,
+              currentSignal: workerResult.currentSignal,
+              currentValue: workerResult.currentValue,
+              currentValuePct: workerResult.currentValuePct,
+              priceContext,
+            });
+          } catch {
+          } finally {
+            doneCount++;
+            setProgress({ current: doneCount, total: tickerList.length });
+            if (doneCount % 3 === 0 || doneCount === tickerList.length) setResults([...accumulated]);
+          }
+        });
+
+        await Promise.all(tasks);
+        setResults([...accumulated]);
+        pool.terminate();
+        workerPoolRef.current = null;
         setIsRunning(false);
         return;
       }
-
-      // EWO weekly
-      const accumulated: any[] = [];
-      for (let idx = 0; idx < tickerList.length && !cancelRef.current; idx++) {
-        const ticker = tickerList[idx];
-        setProgress({ current: idx + 1, total: tickerList.length });
-        try {
-          const priceData = combinedBasket
-            ? await wt(combinedBasket, dateRange).then((x: any) =>
-                x
-                  ? { closes: x.closes, highs: x.highs, lows: x.lows, volumes: x.volumes, priceDates: x.priceDates, globalIndices: [] }
-                  : null
-              )
-            : await fetchTickerData(ticker.ticker, allDates);
-
-          if (!priceData) continue;
-          const weekly = mo({ dates: priceData.priceDates, closes: priceData.closes, adjCloses: priceData.closes, highs: priceData.highs, lows: priceData.lows }, ht);
-          if (weekly.adjCloses.length < (ht === "monthly" ? 24 : 52)) continue;
-
-          const dailyCloses = priceData.closes;
-          const MA_LEN = ht === "monthly" ? 12 : 52;
-          const maWeekly = new Array(weekly.closes.length).fill(null);
-          let sum = 0; let cnt = 0;
-          for (let i = 0; i < weekly.closes.length; i++) {
-            sum += weekly.closes[i]; cnt++;
-            if (i >= MA_LEN) { sum -= weekly.closes[i - MA_LEN]; cnt--; }
-            if (cnt > 0) maWeekly[i] = sum / cnt;
-          }
-          const recentWk = weekly.closes.slice(-MA_LEN);
-          const avgWk = recentWk.reduce((a: number, b: number) => a + b, 0) / Math.max(recentWk.length, 1);
-
-          const configs: any[] = [];
-          const isBand = returnMode === "band";
-          const bandObj = isBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
-
-          for (const fast of EWO_FAST_PARAMS) {
-            for (const slow of EWO_SLOW_PARAMS) {
-              if (fast >= slow) continue;
-              const warmup = slow + 26;
-              for (const thr of EWO_THRESH_PCT) {
-                const thrLine = maWeekly.map((v: number | null) => (v === null ? null : (thr / 100) * v));
-                const ewoVals = at(weekly.highs, weekly.lows, fast, slow);
-                const signals = Ft(ewoVals, thrLine, warmup);
-                const buyProfiles: any[] = [];
-                const sellProfiles: any[] = [];
-                let lastIdx = -1;
-                for (const sig of signals) {
-                  if (minHold > 0 && sig.index < lastIdx) continue;
-                  const dailyIdx = fo(sig.index, weekly);
-                  if (dailyIdx < 0) continue;
-                  const profile = Lt(dailyCloses, dailyIdx, targetReturn, sig.direction, bandObj, minHold);
-                  sig.direction === "buy" ? buyProfiles.push(profile) : sellProfiles.push(profile);
-                  if (minHold > 0) lastIdx = sig.index + minHold;
-                }
-                const buySummary = Ve(buyProfiles, "buy");
-                const sellSummary = Ve(sellProfiles, "sell");
-                const buyComposite = He(buySummary, "buy", isBand);
-                const sellComposite = He(sellSummary, "sell", isBand);
-                const cats = [
-                  { category: "buy", label: SIGNAL_LABELS.buy.label, description: SIGNAL_LABELS.buy.description, summary: buySummary, composite: buyComposite, profiles: buyProfiles },
-                  { category: "sell", label: SIGNAL_LABELS.sell.label, description: SIGNAL_LABELS.sell.description, summary: sellSummary, composite: sellComposite, profiles: sellProfiles },
-                ];
-                const best = cats.reduce((a, b) => (a.composite.score > b.composite.score ? a : b), cats[0]);
-                configs.push({
-                  configLabel: `EWO(${fast},${slow}) thr ${thr}%`,
-                  configKey: `${fast}_${slow}_${thr}`,
-                  categories: cats,
-                  bestCategory: best.category,
-                  bestScore: best.composite.score,
-                });
-              }
-            }
-          }
-
-          if (configs.length === 0) continue;
-          const TOP_N = 6;
-          const sorted = [...configs].sort((a, b) => b.bestScore - a.bestScore);
-          const topKeys = new Set(sorted.slice(0, TOP_N).map((c) => c.configKey));
-          for (const c of configs) {
-            if (!topKeys.has(c.configKey)) {
-              for (const cat of c.categories) cat.profiles = undefined;
-            }
-          }
-          const bestCfg = configs.reduce((a, b) => (a.bestScore > b.bestScore ? a : b));
-          const parts = bestCfg.configKey.split("_").map(Number);
-          const [bFast, bSlow, bThr] = parts;
-          const ewoLast = at(weekly.highs, weekly.lows, bFast, bSlow);
-          const lastVal = ewoLast[ewoLast.length - 1];
-          const prevVal = ewoLast[ewoLast.length - 2] ?? null;
-          const currentValue = lastVal !== null ? Math.round(lastVal * 1000) / 1000 : null;
-          let currentValuePct: number | null = null;
-          if (lastVal !== null) {
-            const slice = weekly.closes.slice(-bSlow);
-            const avg = slice.reduce((a: number, b: number) => a + b, 0) / Math.max(slice.length, 1);
-            if (avg > 0) currentValuePct = Math.round((lastVal / avg) * 1000) / 10;
-          }
-          const thrAbs = (bThr / 100) * avgWk;
-          let currentSignal = "None";
-          if (lastVal !== null) {
-            if (lastVal > thrAbs) currentSignal = thrAbs > 0 ? "Above +Thr" : "Above 0";
-            else if (lastVal < -thrAbs) currentSignal = thrAbs > 0 ? "Below -Thr" : "Below 0";
-            else currentSignal = "In Zone";
-            if (prevVal !== null) {
-              if (thrAbs === 0) {
-                if (prevVal <= 0 && lastVal > 0) currentSignal = "→ Cross Up";
-                else if (prevVal >= 0 && lastVal < 0) currentSignal = "→ Cross Down";
-              } else {
-                if (prevVal <= thrAbs && lastVal > thrAbs) currentSignal = "→ Cross +Thr";
-                else if (prevVal >= -thrAbs && lastVal < -thrAbs) currentSignal = "→ Cross -Thr";
-              }
-            }
-          }
-
-          const tickerLabel =
-            ticker.ticker === "__PAIR__"
-              ? `${pairTickerA}/${pairTickerB}`
-              : (ticker.ticker.startsWith("__PAIR__:") && ticker.name) || ticker.ticker;
-
-          const priceContext = {
-            prices: weekly.closes,
-            highs: weekly.highs,
-            lows: weekly.lows,
-            volumes: weekly.volumes,
-            dates: weekly.dates,
-            globalIndices: weekly.dailyIndexMap.map((x: number) => priceData.globalIndices[x] ?? -1),
-            benchmarkPrices: null,
-            mode: mode === "pair" || mode === "pairCombo" ? "pair" : "single",
-            pairLegA: mode === "pairCombo" ? ticker.pairA : mode === "pair" ? pairTickerA : undefined,
-            pairLegB: mode === "pairCombo" ? ticker.pairB : mode === "pair" ? pairTickerB : undefined,
-          };
-
-          accumulated.push({
-            ticker: tickerLabel,
-            name: ticker.name,
-            configs,
-            bestConfigLabel: bestCfg.configLabel,
-            bestCategory: SIGNAL_LABELS[bestCfg.bestCategory as keyof typeof SIGNAL_LABELS]?.label ?? bestCfg.bestCategory,
-            bestScore: bestCfg.bestScore,
-            priceContext,
-            currentSignal,
-            currentValue,
-            currentValuePct,
-          });
-          if (idx % 3 === 0 || idx === tickerList.length - 1) setResults([...accumulated]);
-        } catch {}
-      }
-      setResults(accumulated);
-      setIsRunning(false);
-      return;
     }
 
     // Stoch mode

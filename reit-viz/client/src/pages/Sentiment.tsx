@@ -23,6 +23,19 @@ export default function Sentiment({ initialFamily }: { initialFamily?: Sentiment
   const [family, setFamily] = useState<SentimentFamily>(initialFamily ?? "si");
   const pinnedRef = useRef(initialFamily != null);
 
+  // Alias-route navigation (/short-interest -> /ratings) re-renders this SAME
+  // component instance, so the useState initial value never re-applies and the
+  // shell kept showing the old family. Sync on prop change (render-time state
+  // adjustment).
+  const lastInitialRef = useRef(initialFamily);
+  if (initialFamily !== lastInitialRef.current) {
+    lastInitialRef.current = initialFamily;
+    if (initialFamily != null && initialFamily !== family) {
+      pinnedRef.current = true;
+      setFamily(initialFamily);
+    }
+  }
+
   // While alias-pinned, don't overwrite the workspace-saved family.
   const serialize = useCallback(() => (pinnedRef.current ? {} : { family }), [family]);
   const restore = useCallback((s: any) => {

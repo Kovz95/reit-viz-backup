@@ -58,6 +58,12 @@ export interface MtfSettings {
   hitRateThreshold: number;
   /** Which horizon label qualifies a setup. */
   horizonLabel: string;
+  /**
+   * Minimum accepted-signal frequency per year. Was a hardcoded 2 inside the
+   * scan — on monthly bars conjunctions fire ~0.25-1/yr, so 2/yr killed every
+   * combo before the visible knobs even applied.
+   */
+  freqFloorPerYear: number;
   deepScan: boolean;
 }
 
@@ -70,6 +76,7 @@ export const DEFAULT_MTF_SETTINGS: MtfSettings = {
   minOccurrences: 8,
   hitRateThreshold: 0.55,
   horizonLabel: "1M",
+  freqFloorPerYear: 2,
   // Deep scan on by default: pairs first, then triples seeded from the
   // qualified pairs — full C(n,3) over the expanded catalog would be ~300k
   // combos, but seeded extension stays proportional to what qualified.
@@ -77,9 +84,15 @@ export const DEFAULT_MTF_SETTINGS: MtfSettings = {
 };
 
 /** Base-TF-appropriate defaults for the fields that depend on bar density. */
-export function defaultsForBase(baseTf: "H" | "D" | "M"): Pick<MtfSettings, "cooldownBars" | "horizonLabel"> {
-  if (baseTf === "M") return { cooldownBars: 2, horizonLabel: "3M" };
-  return baseTf === "H" ? { cooldownBars: 21, horizonLabel: "1W" } : { cooldownBars: 10, horizonLabel: "1M" };
+export function defaultsForBase(
+  baseTf: "H" | "D" | "M",
+): Pick<MtfSettings, "cooldownBars" | "horizonLabel" | "freqFloorPerYear" | "minOccurrences"> {
+  // Monthly conjunctions are sparse (~0.25-1/yr even on 30-year tickers) —
+  // the daily floors would qualify nothing.
+  if (baseTf === "M") return { cooldownBars: 2, horizonLabel: "3M", freqFloorPerYear: 0.25, minOccurrences: 5 };
+  return baseTf === "H"
+    ? { cooldownBars: 21, horizonLabel: "1W", freqFloorPerYear: 2, minOccurrences: 8 }
+    : { cooldownBars: 10, horizonLabel: "1M", freqFloorPerYear: 2, minOccurrences: 8 };
 }
 
 export function horizonsForBase(baseTf: "H" | "D" | "M"): MtfHorizon[] {
@@ -287,7 +300,7 @@ export async function runMtfScan(opts: {
       if (!q || q.count < settings.minOccurrences) continue;
       if (q.hitRate <= settings.hitRateThreshold) continue;
       const freqPerYear = acceptedIndices.length / spanYears;
-      if (freqPerYear < 2) continue;
+      if (freqPerYear < (settings.freqFloorPerYear ?? 2)) continue;
       const lastFiredIdx = entries[entries.length - 1];
       out.push({
         key: `${bundle.ticker}|${legs.map((l) => l.key).sort().join("+")}|${direction}`,
