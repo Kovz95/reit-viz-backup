@@ -733,11 +733,20 @@ export default function UniversalScreener() {
                 </button>
               );
             })}
+          <label className="flex items-center gap-1 text-muted-foreground" title="Bar frequency the sweep runs on: weekly/monthly resample every series (price + valuation) to period-end bars before detection, and horizons count calendar periods on those bars.">
+            Bars
+            <select value={settings.barMode ?? "daily"} onChange={(e) => set("barMode", e.target.value as SweepSettings["barMode"])}
+              className="bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-bar-mode">
+              <option value="daily">D</option>
+              <option value="weekly">W</option>
+              <option value="monthly">M</option>
+            </select>
+          </label>
           <label className="flex items-center gap-1 text-muted-foreground">
             Horizon
             <select value={settings.horizon} onChange={(e) => set("horizon", e.target.value)}
               className="bg-background border border-border rounded px-1 py-0.5 text-[11px]" data-testid="uhs-horizon">
-              {HORIZONS.map((h) => <option key={h.label} value={h.label}>{h.label}</option>)}
+              {(settings.barMode === "monthly" ? HORIZONS.filter((h) => !["1W", "2W"].includes(h.label)) : HORIZONS).map((h) => <option key={h.label} value={h.label}>{h.label}</option>)}
             </select>
           </label>
           <label className="flex items-center gap-1 text-muted-foreground" title="Qualification threshold. Singles qualify on Hit% (reached the target move within the horizon); pairs qualify on Win% (directionally-correct horizon return).">

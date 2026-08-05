@@ -13,10 +13,27 @@ import {
 
 const fmtSigned = (v: number, dp = 2) => `${v >= 0 ? "+" : ""}${v.toFixed(dp)}`;
 
+import { downsampleSeries } from "@/lib/chartFrequency";
+
+/** Monthly-bar preset: windows/horizons in MONTHS (36mo pctile window, 1-bar
+ *  step, 1/3/6-month horizons) — the kernel is bar-agnostic. */
+const MONTHLY_SI_BT: SIBtParams = {
+  pctileWindow: 36, hiPctile: 70, loPctile: 30, trendLookback: 1, deadband: 0.1,
+  horizons: [1, 3, 6], stepDays: 1, minN: 8, primaryHorizon: 3,
+};
+
 interface TV { time: string; value: number }
 
 export default function SIBacktestModal({ ticker, name, onClose }: { ticker: string; name: string; onClose: () => void }) {
   const [params, setParams] = useState<SIBtParams>(DEFAULT_SI_BT);
+  // Bar mode: monthly resamples SI/price to calendar-month bars and swaps in
+  // the monthly parameter preset (bar-count params mean MONTHS then).
+  const [barMode, setBarMode] = useState<"daily" | "monthly">("daily");
+  const changeBarMode = (m: "daily" | "monthly") => {
+    if (m === barMode) return;
+    setBarMode(m);
+    setParams(m === "monthly" ? MONTHLY_SI_BT : DEFAULT_SI_BT);
+  };
   const [data, setData] = useState<{ si: TV[]; close: TV[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,15 +49,19 @@ export default function SIBacktestModal({ ticker, name, onClose }: { ticker: str
 
   const result = useMemo(() => {
     if (!data) return null;
-    try { return runSIVerdictBacktest(data.si, data.close, params); } catch { return null; }
-  }, [data, params]);
+    try {
+      const sig = barMode === "monthly" ? (downsampleSeries(data.si as any, "monthly") as TV[]) : data.si;
+      const px = barMode === "monthly" ? (downsampleSeries(data.close as any, "monthly") as TV[]) : data.close;
+      return runSIVerdictBacktest(sig, px, params);
+    } catch { return null; }
+  }, [data, params, barMode]);
 
   const setNum = (key: keyof SIBtParams, v: number) => setParams(p => ({ ...p, [key]: v }));
 
   const exportCsv = () => {
     if (!result) return;
     const hs = params.horizons;
-    const lines = [`date,state,si,pctile,trend,${hs.map(h => `fwd${h}d`).join(",")}`];
+    const lines = [`date,state,si,pctile,trend,${hs.map(h => `fwd${h}${barMode === "monthly" ? "mo" : "d"}`).join(",")}`];
     for (const s of result.samples) {
       lines.push([
         s.date, s.state, s.si.toFixed(3), s.pctile.toFixed(1), s.trend.toFixed(3),
@@ -88,6 +109,20 @@ export default function SIBacktestModal({ ticker, name, onClose }: { ticker: str
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">bars</span>
+            {(["daily", "monthly"] as const).map((m) => (
+              <button
+                key={m}
+                className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${barMode === m ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                onClick={() => changeBarMode(m)}
+                title={m === "monthly" ? "Calendar-month bars — windows/horizons count months" : "Daily bars"}
+                data-testid={`si-bt-bars-${m}`}
+              >
+                {m === "daily" ? "D" : "M"}
+              </button>
+            ))}
+          </div>
           {num("hi %ile", "hiPctile", { min: 50 })}
           {num("lo %ile", "loPctile", { min: 1 })}
           {num("trend (d)", "trendLookback", { min: 1 })}

@@ -28,6 +28,15 @@ export const DAILY_MTF_HORIZONS: MtfHorizon[] = [
   { label: "3M", bars: 63 },
 ];
 
+/** Monthly-base horizons (bars = calendar months). */
+export const MONTHLY_MTF_HORIZONS: MtfHorizon[] = [
+  { label: "1M", bars: 1 },
+  { label: "2M", bars: 2 },
+  { label: "3M", bars: 3 },
+  { label: "6M", bars: 6 },
+  { label: "1Y", bars: 12 },
+];
+
 /** Hourly-base horizons (US regular session ≈ 7 hourly bars/day). */
 export const HOURLY_MTF_HORIZONS: MtfHorizon[] = [
   { label: "1D", bars: 7 },
@@ -40,7 +49,7 @@ export const HOURLY_MTF_HORIZONS: MtfHorizon[] = [
 export type MtfDirection = "long" | "short";
 
 export interface MtfSettings {
-  baseTf: "H" | "D";
+  baseTf: "H" | "D" | "M";
   /** PERCENT in the UI (5 = +5%); divided by 100 at the kernel call. */
   targetPct: number;
   cooldownBars: number;
@@ -68,12 +77,13 @@ export const DEFAULT_MTF_SETTINGS: MtfSettings = {
 };
 
 /** Base-TF-appropriate defaults for the fields that depend on bar density. */
-export function defaultsForBase(baseTf: "H" | "D"): Pick<MtfSettings, "cooldownBars" | "horizonLabel"> {
+export function defaultsForBase(baseTf: "H" | "D" | "M"): Pick<MtfSettings, "cooldownBars" | "horizonLabel"> {
+  if (baseTf === "M") return { cooldownBars: 2, horizonLabel: "3M" };
   return baseTf === "H" ? { cooldownBars: 21, horizonLabel: "1W" } : { cooldownBars: 10, horizonLabel: "1M" };
 }
 
-export function horizonsForBase(baseTf: "H" | "D"): MtfHorizon[] {
-  return baseTf === "H" ? HOURLY_MTF_HORIZONS : DAILY_MTF_HORIZONS;
+export function horizonsForBase(baseTf: "H" | "D" | "M"): MtfHorizon[] {
+  return baseTf === "H" ? HOURLY_MTF_HORIZONS : baseTf === "M" ? MONTHLY_MTF_HORIZONS : DAILY_MTF_HORIZONS;
 }
 
 export interface MtfHorizonRow {
@@ -212,7 +222,7 @@ const TF_RANK = { H: 0, D: 1, W: 2, M: 3 } as const;
  * pairs (contradictions/redundancies; also enforces "cross-TF or
  * cross-indicator" by construction).
  */
-export function enumeratePairs(instances: ConditionInstance[], baseTf: "H" | "D"): ConditionInstance[][] {
+export function enumeratePairs(instances: ConditionInstance[], baseTf: "H" | "D" | "M"): ConditionInstance[][] {
   const legs = instances.filter((i) => TF_RANK[i.tf] >= TF_RANK[baseTf]);
   const out: ConditionInstance[][] = [];
   for (let a = 0; a < legs.length; a++) {
@@ -239,7 +249,7 @@ export async function runMtfScan(opts: {
 }): Promise<MtfScanResult> {
   const { bundle, settings, onProgress, cancelRef } = opts;
   const baseTf = settings.baseTf === "H" && !bundle.hourly ? "D" : settings.baseTf;
-  const base = baseTf === "H" ? bundle.hourly! : bundle.daily;
+  const base = baseTf === "H" ? bundle.hourly! : baseTf === "M" ? bundle.monthly : bundle.daily;
   const horizons = horizonsForBase(baseTf);
   const targetFraction = settings.targetPct / 100;
 
@@ -247,14 +257,15 @@ export async function runMtfScan(opts: {
   const matrix = computeConditionMatrix(bundle, baseTf, instances);
 
   // Span for freq/yr: base-series calendar span.
-  const firstDate = baseTf === "H" ? bundle.hourlyDates[0] : bundle.daily.keys[0];
-  const lastDate = baseTf === "H" ? bundle.hourlyDates[bundle.hourlyDates.length - 1] : bundle.daily.keys[bundle.daily.keys.length - 1];
+  const baseKeys = baseTf === "H" ? bundle.hourlyDates : baseTf === "M" ? bundle.monthly.keys : bundle.daily.keys;
+  const firstDate = baseKeys[0];
+  const lastDate = baseKeys[baseKeys.length - 1];
   const spanYears = Math.max(
     (new Date(lastDate).getTime() - new Date(firstDate).getTime()) / (365.25 * 24 * 3600 * 1000),
     0.25,
   );
 
-  const entryLabelOf = (idx: number) => (baseTf === "H" ? bundle.hourlyDates[idx] : bundle.daily.keys[idx]);
+  const entryLabelOf = (idx: number) => (baseTf === "H" ? bundle.hourlyDates[idx] : baseTf === "M" ? bundle.monthly.keys[idx] : bundle.daily.keys[idx]);
 
   const evaluateCombo = (legs: ConditionInstance[]): MtfSetupRow[] => {
     const states = legs.map((l) => matrix.get(l.key)!).filter(Boolean);

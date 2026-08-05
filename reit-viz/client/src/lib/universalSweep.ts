@@ -12,6 +12,8 @@
 // default semantics.
 
 import { buildBacktestResult, type HorizonRow } from "@/components/EvaluatorPanel";
+import { evaluateForwardStats, type MtfHorizon } from "@/lib/mtfEngine";
+import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
@@ -27,6 +29,11 @@ import {
 
 export interface SweepSettings {
   mode: "single" | "pair" | "both";
+  /** Bar frequency the whole sweep runs on. Weekly/monthly resample every
+   *  bundle (price + valuation series) to period-end bars before detection,
+   *  and horizons are measured in bars of that frequency via the bar-agnostic
+   *  MTF kernel (the shared daily kernel's horizons are hardwired). */
+  barMode?: "daily" | "weekly" | "monthly";
   /** HORIZONS label the qualification reads (1W/2W/1M/3M/6M/1Y). */
   horizon: string;
   /** Strict > threshold on the horizon hit rate. */
@@ -63,6 +70,7 @@ export interface SweepSettings {
 
 export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   mode: "single",
+  barMode: "daily",
   horizon: "3M",
   hitRateThreshold: 0.5,
   minOccurrences: 8,
@@ -255,6 +263,49 @@ async function buildPairBundle(a: string, b: string, minBars: number): Promise<S
 }
 
 // ---------------------------------------------------------------------------
+// Bar-mode resampling
+// ---------------------------------------------------------------------------
+
+/** Calendar-labelled horizons in BARS of the selected frequency. */
+const WEEKLY_SWEEP_HORIZONS: MtfHorizon[] = [
+  { label: "1W", bars: 1 }, { label: "2W", bars: 2 }, { label: "1M", bars: 4 },
+  { label: "3M", bars: 13 }, { label: "6M", bars: 26 }, { label: "1Y", bars: 52 },
+];
+const MONTHLY_SWEEP_HORIZONS: MtfHorizon[] = [
+  { label: "1M", bars: 1 }, { label: "3M", bars: 3 }, { label: "6M", bars: 6 }, { label: "1Y", bars: 12 },
+];
+
+/** Downsample a whole bundle to weekly/monthly period-end bars (last value
+ *  per bucket for every aligned series). */
+function resampleBundle(b: SeriesBundle, mode: "weekly" | "monthly"): SeriesBundle {
+  const ds = weeklyDownsample(
+    {
+      dates: b.dates, closes: b.closes, adjCloses: b.closes,
+      highs: b.highs ?? b.closes, lows: b.lows ?? b.closes,
+      opens: b.opens ?? b.closes, volumes: b.volumes ?? [],
+    },
+    mode,
+  );
+  const map = ds.dailyIndexMap;
+  return {
+    ...b,
+    dates: ds.dates,
+    closes: ds.closes,
+    opens: b.opens ? ds.opens : undefined,
+    highs: b.highs ? ds.highs : undefined,
+    lows: b.lows ? ds.lows : undefined,
+    volumes: b.volumes ? ds.volumes : undefined,
+    benchCloses: b.benchCloses ? map.map((di: number) => b.benchCloses![di]) : undefined,
+    valuation: b.valuation
+      ? Object.fromEntries(Object.entries(b.valuation).map(([k, v]) => [k, map.map((di: number) => v[di])]))
+      : undefined,
+    pair: b.pair
+      ? { aCloses: map.map((di: number) => b.pair!.aCloses[di]), bCloses: map.map((di: number) => b.pair!.bCloses[di]) }
+      : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Evaluation
 // ---------------------------------------------------------------------------
 
@@ -297,18 +348,38 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
         }
         if (indices.length < settings.minOccurrences) continue;
 
-        const result = buildBacktestResult(
-          bundle.closes,
-          bundle.dates,
-          indices,
-          dir,
-          settings.targetPct / 100,
-          settings.cooldown,
-          undefined,
-          settings.horizon,
-        );
+        const barMode = settings.barMode ?? "daily";
+        let result: { rows: any[]; signalCount: number; firstSignalDate: string | null; lastSignalDate: string | null; signals: { date: string }[] };
+        if (barMode === "weekly" || barMode === "monthly") {
+          // Bar-agnostic MTF kernel: horizons count bars of the sweep's
+          // frequency; semantics mirror buildBacktestResult exactly.
+          const horizons = barMode === "weekly" ? WEEKLY_SWEEP_HORIZONS : MONTHLY_SWEEP_HORIZONS;
+          const { rows: hrows, acceptedIndices } = evaluateForwardStats(
+            bundle.closes, indices, dir as "long" | "short",
+            settings.targetPct / 100, settings.cooldown, horizons,
+          );
+          result = {
+            rows: hrows,
+            signalCount: acceptedIndices.length,
+            firstSignalDate: acceptedIndices.length ? bundle.dates[acceptedIndices[0]] ?? null : null,
+            lastSignalDate: acceptedIndices.length ? bundle.dates[acceptedIndices[acceptedIndices.length - 1]] ?? null : null,
+            signals: acceptedIndices.map((i) => ({ date: bundle.dates[i] ?? "" })),
+          };
+        } else {
+          result = buildBacktestResult(
+            bundle.closes,
+            bundle.dates,
+            indices,
+            dir,
+            settings.targetPct / 100,
+            settings.cooldown,
+            undefined,
+            settings.horizon,
+          ) as any;
+        }
 
-        const row = result.rows.find((r) => r.horizon === settings.horizon);
+        // Monthly mode has no 1W/2W horizons — fall back to the shortest.
+        const row = result.rows.find((r) => r.horizon === settings.horizon) ?? (barMode === "monthly" ? result.rows[0] : undefined);
         if (!row) continue;
         if (row.count < settings.minOccurrences) continue;
         // Pairs qualify on winRate (directionally-correct horizon return):
@@ -412,7 +483,8 @@ export async function runUniversalSweep(opts: {
 
     for (let i = 0; i < batch.length; i++) {
       if (cancelRef.current) break;
-      const bundle = bundles[i];
+      const bundle0 = bundles[i];
+      const bundle = bundle0 && settings.barMode && settings.barMode !== "daily" ? resampleBundle(bundle0, settings.barMode) : bundle0;
       if (bundle) {
         const rows = evaluateBundle(bundle, settings);
         if (rows.length > 0) {
@@ -463,9 +535,10 @@ export async function refreshFiringStatus(
     const subjectRows = bySubject.get(subject)!;
     const isPair = subject.includes("/");
     const valMetrics = requiredValuationMetrics(new Set(subjectRows.map((r) => r.signalId)));
-    const bundle = isPair
+    const bundle0 = isPair
       ? await buildPairBundle(subject.split("/")[0], subject.split("/")[1], minBars)
       : await buildSingleBundle(subject, minBars, valMetrics);
+    const bundle = bundle0 && settings.barMode && settings.barMode !== "daily" ? resampleBundle(bundle0, settings.barMode) : bundle0;
 
     for (const r of subjectRows) {
       if (!bundle) {

@@ -189,7 +189,7 @@ export default function MTFSetups() {
   const set = useCallback(<K extends keyof MtfSettings>(k: K, v: MtfSettings[K]) => {
     setSettings((prev) => ({ ...prev, [k]: v }));
   }, []);
-  const setBaseTf = useCallback((baseTf: "H" | "D") => {
+  const setBaseTf = useCallback((baseTf: "H" | "D" | "M") => {
     setSettings((prev) => ({ ...prev, baseTf, ...defaultsForBase(baseTf) }));
   }, []);
 
@@ -233,7 +233,7 @@ export default function MTFSetups() {
     return () => { active = false; };
   }, [ticker, scope, pairA, pairB]);
 
-  const effectiveBase: "H" | "D" = settings.baseTf === "H" && bundle && !bundle.hourly ? "D" : settings.baseTf;
+  const effectiveBase: "H" | "D" | "M" = settings.baseTf === "H" && bundle && !bundle.hourly ? "D" : settings.baseTf;
 
   // ── Scan ───────────────────────────────────────────────────────────────────
   const [scan, setScan] = useState<MtfScanResult | null>(null);
@@ -338,14 +338,14 @@ export default function MTFSetups() {
     if (states.length !== legs.length) { setCustomErr("A leg is unavailable for this base timeframe."); return; }
     const { entries, state } = conjunctionEntries(states);
     if (entries.length === 0) { setCustomErr("This combination never turned on in the available history."); return; }
-    const base = effectiveBase === "H" ? bundle.hourly! : bundle.daily;
+    const base = effectiveBase === "H" ? bundle.hourly! : effectiveBase === "M" ? bundle.monthly : bundle.daily;
     const horizons = horizonsForBase(effectiveBase);
     const { rows, acceptedIndices } = evaluateForwardStats(
       base.closes, entries, customDir, settings.targetPct / 100, settings.cooldownBars, horizons,
     );
     const q = rows.find((r) => r.horizon === settings.horizonLabel) ?? rows[0];
-    const entryLabelOf = (idx: number) => (effectiveBase === "H" ? bundle.hourlyDates[idx] : bundle.daily.keys[idx]);
-    const firstDate = effectiveBase === "H" ? bundle.hourlyDates[0] : bundle.daily.keys[0];
+    const entryLabelOf = (idx: number) => (effectiveBase === "H" ? bundle.hourlyDates[idx] : effectiveBase === "M" ? bundle.monthly.keys[idx] : bundle.daily.keys[idx]);
+    const firstDate = effectiveBase === "H" ? bundle.hourlyDates[0] : effectiveBase === "M" ? bundle.monthly.keys[0] : bundle.daily.keys[0];
     const lastDate = entryLabelOf(base.keys.length - 1);
     const spanYears = Math.max(
       (new Date(lastDate).getTime() - new Date(firstDate).getTime()) / (365.25 * 24 * 3600 * 1000),
@@ -570,7 +570,7 @@ export default function MTFSetups() {
             </>
           )}
           <div className="flex items-center rounded border border-border overflow-hidden" title={bundle && !bundle.hourly ? "No usable 60m data for this symbol — Daily base only" : undefined}>
-            {(["D", "H"] as const).map((tf) => (
+            {(["M", "D", "H"] as const).map((tf) => (
               <button
                 key={tf}
                 type="button"
@@ -579,7 +579,7 @@ export default function MTFSetups() {
                 data-testid={`mtf-base-${tf}`}
                 className={`px-2 py-0.5 text-[10px] font-mono ${effectiveBase === tf ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground disabled:opacity-40"}`}
               >
-                {tf === "D" ? "Daily base" : "Hourly base"}
+                {tf === "D" ? "Daily base" : tf === "H" ? "Hourly base" : "Monthly base"}
               </button>
             ))}
           </div>

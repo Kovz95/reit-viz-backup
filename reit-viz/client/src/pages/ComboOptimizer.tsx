@@ -1008,7 +1008,28 @@ export default function ComboOptimizer() {
         }
       }
 
-      const indCache = computeIndicators(workPrices);
+      // Real W/D + M/D evaluation (grid parity): indicators computed on
+      // weekly/monthly bars, expanded back onto daily bars for daily signals.
+      let indCache: IndicatorCache;
+      if ((frequency as string).endsWith("_on_daily")) {
+        const wodMode = (frequency as string) === "monthly_on_daily" ? "monthly" : undefined;
+        const weeklyResult = weeklyDownsamplePricesFn(workPrices, dates, wodMode) as any;
+        const n = workPrices.length;
+        const weeklyCache = computeIndicators(weeklyResult.prices);
+        const expandToDaily = (arr: (number | null)[]): (number | null)[] =>
+          (expandWeeklyToDailyFn(arr.map((v: number | null) => (v === null ? NaN : v)), weeklyResult.weekIndex, n) as number[])
+            .map((v: number) => (Number.isFinite(v) ? v : null));
+        const expandRaw = (arr: number[]): number[] => expandWeeklyToDailyFn(arr, weeklyResult.weekIndex, n);
+        const expandedRoc = new Map<number, number[]>();
+        Array.from(weeklyCache.rocByPeriod.entries()).forEach(([p, arr]) => expandedRoc.set(p, expandRaw(arr)));
+        const expandedSma = new Map<number, (number | null)[]>();
+        Array.from(weeklyCache.smaByPeriod.entries()).forEach(([p, arr]) => expandedSma.set(p, expandToDaily(arr)));
+        const expandedSlope = new Map<number, (number | null)[]>();
+        Array.from(weeklyCache.slopeByPeriod.entries()).forEach(([p, arr]) => expandedSlope.set(p, expandToDaily(arr)));
+        indCache = { rsi14: expandToDaily(weeklyCache.rsi14), rocByPeriod: expandedRoc, smaByPeriod: expandedSma, slopeByPeriod: expandedSlope };
+      } else {
+        indCache = computeIndicators(workPrices);
+      }
       const signalIndices = detectTriggerSignals(trigger, workPrices, indCache);
       const activeFilters = allFilters.filter(f => evalFilterKeys.includes(f.label));
       const filteredIndices: number[] = [];

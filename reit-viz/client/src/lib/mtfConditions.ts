@@ -542,10 +542,10 @@ export function conditionInstances(bundle: MtfBundle): ConditionInstance[] {
  */
 export function computeConditionMatrix(
   bundle: MtfBundle,
-  baseTf: "H" | "D",
+  baseTf: "H" | "D" | "M",
   instances: ConditionInstance[],
 ): Map<string, (boolean | null)[]> {
-  const base = baseTf === "H" ? bundle.hourly! : bundle.daily;
+  const base = baseTf === "H" ? bundle.hourly! : baseTf === "M" ? bundle.monthly : bundle.daily;
   const n = base.keys.length;
   const out = new Map<string, (boolean | null)[]>();
   for (const inst of instances) {
@@ -560,6 +560,24 @@ export function computeConditionMatrix(
     // (and the naive fallthrough below would index hourly states with weekly
     // indices) — skip it; callers treat a missing key as "leg unavailable".
     if (baseTf === "D" && inst.tf === "H") continue;
+    if (baseTf === "M") {
+      // Monthly base: finer-TF conditions are sampled at each month-end —
+      // D via the month's last daily bar, W via the last USABLE weekly bar
+      // at that daily bar. Hourly is excluded (no projection).
+      if (inst.tf === "H") continue;
+      const projectedM: (boolean | null)[] = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const di = bundle.monthlyDailyIndexMap[i];
+        if (inst.tf === "D") {
+          projectedM[i] = di >= 0 ? own[di] : null;
+        } else {
+          const wi = di >= 0 ? bundle.dailyToWeekly[di] : -1;
+          projectedM[i] = wi >= 0 ? own[wi] : null;
+        }
+      }
+      out.set(inst.key, projectedM);
+      continue;
+    }
     const map =
       baseTf === "H"
         ? inst.tf === "D"

@@ -1051,16 +1051,49 @@ export default function Oscillators() {
       const side = evalSide === "long" ? "buy" : "sell";
       const signalIndices: number[] = [];
 
+      // Real W/D + M/D evaluation (grid parity): compute the oscillator on
+      // weekly/monthly bars, expand the values back onto the daily axis, and
+      // detect + evaluate signals on daily bars.
+      const evalOnDaily = mode !== "pair" && (frequency as string).endsWith("_on_daily");
+      const evalWodMode = frequency === "monthly_on_daily" ? "monthly" : undefined;
+      const evalWodMult = evalWodMode ? 21 : 5;
+      const expandNullable = (arr: (number | null)[], weekIndex: number[]): (number | null)[] =>
+        (Vt(arr.map((v: number | null) => (v === null ? NaN : v)), weekIndex, closes.length) as number[])
+          .map((v) => (Number.isFinite(v) ? v : null));
+
       if (subMode === "stoch") {
-        const { k, d } = Kt(highs, lows, closes, stochK, stochSmoothK, stochSmoothD);
-        const warmup = stochK + stochSmoothK + stochSmoothD + 5;
-        const signals = wo(k, d, stochOS, stochOB, stochSignalMode, warmup);
+        let kArr: (number | null)[], dArr: (number | null)[], warmup: number;
+        if (evalOnDaily) {
+          const wkC = qe(closes, priceDates, evalWodMode);
+          const wkH = qe(highs, priceDates, evalWodMode);
+          const wkL = qe(lows, priceDates, evalWodMode);
+          if (wkC.prices.length < (evalWodMode ? 24 : 52)) { setIsEvaluating(false); return; }
+          const { k, d } = Kt(wkH.prices, wkL.prices, wkC.prices, stochK, stochSmoothK, stochSmoothD);
+          kArr = expandNullable(k, wkC.weekIndex);
+          dArr = expandNullable(d, wkC.weekIndex);
+          warmup = Math.max((stochK + stochSmoothK + stochSmoothD) * evalWodMult, 21) + 126;
+        } else {
+          const { k, d } = Kt(highs, lows, closes, stochK, stochSmoothK, stochSmoothD);
+          kArr = k; dArr = d;
+          warmup = stochK + stochSmoothK + stochSmoothD + 5;
+        }
+        const signals = wo(kArr, dArr, stochOS, stochOB, stochSignalMode, warmup);
         for (const sig of signals) if (sig.direction === side) signalIndices.push(sig.index);
       } else {
-        const ewoVals = at(highs, lows, ewoFast, ewoSlow);
+        let ewoVals: (number | null)[], warmup: number;
+        if (evalOnDaily) {
+          const wkC = qe(closes, priceDates, evalWodMode);
+          const wkH = qe(highs, priceDates, evalWodMode);
+          const wkL = qe(lows, priceDates, evalWodMode);
+          if (wkC.prices.length < (evalWodMode ? 24 : 52)) { setIsEvaluating(false); return; }
+          ewoVals = expandNullable(at(wkH.prices, wkL.prices, ewoFast, ewoSlow), wkC.weekIndex);
+          warmup = Math.max(Math.max(ewoFast, ewoSlow) * evalWodMult, 21) + 126;
+        } else {
+          ewoVals = at(highs, lows, ewoFast, ewoSlow);
+          warmup = Math.max(ewoFast, ewoSlow) + 5;
+        }
         const lastPrice = closes[closes.length - 1] ?? 0;
         const thrAbs = (ewoThreshPct / 100) * lastPrice;
-        const warmup = Math.max(ewoFast, ewoSlow) + 5;
         const signals = Ft(ewoVals, thrAbs, warmup);
         for (const sig of signals) if (sig.direction === side) signalIndices.push(sig.index);
       }
@@ -1086,7 +1119,7 @@ export default function Oscillators() {
   }, [
     mode, pairTickerA, pairTickerB, selectedTicker, filteredAllTickers, subMode, stochSignalMode,
     stochK, stochSmoothK, stochSmoothD, stochOS, stochOB, ewoFast, ewoSlow, ewoThreshPct,
-    targetReturn, minHold, evalSide, dateRange, ht,
+    targetReturn, minHold, evalSide, dateRange, frequency,
   ]);
 
   const evalLabel = useMemo(() => {
