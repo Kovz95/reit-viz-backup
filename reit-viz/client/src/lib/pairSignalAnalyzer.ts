@@ -123,6 +123,8 @@ export interface PairSignalRawResult {
   currentSignals: Array<{ signal: SignalTypePair; value: number | null }>;
   buckets: Record<SignalTypePair, BucketRow[]>;
   analogs: Record<SignalTypePair, SignalAnalogResult | null>;
+  /** Same signals matched at MONTHLY granularity (month-end sampling, 1/3/6-month forward returns). */
+  analogsMonthly: Record<SignalTypePair, SignalAnalogResult | null>;
   bestNow: {
     signal: SignalTypePair;
     bucket: BucketRow;
@@ -359,10 +361,14 @@ export interface SignalAnalogResult {
   todayValue: number;
   /** Mean-reversion direction implied by today's value: true = expect ratio up */
   isLong: boolean;
+  /** fwd5d/fwd20d/fwd60d are GENERIC slots for the 1st/2nd/3rd horizon —
+   *  horizonBars says what they actually are (default [5, 20, 60] daily bars;
+   *  monthly matching passes [1, 3, 6] months). */
   matches: Array<{ date: string; value: number; fwd5d: number | null; fwd20d: number | null; fwd60d: number | null }>;
   h5d: AnalogStats | null;
   h20d: AnalogStats | null;
   h60d: AnalogStats | null;
+  horizonBars: [number, number, number];
   totalCandidates: number;
   droppedByGap: number;
 }
@@ -379,14 +385,15 @@ export function computeSignalAnalogs(
   dates: string[],
   signalValues: (number | null)[],
   closePrices: number[],
-  opts?: { topN?: number; minGap?: number; excludeLast?: number; reversionMid?: number }
+  opts?: { topN?: number; minGap?: number; excludeLast?: number; reversionMid?: number; horizonBars?: [number, number, number]; minBars?: number }
 ): SignalAnalogResult | null {
   const n = Math.min(dates.length, signalValues.length, closePrices.length);
   const topN = opts?.topN ?? 20;
   const minGap = opts?.minGap ?? 21;
   const excludeLast = opts?.excludeLast ?? 60;
   const reversionMid = opts?.reversionMid ?? 0;
-  if (n < 120) return null;
+  const horizonBars = opts?.horizonBars ?? ([5, 20, 60] as [number, number, number]);
+  if (n < (opts?.minBars ?? 120)) return null;
   const todayValue = signalValues[n - 1];
   if (todayValue == null || !isFinite(todayValue)) return null;
   const isLong = todayValue < reversionMid;
@@ -418,9 +425,9 @@ export function computeSignalAnalogs(
   const matches = accepted.map((idx) => ({
     date: dates[idx],
     value: signalValues[idx] as number,
-    fwd5d: fwd(idx, 5),
-    fwd20d: fwd(idx, 20),
-    fwd60d: fwd(idx, 60),
+    fwd5d: fwd(idx, horizonBars[0]),
+    fwd20d: fwd(idx, horizonBars[1]),
+    fwd60d: fwd(idx, horizonBars[2]),
   }));
 
   const summarize = (vals: Array<number | null>): AnalogStats | null => {
@@ -440,9 +447,46 @@ export function computeSignalAnalogs(
     h5d: summarize(matches.map((m) => m.fwd5d)),
     h20d: summarize(matches.map((m) => m.fwd20d)),
     h60d: summarize(matches.map((m) => m.fwd60d)),
+    horizonBars,
     totalCandidates: candidates.length,
     droppedByGap,
   };
+}
+
+/**
+ * Monthly analog matching: the SAME signal series sampled at each month's
+ * last bar (plus the current bar as "today"), so todayValue matches the daily
+ * panel, but matches are distinct historical MONTHS and forward returns are
+ * measured 1/3/6 months out on month-end closes. Cheap and window-free —
+ * no re-derivation of signal lookbacks on coarse bars.
+ */
+export function computeSignalAnalogsMonthly(
+  dates: string[],
+  signalValues: (number | null)[],
+  closePrices: number[],
+  opts?: { reversionMid?: number }
+): SignalAnalogResult | null {
+  const n = Math.min(dates.length, signalValues.length, closePrices.length);
+  if (n < 40) return null;
+  const idxs: number[] = [];
+  let prevKey = "";
+  for (let i = 0; i < n; i++) {
+    const key = (dates[i] ?? "").slice(0, 7);
+    if (key !== prevKey && i > 0) idxs.push(i - 1);
+    prevKey = key;
+  }
+  idxs.push(n - 1); // current (possibly forming) month = "today"
+  const dM = idxs.map((i) => dates[i]);
+  const sM = idxs.map((i) => signalValues[i]);
+  const cM = idxs.map((i) => closePrices[i]);
+  return computeSignalAnalogs(dM, sM, cM, {
+    ...opts,
+    horizonBars: [1, 3, 6],
+    minGap: 2,
+    excludeLast: 6,
+    minBars: 36,
+    topN: 15,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +780,12 @@ export function analyzePairRaw(
     spread_z: computeSignalAnalogs(dates, spreadZ, ratio),
     pct:      computeSignalAnalogs(dates, pct, ratio, { reversionMid: 50 }),
   };
+  const analogsMonthly: Record<SignalTypePair, SignalAnalogResult | null> = {
+    raw_z:    computeSignalAnalogsMonthly(dates, rawZ, ratio),
+    ols_z:    computeSignalAnalogsMonthly(dates, olsZFull, ratio),
+    spread_z: computeSignalAnalogsMonthly(dates, spreadZ, ratio),
+    pct:      computeSignalAnalogsMonthly(dates, pct, ratio, { reversionMid: 50 }),
+  };
 
   // Find best signal
   let bestNow: PairSignalRawResult["bestNow"] = null;
@@ -784,6 +834,7 @@ export function analyzePairRaw(
     currentSignals,
     buckets,
     analogs,
+    analogsMonthly,
     bestNow,
     halfLifeDays: computeHalfLife(rawZ),
   };

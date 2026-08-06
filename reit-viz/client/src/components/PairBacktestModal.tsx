@@ -25,10 +25,15 @@ export default function PairBacktestModal({ a, b, onClose }: { a: string; b: str
     try { return runPairBacktest(closes.a, closes.b, params); } catch { return null; }
   }, [closes, params]);
 
+  // Analog matching granularity: daily bars (5/20/60d) or month-end sampling
+  // (distinct months, 1/3/6mo forward returns).
+  const [analogBarMode, setAnalogBarMode] = useState<"daily" | "monthly">("daily");
   const analogs: SignalAnalogResult | null = useMemo(() => {
     if (!closes) return null;
-    try { return runPairAnalogs(closes.a, closes.b, params); } catch { return null; }
-  }, [closes, params]);
+    try { return runPairAnalogs(closes.a, closes.b, params, analogBarMode); } catch { return null; }
+  }, [closes, params, analogBarMode]);
+  const anMonthly = analogBarMode === "monthly" && analogs?.horizonBars?.[0] === 1;
+  const anHz: [string, string, string] = anMonthly ? ["1mo", "3mo", "6mo"] : ["5d", "20d", "60d"];
 
   const setP = (key: keyof PairBtParams, v: number | string) =>
     setParams((p) => ({ ...p, [key]: v }));
@@ -124,12 +129,25 @@ export default function PairBacktestModal({ a, b, onClose }: { a: string; b: str
               <div className="rounded border border-border/60 bg-background/60 px-2.5 py-2 space-y-1.5" data-testid="bt-analogs">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">Analogs to today's z ({analogs.todayValue >= 0 ? "+" : ""}{analogs.todayValue.toFixed(2)})</span>
+                  <div className="inline-flex rounded border border-border/50 overflow-hidden">
+                    {(["daily", "monthly"] as const).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setAnalogBarMode(m)}
+                        data-testid={`bt-analog-bars-${m}`}
+                        title={m === "monthly" ? "Match distinct historical MONTHS (month-end readings) with 1/3/6-month forward returns" : "Match daily bars with 5/20/60-day forward returns"}
+                        className={`px-1.5 py-0.5 text-[9px] font-mono font-bold ${m === "monthly" ? "border-l border-border/50" : ""} ${analogBarMode === m ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {m === "daily" ? "D" : "M"}
+                      </button>
+                    ))}
+                  </div>
                   <span className="text-[9.5px] text-muted-foreground">
-                    {analogs.matches.length} closest historical readings · fwd % move of {a}/{b} ratio · revert = {analogs.isLong ? "ratio up" : "ratio down"}
+                    {analogs.matches.length} closest historical {anMonthly ? "month-end readings" : "readings"} · fwd % move of {a}/{b} ratio · revert = {analogs.isLong ? "ratio up" : "ratio down"}
                   </span>
                 </div>
                 <div className="flex items-center gap-4 flex-wrap text-[10px] font-mono">
-                  {([["5d", analogs.h5d], ["20d", analogs.h20d], ["60d", analogs.h60d]] as const).map(([hz, s]) => (
+                  {([[anHz[0], analogs.h5d], [anHz[1], analogs.h20d], [anHz[2], analogs.h60d]] as const).map(([hz, s]) => (
                     <span key={hz}>
                       <span className="text-muted-foreground uppercase">{hz} </span>
                       {s ? (
@@ -153,7 +171,7 @@ export default function PairBacktestModal({ a, b, onClose }: { a: string; b: str
                           ? "border-emerald-500/30 text-emerald-300/90"
                           : "border-rose-500/30 text-rose-300/90"
                       }`}
-                      title={`z ${m.value >= 0 ? "+" : ""}${m.value.toFixed(2)} · fwd 20d ${m.fwd20d == null ? "—" : `${m.fwd20d >= 0 ? "+" : ""}${m.fwd20d.toFixed(2)}%`}`}
+                      title={`z ${m.value >= 0 ? "+" : ""}${m.value.toFixed(2)} · fwd ${anHz[1]} ${m.fwd20d == null ? "—" : `${m.fwd20d >= 0 ? "+" : ""}${m.fwd20d.toFixed(2)}%`}`}
                     >
                       {m.date}
                     </span>

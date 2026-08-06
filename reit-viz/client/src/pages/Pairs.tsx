@@ -436,6 +436,9 @@ function SignalAnalyzerChart({
   onMaximize: (id: string | null) => void;
 }) {
   const [activeSignal, setActiveSignal] = useState("raw_z");
+  // Analog matching granularity: daily bars (5/20/60d fwd) or month-end
+  // sampling (distinct months, 1/3/6mo fwd) — see computeSignalAnalogsMonthly.
+  const [analogBarMode, setAnalogBarMode] = useState<"daily" | "monthly">("daily");
   const analysis = useMemo(() => {
     if (!priceA || !priceB || priceA.length < 200 || priceB.length < 200) return null;
     try {
@@ -626,16 +629,35 @@ function SignalAnalyzerChart({
           {analysis.firstDate} → {analysis.lastDate} ({analysis.n.toLocaleString()} days).
         </div>
         {(() => {
-          const an = (analysis as any).analogs?.[activeSignal];
+          const monthly = analogBarMode === "monthly";
+          const an = monthly
+            ? (analysis as any).analogsMonthly?.[activeSignal] ?? (analysis as any).analogs?.[activeSignal]
+            : (analysis as any).analogs?.[activeSignal];
           if (!an) return null;
-          const horizons: Array<[string, any]> = [["5d", an.h5d], ["20d", an.h20d], ["60d", an.h60d]];
+          const isMo = monthly && (analysis as any).analogsMonthly?.[activeSignal];
+          const hzLabels = isMo ? ["1mo", "3mo", "6mo"] : ["5d", "20d", "60d"];
+          const horizons: Array<[string, any]> = [[hzLabels[0], an.h5d], [hzLabels[1], an.h20d], [hzLabels[2], an.h60d]];
+          const midLabel = hzLabels[1];
           return (
             <div className="rounded-md border border-border/40 bg-card/30 p-3 space-y-2" data-testid={`analog-panel-${activeSignal}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-cyan-300">Analog episodes</span>
+                <div className="inline-flex rounded border border-border/50 overflow-hidden">
+                  {(["daily", "monthly"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setAnalogBarMode(m)}
+                      data-testid={`analog-bars-${m}`}
+                      title={m === "monthly" ? "Match distinct historical MONTHS (month-end readings) with 1/3/6-month forward returns" : "Match daily bars with 5/20/60-day forward returns"}
+                      className={`px-1.5 py-0.5 text-[9px] font-mono font-bold ${m === "monthly" ? "border-l border-border/50" : ""} ${analogBarMode === m ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {m === "daily" ? "D" : "M"}
+                    </button>
+                  ))}
+                </div>
                 <span className="text-[10px] text-muted-foreground">
-                  {an.matches.length} closest historical matches to today's {signalLabel(activeSignal)} ({signalValueFormat(activeSignal, an.todayValue)})
-                  · min 21d apart · last 60d excluded{an.droppedByGap ? ` · ${an.droppedByGap} dropped by spacing` : ""}
+                  {an.matches.length} closest historical {isMo ? "month-end readings" : "matches"} to today's {signalLabel(activeSignal)} ({signalValueFormat(activeSignal, an.todayValue)})
+                  · {isMo ? "min 2mo apart · last 6mo excluded" : "min 21d apart · last 60d excluded"}{an.droppedByGap ? ` · ${an.droppedByGap} dropped by spacing` : ""}
                 </span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -672,7 +694,7 @@ function SignalAnalyzerChart({
                         ? "border-emerald-500/30 text-emerald-300/90 bg-emerald-500/5"
                         : "border-rose-500/30 text-rose-300/90 bg-rose-500/5"
                     }`}
-                    title={`${signalLabel(activeSignal)} ${signalValueFormat(activeSignal, m.value)} · fwd 20d ${fmtSignalPct(m.fwd20d)}`}
+                    title={`${signalLabel(activeSignal)} ${signalValueFormat(activeSignal, m.value)} · fwd ${midLabel} ${fmtSignalPct(m.fwd20d)}`}
                   >
                     {m.date}
                   </span>
@@ -680,7 +702,7 @@ function SignalAnalyzerChart({
               </div>
               <div className="text-[9.5px] text-muted-foreground/70 leading-snug">
                 Forward % change in the {tickerA}/{tickerB} ratio after each matched date. "Reverted" = moved in the
-                mean-reversion direction implied by today's reading ({an.isLong ? "ratio up" : "ratio down"}). Chip color = 20d outcome.
+                mean-reversion direction implied by today's reading ({an.isLong ? "ratio up" : "ratio down"}). Chip color = {midLabel} outcome.
               </div>
             </div>
           );

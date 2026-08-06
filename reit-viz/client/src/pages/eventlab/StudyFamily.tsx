@@ -37,9 +37,10 @@ import { ChevronRight, ChevronDown, Play, Download, Plus, Minus, Activity } from
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import {
   mean, percentile, buildHistogram, extractColumn, computeSigmaInspect,
-  runEventStudy, emptyStudyResult, DEFAULT_HORIZONS,
+  runEventStudy, emptyStudyResult,
+  HORIZONS_BY_BAR_MODE, BAR_UNIT, EXTREME_WINDOW_BY_BAR_MODE, resampleEventBundle,
   type EventBundle, type HorizonStats, type EventEntry, type StudyResult,
-  type SigmaInspect, type SigmaBasis,
+  type SigmaInspect, type SigmaBasis, type StudyBarMode,
 } from "@/lib/eventStudy";
 import {
   newStudyCondition, studyConditionLabel, combineConditions, isCalendarType,
@@ -60,7 +61,6 @@ const UsersIcon = createLucideIcon("Users", [
 ]);
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-const HORIZONS = DEFAULT_HORIZONS;
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -80,7 +80,14 @@ interface RunConfig {
   tickers: Array<{ ticker: string; name: string }>;
   conditions: StudyCondition[];
   combinator: "AND" | "OR";
+  barMode: StudyBarMode;
   nonce: number;
+}
+
+/** Prose unit for horizon labels ("5 days" / "3 months"). */
+function barWord(mode: StudyBarMode, n: number): string {
+  const w = mode === "daily" ? "day" : mode === "weekly" ? "week" : "month";
+  return n === 1 ? w : `${w}s`;
 }
 
 // ── Study wrapper over the shared libs ─────────────────────────────────────────
@@ -89,11 +96,19 @@ function computeStudy(
   conditions: StudyCondition[],
   combinator: "AND" | "OR",
   calendar: CalendarDates | null,
+  barMode: StudyBarMode = "daily",
 ): StudyResult {
   const validConds = conditions.filter(Boolean);
-  if (validConds.length === 0) return emptyStudyResult();
-  const hits = combineConditions(validConds, bundle, combinator, calendar);
-  return runEventStudy(bundle, hits);
+  const horizons = HORIZONS_BY_BAR_MODE[barMode];
+  if (validConds.length === 0) return emptyStudyResult(horizons);
+  // Coarse bar modes resample to period-end bars BEFORE condition evaluation,
+  // so conditions AND horizons are bar-denominated (a 2σ weekly move, +3
+  // months forward). Calendar dates map onto the containing coarse bar.
+  const b = resampleEventBundle(bundle, barMode);
+  const hits = combineConditions(validConds, b, combinator, calendar, {
+    extremeWindow: EXTREME_WINDOW_BY_BAR_MODE[barMode],
+  });
+  return runEventStudy(b, hits, { horizons });
 }
 
 function needsCalendar(conditions: StudyCondition[]): boolean {
@@ -252,13 +267,17 @@ function ConditionEditor({ cond, onChange, onRemove, canRemove }: {
   );
 }
 
-function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShowAllSingleEvents, pairsTickerA, pairsTickerB }: {
+function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShowAllSingleEvents, pairsTickerA, pairsTickerB, barMode = "daily" }: {
   run: any; result: StudyResult; triggerSummary: string;
   showAllSingleEvents: boolean; setShowAllSingleEvents: (v: boolean) => void;
-  pairsTickerA?: string; pairsTickerB?: string;
+  pairsTickerA?: string; pairsTickerB?: string; barMode?: StudyBarMode;
 }) {
   const isPairs = !!pairsTickerA && !!pairsTickerB;
   const displayName = useBasketName();
+  // Horizons come from the run's own stats, so tables always match the bar
+  // mode the study actually ran at.
+  const horizons = result.stats.map((s) => s.horizon);
+  const unit = BAR_UNIT[barMode];
   return (
     <>
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -305,7 +324,7 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
                     const pUpClass = Number.isFinite(stat.pUp) ? stat.pUp >= 0.5 ? "text-chart-2" : "text-destructive" : "";
                     return (
                       <tr key={stat.horizon} className="border-b border-border/50 hover:bg-muted/30">
-                        <td className="py-1.5 pr-3 font-medium">{stat.horizon === 1 ? "1 day" : `${stat.horizon} days`}</td>
+                        <td className="py-1.5 pr-3 font-medium">{`${stat.horizon} ${barWord(barMode, stat.horizon)}`}</td>
                         <td className="py-1.5 pr-3">{stat.count}</td>
                         <td className={`py-1.5 pr-3 font-semibold ${edgeClass}`}>{pctFmt(stat.mean)}</td>
                         <td className="py-1.5 pr-3">{pctFmt(stat.median)}</td>
@@ -341,7 +360,7 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
               <LineChart data={result.avgPath} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="day" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  label={{ value: "Trading days after event", position: "insideBottom", offset: -4, style: { fontSize: 10, fill: "hsl(var(--muted-foreground))" } }} />
+                  label={{ value: `Trading ${barWord(barMode, 2)} after event`, position: "insideBottom", offset: -4, style: { fontSize: 10, fill: "hsl(var(--muted-foreground))" } }} />
                 <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
                   tickFormatter={(v) => `${v.toFixed(1)}%`} />
                 <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
@@ -356,12 +375,12 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
       )}
       {result.events.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-          {HORIZONS.map(h => {
+          {horizons.map(h => {
             const bins = buildHistogram(result.distribution[h], 24);
             return (
               <Card key={h}>
                 <CardHeader className="pb-1">
-                  <CardTitle className="text-xs font-semibold text-muted-foreground">{h}-day forward return distribution</CardTitle>
+                  <CardTitle className="text-xs font-semibold text-muted-foreground">{h}-{barWord(barMode, 1)} forward return distribution</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0 h-40">
                   <ResponsiveContainer width="100%" height="100%">
@@ -426,7 +445,7 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
                   <tr className="text-left text-muted-foreground border-b border-border">
                     <th className="py-1.5 pr-3 font-medium">Date</th>
                     <th className="py-1.5 pr-3 font-medium">Trigger value</th>
-                    {HORIZONS.map(h => <th key={h} className="py-1.5 pr-3 font-medium">+{h}d</th>)}
+                    {horizons.map(h => <th key={h} className="py-1.5 pr-3 font-medium">+{h}{unit}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -438,7 +457,7 @@ function ResultStats({ run, result, triggerSummary, showAllSingleEvents, setShow
                       <tr key={`${ev.date}-${i}`} className="border-b border-border/50 hover:bg-muted/30">
                         <td className="py-1 pr-3">{ev.date}</td>
                         <td className="py-1 pr-3">{isSigmaOrGap ? pctFmt(ev.triggerValue) : numFmt(ev.triggerValue)}</td>
-                        {HORIZONS.map(h => {
+                        {horizons.map(h => {
                           const v = ev.fwd[h];
                           const cls = v == null ? "" : v > 0 ? "text-chart-2" : v < 0 ? "text-destructive" : "";
                           return <td key={h} className={`py-1 pr-3 ${cls}`}>{pctFmt(v ?? null)}</td>;
@@ -492,6 +511,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   const [tickerB, setTickerB] = useState("");
   const [conditions, setConditions] = useState<StudyCondition[]>([newStudyCondition("sigma")]);
   const [combinator, setCombinator] = useState<"AND" | "OR">("AND");
+  const [barMode, setBarMode] = useState<StudyBarMode>("daily");
   const [rankHorizon, setRankHorizon] = useState(20);
   const [sortKey, setSortKey] = useState("edge");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -575,7 +595,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     if (!runConfig || runConfig.mode !== "single" || !singleData?.series) return null;
     const s = singleData.series;
     const bundle: EventBundle = { dates: s.dates, closes: s.closes, opens: s.opens };
-    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, singleData.calendar);
+    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, singleData.calendar, runConfig.barMode);
   }, [runConfig, singleData]);
 
   // Pairs query (calendar dates come from symbol A when a calendar condition exists)
@@ -624,10 +644,10 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       }
       bundle = { dates: dts, closes: ratioClose, opens: ratioOpen };
     }
-    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, pairsData.calendar);
+    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, pairsData.calendar, runConfig.barMode);
   }, [runConfig, pairsData, dates]);
 
-  const runCrossStudy = useCallback(async (cfg: { tickers: Array<{ ticker: string; name: string }>; conditions: StudyCondition[]; combinator: "AND" | "OR" }) => {
+  const runCrossStudy = useCallback(async (cfg: { tickers: Array<{ ticker: string; name: string }>; conditions: StudyCondition[]; combinator: "AND" | "OR"; barMode: StudyBarMode }) => {
     setIsCrossRunning(true);
     setCrossResults(null);
     setCrossProgress({ done: 0, total: cfg.tickers.length });
@@ -651,7 +671,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
           // per ticker (the old page double-counted no-data tickers).
           if (!close.length) continue;
           const bundle: EventBundle = { dates, closes: close, opens: open };
-          const res = computeStudy(bundle, cfg.conditions, cfg.combinator, calendar);
+          const res = computeStudy(bundle, cfg.conditions, cfg.combinator, calendar, cfg.barMode);
           results.push({ ticker: t.ticker, name: t.name, events: res.events.length, stats: res.stats, baseline: res.baseline, eventRows: res.events });
         } catch {} finally {
           setCrossProgress(p => p ? { ...p, done: p.done + 1 } : null);
@@ -680,11 +700,13 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     setMode("single");
     setTicker(preset.ticker);
     setConditions([cond]);
+    // Sigma hand-offs are daily-calibrated (sigmaWindow in days).
+    setBarMode("daily");
     setRunConfig({
       mode: "single", symbol: preset.ticker, symbolB: undefined,
       tickers: filteredTickers.map((t: any) => ({ ticker: t.ticker, name: t.name })),
       conditions: [{ ...cond }],
-      combinator: "AND", nonce: preset.nonce,
+      combinator: "AND", barMode: "daily", nonce: preset.nonce,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
@@ -697,39 +719,46 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       symbolB: mode === "pairs" ? tickerB : undefined,
       tickers: filteredTickers.map((t: any) => ({ ticker: t.ticker, name: t.name })),
       conditions: conditions.map(c => ({ ...c })),
-      combinator, nonce: Date.now(),
+      combinator, barMode, nonce: Date.now(),
     };
     setRunConfig(cfg);
     if (mode === "cross") {
-      runCrossStudy({ tickers: cfg.tickers, conditions: cfg.conditions, combinator: cfg.combinator });
+      runCrossStudy({ tickers: cfg.tickers, conditions: cfg.conditions, combinator: cfg.combinator, barMode: cfg.barMode });
     } else {
       setCrossResults(null);
     }
-  }, [mode, ticker, tickerB, filteredTickers, conditions, combinator, runCrossStudy]);
+  }, [mode, ticker, tickerB, filteredTickers, conditions, combinator, barMode, runCrossStudy]);
 
   const triggerSummary = useMemo(() => runConfig
     ? runConfig.conditions.map(studyConditionLabel).join(runConfig.combinator === "AND" ? " AND " : " OR ")
     : "", [runConfig]);
 
+  // Results follow the bar mode of the RUN; the builder toggle only takes
+  // effect on the next Run. rankHorizon snaps into the active horizon set.
+  const activeBarMode: StudyBarMode = runConfig?.barMode ?? barMode;
+  const horizons = HORIZONS_BY_BAR_MODE[activeBarMode];
+  const barUnit = BAR_UNIT[activeBarMode];
+  const effRankHorizon = horizons.includes(rankHorizon) ? rankHorizon : horizons[Math.min(2, horizons.length - 1)];
+
   const exportSingleCsv = useCallback(() => {
     if (!singleResult || !runConfig) return;
-    const lines = ["Date,TriggerValue," + HORIZONS.map(h => `Fwd_${h}d_%`).join(","),
-      ...singleResult.events.map(ev => [ev.date, ev.triggerValue.toFixed(4), ...HORIZONS.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","))];
+    const lines = ["Date,TriggerValue," + horizons.map(h => `Fwd_${h}${barUnit}_%`).join(","),
+      ...singleResult.events.map(ev => [ev.date, ev.triggerValue.toFixed(4), ...horizons.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","))];
     downloadCsv(`${ticker}_event_study.csv`, lines.join("\n"));
   }, [singleResult, runConfig, ticker]);
 
   const exportPairsCsv = useCallback(() => {
     if (!pairsResult || !runConfig) return;
-    const lines = ["Date,RatioTriggerValue," + HORIZONS.map(h => `Fwd_${h}d_%`).join(","),
-      ...pairsResult.events.map(ev => [ev.date, ev.triggerValue.toFixed(4), ...HORIZONS.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","))];
+    const lines = ["Date,RatioTriggerValue," + horizons.map(h => `Fwd_${h}${barUnit}_%`).join(","),
+      ...pairsResult.events.map(ev => [ev.date, ev.triggerValue.toFixed(4), ...horizons.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","))];
     downloadCsv(`${ticker}_over_${tickerB}_event_study.csv`, lines.join("\n"));
   }, [pairsResult, runConfig, ticker, tickerB]);
 
   const exportCrossCsv = useCallback(() => {
     if (!crossResults || !runConfig) return;
-    const lines = [["Ticker", "Name", "Events", ...HORIZONS.flatMap(h => [`Mean_${h}d`, `Pup_${h}d`, `Edge_${h}d_pp`])].join(",")];
+    const lines = [["Ticker", "Name", "Events", ...horizons.flatMap(h => [`Mean_${h}${barUnit}`, `Pup_${h}${barUnit}`, `Edge_${h}${barUnit}_pp`])].join(",")];
     for (const row of crossResults) {
-      const cols = [row.ticker, `"${row.name.replace(/"/g, '""')}"`, String(row.events), ...HORIZONS.flatMap(h => {
+      const cols = [row.ticker, `"${row.name.replace(/"/g, '""')}"`, String(row.events), ...horizons.flatMap(h => {
         const s = row.stats.find(x => x.horizon === h)!;
         const b = row.baseline.find(x => x.horizon === h)!;
         const edge = Number.isFinite(s.mean) && Number.isFinite(b.mean) ? s.mean - b.mean : NaN;
@@ -742,10 +771,10 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
 
   const exportCrossEventsCsv = useCallback(() => {
     if (!crossResults || !runConfig) return;
-    const lines = [["Ticker", "Name", "Date", "TriggerValue", ...HORIZONS.map(h => `Fwd_${h}d_%`)].join(",")];
+    const lines = [["Ticker", "Name", "Date", "TriggerValue", ...horizons.map(h => `Fwd_${h}${barUnit}_%`)].join(",")];
     for (const row of crossResults)
       for (const ev of row.eventRows)
-        lines.push([row.ticker, `"${row.name.replace(/"/g, '""')}"`, ev.date, Number.isFinite(ev.triggerValue) ? ev.triggerValue.toFixed(4) : "", ...HORIZONS.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","));
+        lines.push([row.ticker, `"${row.name.replace(/"/g, '""')}"`, ev.date, Number.isFinite(ev.triggerValue) ? ev.triggerValue.toFixed(4) : "", ...horizons.map(h => ev.fwd[h] != null ? ev.fwd[h]!.toFixed(4) : "")].join(","));
     downloadCsv("cross_sectional_all_events.csv", lines.join("\n"));
   }, [crossResults, runConfig]);
 
@@ -753,10 +782,10 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     if (!crossResults) return null;
     const sorted = crossResults.slice();
     sorted.sort((a, b) => {
-      const sk = a.stats.find(x => x.horizon === rankHorizon)!;
-      const mk = b.stats.find(x => x.horizon === rankHorizon)!;
-      const bk = a.baseline.find(x => x.horizon === rankHorizon)!;
-      const bm = b.baseline.find(x => x.horizon === rankHorizon)!;
+      const sk = a.stats.find(x => x.horizon === effRankHorizon)!;
+      const mk = b.stats.find(x => x.horizon === effRankHorizon)!;
+      const bk = a.baseline.find(x => x.horizon === effRankHorizon)!;
+      const bm = b.baseline.find(x => x.horizon === effRankHorizon)!;
       const dir = sortDir === "asc" ? 1 : -1;
       if (sortKey === "ticker") return dir * a.ticker.localeCompare(b.ticker);
       if (sortKey === "name") return dir * a.name.localeCompare(b.name);
@@ -773,13 +802,13 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       return 0;
     });
     return sorted;
-  }, [crossResults, sortKey, sortDir, rankHorizon]);
+  }, [crossResults, sortKey, sortDir, effRankHorizon]);
 
   const crossAggregate = useMemo(() => {
     if (!sortedCrossResults) return null;
     const withEvents = sortedCrossResults.filter(t => t.events > 0);
     if (!withEvents.length) return null;
-    return HORIZONS.map(h => {
+    return horizons.map(h => {
       const means = withEvents.map(t => t.stats.find(x => x.horizon === h)?.mean).filter((v): v is number => Number.isFinite(v as number));
       const pUps = withEvents.map(t => t.stats.find(x => x.horizon === h)?.pUp).filter((v): v is number => Number.isFinite(v as number));
       const edges = withEvents.map(t => {
@@ -831,13 +860,14 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
               label="Templates"
               testIdPrefix="study-presets"
               className="ml-auto font-normal"
-              capture={() => ({ mode, ticker, tickerB, conditions, combinator, rankHorizon, sortKey, sortDir })}
+              capture={() => ({ mode, ticker, tickerB, conditions, combinator, barMode, rankHorizon, sortKey, sortDir })}
               apply={(c) => {
                 if (c?.mode === "single" || c?.mode === "cross" || c?.mode === "pairs") setMode(c.mode);
                 if (typeof c?.ticker === "string") setTicker(c.ticker);
                 if (typeof c?.tickerB === "string") setTickerB(c.tickerB);
                 if (Array.isArray(c?.conditions) && c.conditions.length) setConditions(c.conditions);
                 if (c?.combinator === "AND" || c?.combinator === "OR") setCombinator(c.combinator);
+                if (c?.barMode === "daily" || c?.barMode === "weekly" || c?.barMode === "monthly") setBarMode(c.barMode);
                 if (Number.isFinite(c?.rankHorizon)) setRankHorizon(c.rankHorizon);
                 if (typeof c?.sortKey === "string" && c.sortKey) setSortKey(c.sortKey);
                 if (c?.sortDir === "asc" || c?.sortDir === "desc") setSortDir(c.sortDir);
@@ -951,6 +981,19 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                 </div>
               </>
             )}
+
+            {/* Bar frequency: conditions + horizons run on these bars */}
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs text-muted-foreground" title="Bar frequency the study runs on: weekly/monthly resample the series to period-end bars before condition evaluation, and horizons count those bars (e.g. +3mo).">Bars</Label>
+              <div className="inline-flex rounded border border-border overflow-hidden h-8">
+                {(["daily", "weekly", "monthly"] as StudyBarMode[]).map((m) => (
+                  <button key={m} onClick={() => setBarMode(m)} data-testid={`study-bars-${m}`}
+                    className={`px-2.5 text-xs font-mono font-bold ${m !== "daily" ? "border-l border-border" : ""} ${barMode === m ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}>
+                    {m === "daily" ? "D" : m === "weekly" ? "W" : "M"}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="flex flex-col gap-1">
               <Label className="text-xs text-muted-foreground">Universe</Label>
@@ -1073,7 +1116,8 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
 
       {runConfig?.mode === "single" && singleResult && (
         <ResultStats run={runConfig} result={singleResult} triggerSummary={triggerSummary}
-          showAllSingleEvents={showAllSingleEvents} setShowAllSingleEvents={setShowAllSingleEvents} />
+          showAllSingleEvents={showAllSingleEvents} setShowAllSingleEvents={setShowAllSingleEvents}
+          barMode={runConfig.barMode} />
       )}
 
       {runConfig?.mode === "pairs" && isLoadingPairs && (
@@ -1093,7 +1137,8 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
           run={{ symbol: `${getBasketName(runConfig.symbol)}/${getBasketName(runConfig.symbolB)}`, conditions: runConfig.conditions, combinator: runConfig.combinator }}
           result={pairsResult} triggerSummary={triggerSummary}
           showAllSingleEvents={showAllSingleEvents} setShowAllSingleEvents={setShowAllSingleEvents}
-          pairsTickerA={runConfig.symbol} pairsTickerB={runConfig.symbolB} />
+          pairsTickerA={runConfig.symbol} pairsTickerB={runConfig.symbolB}
+          barMode={runConfig.barMode} />
       )}
 
       {runConfig?.mode === "cross" && (isCrossRunning || crossProgress) && (
@@ -1141,7 +1186,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                     <tbody>
                       {crossAggregate.map(row => (
                         <tr key={row.horizon} className="border-b border-border/50 hover:bg-muted/30">
-                          <td className="py-1.5 pr-3 font-medium">{row.horizon === 1 ? "1 day" : `${row.horizon} days`}</td>
+                          <td className="py-1.5 pr-3 font-medium">{`${row.horizon} ${barWord(activeBarMode, row.horizon)}`}</td>
                           <td className="py-1.5 pr-3">{row.nTickers}</td>
                           <td className={`py-1.5 pr-3 font-semibold ${Number.isFinite(row.avgMean) && row.avgMean > 0 ? "text-chart-2" : Number.isFinite(row.avgMean) && row.avgMean < 0 ? "text-destructive" : ""}`}>{pctFmt(row.avgMean)}</td>
                           <td className="py-1.5 pr-3">{pctFmt(row.medMean)}</td>
@@ -1162,10 +1207,10 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
               <CardTitle className="text-xs font-semibold text-muted-foreground">Per-ticker ranked results</CardTitle>
               <div className="flex items-center gap-2">
                 <Label className="text-xs text-muted-foreground">Rank horizon</Label>
-                <Select value={String(rankHorizon)} onValueChange={v => setRankHorizon(parseInt(v))}>
+                <Select value={String(effRankHorizon)} onValueChange={v => setRankHorizon(parseInt(v))}>
                   <SelectTrigger className="h-7 w-[90px]" data-testid="select-rank-horizon"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {HORIZONS.map(h => <SelectItem key={h} value={String(h)}>{h}d</SelectItem>)}
+                    {horizons.map(h => <SelectItem key={h} value={String(h)}>{h}{barUnit}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -1179,7 +1224,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("ticker")}>Ticker <SortIcon col="ticker" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("name")}>Name <SortIcon col="name" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("events")}>N <SortIcon col="events" /></th>
-                      <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("mean")}>Mean@{rankHorizon}d <SortIcon col="mean" /></th>
+                      <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("mean")}>Mean@{effRankHorizon}{barUnit} <SortIcon col="mean" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("median")}>Median <SortIcon col="median" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("pUp")}>P(up) <SortIcon col="pUp" /></th>
                       <th className="py-1.5 pr-3 font-medium cursor-pointer select-none" onClick={() => handleColSort("baseMean")}>Baseline Mean <SortIcon col="baseMean" /></th>
@@ -1188,8 +1233,8 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                   </thead>
                   <tbody>
                     {sortedCrossResults.map(row => {
-                      const stat = row.stats.find(x => x.horizon === rankHorizon)!;
-                      const base = row.baseline.find(x => x.horizon === rankHorizon)!;
+                      const stat = row.stats.find(x => x.horizon === effRankHorizon)!;
+                      const base = row.baseline.find(x => x.horizon === effRankHorizon)!;
                       const edge = Number.isFinite(stat.mean) && Number.isFinite(base.mean) ? stat.mean - base.mean : NaN;
                       const edgeCls = Number.isFinite(edge) ? edge > 0 ? "text-chart-2" : "text-destructive" : "";
                       const meanCls = Number.isFinite(stat.mean) ? stat.mean > 0 ? "text-chart-2" : "text-destructive" : "";
@@ -1249,7 +1294,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                                         <tr className="text-left text-muted-foreground border-b border-border">
                                           <th className="py-1 px-2 font-medium">Date</th>
                                           <th className="py-1 px-2 font-medium">Trigger</th>
-                                          {HORIZONS.map(h => <th key={h} className="py-1 px-2 font-medium">+{h}d</th>)}
+                                          {horizons.map(h => <th key={h} className="py-1 px-2 font-medium">+{h}{barUnit}</th>)}
                                         </tr>
                                       </thead>
                                       <tbody>
@@ -1257,7 +1302,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
                                           <tr key={`${ev.date}-${idx}`} className="border-b border-border/30 hover:bg-muted/30">
                                             <td className="py-0.5 px-2 font-mono">{ev.date}</td>
                                             <td className="py-0.5 px-2">{isSigmaOrGap ? pctFmt(ev.triggerValue) : numFmt(ev.triggerValue)}</td>
-                                            {HORIZONS.map(h => {
+                                            {horizons.map(h => {
                                               const v = ev.fwd[h];
                                               const cls = v == null ? "" : v > 0 ? "text-chart-2" : v < 0 ? "text-destructive" : "";
                                               return <td key={h} className={`py-0.5 px-2 ${cls}`}>{pctFmt(v ?? null)}</td>;

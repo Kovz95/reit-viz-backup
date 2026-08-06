@@ -13,10 +13,67 @@
 
 export const DEFAULT_HORIZONS = [1, 5, 20, 60];
 
+// Bar-frequency dimension for studies: horizons stay bar-denominated, so each
+// mode carries its own natural horizon set + label unit + "52-week" window.
+export type StudyBarMode = "daily" | "weekly" | "monthly";
+export const HORIZONS_BY_BAR_MODE: Record<StudyBarMode, number[]> = {
+  daily: DEFAULT_HORIZONS,
+  weekly: [1, 4, 13, 26],
+  monthly: [1, 3, 6, 12],
+};
+export const BAR_UNIT: Record<StudyBarMode, string> = { daily: "d", weekly: "w", monthly: "mo" };
+/** Bars in the "52-week extreme" lookback per mode (high52/low52 conditions). */
+export const EXTREME_WINDOW_BY_BAR_MODE: Record<StudyBarMode, number> = { daily: 252, weekly: 52, monthly: 12 };
+
 export interface EventBundle {
   dates: string[];
   closes: (number | null)[];
   opens?: (number | null)[];
+}
+
+/**
+ * Downsample an event bundle to period-end weekly/monthly bars, null-safe:
+ * a bar's close is the LAST non-null close in the bucket, its open the FIRST
+ * non-null open, its date the bucket's last trading date. Weekly buckets
+ * roll when the weekday decreases (same convention as lib/weeklyDownsample);
+ * monthly buckets are calendar months.
+ */
+export function resampleEventBundle(b: EventBundle, mode: StudyBarMode): EventBundle {
+  if (mode === "daily") return b;
+  const n = b.dates.length;
+  const dates: string[] = [];
+  const closes: (number | null)[] = [];
+  const opens: (number | null)[] = [];
+  let bClose: number | null = null;
+  let bOpen: number | null = null;
+  let bDate: string | null = null;
+  let prevKey: string | number | null = null;
+  const flush = () => {
+    if (bDate == null) return;
+    dates.push(bDate);
+    closes.push(bClose);
+    opens.push(bOpen);
+    bClose = null; bOpen = null; bDate = null;
+  };
+  for (let i = 0; i < n; i++) {
+    const d = b.dates[i];
+    if (!d) continue;
+    const key = mode === "monthly" ? d.slice(0, 7) : undefined;
+    if (mode === "monthly") {
+      if (key !== prevKey) { flush(); prevKey = key!; }
+    } else {
+      const dow = new Date(d + "T00:00:00Z").getUTCDay();
+      if (prevKey != null && dow <= (prevKey as number)) flush();
+      prevKey = dow;
+    }
+    bDate = d;
+    const c = b.closes[i];
+    if (c != null && Number.isFinite(c)) bClose = c;
+    const o = b.opens?.[i];
+    if (bOpen == null && o != null && Number.isFinite(o)) bOpen = o;
+  }
+  flush();
+  return { dates, closes, opens };
 }
 
 export interface HorizonStats {

@@ -4,7 +4,7 @@
 // |z| ≤ exitZ or after maxHold bars. All stats are in spread-return % (long
 // the cheap leg, short the rich one, hedge-weighted).
 import { computeKalmanHedge } from "./adaptiveModels";
-import { computeSignalAnalogs, type SignalAnalogResult } from "./pairSignalAnalyzer";
+import { computeSignalAnalogs, computeSignalAnalogsMonthly, type SignalAnalogResult } from "./pairSignalAnalyzer";
 
 export interface PairBtParams {
   window: number;   // rolling z window (bars)
@@ -107,7 +107,12 @@ function spreadZSeries(spread: number[], window: number): number[] {
  * with forward % moves of the A/B ratio. Complements the trade backtest —
  * no entry/exit rules, just "what followed similar readings".
  */
-export function runPairAnalogs(aCloses: TV[], bCloses: TV[], params: PairBtParams): SignalAnalogResult | null {
+export function runPairAnalogs(
+  aCloses: TV[],
+  bCloses: TV[],
+  params: PairBtParams,
+  barMode: "daily" | "monthly" = "daily",
+): SignalAnalogResult | null {
   const { times, a, b } = alignCloses(aCloses, bCloses);
   const n = times.length;
   if (n < params.window * 2 + 10) return null;
@@ -116,7 +121,12 @@ export function runPairAnalogs(aCloses: TV[], bCloses: TV[], params: PairBtParam
   const spread = spreadSeries(la, lb, params.hedge, params.window);
   const z = spreadZSeries(spread, params.window);
   const ratio = a.map((v, i) => v / b[i]);
-  return computeSignalAnalogs(times, z.map((v) => (Number.isFinite(v) ? v : null)), ratio);
+  const zClean = z.map((v) => (Number.isFinite(v) ? v : null));
+  // Monthly: same daily z sampled at month-ends, matches spaced in months,
+  // forward returns at 1/3/6 months (see computeSignalAnalogsMonthly).
+  return barMode === "monthly"
+    ? computeSignalAnalogsMonthly(times, zClean, ratio)
+    : computeSignalAnalogs(times, zClean, ratio);
 }
 
 export function runPairBacktest(aCloses: TV[], bCloses: TV[], params: PairBtParams): PairBtResult | null {

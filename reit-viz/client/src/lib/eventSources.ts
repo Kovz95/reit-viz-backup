@@ -173,7 +173,12 @@ export function computeStudyMask(
   cond: StudyCondition,
   bundle: EventBundle,
   calendar?: CalendarDates | null,
+  opts?: { extremeWindow?: number },
 ): ConditionMask {
+  // "52-week" extreme lookback in BARS — 252 on daily bars; coarse-bar
+  // studies pass 52 (weekly) / 12 (monthly) so the condition keeps meaning
+  // "one-year extreme" instead of demanding 21 years of monthly bars.
+  const extremeWindow = Math.max(2, Math.floor(opts?.extremeWindow ?? 252));
   const closes = bundle.closes;
   const opens = bundle.opens ?? [];
   const n = closes.length;
@@ -221,19 +226,19 @@ export function computeStudyMask(
       }
     }
   } else if (cond.type === "high52" || cond.type === "low52") {
-    for (let i = 252; i < n; i++) {
+    for (let i = extremeWindow; i < n; i++) {
       const v = closes[i];
       if (v == null) continue;
       let extreme = cond.type === "high52" ? -Infinity : Infinity;
       let cnt = 0;
-      for (let j = i - 252; j < i; j++) {
+      for (let j = i - extremeWindow; j < i; j++) {
         const x = closes[j];
         if (x != null) {
           cnt++;
           if (cond.type === "high52" ? x > extreme : x < extreme) extreme = x;
         }
       }
-      if (cnt < Math.floor(252 * 0.6)) continue;
+      if (cnt < Math.floor(extremeWindow * 0.6)) continue;
       if (cond.type === "high52" ? v > extreme : v < extreme) { mask[i] = true; value[i] = v; }
     }
   } else if (cond.type === "gap") {
@@ -283,9 +288,9 @@ export function computeStudyMask(
 
 /** Warmup bars a condition needs before its mask is meaningful (verbatim for
  *  technical types; calendar types need only 1 prior bar for the day-move). */
-export function warmupFor(cond: StudyCondition): number {
+export function warmupFor(cond: StudyCondition, extremeWindow = 252): number {
   if (cond.type === "sigma") return cond.sigmaBasis === "full" ? 30 : cond.sigmaWindow + 2;
-  if (cond.type === "high52" || cond.type === "low52") return 253;
+  if (cond.type === "high52" || cond.type === "low52") return extremeWindow + 1;
   if (cond.type === "gap") return 2;
   return 1;
 }
@@ -312,12 +317,13 @@ export function combineConditions(
   bundle: EventBundle,
   combinator: "AND" | "OR",
   calendar?: CalendarDates | null,
+  opts?: { extremeWindow?: number },
 ): Array<{ idx: number; val: number }> {
   const n = bundle.closes.length;
   const valid = conditions.filter(Boolean);
   if (!valid.length) return [];
-  const masks = valid.map((c) => smearMask(computeStudyMask(c, bundle, calendar), c.withinBars, n));
-  const warmup = Math.max(...valid.map(warmupFor));
+  const masks = valid.map((c) => smearMask(computeStudyMask(c, bundle, calendar, opts), c.withinBars, n));
+  const warmup = Math.max(...valid.map((c) => warmupFor(c, opts?.extremeWindow ?? 252)));
   const hits: Array<{ idx: number; val: number }> = [];
   for (let i = warmup; i < n; i++) {
     let fire = combinator === "AND";
