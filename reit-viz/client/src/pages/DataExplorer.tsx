@@ -289,6 +289,10 @@ export default function DataExplorer() {
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [sortAsc, setSortAsc] = useState(false);
+  // Row sampling frequency: weekly/monthly keep one row per calendar period
+  // (stamped on the period's last date; every column carries its latest value
+  // within the period).
+  const [rowFreq, setRowFreq] = useState<"daily" | "weekly" | "monthly">("daily");
   const [visibleMetrics, setVisibleMetrics] = useState<Set<string> | null>(null);
   const [columnSearch, setColumnSearch] = useState("");
   const [showStats, setShowStats] = useState(true);
@@ -518,13 +522,55 @@ export default function DataExplorer() {
       if (pairs) for (const [idx] of pairs) allDateIdxs.add(idx);
     }
     const dateIdxArr = Array.from(allDateIdxs).sort((a, b) => a - b);
-    if (!sortAsc) dateIdxArr.reverse();
-    return dateIdxArr.map((dateIdx) => ({
-      dateIdx,
-      date: dates[dateIdx] ?? `idx:${dateIdx}`,
-      values: metricMaps.map((m) => m.get(dateIdx) ?? null),
-    }));
-  }, [dates, displayMetrics, rawData, sortAsc]);
+
+    if (rowFreq === "daily") {
+      if (!sortAsc) dateIdxArr.reverse();
+      return dateIdxArr.map((dateIdx) => ({
+        dateIdx,
+        date: dates[dateIdx] ?? `idx:${dateIdx}`,
+        values: metricMaps.map((m) => m.get(dateIdx) ?? null),
+      }));
+    }
+
+    // Weekly/monthly sampling: bucket the (ascending) date rows by calendar
+    // period; one row per period stamped on its LAST date. Each column takes
+    // its latest value WITHIN the period (metrics are sparse — the month-end
+    // row alone would show blanks for anything not updated that exact day).
+    const buckets: number[][] = [];
+    let cur: number[] = [];
+    let prevKey: string | number | null = null;
+    for (const idx of dateIdxArr) {
+      const d = dates[idx] ?? "";
+      if (rowFreq === "monthly") {
+        const key = d.slice(0, 7);
+        if (prevKey !== null && key !== prevKey && cur.length) { buckets.push(cur); cur = []; }
+        prevKey = key;
+      } else {
+        const dow = new Date(d + "T00:00:00Z").getUTCDay();
+        if (prevKey !== null && dow <= (prevKey as number) && cur.length) { buckets.push(cur); cur = []; }
+        prevKey = dow;
+      }
+      cur.push(idx);
+    }
+    if (cur.length) buckets.push(cur);
+
+    const rows = buckets.map((bucket) => {
+      const last = bucket[bucket.length - 1];
+      return {
+        dateIdx: last,
+        date: dates[last] ?? `idx:${last}`,
+        values: metricMaps.map((m) => {
+          for (let i = bucket.length - 1; i >= 0; i--) {
+            const v = m.get(bucket[i]);
+            if (v !== undefined) return v;
+          }
+          return null;
+        }),
+      };
+    });
+    if (!sortAsc) rows.reverse();
+    return rows;
+  }, [dates, displayMetrics, rawData, sortAsc, rowFreq]);
 
   // Per-column summary statistics over the selected lookback window.
   // Values are the raw (unscaled) metric values; they're formatted for display
@@ -1051,6 +1097,22 @@ export default function DataExplorer() {
         )}
 
         <div className="flex-1" />
+
+        {/* Row sampling frequency: D = every data date, W/M = one row per
+            calendar period, every column carrying its latest in-period value */}
+        <div className="inline-flex rounded border border-border overflow-hidden h-7"
+          title="Row frequency: weekly/monthly keep one row per calendar period (stamped on its last date); each column shows its latest value within the period.">
+          {(["daily", "weekly", "monthly"] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => setRowFreq(f)}
+              data-testid={`data-freq-${f}`}
+              className={`px-2 text-[10px] font-mono font-bold ${f !== "daily" ? "border-l border-border" : ""} ${rowFreq === f ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:text-foreground"}`}
+            >
+              {f === "daily" ? "D" : f === "weekly" ? "W" : "M"}
+            </button>
+          ))}
+        </div>
 
         {/* Group filter — show only one metric category (same categories as Charts) */}
         <Popover open={groupPickerOpen} onOpenChange={setGroupPickerOpen}>
