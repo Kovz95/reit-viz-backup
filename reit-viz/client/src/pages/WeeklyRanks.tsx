@@ -4,7 +4,7 @@
 //
 // The ranking is YOUR judgment; the app keeps it internally consistent. See
 // docs/conviction-ranking-plan.md and lib/convictionGraph.ts (the pure engine).
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save, Swords, ListOrdered, TrendingUp, SkipForward, Undo2 } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
@@ -20,16 +20,31 @@ import { analyzeConviction, compareRankings, pairKey, type ConvictionState } fro
 interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; ties?: Array<[string, string]>; }
 const SNAP_KEY = "reit-viz:weekly-ranks:snapshots";
 
+// The six classification levels the app carries on every ticker, coarse→fine.
+type GroupLevel = "none" | "economy" | "sector" | "subsector" | "industryGroup" | "industry" | "subindustry";
+const GROUP_LEVELS: Array<{ value: GroupLevel; label: string }> = [
+  { value: "none", label: "No grouping" },
+  { value: "economy", label: "Economy" },
+  { value: "sector", label: "Sector" },
+  { value: "subsector", label: "Subsector" },
+  { value: "industryGroup", label: "Industry Group" },
+  { value: "industry", label: "Industry" },
+  { value: "subindustry", label: "Subindustry" },
+];
+
 export default function WeeklyRanks() {
   const { universeTickers } = useUniverse();
   const basketScope = useBasketScope("reit-viz:basket-scope:weekly-ranks");
 
   const { data: tickerMeta = [] } = useQuery({ queryKey: ["/api/tickers"], queryFn: () => getTickers() });
   const metaMap = useMemo(() => {
-    const m = new Map<string, { name: string; sector: string }>();
-    for (const t of tickerMeta as any[]) m.set(t.ticker, { name: t.name ?? t.ticker, sector: t.subsector || t.sector || "" });
+    const m = new Map<string, any>();
+    for (const t of tickerMeta as any[]) m.set(t.ticker, t);
     return m;
   }, [tickerMeta]);
+  const classOf = (t: string, level: GroupLevel): string =>
+    level === "none" ? "" : (metaMap.get(t)?.[level] || "— unclassified —");
+  const sectorLabel = (t: string) => metaMap.get(t)?.subsector || metaMap.get(t)?.sector || "";
 
   // ── Working state (restored per tab via useWorkspaceTab) ──────────────────
   const [order, setOrder] = useState<string[]>([]);
@@ -41,6 +56,7 @@ export default function WeeklyRanks() {
   const [pinFrom, setPinFrom] = useState<string | null>(null); // "pin X over…" armed
   const [tieFrom, setTieFrom] = useState<string | null>(null); // "tie X with…" armed
   const [view, setView] = useState<"rank" | "duel" | "changes">("rank");
+  const [groupBy, setGroupBy] = useState<GroupLevel>("subsector");
   const [skipped, setSkipped] = useState<Set<string>>(new Set()); // duel pairs passed on
   const [duelUndo, setDuelUndo] = useState<Array<{ kind: "pin" | "tie"; a: string; b: string }>>([]); // duel actions, for undo
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -143,6 +159,26 @@ export default function WeeklyRanks() {
 
   // Week-over-week diff for the Changes view.
   const cmp = useMemo(() => (compareSnap ? compareRankings(order, compareSnap.order) : null), [order, compareSnap]);
+
+  // Group the ranking by a classification level, preserving each name's global
+  // rank. Groups are ordered by their best (top) rank; each carries count +
+  // best/avg rank so you can see how you're ranking within subcategories.
+  const groups = useMemo(() => {
+    if (groupBy === "none") return null;
+    const g = new Map<string, string[]>();
+    order.forEach((t) => { const v = classOf(t, groupBy); (g.get(v) ?? g.set(v, []).get(v)!).push(t); });
+    const posOf = new Map<string, number>();
+    order.forEach((t, i) => posOf.set(t, i));
+    return [...g.entries()]
+      .map(([label, members]) => {
+        const ranks = members.map((t) => posOf.get(t)! + 1);
+        const best = Math.min(...ranks);
+        const avg = ranks.reduce((s, r) => s + r, 0) / ranks.length;
+        return { label, members, count: members.length, best, avg };
+      })
+      .sort((a, b) => a.best - b.best);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupBy, order, metaMap]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const move = (ticker: string, dir: -1 | 1) => {
@@ -306,6 +342,57 @@ export default function WeeklyRanks() {
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const duel = analysis.nextDuel;
 
+  // One ranked row — reused by the flat list and every classification group.
+  const renderRow = (t: string) => {
+    const i = order.indexOf(t);
+    const meta = metaMap.get(t);
+    const lw = lastWeekRank.get(t);
+    const delta = lw != null ? lw - (i + 1) : null;
+    const inCycle = cycleSet.has(t);
+    const inConflict = !inCycle && conflictSet.has(t);
+    const armed = pinFrom === t;
+    const tieArmed = tieFrom === t;
+    const tier = tierIndex.get(t);
+    const tierGap = tierGapSet.has(t);
+    return (
+      <tr key={t}
+        draggable
+        onDragStart={() => { dragIdx.current = i; }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={() => onDrop(i)}
+        className={`border-b border-border/40 hover:bg-card/60 ${armed ? "ring-1 ring-cyan-400/60" : ""} ${tieArmed ? "ring-1 ring-violet-400/60" : ""} ${inCycle ? "bg-rose-500/10" : inConflict ? "bg-amber-500/10" : tier != null ? "bg-violet-500/[0.06]" : ""}`}
+        data-testid={`wr-row-${t}`}>
+        <td className="text-right pr-1 font-mono tabular-nums" data-testid={`wr-rank-${t}`}>{i + 1}</td>
+        <td className="text-muted-foreground cursor-grab"><GripVertical className="w-3 h-3" /></td>
+        <td className="font-mono font-semibold py-1">
+          {t}
+          {tier != null && <span className={`ml-1 text-[9px] px-1 rounded ${tierGap ? "text-amber-400 border border-amber-500/40" : "text-violet-300 bg-violet-500/15"}`} data-testid={`wr-tier-${t}`} title={tierGap ? "Tier not grouped — snap to group it" : `Tier ${tier + 1} (indifferent)`}>≈{tier + 1}{tierGap ? " gap" : ""}</span>}
+          {inCycle && <span className="ml-1 text-[9px] text-rose-400" data-testid={`wr-badge-cycle-${t}`} title="In a contradiction cycle">⟳ contradiction</span>}
+          {inConflict && <span className="ml-1 text-[9px] text-amber-400" data-testid={`wr-badge-conflict-${t}`} title="A pin is violated by this placement">⚠ conflict</span>}
+        </td>
+        <td className="text-muted-foreground truncate max-w-[220px]">{meta?.name ?? ""}</td>
+        <td className="text-[10px] text-muted-foreground">{sectorLabel(t)}</td>
+        <td className="text-right pr-2 font-mono text-muted-foreground">{lw ?? "—"}</td>
+        <td className={`text-right pr-2 font-mono ${delta == null ? "text-muted-foreground" : delta > 0 ? "text-emerald-400" : delta < 0 ? "text-rose-400" : "text-muted-foreground"}`} data-testid={`wr-delta-${t}`}>
+          {delta == null ? "—" : delta > 0 ? `+${delta}` : delta}
+        </td>
+        <td className="text-right pr-2 whitespace-nowrap">
+          <button className="text-muted-foreground hover:text-foreground disabled:opacity-30" onClick={() => move(t, -1)} disabled={i === 0} data-testid={`wr-up-${t}`}><ChevronUp className="w-3.5 h-3.5 inline" /></button>
+          <button className="text-muted-foreground hover:text-foreground disabled:opacity-30 ml-1" onClick={() => move(t, 1)} disabled={i === order.length - 1} data-testid={`wr-down-${t}`}><ChevronDown className="w-3.5 h-3.5 inline" /></button>
+        </td>
+        <td className="text-right pr-2 whitespace-nowrap">
+          <button className={`hover:text-cyan-300 ${armed ? "text-cyan-300" : "text-muted-foreground"}`}
+            onClick={() => onRowPinClick(t)} title={pinFrom ? `Pin ${pinFrom} ▸ ${t}` : `Pin ${t} over another name`}
+            data-testid={`wr-pin-from-${t}`}><Flag className="w-3.5 h-3.5 inline" /></button>
+          <button className={`ml-1.5 font-bold ${tieArmed ? "text-violet-300" : "text-muted-foreground hover:text-violet-300"}`}
+            onClick={() => onRowTieClick(t)} title={tieFrom ? `Tie ${tieFrom} ≈ ${t}` : `Tie ${t} with another name (same tier)`}
+            data-testid={`wr-tie-from-${t}`}>≈</button>
+          <button className="text-muted-foreground hover:text-destructive ml-1.5" onClick={() => removeTicker(t)} title="Remove from book" data-testid={`wr-remove-${t}`}><X className="w-3.5 h-3.5 inline" /></button>
+        </td>
+      </tr>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-background" data-testid="wr-root">
       {/* Toolbar */}
@@ -389,6 +476,12 @@ export default function WeeklyRanks() {
         <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={saveSnapshot} data-testid="wr-snapshot-save">
           <Save className="w-3 h-3" /> Save this week
         </Button>
+        <div className="h-4 w-px bg-border mx-0.5" />
+        <span className="text-muted-foreground">group by</span>
+        <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupLevel)} data-testid="wr-groupby"
+          className="h-6 bg-background border border-border rounded px-1 text-[11px]" title="Cluster the ranking by classification to see how you rank within subcategories">
+          {GROUP_LEVELS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
+        </select>
         {pinFrom && (
           <span className="ml-auto text-[11px] text-cyan-300">Pinning <b>{pinFrom}</b> over… click a flag below (or <button className="underline" onClick={() => setPinFrom(null)}>cancel</button>)</span>
         )}
@@ -421,54 +514,19 @@ export default function WeeklyRanks() {
                 </tr>
               </thead>
               <tbody>
-                {order.map((t, i) => {
-                  const meta = metaMap.get(t);
-                  const lw = lastWeekRank.get(t);
-                  const delta = lw != null ? lw - (i + 1) : null;
-                  const inCycle = cycleSet.has(t);
-                  const inConflict = !inCycle && conflictSet.has(t);
-                  const armed = pinFrom === t;
-                  const tieArmed = tieFrom === t;
-                  const tier = tierIndex.get(t);
-                  const tierGap = tierGapSet.has(t);
-                  return (
-                    <tr key={t}
-                      draggable
-                      onDragStart={() => { dragIdx.current = i; }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => onDrop(i)}
-                      className={`border-b border-border/40 hover:bg-card/60 ${armed ? "ring-1 ring-cyan-400/60" : ""} ${tieArmed ? "ring-1 ring-violet-400/60" : ""} ${inCycle ? "bg-rose-500/10" : inConflict ? "bg-amber-500/10" : tier != null ? "bg-violet-500/[0.06]" : ""}`}
-                      data-testid={`wr-row-${t}`}>
-                      <td className="text-right pr-1 font-mono tabular-nums" data-testid={`wr-rank-${t}`}>{i + 1}</td>
-                      <td className="text-muted-foreground cursor-grab"><GripVertical className="w-3 h-3" /></td>
-                      <td className="font-mono font-semibold py-1">
-                        {t}
-                        {tier != null && <span className={`ml-1 text-[9px] px-1 rounded ${tierGap ? "text-amber-400 border border-amber-500/40" : "text-violet-300 bg-violet-500/15"}`} data-testid={`wr-tier-${t}`} title={tierGap ? "Tier not grouped — snap to group it" : `Tier ${tier + 1} (indifferent)`}>≈{tier + 1}{tierGap ? " gap" : ""}</span>}
-                        {inCycle && <span className="ml-1 text-[9px] text-rose-400" data-testid={`wr-badge-cycle-${t}`} title="In a contradiction cycle">⟳ contradiction</span>}
-                        {inConflict && <span className="ml-1 text-[9px] text-amber-400" data-testid={`wr-badge-conflict-${t}`} title="A pin is violated by this placement">⚠ conflict</span>}
-                      </td>
-                      <td className="text-muted-foreground truncate max-w-[220px]">{meta?.name ?? ""}</td>
-                      <td className="text-[10px] text-muted-foreground">{meta?.sector ?? ""}</td>
-                      <td className="text-right pr-2 font-mono text-muted-foreground">{lw ?? "—"}</td>
-                      <td className={`text-right pr-2 font-mono ${delta == null ? "text-muted-foreground" : delta > 0 ? "text-emerald-400" : delta < 0 ? "text-rose-400" : "text-muted-foreground"}`} data-testid={`wr-delta-${t}`}>
-                        {delta == null ? "—" : delta > 0 ? `+${delta}` : delta}
-                      </td>
-                      <td className="text-right pr-2 whitespace-nowrap">
-                        <button className="text-muted-foreground hover:text-foreground disabled:opacity-30" onClick={() => move(t, -1)} disabled={i === 0} data-testid={`wr-up-${t}`}><ChevronUp className="w-3.5 h-3.5 inline" /></button>
-                        <button className="text-muted-foreground hover:text-foreground disabled:opacity-30 ml-1" onClick={() => move(t, 1)} disabled={i === order.length - 1} data-testid={`wr-down-${t}`}><ChevronDown className="w-3.5 h-3.5 inline" /></button>
-                      </td>
-                      <td className="text-right pr-2 whitespace-nowrap">
-                        <button className={`hover:text-cyan-300 ${armed ? "text-cyan-300" : "text-muted-foreground"}`}
-                          onClick={() => onRowPinClick(t)} title={pinFrom ? `Pin ${pinFrom} ▸ ${t}` : `Pin ${t} over another name`}
-                          data-testid={`wr-pin-from-${t}`}><Flag className="w-3.5 h-3.5 inline" /></button>
-                        <button className={`ml-1.5 font-bold ${tieArmed ? "text-violet-300" : "text-muted-foreground hover:text-violet-300"}`}
-                          onClick={() => onRowTieClick(t)} title={tieFrom ? `Tie ${tieFrom} ≈ ${t}` : `Tie ${t} with another name (same tier)`}
-                          data-testid={`wr-tie-from-${t}`}>≈</button>
-                        <button className="text-muted-foreground hover:text-destructive ml-1.5" onClick={() => removeTicker(t)} title="Remove from book" data-testid={`wr-remove-${t}`}><X className="w-3.5 h-3.5 inline" /></button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {groups
+                  ? groups.map((grp) => (
+                    <Fragment key={grp.label}>
+                      <tr className="bg-card/70 border-y border-border" data-testid="wr-group-header">
+                        <td colSpan={9} className="px-2 py-1 text-[10px]">
+                          <span className="font-semibold text-foreground uppercase tracking-wide">{grp.label}</span>
+                          <span className="ml-2 text-muted-foreground">{grp.count} name{grp.count > 1 ? "s" : ""} · best #{grp.best} · avg #{grp.avg.toFixed(1)}</span>
+                        </td>
+                      </tr>
+                      {grp.members.map(renderRow)}
+                    </Fragment>
+                  ))
+                  : order.map(renderRow)}
               </tbody>
             </table>
           )}
