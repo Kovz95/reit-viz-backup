@@ -51,11 +51,14 @@ export default function WeeklyRanks() {
   }, []);
   useWorkspaceTab("weekly-ranks", serialize, restore);
 
-  // Load saved snapshots once.
+  // Load saved snapshots once. Guard against the load resolving AFTER the user
+  // has already saved this session (would clobber the just-saved snapshot in
+  // the UI even though serverPrefs already persisted it).
+  const savedThisSession = useRef(false);
   useEffect(() => {
     let cancelled = false;
     void loadServerPref<Snapshot[]>(SNAP_KEY).then((s) => {
-      if (!cancelled && Array.isArray(s)) setSnapshots(s);
+      if (!cancelled && !savedThisSession.current && Array.isArray(s)) setSnapshots(s);
     });
     return () => { cancelled = true; };
   }, []);
@@ -73,7 +76,15 @@ export default function WeeklyRanks() {
 
   // Reconcile the order against the book: keep existing ranks, append newcomers
   // (a "to place" tail), drop names no longer in the book.
+  //
+  // GUARD: never reconcile against an EMPTY book. The basket's member set loads
+  // async (useBaskets), and `restore` re-sets `extras`, both of which flip the
+  // `book` memo to [] for a tick — without this guard that transient empty book
+  // wipes a restored/custom hand-ranking and it comes back in raw basket order.
+  // A genuinely empty book (deselected basket, no extras) leaves the list
+  // untouched; use per-row remove to clear names.
   useEffect(() => {
+    if (book.length === 0) return;
     const bookSet = new Set(book);
     setOrder((prev) => {
       const kept = prev.filter((t) => bookSet.has(t));
@@ -82,6 +93,12 @@ export default function WeeklyRanks() {
       const next = [...kept, ...newcomers];
       if (next.length === prev.length && next.every((t, i) => t === prev[i])) return prev;
       return next;
+    });
+    // Drop pins whose endpoints left the book (basket switch), so the calls
+    // list never shows a name that's no longer ranked.
+    setPins((prev) => {
+      const next = prev.filter(([a, b]) => bookSet.has(a) && bookSet.has(b));
+      return next.length === prev.length ? prev : next;
     });
   }, [book]);
 
@@ -140,6 +157,9 @@ export default function WeeklyRanks() {
     setExtras((e) => e.filter((x) => x !== ticker));
     setRemoved((r) => (r.includes(ticker) ? r : [...r, ticker]));
     setPins((p) => p.filter(([a, b]) => a !== ticker && b !== ticker));
+    // Filter the order directly — don't rely on the reconcile effect, which
+    // no-ops when removing the last name empties the book (the guard above).
+    setOrder((o) => o.filter((t) => t !== ticker));
     if (pinFrom === ticker) setPinFrom(null);
   };
 
@@ -163,10 +183,14 @@ export default function WeeklyRanks() {
   };
 
   const saveSnapshot = () => {
+    savedThisSession.current = true;
     const now = new Date();
     const iso = now.toISOString().slice(0, 10);
+    // Hash the full order AND pin content (not just pin count) so two distinct
+    // rankings saved the same day don't collide onto one id and overwrite.
+    const sig = order.join(",") + "|" + pins.map(([a, b]) => `${a}>${b}`).join(",");
     const snap: Snapshot = {
-      id: `${iso}-${Math.abs(hashStr(order.join(",") + pins.length)).toString(36)}`,
+      id: `${iso}-${Math.abs(hashStr(sig)).toString(36)}`,
       name: snapName.trim() || `Week of ${iso}`,
       date: iso,
       order: order.slice(),
