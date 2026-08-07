@@ -37,6 +37,7 @@ import {
   GitMerge,
   BarChart2,
   ChevronDown,
+  Trophy,
 } from "lucide-react";
 import DataManager from "@/components/DataManager";
 import AutoSaveManager from "@/components/AutoSaveManager";
@@ -54,6 +55,7 @@ const Universe = lazy(() => import("@/pages/Universe"));
 const GlobalUniverseExplorer = lazy(() => import("@/pages/GlobalUniverseExplorer"));
 const Baskets = lazy(() => import("@/pages/Baskets"));
 const Ranking = lazy(() => import("@/pages/Ranking"));
+const WeeklyRanks = lazy(() => import("@/pages/WeeklyRanks"));
 const Scatter = lazy(() => import("@/pages/Scatter"));
 const FactorBacktest = lazy(() => import("@/pages/FactorBacktest"));
 const RelativeStrength = lazy(() => import("@/pages/RelativeStrength"));
@@ -257,6 +259,7 @@ function NavBar() {
       universeControlled: true,
       group: [
         { path: "/ranking", label: "Ranking", icon: ListOrdered },
+        { path: "/weekly-ranks", label: "Weekly Ranks", icon: Trophy },
         { path: "/scatter", label: "XY Scatter", icon: ScatterChart },
         { path: "/factor-backtest", label: "Factor Backtest", icon: TrendingUp },
         { path: "/relative-strength", label: "Relative Strength", icon: TrendingUp },
@@ -580,6 +583,7 @@ const PAGES = [
   { path: "/", label: "Charts" },
   { path: "/universe", label: "Universe" },
   { path: "/ranking", label: "Ranking" },
+  { path: "/weekly-ranks", label: "Weekly Ranks" },
   { path: "/scatter", label: "XY Scatter" },
   { path: "/factor-backtest", label: "Factor Backtest" },
   { path: "/relative-strength", label: "Relative Strength Engine" },
@@ -704,6 +708,7 @@ function AppShell() {
               <Route path="/global-universe" component={GlobalUniverseExplorer} />
               <Route path="/baskets" component={Baskets} />
               <Route path="/ranking" component={Ranking} />
+              <Route path="/weekly-ranks" component={WeeklyRanks} />
               <Route path="/scatter" component={Scatter} />
               <Route path="/factor-backtest" component={FactorBacktest} />
               <Route path="/relative-strength" component={RelativeStrength} />
