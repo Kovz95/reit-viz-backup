@@ -6,11 +6,11 @@
 // docs/conviction-ranking-plan.md and lib/convictionGraph.ts (the pure engine).
 import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save, Swords, ListOrdered, TrendingUp, SkipForward, Undo2 } from "lucide-react";
+import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save, Swords, ListOrdered, TrendingUp, SkipForward, Undo2, Plus, Pencil, Trash2 } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
-import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
-import { useWorkspaceTab } from "@/lib/workspaceContext";
+import { BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { useBaskets } from "@/lib/useBaskets";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import { PagePresets } from "@/components/PagePresets";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,23 @@ import { Input } from "@/components/ui/input";
 import { analyzeConviction, compareRankings, pairKey, type ConvictionState } from "@/lib/convictionGraph";
 
 interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; ties?: Array<[string, string]>; }
-const SNAP_KEY = "reit-viz:weekly-ranks:snapshots";
+const SNAP_KEY = "reit-viz:weekly-ranks:snapshots"; // legacy single-list snapshots (migrated into a default list)
+const LISTS_KEY = "reit-viz:weekly-ranks:lists";
+
+// A named ranking list — its own book/scope, order, calls, ties, and snapshots.
+interface RankList {
+  id: string;
+  name: string;
+  order: string[];
+  pins: Array<[string, string]>;
+  ties: Array<[string, string]>;
+  extras: string[];
+  removed: string[];
+  basketId: string;
+  compareId: string;
+  snapshots: Snapshot[];
+}
+const newListId = () => `wl-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 
 // The six classification levels the app carries on every ticker, coarse→fine.
 type GroupLevel = "none" | "economy" | "sector" | "subsector" | "industryGroup" | "industry" | "subindustry";
@@ -34,7 +50,7 @@ const GROUP_LEVELS: Array<{ value: GroupLevel; label: string }> = [
 
 export default function WeeklyRanks() {
   const { universeTickers } = useUniverse();
-  const basketScope = useBasketScope("reit-viz:basket-scope:weekly-ranks");
+  const { baskets, getBasket } = useBaskets();
 
   const { data: tickerMeta = [] } = useQuery({ queryKey: ["/api/tickers"], queryFn: () => getTickers() });
   const metaMap = useMemo(() => {
@@ -62,40 +78,115 @@ export default function WeeklyRanks() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [compareId, setCompareId] = useState<string>("");
   const [snapName, setSnapName] = useState("");
+  const [basketId, setBasketId] = useState(""); // scope basket, owned per-list
 
-  const serialize = useCallback(() => ({ order, pins, ties, extras, removed, compareId }), [order, pins, ties, extras, removed, compareId]);
-  const restore = useCallback((s: any) => {
-    if (Array.isArray(s?.order)) setOrder(s.order.filter((x: any) => typeof x === "string"));
-    if (Array.isArray(s?.pins)) setPins(s.pins.filter((p: any) => Array.isArray(p) && p.length === 2));
-    if (Array.isArray(s?.ties)) setTies(s.ties.filter((p: any) => Array.isArray(p) && p.length === 2));
-    if (Array.isArray(s?.extras)) setExtras(s.extras.filter((x: any) => typeof x === "string"));
-    if (Array.isArray(s?.removed)) setRemoved(s.removed.filter((x: any) => typeof x === "string"));
-    if (typeof s?.compareId === "string") setCompareId(s.compareId);
+  // ── Multiple named lists (each with its own scope/order/calls/snapshots) ──
+  const [lists, setLists] = useState<RankList[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [listName, setListName] = useState("");
+  const [listMenuOpen, setListMenuOpen] = useState(false);
+  const hydratedRef = useRef(false);
+
+  const loadListIntoWorking = useCallback((l: RankList) => {
+    setOrder(l.order ?? []);
+    setPins(l.pins ?? []);
+    setTies(l.ties ?? []);
+    setExtras(l.extras ?? []);
+    setRemoved(l.removed ?? []);
+    setBasketId(l.basketId ?? "");
+    setCompareId(l.compareId ?? "");
+    setSnapshots(l.snapshots ?? []);
+    setPinFrom(null); setTieFrom(null); setSkipped(new Set()); setDuelUndo([]);
   }, []);
-  useWorkspaceTab("weekly-ranks", serialize, restore);
 
-  // Load saved snapshots once. Guard against the load resolving AFTER the user
-  // has already saved this session (would clobber the just-saved snapshot in
-  // the UI even though serverPrefs already persisted it).
-  const savedThisSession = useRef(false);
+  // Load the lists collection once; migrate the legacy single-list snapshots
+  // into a default "My Book" on first upgrade.
   useEffect(() => {
     let cancelled = false;
-    void loadServerPref<Snapshot[]>(SNAP_KEY).then((s) => {
-      if (!cancelled && !savedThisSession.current && Array.isArray(s)) setSnapshots(s);
+    void Promise.all([
+      loadServerPref<{ activeId: string; lists: RankList[] }>(LISTS_KEY),
+      loadServerPref<Snapshot[]>(SNAP_KEY),
+    ]).then(([blob, oldSnaps]) => {
+      if (cancelled) return;
+      let ls = (blob?.lists ?? []).filter((l) => l && typeof l.id === "string");
+      let aid = blob?.activeId ?? "";
+      if (!ls.length) {
+        ls = [{ id: newListId(), name: "My Book", order: [], pins: [], ties: [], extras: [], removed: [], basketId: "", compareId: "", snapshots: Array.isArray(oldSnaps) ? oldSnaps : [] }];
+      }
+      if (!ls.find((l) => l.id === aid)) aid = ls[0].id;
+      setLists(ls);
+      setActiveId(aid);
+      loadListIntoWorking(ls.find((l) => l.id === aid)!);
+      hydratedRef.current = true;
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [loadListIntoWorking]);
+
+  // Mirror the working state back into the active list, and persist the
+  // collection (debounced). Both no-op until hydration completes.
+  useEffect(() => {
+    if (!hydratedRef.current || !activeId) return;
+    setLists((prev) => prev.map((l) => l.id === activeId ? { ...l, order, pins, ties, extras, removed, basketId, compareId, snapshots } : l));
+  }, [order, pins, ties, extras, removed, basketId, compareId, snapshots, activeId]);
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    saveServerPref(LISTS_KEY, { activeId, lists });
+  }, [lists, activeId]);
+
+  const switchList = (id: string) => {
+    if (id === activeId) return;
+    const target = lists.find((l) => l.id === id);
+    if (!target) return;
+    setActiveId(id);
+    loadListIntoWorking(target);
+    setListMenuOpen(false);
+  };
+  const addList = () => {
+    const nl: RankList = { id: newListId(), name: listName.trim() || `List ${lists.length + 1}`, order: [], pins: [], ties: [], extras: [], removed: [], basketId: "", compareId: "", snapshots: [] };
+    setLists((prev) => [...prev, nl]);
+    setActiveId(nl.id);
+    loadListIntoWorking(nl);
+    setListName("");
+  };
+  const renameActive = () => {
+    const nm = listName.trim();
+    if (!nm) return;
+    setLists((prev) => prev.map((l) => l.id === activeId ? { ...l, name: nm } : l));
+    setListName("");
+  };
+  const deleteActive = () => {
+    if (lists.length <= 1) return; // always keep one list
+    const remaining = lists.filter((l) => l.id !== activeId);
+    setLists(remaining);
+    setActiveId(remaining[0].id);
+    loadListIntoWorking(remaining[0]);
+    setListMenuOpen(false);
+  };
+  const activeList = lists.find((l) => l.id === activeId);
+
+  // ── Scope: resolve the active list's basket to a member set. ──────────────
+  const activeBasket = basketId ? (getBasket(basketId) as any) : undefined;
+  const members = useMemo(
+    () => (activeBasket ? new Set(activeBasket.tickers.map((t: string) => t.toUpperCase())) : null),
+    [activeBasket?.id, activeBasket?.updatedAt, baskets],
+  );
+  const scope = useMemo(() => ({
+    baskets, basketId, setBasketId,
+    basketName: activeBasket?.name ?? null,
+    members,
+    inScope: (t: string) => !members || members.has(t.toUpperCase()),
+  }), [baskets, basketId, activeBasket, members]);
 
   // ── The book = basket members ∪ manual extras − manual removals, honoring
   //    the app-wide universe filter. ────────────────────────────────────────
   const book = useMemo(() => {
     const set = new Set<string>();
-    if (basketScope.members) for (const t of basketScope.members) set.add(t);
+    if (members) for (const t of members as Set<string>) set.add(t);
     for (const t of extras) set.add(t);
     for (const t of removed) set.delete(t);
     const arr = [...set];
     return universeTickers ? arr.filter((t) => universeTickers.has(t)) : arr;
-  }, [basketScope.members, extras, removed, universeTickers]);
+  }, [members, extras, removed, universeTickers]);
 
   // Reconcile the order against the book: keep existing ranks, append newcomers
   // (a "to place" tail), drop names no longer in the book.
@@ -297,7 +388,6 @@ export default function WeeklyRanks() {
   }, [view, analysis.nextDuel]);
 
   const saveSnapshot = () => {
-    savedThisSession.current = true;
     const now = new Date();
     const iso = now.toISOString().slice(0, 10);
     // Hash the full order AND pin content (not just pin count) so two distinct
@@ -398,6 +488,29 @@ export default function WeeklyRanks() {
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/50 flex-wrap flex-shrink-0">
         <span className="text-sm font-bold flex items-center gap-1.5"><Trophy className="w-4 h-4 text-primary" /> Weekly Ranks</span>
+        {/* List selector — each list is its own book/scope/ranking/snapshots */}
+        <div className="flex items-center gap-1">
+          <select value={activeId} onChange={(e) => switchList(e.target.value)} data-testid="wr-list-select"
+            className="h-7 bg-background border border-border rounded px-1 text-xs max-w-[160px]" title="Switch ranking list">
+            {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <div className="relative">
+            <Button size="sm" variant="outline" className="h-7 px-1.5" onClick={() => setListMenuOpen((o) => !o)} data-testid="wr-list-menu" title="Manage lists"><Pencil className="w-3 h-3" /></Button>
+            {listMenuOpen && (
+              <div className="absolute left-0 top-full mt-1 z-30 bg-card border border-border rounded shadow-lg p-2 w-56 space-y-1.5" data-testid="wr-list-menu-panel">
+                <div className="flex gap-1">
+                  <Input value={listName} onChange={(e) => setListName(e.target.value)} placeholder="List name…" className="h-7 text-[11px] flex-1" data-testid="wr-list-name" />
+                </div>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-[10px] gap-1 flex-1" onClick={addList} data-testid="wr-list-new"><Plus className="w-3 h-3" />New</Button>
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-[10px] gap-1 flex-1" onClick={renameActive} data-testid="wr-list-rename"><Pencil className="w-3 h-3" />Rename</Button>
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-[10px] gap-1 text-destructive" onClick={deleteActive} disabled={lists.length <= 1} data-testid="wr-list-delete"><Trash2 className="w-3 h-3" /></Button>
+                </div>
+                <div className="text-[9.5px] text-muted-foreground">Each list keeps its own basket/scope, ranking, and snapshots.</div>
+              </div>
+            )}
+          </div>
+        </div>
         {/* View toggle */}
         <div className="inline-flex rounded border border-border overflow-hidden h-7">
           {([["rank", "Rank", ListOrdered], ["duel", "Duel", Swords], ["changes", "Changes", TrendingUp]] as const).map(([v, label, Icon]) => (
@@ -407,7 +520,7 @@ export default function WeeklyRanks() {
             </button>
           ))}
         </div>
-        <BasketScopeSelect scope={basketScope} />
+        <BasketScopeSelect scope={scope as any} />
         <div className="flex items-center gap-1">
           <Input value={addText} onChange={(e) => setAddText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") addTicker(); }}
