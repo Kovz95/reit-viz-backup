@@ -23,6 +23,8 @@ export interface ConvictionState {
   order: string[];
   /** [winner, loser] pairs — winner ▸ loser (winner should rank above loser). */
   pins: Array<[string, string]>;
+  /** [a, b] indifference pairs — a ≈ b (same tier). Symmetric; builds equivalence classes. */
+  ties?: Array<[string, string]>;
 }
 
 /** A direct pin whose order placement is wrong (pinned a▸b but b is above a). */
@@ -55,6 +57,12 @@ export interface ConvictionAnalysis {
   suggestedOrder: string[] | null;
   /** Most-informative undetermined pair to duel next; null if fully determined. */
   nextDuel: [string, string] | null;
+  /** Indifference tiers (equivalence classes of size ≥ 2), each as its member tickers. */
+  tiers: string[][];
+  /** Strict pins whose endpoints are also tied (a ▸ b AND a ≈ b) — a contradiction. */
+  tieContradictions: Array<[string, string]>;
+  /** Nodes in a tier whose members aren't contiguous in the current order (soft "group me" hint). */
+  tierGapNodes: string[];
 }
 
 const SEP = "\u0001";
@@ -66,7 +74,7 @@ function validPins(state: ConvictionState): Array<[string, string]> {
   const inBook = new Set(state.order);
   const seen = new Set<string>();
   const out: Array<[string, string]> = [];
-  for (const [a, b] of state.pins) {
+  for (const [a, b] of state.pins ?? []) {
     if (a === b || !inBook.has(a) || !inBook.has(b)) continue;
     const k = key(a, b);
     if (seen.has(k)) continue;
@@ -79,6 +87,34 @@ function validPins(state: ConvictionState): Array<[string, string]> {
 /** Reachability closure via BFS from each node. Returns the set of "a\u0001b"
  *  keys for every a that reaches b (a ≠ b). Under a cycle, both a▸b and b▸a can
  *  appear — that's the contradiction signature. */
+function makeUnionFind(nodes: string[]) {
+  const parent = new Map<string, string>();
+  for (const n of nodes) parent.set(n, n);
+  const find = (x: string): string => {
+    let r = x;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    while (parent.get(x) !== r) { const nx = parent.get(x)!; parent.set(x, r); x = nx; }
+    return r;
+  };
+  const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+  return { find, union };
+}
+
+/** Keep only ties with both endpoints in the book, no self-loops, dedupe unordered. */
+function validTies(state: ConvictionState): Array<[string, string]> {
+  const inBook = new Set(state.order);
+  const seen = new Set<string>();
+  const out: Array<[string, string]> = [];
+  for (const [a, b] of state.ties ?? []) {
+    if (a === b || !inBook.has(a) || !inBook.has(b)) continue;
+    const k = a < b ? key(a, b) : key(b, a);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push([a, b]);
+  }
+  return out;
+}
+
 function transitiveClosure(nodes: string[], adj: Map<string, string[]>): Set<string> {
   const closure = new Set<string>();
   for (const start of nodes) {
@@ -178,74 +214,110 @@ export function analyzeConviction(state: ConvictionState, opts?: { skip?: Set<st
   nodes.forEach((n, i) => pos.set(n, i));
 
   const pins = validPins(state);
-  const adj = new Map<string, string[]>();
-  for (const n of nodes) adj.set(n, []);
-  for (const [a, b] of pins) adj.get(a)!.push(b);
+  const ties = validTies(state);
 
-  const closureKeys = transitiveClosure(nodes, adj);
-  const directSet = new Set(pins.map(([a, b]) => key(a, b)));
-  const impliedPairs: Array<[string, string]> = [];
-  for (const k of closureKeys) {
-    if (!directSet.has(k)) {
-      const [a, b] = k.split(SEP);
-      impliedPairs.push([a, b]);
-    }
+  // Indifference classes: ≈ merges names into equivalence classes; strict
+  // preferences then operate on the CLASSES, not the individual names.
+  const uf = makeUnionFind(nodes);
+  for (const [a, b] of ties) uf.union(a, b);
+  const rep = (x: string) => uf.find(x);
+  const reps = [...new Set(nodes.map(rep))];
+
+  // Strict pins split: within a class ⇒ contradiction (a▸b but a≈b); across
+  // classes ⇒ a directed edge between the two classes.
+  const tieContradictions: Array<[string, string]> = [];
+  const classAdj = new Map<string, string[]>();
+  for (const r of reps) classAdj.set(r, []);
+  for (const [a, b] of pins) {
+    if (rep(a) === rep(b)) tieContradictions.push([a, b]);
+    else classAdj.get(rep(a))!.push(rep(b));
   }
 
-  // Contradictions: SCCs of size > 1.
-  const comps = stronglyConnectedComponents(nodes, adj);
-  const cycles = comps.filter((c) => c.length > 1);
-  const compOf = new Map<string, number>();
-  cycles.forEach((c, ci) => c.forEach((n) => compOf.set(n, ci)));
-  const cyclePins = pins.filter(([a, b]) => compOf.has(a) && compOf.get(a) === compOf.get(b));
+  // Closure + SCC on the CLASS graph.
+  const classClosure = transitiveClosure(reps, classAdj);
+  const precedes = (a: string, b: string) => classClosure.has(key(rep(a), rep(b)));
+  const classComps = stronglyConnectedComponents(reps, classAdj);
+  const sccOf = new Map<string, number>();
+  classComps.forEach((c, ci) => c.forEach((r) => sccOf.set(r, ci)));
+  const sccSize = new Map<number, number>();
+  classComps.forEach((c, ci) => sccSize.set(ci, c.length));
+  const inCyclicScc = (r: string) => (sccSize.get(sccOf.get(r)!) ?? 1) > 1;
+
+  // Node-level implied strict preferences (a▸b when a's class precedes b's).
+  const closureKeys = new Set<string>();
+  for (const a of nodes) for (const b of nodes) if (a !== b && precedes(a, b)) closureKeys.add(key(a, b));
+  const directSet = new Set(pins.map(([a, b]) => key(a, b)));
+  const impliedPairs: Array<[string, string]> = [];
+  for (const k of closureKeys) if (!directSet.has(k)) { const [a, b] = k.split(SEP); impliedPairs.push([a, b]); }
+
+  // Contradictions = class cycles ∪ same-class strict pins. Report as node
+  // clusters (expand classes; merge classes sharing a class-SCC).
+  const bad = makeUnionFind(reps);
+  for (const comp of classComps) if (comp.length > 1) for (let i = 1; i < comp.length; i++) bad.union(comp[0], comp[i]);
+  const contradictoryReps = new Set<string>();
+  for (const comp of classComps) if (comp.length > 1) comp.forEach((r) => contradictoryReps.add(r));
+  for (const [a] of tieContradictions) contradictoryReps.add(rep(a));
+  const clusterOf = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (!contradictoryReps.has(rep(n))) continue;
+    const g = bad.find(rep(n));
+    (clusterOf.get(g) ?? clusterOf.set(g, []).get(g)!).push(n);
+  }
+  const cycles = [...clusterOf.values()];
+  const cyclePins = pins.filter(([a, b]) => rep(a) === rep(b) || (inCyclicScc(rep(a)) && sccOf.get(rep(a)) === sccOf.get(rep(b))));
   const hasContradiction = cycles.length > 0;
 
-  // Conflicts: direct pins the order violates. Complete problem set alongside
-  // cycles (see header theorem).
+  // Conflicts: cross-class strict pins the order violates (same-class ones are
+  // contradictions, handled above).
   const conflicts: ConvictionConflict[] = [];
   for (const [a, b] of pins) {
-    if (pos.get(a)! > pos.get(b)!) conflicts.push({ a, b });
+    if (rep(a) !== rep(b) && pos.get(a)! > pos.get(b)!) conflicts.push({ a, b });
   }
   const orderIsConsistent = conflicts.length === 0;
 
-  // Coverage over unordered pairs.
+  // Tiers (classes ≥ 2) + a soft "not grouped" flag when a tier's members
+  // aren't contiguous in the current order.
+  const members = new Map<string, string[]>();
+  for (const n of nodes) (members.get(rep(n)) ?? members.set(rep(n), []).get(rep(n))!).push(n);
+  const tiers: string[][] = [];
+  const tierGapNodes: string[] = [];
+  for (const [, ms] of members) {
+    if (ms.length < 2) continue;
+    tiers.push(ms.slice());
+    const ps = ms.map((m) => pos.get(m)!);
+    if (Math.max(...ps) - Math.min(...ps) + 1 !== ms.length) tierGapNodes.push(...ms);
+  }
+
+  // Coverage: a pair is determined if same class (tie) or class-ordered;
+  // committed if a direct tie or a direct strict pin exists.
+  const directTie = new Set(ties.map(([a, b]) => unordered(a, b)));
   const totalPairs = (nodes.length * (nodes.length - 1)) / 2;
-  let committed = 0;
-  let determined = 0;
+  let committed = 0, determined = 0;
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const x = nodes[i], y = nodes[j];
-      if (directSet.has(key(x, y)) || directSet.has(key(y, x))) committed++;
-      if (closureKeys.has(key(x, y)) || closureKeys.has(key(y, x))) determined++;
+      if (directSet.has(key(x, y)) || directSet.has(key(y, x)) || directTie.has(unordered(x, y))) committed++;
+      if (rep(x) === rep(y) || precedes(x, y) || precedes(y, x)) determined++;
     }
   }
   const undeterminedPairs = totalPairs - determined;
   const committedPct = totalPairs ? committed / totalPairs : 0;
   const determinedPct = totalPairs ? determined / totalPairs : 0;
 
-  const suggestedOrder = hasContradiction ? null : topoSnap(nodes, pins, pos);
+  const suggestedOrder = hasContradiction ? null : topoSnapTiered(nodes, classAdj, reps, rep, pos, members);
 
-  // Next duel: the MOST-INFORMATIVE undetermined pair — the one whose answer
-  // would newly determine the most other pairs. Resolving x▸y links every node
-  // that reaches x (Up(x)) to every node y reaches (Down(y)), so the value of a
-  // pair ≈ max(|Up(x)|·|Down(y)|, |Up(y)|·|Down(x)|). Up/Down counts come
-  // straight from the closure — O(pairs) total. Tiebreak: nearest in the
-  // current order (least-supported gap), then earliest. `skip` (unordered pair
-  // keys) lets the duel flow pass on pairs the user couldn't decide.
-  const up = new Map<string, number>();   // {x} ∪ nodes that reach x
-  const down = new Map<string, number>(); // {x} ∪ nodes x reaches
+  // Next duel: most-informative undetermined pair (see header). Up/Down from
+  // node closure; skip determined (incl. tied) pairs and the caller's skip set.
+  const up = new Map<string, number>();
+  const down = new Map<string, number>();
   for (const n of nodes) { up.set(n, 1); down.set(n, 1); }
-  for (const k of closureKeys) {
-    const [a, b] = k.split(SEP); // a reaches b
-    down.set(a, down.get(a)! + 1);
-    up.set(b, up.get(b)! + 1);
-  }
+  for (const k of closureKeys) { const [a, b] = k.split(SEP); down.set(a, down.get(a)! + 1); up.set(b, up.get(b)! + 1); }
   let nextDuel: [string, string] | null = null;
   let bestScore = -1, bestDist = Infinity, bestI = Infinity;
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const x = nodes[i], y = nodes[j];
-      if (closureKeys.has(key(x, y)) || closureKeys.has(key(y, x))) continue; // determined
+      if (rep(x) === rep(y) || precedes(x, y) || precedes(y, x)) continue; // determined (incl. tie)
       if (opts?.skip?.has(unordered(x, y))) continue;
       const score = Math.max(up.get(x)! * down.get(y)!, up.get(y)! * down.get(x)!);
       const dist = j - i;
@@ -256,21 +328,49 @@ export function analyzeConviction(state: ConvictionState, opts?: { skip?: Set<st
   }
 
   return {
-    nodes,
-    closureKeys,
-    impliedPairs,
-    cycles,
-    cyclePins,
-    conflicts,
-    hasContradiction,
-    orderIsConsistent,
-    totalPairs,
-    undeterminedPairs,
-    committedPct,
-    determinedPct,
-    suggestedOrder,
-    nextDuel,
+    nodes, closureKeys, impliedPairs, cycles, cyclePins, conflicts,
+    hasContradiction, orderIsConsistent, totalPairs, undeterminedPairs,
+    committedPct, determinedPct, suggestedOrder, nextDuel,
+    tiers, tieContradictions, tierGapNodes,
   };
+}
+
+/** Topo-sort the CLASS graph (tiebreak by each class's smallest current
+ *  position), then emit each class's members contiguously (a tier block),
+ *  ordered by their current position. Returns null if a class cycle blocks it. */
+function topoSnapTiered(
+  nodes: string[],
+  classAdj: Map<string, string[]>,
+  reps: string[],
+  rep: (x: string) => string,
+  pos: Map<string, number>,
+  members: Map<string, string[]>,
+): string[] | null {
+  // Dedupe multi-edges between the same class pair so indegree stays correct.
+  const edges = new Set<string>();
+  for (const [r, list] of classAdj) for (const s of list) edges.add(key(r, s));
+  const indeg = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const r of reps) { indeg.set(r, 0); adj.set(r, []); }
+  for (const e of edges) { const [r, s] = e.split(SEP); adj.get(r)!.push(s); indeg.set(s, indeg.get(s)! + 1); }
+  const minPos = new Map<string, number>();
+  for (const n of nodes) { const r = rep(n); const p = pos.get(n)!; if (!minPos.has(r) || p < minPos.get(r)!) minPos.set(r, p); }
+  const avail = reps.filter((r) => indeg.get(r) === 0);
+  const outReps: string[] = [];
+  while (avail.length) {
+    let best = 0;
+    for (let i = 1; i < avail.length; i++) if (minPos.get(avail[i])! < minPos.get(avail[best])!) best = i;
+    const u = avail.splice(best, 1)[0];
+    outReps.push(u);
+    for (const v of adj.get(u)!) { indeg.set(v, indeg.get(v)! - 1); if (indeg.get(v) === 0) avail.push(v); }
+  }
+  if (outReps.length !== reps.length) return null;
+  const out: string[] = [];
+  for (const r of outReps) {
+    const ms = (members.get(r) ?? []).slice().sort((a, b) => pos.get(a)! - pos.get(b)!);
+    out.push(...ms);
+  }
+  return out;
 }
 
 /** Convenience: is "a ▸ b" implied (directly or transitively) by the pins? */

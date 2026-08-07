@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { analyzeConviction, compareRankings, pairKey, type ConvictionState } from "@/lib/convictionGraph";
 
-interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; }
+interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; ties?: Array<[string, string]>; }
 const SNAP_KEY = "reit-viz:weekly-ranks:snapshots";
 
 export default function WeeklyRanks() {
@@ -34,21 +34,24 @@ export default function WeeklyRanks() {
   // ── Working state (restored per tab via useWorkspaceTab) ──────────────────
   const [order, setOrder] = useState<string[]>([]);
   const [pins, setPins] = useState<Array<[string, string]>>([]);
+  const [ties, setTies] = useState<Array<[string, string]>>([]); // A ≈ B indifference (tiers)
   const [extras, setExtras] = useState<string[]>([]);   // manually-added names
   const [removed, setRemoved] = useState<string[]>([]); // manually-excluded names
   const [addText, setAddText] = useState("");
   const [pinFrom, setPinFrom] = useState<string | null>(null); // "pin X over…" armed
+  const [tieFrom, setTieFrom] = useState<string | null>(null); // "tie X with…" armed
   const [view, setView] = useState<"rank" | "duel" | "changes">("rank");
   const [skipped, setSkipped] = useState<Set<string>>(new Set()); // duel pairs passed on
-  const [duelUndo, setDuelUndo] = useState<Array<[string, string]>>([]); // pins added via duel, for undo
+  const [duelUndo, setDuelUndo] = useState<Array<{ kind: "pin" | "tie"; a: string; b: string }>>([]); // duel actions, for undo
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [compareId, setCompareId] = useState<string>("");
   const [snapName, setSnapName] = useState("");
 
-  const serialize = useCallback(() => ({ order, pins, extras, removed, compareId }), [order, pins, extras, removed, compareId]);
+  const serialize = useCallback(() => ({ order, pins, ties, extras, removed, compareId }), [order, pins, ties, extras, removed, compareId]);
   const restore = useCallback((s: any) => {
     if (Array.isArray(s?.order)) setOrder(s.order.filter((x: any) => typeof x === "string"));
     if (Array.isArray(s?.pins)) setPins(s.pins.filter((p: any) => Array.isArray(p) && p.length === 2));
+    if (Array.isArray(s?.ties)) setTies(s.ties.filter((p: any) => Array.isArray(p) && p.length === 2));
     if (Array.isArray(s?.extras)) setExtras(s.extras.filter((x: any) => typeof x === "string"));
     if (Array.isArray(s?.removed)) setRemoved(s.removed.filter((x: any) => typeof x === "string"));
     if (typeof s?.compareId === "string") setCompareId(s.compareId);
@@ -104,10 +107,22 @@ export default function WeeklyRanks() {
       const next = prev.filter(([a, b]) => bookSet.has(a) && bookSet.has(b));
       return next.length === prev.length ? prev : next;
     });
+    setTies((prev) => {
+      const next = prev.filter(([a, b]) => bookSet.has(a) && bookSet.has(b));
+      return next.length === prev.length ? prev : next;
+    });
   }, [book]);
 
   // ── Engine analysis (recompute on every edit; trivial at book size) ───────
-  const analysis = useMemo(() => analyzeConviction({ order, pins } as ConvictionState, { skip: skipped }), [order, pins, skipped]);
+  const analysis = useMemo(() => analyzeConviction({ order, pins, ties } as ConvictionState, { skip: skipped }), [order, pins, ties, skipped]);
+  const tierIndex = useMemo(() => {
+    const m = new Map<string, number>();
+    analysis.tiers.forEach((t, i) => t.forEach((n) => m.set(n, i)));
+    return m;
+  }, [analysis.tiers]);
+  const tierGapSet = useMemo(() => new Set(analysis.tierGapNodes), [analysis.tierGapNodes]);
+  // Snapping is worthwhile when there's a conflict OR a tier that isn't grouped.
+  const canSnap = !analysis.hasContradiction && (!analysis.orderIsConsistent || analysis.tierGapNodes.length > 0);
   const conflictSet = useMemo(() => {
     const s = new Set<string>();
     for (const c of analysis.conflicts) { s.add(c.a); s.add(c.b); }
@@ -164,11 +179,19 @@ export default function WeeklyRanks() {
     setExtras((e) => e.filter((x) => x !== ticker));
     setRemoved((r) => (r.includes(ticker) ? r : [...r, ticker]));
     setPins((p) => p.filter(([a, b]) => a !== ticker && b !== ticker));
+    setTies((t) => t.filter(([a, b]) => a !== ticker && b !== ticker));
     // Filter the order directly — don't rely on the reconcile effect, which
     // no-ops when removing the last name empties the book (the guard above).
     setOrder((o) => o.filter((t) => t !== ticker));
     if (pinFrom === ticker) setPinFrom(null);
+    if (tieFrom === ticker) setTieFrom(null);
   };
+
+  const addTie = (a: string, b: string) => {
+    if (a === b) return;
+    setTies((t) => (t.some(([x, y]) => pairKey(x, y) === pairKey(a, b)) ? t : [...t, [a, b]]));
+  };
+  const delTie = (a: string, b: string) => setTies((t) => t.filter(([x, y]) => pairKey(x, y) !== pairKey(a, b)));
 
   const addPin = (winner: string, loser: string) => {
     if (winner === loser) return;
@@ -179,10 +202,19 @@ export default function WeeklyRanks() {
 
   // Click a row while "pin from X" is armed → assert X ▸ (clicked). Else arm.
   const onRowPinClick = (ticker: string) => {
+    setTieFrom(null);
     if (pinFrom == null) { setPinFrom(ticker); return; }
     if (pinFrom === ticker) { setPinFrom(null); return; }
     addPin(pinFrom, ticker);
     setPinFrom(null);
+  };
+  // Click "=" while "tie from X" is armed → assert X ≈ (clicked). Else arm.
+  const onRowTieClick = (ticker: string) => {
+    setPinFrom(null);
+    if (tieFrom == null) { setTieFrom(ticker); return; }
+    if (tieFrom === ticker) { setTieFrom(null); return; }
+    addTie(tieFrom, ticker);
+    setTieFrom(null);
   };
 
   const snapToCalls = () => {
@@ -192,7 +224,11 @@ export default function WeeklyRanks() {
   // ── Duel flow ─────────────────────────────────────────────────────────────
   const answerDuel = (winner: string, loser: string) => {
     addPin(winner, loser);
-    setDuelUndo((u) => [...u, [winner, loser]]);
+    setDuelUndo((u) => [...u, { kind: "pin", a: winner, b: loser }]);
+  };
+  const answerTie = (a: string, b: string) => {
+    addTie(a, b);
+    setDuelUndo((u) => [...u, { kind: "tie", a, b }]);
   };
   const skipDuel = () => {
     if (analysis.nextDuel) setSkipped((s) => new Set(s).add(pairKey(analysis.nextDuel![0], analysis.nextDuel![1])));
@@ -200,20 +236,22 @@ export default function WeeklyRanks() {
   const undoDuel = () => {
     setDuelUndo((u) => {
       if (!u.length) return u;
-      const [a, b] = u[u.length - 1];
-      setPins((p) => p.filter(([x, y]) => !(x === a && y === b)));
+      const last = u[u.length - 1];
+      if (last.kind === "pin") setPins((p) => p.filter(([x, y]) => !(x === last.a && y === last.b)));
+      else setTies((t) => t.filter(([x, y]) => pairKey(x, y) !== pairKey(last.a, last.b)));
       return u.slice(0, -1);
     });
   };
   const resetSkips = () => setSkipped(new Set());
 
-  // Keyboard shortcuts in duel view: ← pick left, → pick right, S skip, U undo.
+  // Keyboard in duel view: ← left, → right, T tie, S skip, U undo.
   useEffect(() => {
     if (view !== "duel") return;
     const onKey = (e: KeyboardEvent) => {
       const d = analysis.nextDuel;
       if (e.key === "ArrowLeft" && d) { e.preventDefault(); answerDuel(d[0], d[1]); }
       else if (e.key === "ArrowRight" && d) { e.preventDefault(); answerDuel(d[1], d[0]); }
+      else if ((e.key === "t" || e.key === "T") && d) { e.preventDefault(); answerTie(d[0], d[1]); }
       else if ((e.key === "s" || e.key === "S") && d) { e.preventDefault(); skipDuel(); }
       else if (e.key === "u" || e.key === "U") { e.preventDefault(); undoDuel(); }
     };
@@ -235,6 +273,7 @@ export default function WeeklyRanks() {
       date: iso,
       order: order.slice(),
       pins: pins.map(([a, b]) => [a, b] as [string, string]),
+      ties: ties.map(([a, b]) => [a, b] as [string, string]),
     };
     const next = [...snapshots.filter((s) => s.id !== snap.id), snap];
     setSnapshots(next);
@@ -310,7 +349,7 @@ export default function WeeklyRanks() {
           </span>
         )}
         <Button size="sm" variant="outline" className="h-7 px-2 text-xs ml-auto"
-          onClick={snapToCalls} disabled={analysis.hasContradiction || analysis.orderIsConsistent}
+          onClick={snapToCalls} disabled={!canSnap}
           title="Reorder to the arrangement closest to yours that honors every pin"
           data-testid="wr-snap-btn">Snap to my calls</Button>
         <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" onClick={exportCsv} data-testid="wr-export"><Download className="w-3 h-3" />CSV</Button>
@@ -318,10 +357,11 @@ export default function WeeklyRanks() {
           storageKey="reit-viz:weekly-ranks:presets"
           label="Presets"
           testIdPrefix="wr-presets"
-          capture={() => ({ order, pins, extras, removed, compareId })}
+          capture={() => ({ order, pins, ties, extras, removed, compareId })}
           apply={(c: any) => {
             if (Array.isArray(c?.order)) setOrder(c.order.filter((x: any) => typeof x === "string"));
             if (Array.isArray(c?.pins)) setPins(c.pins.filter((p: any) => Array.isArray(p) && p.length === 2));
+            if (Array.isArray(c?.ties)) setTies(c.ties.filter((p: any) => Array.isArray(p) && p.length === 2));
             if (Array.isArray(c?.extras)) setExtras(c.extras.filter((x: any) => typeof x === "string"));
             if (Array.isArray(c?.removed)) setRemoved(c.removed.filter((x: any) => typeof x === "string"));
             if (typeof c?.compareId === "string") setCompareId(c.compareId);
@@ -350,7 +390,10 @@ export default function WeeklyRanks() {
           <Save className="w-3 h-3" /> Save this week
         </Button>
         {pinFrom && (
-          <span className="ml-auto text-[11px] text-cyan-300">Pinning <b>{pinFrom}</b> over… click a name below (or <button className="underline" onClick={() => setPinFrom(null)}>cancel</button>)</span>
+          <span className="ml-auto text-[11px] text-cyan-300">Pinning <b>{pinFrom}</b> over… click a flag below (or <button className="underline" onClick={() => setPinFrom(null)}>cancel</button>)</span>
+        )}
+        {tieFrom && (
+          <span className="ml-auto text-[11px] text-violet-300">Tying <b>{tieFrom}</b> with… click a ≈ below (or <button className="underline" onClick={() => setTieFrom(null)}>cancel</button>)</span>
         )}
       </div>
 
@@ -385,18 +428,22 @@ export default function WeeklyRanks() {
                   const inCycle = cycleSet.has(t);
                   const inConflict = !inCycle && conflictSet.has(t);
                   const armed = pinFrom === t;
+                  const tieArmed = tieFrom === t;
+                  const tier = tierIndex.get(t);
+                  const tierGap = tierGapSet.has(t);
                   return (
                     <tr key={t}
                       draggable
                       onDragStart={() => { dragIdx.current = i; }}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={() => onDrop(i)}
-                      className={`border-b border-border/40 hover:bg-card/60 ${armed ? "ring-1 ring-cyan-400/60" : ""} ${inCycle ? "bg-rose-500/10" : inConflict ? "bg-amber-500/10" : ""}`}
+                      className={`border-b border-border/40 hover:bg-card/60 ${armed ? "ring-1 ring-cyan-400/60" : ""} ${tieArmed ? "ring-1 ring-violet-400/60" : ""} ${inCycle ? "bg-rose-500/10" : inConflict ? "bg-amber-500/10" : tier != null ? "bg-violet-500/[0.06]" : ""}`}
                       data-testid={`wr-row-${t}`}>
                       <td className="text-right pr-1 font-mono tabular-nums" data-testid={`wr-rank-${t}`}>{i + 1}</td>
                       <td className="text-muted-foreground cursor-grab"><GripVertical className="w-3 h-3" /></td>
                       <td className="font-mono font-semibold py-1">
                         {t}
+                        {tier != null && <span className={`ml-1 text-[9px] px-1 rounded ${tierGap ? "text-amber-400 border border-amber-500/40" : "text-violet-300 bg-violet-500/15"}`} data-testid={`wr-tier-${t}`} title={tierGap ? "Tier not grouped — snap to group it" : `Tier ${tier + 1} (indifferent)`}>≈{tier + 1}{tierGap ? " gap" : ""}</span>}
                         {inCycle && <span className="ml-1 text-[9px] text-rose-400" data-testid={`wr-badge-cycle-${t}`} title="In a contradiction cycle">⟳ contradiction</span>}
                         {inConflict && <span className="ml-1 text-[9px] text-amber-400" data-testid={`wr-badge-conflict-${t}`} title="A pin is violated by this placement">⚠ conflict</span>}
                       </td>
@@ -414,6 +461,9 @@ export default function WeeklyRanks() {
                         <button className={`hover:text-cyan-300 ${armed ? "text-cyan-300" : "text-muted-foreground"}`}
                           onClick={() => onRowPinClick(t)} title={pinFrom ? `Pin ${pinFrom} ▸ ${t}` : `Pin ${t} over another name`}
                           data-testid={`wr-pin-from-${t}`}><Flag className="w-3.5 h-3.5 inline" /></button>
+                        <button className={`ml-1.5 font-bold ${tieArmed ? "text-violet-300" : "text-muted-foreground hover:text-violet-300"}`}
+                          onClick={() => onRowTieClick(t)} title={tieFrom ? `Tie ${tieFrom} ≈ ${t}` : `Tie ${t} with another name (same tier)`}
+                          data-testid={`wr-tie-from-${t}`}>≈</button>
                         <button className="text-muted-foreground hover:text-destructive ml-1.5" onClick={() => removeTicker(t)} title="Remove from book" data-testid={`wr-remove-${t}`}><X className="w-3.5 h-3.5 inline" /></button>
                       </td>
                     </tr>
@@ -472,6 +522,25 @@ export default function WeeklyRanks() {
                 </div>
               </div>
             )}
+            {ties.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-border/40">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">Ties ({ties.length})</div>
+                <div className="space-y-0.5" data-testid="wr-ties-list">
+                  {ties.map(([a, b]) => {
+                    const bad = analysis.tieContradictions.some(([x, y]) => pairKey(x, y) === pairKey(a, b));
+                    return (
+                      <div key={pairKey(a, b)} className={`flex items-center gap-1 text-[11px] font-mono ${bad ? "text-rose-400" : "text-violet-300"}`} data-testid={`wr-tie-${a}-${b}`}>
+                        <span className="font-semibold">{a}</span>
+                        <span>≈</span>
+                        <span>{b}</span>
+                        {bad && <span className="text-[9px]" title="You also pinned a strict preference between these — contradiction">⚠</span>}
+                        <button className="ml-auto text-muted-foreground hover:text-destructive" onClick={() => delTie(a, b)} data-testid={`wr-tie-del-${a}-${b}`}><X className="w-3 h-3" /></button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -504,7 +573,8 @@ export default function WeeklyRanks() {
                     <div className="text-[10px] text-muted-foreground truncate">{metaMap.get(duel[0])?.name ?? ""}</div>
                     <div className="text-[9px] text-muted-foreground mt-1">← currently #{order.indexOf(duel[0]) + 1}</div>
                   </button>
-                  <div className="self-center text-muted-foreground text-xs">vs</div>
+                  <button onClick={() => answerTie(duel[0], duel[1])} data-testid="wr-duel-tie"
+                    className="self-center rounded-md border border-violet-500/40 hover:bg-violet-500/15 text-violet-300 px-2 py-1 text-xs" title="Same tier — indifferent (T)">≈ tie</button>
                   <button onClick={() => answerDuel(duel[1], duel[0])} data-testid="wr-duel-pick-b"
                     className="flex-1 rounded-lg border border-border hover:border-primary hover:bg-primary/10 p-4 text-center transition-colors">
                     <div className="font-mono font-bold text-lg">{duel[1]}</div>
@@ -517,14 +587,14 @@ export default function WeeklyRanks() {
                   <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={undoDuel} disabled={!duelUndo.length} data-testid="wr-duel-undo"><Undo2 className="w-3 h-3" />Undo (U)</Button>
                   {skipped.size > 0 && <Button size="sm" variant="ghost" className="h-7" onClick={resetSkips} data-testid="wr-duel-reset-skips">reset {skipped.size} skip{skipped.size > 1 ? "s" : ""}</Button>}
                 </div>
-                <div className="text-center text-[10px] text-muted-foreground">← prefer left · → prefer right · S skip · U undo · implied pairs skipped automatically</div>
+                <div className="text-center text-[10px] text-muted-foreground">← prefer left · → prefer right · T tie · S skip · U undo · implied pairs skipped automatically</div>
               </div>
             ) : (
               <div className="text-center text-sm text-emerald-400" data-testid="wr-duel-complete">Every pair is determined by your calls. 🎉</div>
             )}
             <div className="text-center">
               <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { snapToCalls(); setView("rank"); }}
-                disabled={analysis.hasContradiction || analysis.orderIsConsistent} data-testid="wr-duel-apply">
+                disabled={!canSnap} data-testid="wr-duel-apply">
                 Apply calls to order →
               </Button>
             </div>
