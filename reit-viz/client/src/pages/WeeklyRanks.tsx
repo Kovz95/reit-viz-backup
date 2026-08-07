@@ -6,15 +6,16 @@
 // docs/conviction-ranking-plan.md and lib/convictionGraph.ts (the pure engine).
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save } from "lucide-react";
+import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save, Swords, ListOrdered, TrendingUp, SkipForward, Undo2 } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
+import { PagePresets } from "@/components/PagePresets";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { analyzeConviction, type ConvictionState } from "@/lib/convictionGraph";
+import { analyzeConviction, compareRankings, pairKey, type ConvictionState } from "@/lib/convictionGraph";
 
 interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; }
 const SNAP_KEY = "reit-viz:weekly-ranks:snapshots";
@@ -37,6 +38,9 @@ export default function WeeklyRanks() {
   const [removed, setRemoved] = useState<string[]>([]); // manually-excluded names
   const [addText, setAddText] = useState("");
   const [pinFrom, setPinFrom] = useState<string | null>(null); // "pin X over…" armed
+  const [view, setView] = useState<"rank" | "duel" | "changes">("rank");
+  const [skipped, setSkipped] = useState<Set<string>>(new Set()); // duel pairs passed on
+  const [duelUndo, setDuelUndo] = useState<Array<[string, string]>>([]); // pins added via duel, for undo
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [compareId, setCompareId] = useState<string>("");
   const [snapName, setSnapName] = useState("");
@@ -103,7 +107,7 @@ export default function WeeklyRanks() {
   }, [book]);
 
   // ── Engine analysis (recompute on every edit; trivial at book size) ───────
-  const analysis = useMemo(() => analyzeConviction({ order, pins } as ConvictionState), [order, pins]);
+  const analysis = useMemo(() => analyzeConviction({ order, pins } as ConvictionState, { skip: skipped }), [order, pins, skipped]);
   const conflictSet = useMemo(() => {
     const s = new Set<string>();
     for (const c of analysis.conflicts) { s.add(c.a); s.add(c.b); }
@@ -121,6 +125,9 @@ export default function WeeklyRanks() {
     if (compareSnap) compareSnap.order.forEach((t, i) => m.set(t, i + 1));
     return m;
   }, [compareSnap]);
+
+  // Week-over-week diff for the Changes view.
+  const cmp = useMemo(() => (compareSnap ? compareRankings(order, compareSnap.order) : null), [order, compareSnap]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const move = (ticker: string, dir: -1 | 1) => {
@@ -182,6 +189,39 @@ export default function WeeklyRanks() {
     if (analysis.suggestedOrder) setOrder(analysis.suggestedOrder);
   };
 
+  // ── Duel flow ─────────────────────────────────────────────────────────────
+  const answerDuel = (winner: string, loser: string) => {
+    addPin(winner, loser);
+    setDuelUndo((u) => [...u, [winner, loser]]);
+  };
+  const skipDuel = () => {
+    if (analysis.nextDuel) setSkipped((s) => new Set(s).add(pairKey(analysis.nextDuel![0], analysis.nextDuel![1])));
+  };
+  const undoDuel = () => {
+    setDuelUndo((u) => {
+      if (!u.length) return u;
+      const [a, b] = u[u.length - 1];
+      setPins((p) => p.filter(([x, y]) => !(x === a && y === b)));
+      return u.slice(0, -1);
+    });
+  };
+  const resetSkips = () => setSkipped(new Set());
+
+  // Keyboard shortcuts in duel view: ← pick left, → pick right, S skip, U undo.
+  useEffect(() => {
+    if (view !== "duel") return;
+    const onKey = (e: KeyboardEvent) => {
+      const d = analysis.nextDuel;
+      if (e.key === "ArrowLeft" && d) { e.preventDefault(); answerDuel(d[0], d[1]); }
+      else if (e.key === "ArrowRight" && d) { e.preventDefault(); answerDuel(d[1], d[0]); }
+      else if ((e.key === "s" || e.key === "S") && d) { e.preventDefault(); skipDuel(); }
+      else if (e.key === "u" || e.key === "U") { e.preventDefault(); undoDuel(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, analysis.nextDuel]);
+
   const saveSnapshot = () => {
     savedThisSession.current = true;
     const now = new Date();
@@ -232,6 +272,15 @@ export default function WeeklyRanks() {
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/50 flex-wrap flex-shrink-0">
         <span className="text-sm font-bold flex items-center gap-1.5"><Trophy className="w-4 h-4 text-primary" /> Weekly Ranks</span>
+        {/* View toggle */}
+        <div className="inline-flex rounded border border-border overflow-hidden h-7">
+          {([["rank", "Rank", ListOrdered], ["duel", "Duel", Swords], ["changes", "Changes", TrendingUp]] as const).map(([v, label, Icon]) => (
+            <button key={v} onClick={() => setView(v)} data-testid={`wr-view-${v}`}
+              className={`px-2 text-xs flex items-center gap-1 ${v !== "rank" ? "border-l border-border" : ""} ${view === v ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted text-muted-foreground"}`}>
+              <Icon className="w-3 h-3" />{label}
+            </button>
+          ))}
+        </div>
         <BasketScopeSelect scope={basketScope} />
         <div className="flex items-center gap-1">
           <Input value={addText} onChange={(e) => setAddText(e.target.value)}
@@ -265,6 +314,21 @@ export default function WeeklyRanks() {
           title="Reorder to the arrangement closest to yours that honors every pin"
           data-testid="wr-snap-btn">Snap to my calls</Button>
         <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" onClick={exportCsv} data-testid="wr-export"><Download className="w-3 h-3" />CSV</Button>
+        <PagePresets
+          storageKey="reit-viz:weekly-ranks:presets"
+          label="Presets"
+          testIdPrefix="wr-presets"
+          capture={() => ({ order, pins, extras, removed, compareId })}
+          apply={(c: any) => {
+            if (Array.isArray(c?.order)) setOrder(c.order.filter((x: any) => typeof x === "string"));
+            if (Array.isArray(c?.pins)) setPins(c.pins.filter((p: any) => Array.isArray(p) && p.length === 2));
+            if (Array.isArray(c?.extras)) setExtras(c.extras.filter((x: any) => typeof x === "string"));
+            if (Array.isArray(c?.removed)) setRemoved(c.removed.filter((x: any) => typeof x === "string"));
+            if (typeof c?.compareId === "string") setCompareId(c.compareId);
+            setSkipped(new Set());
+            setDuelUndo([]);
+          }}
+        />
       </div>
 
       {/* Snapshot bar */}
@@ -290,6 +354,7 @@ export default function WeeklyRanks() {
         )}
       </div>
 
+      {view === "rank" && (
       <div className="flex flex-1 min-h-0">
         {/* Ranked list */}
         <div className="flex-1 overflow-auto" data-testid="wr-list">
@@ -368,8 +433,8 @@ export default function WeeklyRanks() {
               <div className="space-y-1.5" data-testid="wr-duel">
                 <div className="text-[10px] text-muted-foreground">Which do you prefer? (the least-supported pair)</div>
                 <div className="flex gap-1.5">
-                  <Button size="sm" variant="outline" className="flex-1 h-8 text-xs font-mono" onClick={() => { addPin(duel[0], duel[1]); }} data-testid="wr-duel-a">{duel[0]}</Button>
-                  <Button size="sm" variant="outline" className="flex-1 h-8 text-xs font-mono" onClick={() => { addPin(duel[1], duel[0]); }} data-testid="wr-duel-b">{duel[1]}</Button>
+                  <Button size="sm" variant="outline" className="flex-1 h-8 text-xs font-mono" onClick={() => answerDuel(duel[0], duel[1])} data-testid="wr-duel-a">{duel[0]}</Button>
+                  <Button size="sm" variant="outline" className="flex-1 h-8 text-xs font-mono" onClick={() => answerDuel(duel[1], duel[0])} data-testid="wr-duel-b">{duel[1]}</Button>
                 </div>
                 <div className="text-[9.5px] text-muted-foreground">Implied calls are skipped automatically.</div>
               </div>
@@ -410,6 +475,113 @@ export default function WeeklyRanks() {
           </div>
         </div>
       </div>
+      )}
+
+      {/* ── Duel view ──────────────────────────────────────────────────────── */}
+      {view === "duel" && (
+        <div className="flex flex-1 min-h-0 items-center justify-center p-6" data-testid="wr-duel-view">
+          <div className="w-full max-w-xl space-y-4">
+            <div className="space-y-1">
+              <div className="flex justify-between text-[11px] text-muted-foreground">
+                <span>{Math.round(analysis.determinedPct * 100)}% determined</span>
+                <span data-testid="wr-duel-progress">{analysis.totalPairs - analysis.undeterminedPairs} / {analysis.totalPairs} pairs</span>
+              </div>
+              <div className="h-1.5 rounded bg-muted overflow-hidden">
+                <div className="h-full bg-primary transition-all" style={{ width: `${Math.round(analysis.determinedPct * 100)}%` }} />
+              </div>
+            </div>
+            {analysis.hasContradiction ? (
+              <div className="text-center text-rose-400 text-sm" data-testid="wr-duel-contradiction">
+                Your calls contain a contradiction — resolve it in Rank view before continuing.
+              </div>
+            ) : duel ? (
+              <div className="space-y-3" data-testid="wr-duel-card">
+                <div className="text-center text-xs text-muted-foreground">Which do you prefer?</div>
+                <div className="flex items-stretch gap-3">
+                  <button onClick={() => answerDuel(duel[0], duel[1])} data-testid="wr-duel-pick-a"
+                    className="flex-1 rounded-lg border border-border hover:border-primary hover:bg-primary/10 p-4 text-center transition-colors">
+                    <div className="font-mono font-bold text-lg">{duel[0]}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{metaMap.get(duel[0])?.name ?? ""}</div>
+                    <div className="text-[9px] text-muted-foreground mt-1">← currently #{order.indexOf(duel[0]) + 1}</div>
+                  </button>
+                  <div className="self-center text-muted-foreground text-xs">vs</div>
+                  <button onClick={() => answerDuel(duel[1], duel[0])} data-testid="wr-duel-pick-b"
+                    className="flex-1 rounded-lg border border-border hover:border-primary hover:bg-primary/10 p-4 text-center transition-colors">
+                    <div className="font-mono font-bold text-lg">{duel[1]}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{metaMap.get(duel[1])?.name ?? ""}</div>
+                    <div className="text-[9px] text-muted-foreground mt-1">currently #{order.indexOf(duel[1]) + 1} →</div>
+                  </button>
+                </div>
+                <div className="flex items-center justify-center gap-2 text-[11px]">
+                  <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={skipDuel} data-testid="wr-duel-skip"><SkipForward className="w-3 h-3" />Skip (S)</Button>
+                  <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={undoDuel} disabled={!duelUndo.length} data-testid="wr-duel-undo"><Undo2 className="w-3 h-3" />Undo (U)</Button>
+                  {skipped.size > 0 && <Button size="sm" variant="ghost" className="h-7" onClick={resetSkips} data-testid="wr-duel-reset-skips">reset {skipped.size} skip{skipped.size > 1 ? "s" : ""}</Button>}
+                </div>
+                <div className="text-center text-[10px] text-muted-foreground">← prefer left · → prefer right · S skip · U undo · implied pairs skipped automatically</div>
+              </div>
+            ) : (
+              <div className="text-center text-sm text-emerald-400" data-testid="wr-duel-complete">Every pair is determined by your calls. 🎉</div>
+            )}
+            <div className="text-center">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { snapToCalls(); setView("rank"); }}
+                disabled={analysis.hasContradiction || analysis.orderIsConsistent} data-testid="wr-duel-apply">
+                Apply calls to order →
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Changes view (week-over-week) ──────────────────────────────────── */}
+      {view === "changes" && (
+        <div className="flex flex-1 min-h-0 overflow-auto p-4" data-testid="wr-changes-view">
+          {!compareSnap ? (
+            <div className="m-auto text-sm text-muted-foreground text-center">Save a snapshot, then pick one in the bar above to compare against.</div>
+          ) : cmp && (
+            <div className="w-full max-w-3xl mx-auto space-y-4">
+              <div className="text-xs text-muted-foreground">Current order vs <b className="text-foreground">{compareSnap.name}</b> · {cmp.commonCount} names in common</div>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <StatCard label="Churn Σ|Δ|" value={String(cmp.churn)} testid="wr-churn" />
+                <StatCard label="Spearman ρ" value={cmp.spearman == null ? "—" : cmp.spearman.toFixed(2)} testid="wr-spearman" />
+                <StatCard label="New" value={String(cmp.entered.length)} testid="wr-entered-count" />
+                <StatCard label="Dropped" value={String(cmp.dropped.length)} testid="wr-dropped-count" />
+              </div>
+              <div className="border border-border rounded overflow-hidden">
+                <table className="w-full text-xs" data-testid="wr-movers">
+                  <thead className="bg-card text-[10px] text-muted-foreground">
+                    <tr><th className="text-left p-1.5">Ticker</th><th className="text-left p-1.5">Name</th><th className="text-right p-1.5">Last</th><th className="text-right p-1.5">Now</th><th className="text-right p-1.5 pr-3">Δ</th></tr>
+                  </thead>
+                  <tbody>
+                    {cmp.movers.map((m) => (
+                      <tr key={m.ticker} className="border-t border-border/40" data-testid={`wr-mover-${m.ticker}`}>
+                        <td className="p-1.5 font-mono font-semibold">{m.ticker}</td>
+                        <td className="p-1.5 text-muted-foreground truncate max-w-[240px]">{metaMap.get(m.ticker)?.name ?? ""}</td>
+                        <td className="p-1.5 text-right font-mono text-muted-foreground">{m.from ?? "—"}</td>
+                        <td className="p-1.5 text-right font-mono">{m.to}</td>
+                        <td className={`p-1.5 pr-3 text-right font-mono ${m.delta == null ? "text-cyan-300" : m.delta > 0 ? "text-emerald-400" : m.delta < 0 ? "text-rose-400" : "text-muted-foreground"}`} data-testid={`wr-mover-delta-${m.ticker}`}>
+                          {m.delta == null ? "NEW" : m.delta > 0 ? `+${m.delta}` : m.delta}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {cmp.dropped.length > 0 && (
+                <div className="text-[11px] text-muted-foreground">Dropped since {compareSnap.name}: <span className="font-mono">{cmp.dropped.join(", ")}</span></div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, testid }: { label: string; value: string; testid: string }) {
+  return (
+    <div className="rounded border border-border bg-card/40 p-2">
+      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-lg font-mono font-bold" data-testid={testid}>{value}</div>
     </div>
   );
 }

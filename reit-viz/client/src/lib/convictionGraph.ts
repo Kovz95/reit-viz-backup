@@ -167,7 +167,12 @@ function topoSnap(nodes: string[], pins: Array<[string, string]>, pos: Map<strin
   return out.length === nodes.length ? out : null;
 }
 
-export function analyzeConviction(state: ConvictionState): ConvictionAnalysis {
+const unordered = (a: string, b: string) => (a < b ? key(a, b) : key(b, a));
+
+/** Stable unordered pair key — matches the format nextDuel's `skip` set consults. */
+export function pairKey(a: string, b: string): string { return unordered(a, b); }
+
+export function analyzeConviction(state: ConvictionState, opts?: { skip?: Set<string> }): ConvictionAnalysis {
   const nodes = state.order.slice();
   const pos = new Map<string, number>();
   nodes.forEach((n, i) => pos.set(n, i));
@@ -220,17 +225,32 @@ export function analyzeConviction(state: ConvictionState): ConvictionAnalysis {
 
   const suggestedOrder = hasContradiction ? null : topoSnap(nodes, pins, pos);
 
-  // Next duel (v1 proxy): the undetermined pair closest together in the current
-  // order — where the ranking is least supported. Deterministic: scan by
-  // increasing positional distance, then by top position.
+  // Next duel: the MOST-INFORMATIVE undetermined pair — the one whose answer
+  // would newly determine the most other pairs. Resolving x▸y links every node
+  // that reaches x (Up(x)) to every node y reaches (Down(y)), so the value of a
+  // pair ≈ max(|Up(x)|·|Down(y)|, |Up(y)|·|Down(x)|). Up/Down counts come
+  // straight from the closure — O(pairs) total. Tiebreak: nearest in the
+  // current order (least-supported gap), then earliest. `skip` (unordered pair
+  // keys) lets the duel flow pass on pairs the user couldn't decide.
+  const up = new Map<string, number>();   // {x} ∪ nodes that reach x
+  const down = new Map<string, number>(); // {x} ∪ nodes x reaches
+  for (const n of nodes) { up.set(n, 1); down.set(n, 1); }
+  for (const k of closureKeys) {
+    const [a, b] = k.split(SEP); // a reaches b
+    down.set(a, down.get(a)! + 1);
+    up.set(b, up.get(b)! + 1);
+  }
   let nextDuel: [string, string] | null = null;
-  outer:
-  for (let dist = 1; dist < nodes.length; dist++) {
-    for (let i = 0; i + dist < nodes.length; i++) {
-      const x = nodes[i], y = nodes[i + dist];
-      if (!closureKeys.has(key(x, y)) && !closureKeys.has(key(y, x))) {
-        nextDuel = [x, y];
-        break outer;
+  let bestScore = -1, bestDist = Infinity, bestI = Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const x = nodes[i], y = nodes[j];
+      if (closureKeys.has(key(x, y)) || closureKeys.has(key(y, x))) continue; // determined
+      if (opts?.skip?.has(unordered(x, y))) continue;
+      const score = Math.max(up.get(x)! * down.get(y)!, up.get(y)! * down.get(x)!);
+      const dist = j - i;
+      if (score > bestScore || (score === bestScore && (dist < bestDist || (dist === bestDist && i < bestI)))) {
+        bestScore = score; bestDist = dist; bestI = i; nextDuel = [x, y];
       }
     }
   }
@@ -256,4 +276,70 @@ export function analyzeConviction(state: ConvictionState): ConvictionAnalysis {
 /** Convenience: is "a ▸ b" implied (directly or transitively) by the pins? */
 export function impliesPreference(analysis: ConvictionAnalysis, a: string, b: string): boolean {
   return analysis.closureKeys.has(key(a, b));
+}
+
+export interface RankMover {
+  ticker: string;
+  /** Rank in the prior snapshot (1-based), or null if it wasn't ranked then. */
+  from: number | null;
+  /** Rank now (1-based). */
+  to: number;
+  /** from − to: positive = moved UP; null for new entries. */
+  delta: number | null;
+}
+export interface RankComparison {
+  /** Every current name, sorted by |delta| desc then rank asc (new entries last). */
+  movers: RankMover[];
+  entered: string[]; // in current, not in prior
+  dropped: string[]; // in prior, not in current
+  /** Σ|delta| over names present in both. */
+  churn: number;
+  /** Spearman rank correlation over the common names (re-ranked 1..k in each); null if < 2 common. */
+  spearman: number | null;
+  commonCount: number;
+}
+
+/** Week-over-week diff between the current order and a prior snapshot's order. */
+export function compareRankings(current: string[], prior: string[]): RankComparison {
+  const priorRank = new Map<string, number>();
+  prior.forEach((t, i) => priorRank.set(t, i + 1));
+  const curRank = new Map<string, number>();
+  current.forEach((t, i) => curRank.set(t, i + 1));
+  const curSet = new Set(current);
+
+  const movers: RankMover[] = current.map((t, i) => {
+    const from = priorRank.has(t) ? priorRank.get(t)! : null;
+    const to = i + 1;
+    return { ticker: t, from, to, delta: from == null ? null : from - to };
+  });
+  movers.sort((a, b) => {
+    const ad = a.delta == null ? -1 : Math.abs(a.delta);
+    const bd = b.delta == null ? -1 : Math.abs(b.delta);
+    return bd - ad || a.to - b.to;
+  });
+
+  const common = current.filter((t) => priorRank.has(t));
+  const churn = common.reduce((s, t) => s + Math.abs(priorRank.get(t)! - curRank.get(t)!), 0);
+
+  // Spearman over the common subset, re-ranked 1..k within each ordering.
+  let spearman: number | null = null;
+  const k = common.length;
+  if (k >= 2) {
+    const curCommonRank = new Map<string, number>();
+    current.filter((t) => priorRank.has(t)).forEach((t, i) => curCommonRank.set(t, i + 1));
+    const priCommonRank = new Map<string, number>();
+    prior.filter((t) => curSet.has(t)).forEach((t, i) => priCommonRank.set(t, i + 1));
+    let d2 = 0;
+    for (const t of common) { const d = curCommonRank.get(t)! - priCommonRank.get(t)!; d2 += d * d; }
+    spearman = 1 - (6 * d2) / (k * (k * k - 1));
+  }
+
+  return {
+    movers,
+    entered: current.filter((t) => !priorRank.has(t)),
+    dropped: prior.filter((t) => !curSet.has(t)),
+    churn,
+    spearman,
+    commonCount: k,
+  };
 }
