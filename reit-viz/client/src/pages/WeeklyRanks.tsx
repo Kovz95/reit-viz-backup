@@ -72,7 +72,7 @@ export default function WeeklyRanks() {
   const [pinFrom, setPinFrom] = useState<string | null>(null); // "pin X over…" armed
   const [tieFrom, setTieFrom] = useState<string | null>(null); // "tie X with…" armed
   const [view, setView] = useState<"rank" | "duel" | "changes">("rank");
-  const [groupBy, setGroupBy] = useState<GroupLevel>("subsector");
+  const [groupBy, setGroupBy] = useState<GroupLevel>("subindustry");
   const [skipped, setSkipped] = useState<Set<string>>(new Set()); // duel pairs passed on
   const [duelUndo, setDuelUndo] = useState<Array<{ kind: "pin" | "tie"; a: string; b: string }>>([]); // duel actions, for undo
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
