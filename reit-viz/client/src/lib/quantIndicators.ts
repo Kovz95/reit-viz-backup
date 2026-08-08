@@ -52,6 +52,60 @@ export function computeRollingPercentile(bars: OhlcBar[], window = 252): DataPoi
   return out;
 }
 
+/** Percentile VALUE at p (0-100) of an ascending-sorted window.
+ *  "nearest" returns an actually-observed value; "linear" interpolates between
+ *  the two nearest ranks (both match TradingView's ta.percentile_* helpers). */
+function percentileOf(sorted: number[], p: number, method: "linear" | "nearest"): number {
+  const n = sorted.length;
+  if (n === 0) return NaN;
+  if (n === 1) return sorted[0];
+  const pp = Math.max(0, Math.min(100, p));
+  if (method === "nearest") {
+    const idx = Math.min(n, Math.max(1, Math.ceil((pp / 100) * n)));
+    return sorted[idx - 1];
+  }
+  const rank = (pp / 100) * (n - 1);
+  const lo = Math.floor(rank), hi = Math.ceil(rank);
+  return lo === hi ? sorted[lo] : sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+}
+
+export interface PercentRankBands {
+  pr: DataPoint[];   // percent rank of the current close, 0-100
+  srcN: DataPoint[]; // source min-max normalized to 0-100 over the window
+  hiN: DataPoint[];  // upper percentile band, normalized 0-100
+  midN: DataPoint[]; // middle percentile band, normalized 0-100
+  loN: DataPoint[];  // lower percentile band, normalized 0-100
+}
+
+/** Percent rank line + percentile bands (upper/mid/lower) of the close over a
+ *  trailing window. Bands are min-max normalized to 0-100 so they share the
+ *  percent-rank axis (a port of the TradingView "Percent Rank + Percentile
+ *  Bands" indicator's normalized view). Close-only ⇒ safe on ratio/derived
+ *  panes; frequency is applied upstream by resampleIndicatorBars. */
+export function computePercentRankBands(
+  bars: OhlcBar[], window: number, pHi: number, pMid: number, pLo: number, method: "linear" | "nearest",
+): PercentRankBands {
+  const { t, c } = closesOf(bars);
+  const empty: PercentRankBands = { pr: [], srcN: [], hiN: [], midN: [], loN: [] };
+  if (c.length < window || window < 5) return empty;
+  const pr: DataPoint[] = [], srcN: DataPoint[] = [], hiN: DataPoint[] = [], midN: DataPoint[] = [], loN: DataPoint[] = [];
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1);
+    const sorted = [...win].sort((a, b) => a - b);
+    const min = sorted[0], max = sorted[sorted.length - 1], rng = max - min;
+    const nrm = (x: number) => (rng > 0 ? ((x - min) / rng) * 100 : 50);
+    let below = 0;
+    for (const v of win) if (v <= c[i]) below++;
+    const time = t[i] as string;
+    pr.push({ time, value: ((below - 1) / (window - 1)) * 100 });
+    srcN.push({ time, value: nrm(c[i]) });
+    hiN.push({ time, value: nrm(percentileOf(sorted, pHi, method)) });
+    midN.push({ time, value: nrm(percentileOf(sorted, pMid, method)) });
+    loN.push({ time, value: nrm(percentileOf(sorted, pLo, method)) });
+  }
+  return { pr, srcN, hiN, midN, loN };
+}
+
 /** Annualized realized volatility (%) of log returns over a trailing window. */
 export function computeRealizedVol(bars: OhlcBar[], window = 21, periodsPerYear = 252): DataPoint[] {
   const { t, c } = closesOf(bars);

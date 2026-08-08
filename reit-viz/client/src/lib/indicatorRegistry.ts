@@ -41,6 +41,7 @@ import {
 import {
   computeRollingZScore,
   computeRollingPercentile,
+  computePercentRankBands,
   computeRealizedVol,
   computeRollingDrawdown,
   computeBollingerPctB,
@@ -934,6 +935,42 @@ const PCTRANK: IndicatorDef = {
   ),
 };
 
+const PRPCTL: IndicatorDef = {
+  id: "prpctl",
+  label: "Percent Rank + Percentiles",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "window", label: "Lookback", default: 252, min: 20, max: 2520, defaultByFrequency: { weekly: 52, monthly: 36 } },
+    { key: "upperPct", label: "Upper %ile", default: 80, min: 50, max: 100 },
+    { key: "midPct", label: "Mid %ile", default: 50, min: 0, max: 100 },
+    { key: "lowerPct", label: "Lower %ile", default: 20, min: 0, max: 50 },
+    { key: "method", label: "Method", default: 0, min: 0, max: 1, options: [{ value: 0, label: "Linear interp" }, { value: 1, label: "Nearest rank" }] },
+  ],
+  colorKeys: ["prpctl_rank", "prpctl_src", "prpctl_upper", "prpctl_mid", "prpctl_lower", "prpctl_ref"],
+  renderPane: (ctx, bars, p) => {
+    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear");
+    if (!r.pr.length) return;
+    const add = (data: { time: string; value: number }[], colorKey: string, title: string, width = 1) => {
+      if (!data.length) return;
+      const s = ctx.chart.addSeries(LineSeries, { color: ctx.colors[colorKey], lineWidth: width as any, title });
+      s.setData(asLine(data));
+      ctx.register(s);
+    };
+    // Percent rank first = crosshair/value-sync anchor; bands + source share the axis (normalized 0-100).
+    add(r.pr, "prpctl_rank", `PctRank ${p.window}${ctx.baseLabel}`, 2);
+    add(r.hiN, "prpctl_upper", `P${p.upperPct}`);
+    add(r.midN, "prpctl_mid", `P${p.midPct}`);
+    add(r.loN, "prpctl_lower", `P${p.lowerPct}`);
+    add(r.srcN, "prpctl_src", "Source (norm)");
+    const f = String(r.pr[0].time), l = String(r.pr[r.pr.length - 1].time);
+    ctx.refLine(p.upperPct, ctx.colors.prpctl_ref, f, l);
+    ctx.refLine(p.midPct, "rgba(255,255,255,0.15)", f, l);
+    ctx.refLine(p.lowerPct, ctx.colors.prpctl_ref, f, l);
+  },
+};
+
 const REALIZED_VOL: IndicatorDef = {
   id: "realizedvol",
   label: "Realized Vol (ann. %)",
@@ -1142,7 +1179,7 @@ const MA_SLOPE: IndicatorDef = {
 
 export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, AUTOCORR,
-  ZSCORE, PCTRANK, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+  ZSCORE, PCTRANK, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
