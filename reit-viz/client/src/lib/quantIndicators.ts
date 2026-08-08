@@ -69,6 +69,77 @@ function percentileOf(sorted: number[], p: number, method: "linear" | "nearest")
   return lo === hi ? sorted[lo] : sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
 }
 
+// ── Smoothing (matches the Pine ma() helper) ──
+export type SmoothType = "None" | "SMA" | "EMA" | "RMA" | "WMA" | "HMA";
+
+function smaArr(v: number[], len: number): (number | null)[] {
+  const n = v.length, out: (number | null)[] = new Array(n).fill(null);
+  if (len < 1) return v.slice();
+  let sum = 0;
+  for (let i = 0; i < n; i++) { sum += v[i]; if (i >= len) sum -= v[i - len]; if (i >= len - 1) out[i] = sum / len; }
+  return out;
+}
+/** EMA/RMA seeded with the SMA of the first `len` values (matches the app's EMA
+ *  convention and TradingView's SMA-seed). alpha: EMA = 2/(len+1), RMA = 1/len. */
+function recursiveMa(v: number[], len: number, alpha: number): (number | null)[] {
+  const n = v.length, out: (number | null)[] = new Array(n).fill(null);
+  if (n < len || len < 1) return out;
+  let seed = 0;
+  for (let i = 0; i < len; i++) seed += v[i];
+  let m = seed / len;
+  out[len - 1] = m;
+  for (let i = len; i < n; i++) { m = alpha * v[i] + (1 - alpha) * m; out[i] = m; }
+  return out;
+}
+function wmaArr(v: number[], len: number): (number | null)[] {
+  const n = v.length, out: (number | null)[] = new Array(n).fill(null);
+  if (len < 1) return v.slice();
+  const denom = (len * (len + 1)) / 2;
+  for (let i = len - 1; i < n; i++) {
+    let acc = 0;
+    for (let k = 0; k < len; k++) acc += v[i - len + 1 + k] * (k + 1);
+    out[i] = acc / denom;
+  }
+  return out;
+}
+function hmaArr(v: number[], len: number): (number | null)[] {
+  const half = Math.max(1, Math.floor(len / 2));
+  const sq = Math.max(1, Math.round(Math.sqrt(len)));
+  const wHalf = wmaArr(v, half), wFull = wmaArr(v, len);
+  const diff: number[] = v.map((_, i) => {
+    const a = wHalf[i], b = wFull[i];
+    return a != null && b != null ? 2 * a - b : NaN;
+  });
+  // wma over `diff` but honoring NaN warmup (start once we have `sq` finite values).
+  const n = v.length, out: (number | null)[] = new Array(n).fill(null);
+  const denom = (sq * (sq + 1)) / 2;
+  for (let i = sq - 1; i < n; i++) {
+    let acc = 0, ok = true;
+    for (let k = 0; k < sq; k++) { const d = diff[i - sq + 1 + k]; if (!Number.isFinite(d)) { ok = false; break; } acc += d * (k + 1); }
+    if (ok) out[i] = acc / denom;
+  }
+  return out;
+}
+function smoothArr(v: number[], type: SmoothType, len: number): (number | null)[] {
+  if (type === "None" || len < 2) return v.slice();
+  switch (type) {
+    case "SMA": return smaArr(v, len);
+    case "EMA": return recursiveMa(v, len, 2 / (len + 1));
+    case "RMA": return recursiveMa(v, len, 1 / len);
+    case "WMA": return wmaArr(v, len);
+    case "HMA": return hmaArr(v, len);
+    default: return v.slice();
+  }
+}
+/** Smooth a DataPoint series' values, dropping the warm-up (leading nulls). */
+function smoothSeries(series: DataPoint[], type: SmoothType, len: number): DataPoint[] {
+  if (type === "None" || len < 2 || series.length === 0) return series;
+  const sm = smoothArr(series.map((d) => d.value), type, len);
+  const out: DataPoint[] = [];
+  for (let i = 0; i < series.length; i++) if (sm[i] != null && Number.isFinite(sm[i]!)) out.push({ time: series[i].time, value: sm[i]! });
+  return out;
+}
+
 export interface PercentRankBands {
   pr: DataPoint[];    // percent rank of the current close, 0-100
   srcN: DataPoint[];  // source min-max normalized to 0-100 over the window
@@ -84,34 +155,69 @@ export interface PercentRankBands {
  *  trailing window. Bands are min-max normalized to 0-100 so they share the
  *  percent-rank axis (a port of the TradingView "Percent Rank + Percentile
  *  Bands" indicator's normalized view). Close-only ⇒ safe on ratio/derived
- *  panes; frequency is applied upstream by resampleIndicatorBars. */
+ *  panes; frequency is applied upstream by resampleIndicatorBars.
+ *
+ *  Optional smoothing (matches the Pine calc order): SOURCE smoothing is
+ *  applied first (rank/percentile the smoothed series), then OUTPUT smoothing
+ *  is applied to the percent-rank line and the bands (not the source line or
+ *  the min/max used for normalization). */
 export function computePercentRankBands(
   bars: OhlcBar[], window: number, pHi: number, pMid: number, pLo: number, method: "linear" | "nearest",
+  smooth?: { srcType?: SmoothType; srcLen?: number; outType?: SmoothType; outLen?: number },
 ): PercentRankBands {
-  const { t, c } = closesOf(bars);
   const empty: PercentRankBands = { pr: [], srcN: [], hiN: [], midN: [], loN: [], hiRaw: [], midRaw: [], loRaw: [] };
+  let { t, c } = closesOf(bars);
+
+  // ── Source smoothing (before ranking) ──
+  const srcType = smooth?.srcType ?? "None", srcLen = smooth?.srcLen ?? 5;
+  if (srcType !== "None" && srcLen >= 2) {
+    const sm = smoothArr(c, srcType, srcLen);
+    const cc: number[] = [], tt: (string | number)[] = [];
+    for (let i = 0; i < c.length; i++) if (sm[i] != null && Number.isFinite(sm[i]!)) { cc.push(sm[i]!); tt.push(t[i]); }
+    c = cc; t = tt;
+  }
   if (c.length < window || window < 5) return empty;
-  const pr: DataPoint[] = [], srcN: DataPoint[] = [], hiN: DataPoint[] = [], midN: DataPoint[] = [], loN: DataPoint[] = [];
-  const hiRaw: DataPoint[] = [], midRaw: DataPoint[] = [], loRaw: DataPoint[] = [];
+
+  // ── Per-window raw stats on the (smoothed) source ──
+  const pr0: DataPoint[] = [], hi0: DataPoint[] = [], mid0: DataPoint[] = [], lo0: DataPoint[] = [];
+  const srcRaw: DataPoint[] = [];
+  const winMM = new Map<string, { min: number; max: number }>();
   for (let i = window - 1; i < c.length; i++) {
     const win = c.slice(i - window + 1, i + 1);
     const sorted = [...win].sort((a, b) => a - b);
-    const min = sorted[0], max = sorted[sorted.length - 1], rng = max - min;
-    const nrm = (x: number) => (rng > 0 ? ((x - min) / rng) * 100 : 50);
+    const min = sorted[0], max = sorted[sorted.length - 1];
     let below = 0;
     for (const v of win) if (v <= c[i]) below++;
     const time = t[i] as string;
-    const hv = percentileOf(sorted, pHi, method), mv = percentileOf(sorted, pMid, method), lv = percentileOf(sorted, pLo, method);
-    pr.push({ time, value: ((below - 1) / (window - 1)) * 100 });
-    srcN.push({ time, value: nrm(c[i]) });
-    hiN.push({ time, value: nrm(hv) });
-    midN.push({ time, value: nrm(mv) });
-    loN.push({ time, value: nrm(lv) });
-    hiRaw.push({ time, value: hv });
-    midRaw.push({ time, value: mv });
-    loRaw.push({ time, value: lv });
+    pr0.push({ time, value: ((below - 1) / (window - 1)) * 100 });
+    hi0.push({ time, value: percentileOf(sorted, pHi, method) });
+    mid0.push({ time, value: percentileOf(sorted, pMid, method) });
+    lo0.push({ time, value: percentileOf(sorted, pLo, method) });
+    srcRaw.push({ time, value: c[i] });
+    winMM.set(time, { min, max });
   }
-  return { pr, srcN, hiN, midN, loN, hiRaw, midRaw, loRaw };
+
+  // ── Output smoothing (after ranking) — pr line + bands only ──
+  const outType = smooth?.outType ?? "None", outLen = smooth?.outLen ?? 3;
+  const pr = smoothSeries(pr0, outType, outLen);
+  const hiRaw = smoothSeries(hi0, outType, outLen);
+  const midRaw = smoothSeries(mid0, outType, outLen);
+  const loRaw = smoothSeries(lo0, outType, outLen);
+
+  // ── Normalized (0-100) using each bar's own window min/max of the source ──
+  const nrm = (d: DataPoint): DataPoint => {
+    const mm = winMM.get(d.time as string);
+    const rng = mm ? mm.max - mm.min : 0;
+    return { time: d.time, value: mm && rng > 0 ? ((d.value - mm.min) / rng) * 100 : 50 };
+  };
+  return {
+    pr,
+    srcN: srcRaw.map(nrm),
+    hiN: hiRaw.map(nrm),
+    midN: midRaw.map(nrm),
+    loN: loRaw.map(nrm),
+    hiRaw, midRaw, loRaw,
+  };
 }
 
 /** Annualized realized volatility (%) of log returns over a trailing window. */

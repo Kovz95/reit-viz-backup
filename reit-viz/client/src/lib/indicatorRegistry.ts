@@ -42,6 +42,7 @@ import {
   computeRollingZScore,
   computeRollingPercentile,
   computePercentRankBands,
+  type SmoothType,
   computeRealizedVol,
   computeRollingDrawdown,
   computeBollingerPctB,
@@ -574,6 +575,23 @@ const KELTNER: IndicatorDef = {
   },
 };
 
+// Numeric-option → SmoothType maps (matching the Pine ma() options) + shared
+// smoothing params, used by both the percent-rank sub-pane and this overlay.
+const SRC_SMOOTH: SmoothType[] = ["None", "SMA", "EMA", "RMA", "WMA", "HMA"];
+const OUT_SMOOTH: SmoothType[] = ["None", "SMA", "EMA", "WMA"];
+const smoothOf = (p: Record<string, number>) => ({
+  srcType: SRC_SMOOTH[Math.round(p.srcSmooth)] ?? "None",
+  srcLen: p.srcSmoothLen,
+  outType: OUT_SMOOTH[Math.round(p.outSmooth)] ?? "None",
+  outLen: p.outSmoothLen,
+});
+const SMOOTH_PARAMS: IndicatorParam[] = [
+  { key: "srcSmooth", label: "Src smooth", default: 0, min: 0, max: 5, options: SRC_SMOOTH.map((s, i) => ({ value: i, label: s })) },
+  { key: "srcSmoothLen", label: "Src len", default: 5, min: 2, max: 200 },
+  { key: "outSmooth", label: "Out smooth", default: 0, min: 0, max: 3, options: OUT_SMOOTH.map((s, i) => ({ value: i, label: s })) },
+  { key: "outSmoothLen", label: "Out len", default: 3, min: 2, max: 100 },
+];
+
 const PCTLBANDS: IndicatorDef = {
   id: "pctlbands",
   label: "Percentile Bands",
@@ -586,11 +604,12 @@ const PCTLBANDS: IndicatorDef = {
     { key: "midPct", label: "Mid %ile", default: 50, min: 0, max: 100 },
     { key: "lowerPct", label: "Lower %ile", default: 20, min: 0, max: 50 },
     { key: "method", label: "Method", default: 0, min: 0, max: 1, options: [{ value: 0, label: "Linear interp" }, { value: 1, label: "Nearest rank" }] },
+    ...SMOOTH_PARAMS,
   ],
   colorKeys: ["pctlbands_upper", "pctlbands_mid", "pctlbands_lower"],
   renderOverlay: (ctx, bars, p) => {
     // Raw percentile VALUES in the source's own units — drawn on the price pane.
-    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear");
+    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear", smoothOf(p));
     if (!r.hiRaw.length) return;
     const line = (data: { time: string; value: number }[], colorKey: string, title: string, dashed = false) => {
       const s = ctx.chart.addSeries(LineSeries, {
@@ -979,10 +998,11 @@ const PRPCTL: IndicatorDef = {
     { key: "midPct", label: "Mid %ile", default: 50, min: 0, max: 100 },
     { key: "lowerPct", label: "Lower %ile", default: 20, min: 0, max: 50 },
     { key: "method", label: "Method", default: 0, min: 0, max: 1, options: [{ value: 0, label: "Linear interp" }, { value: 1, label: "Nearest rank" }] },
+    ...SMOOTH_PARAMS,
   ],
   colorKeys: ["prpctl_rank", "prpctl_src", "prpctl_upper", "prpctl_mid", "prpctl_lower", "prpctl_ref"],
   renderPane: (ctx, bars, p) => {
-    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear");
+    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear", smoothOf(p));
     if (!r.pr.length) return;
     const add = (data: { time: string; value: number }[], colorKey: string, title: string, width = 1) => {
       if (!data.length) return;
