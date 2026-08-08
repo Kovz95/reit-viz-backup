@@ -70,11 +70,14 @@ function percentileOf(sorted: number[], p: number, method: "linear" | "nearest")
 }
 
 export interface PercentRankBands {
-  pr: DataPoint[];   // percent rank of the current close, 0-100
-  srcN: DataPoint[]; // source min-max normalized to 0-100 over the window
-  hiN: DataPoint[];  // upper percentile band, normalized 0-100
-  midN: DataPoint[]; // middle percentile band, normalized 0-100
-  loN: DataPoint[];  // lower percentile band, normalized 0-100
+  pr: DataPoint[];    // percent rank of the current close, 0-100
+  srcN: DataPoint[];  // source min-max normalized to 0-100 over the window
+  hiN: DataPoint[];   // upper percentile band, normalized 0-100
+  midN: DataPoint[];  // middle percentile band, normalized 0-100
+  loN: DataPoint[];   // lower percentile band, normalized 0-100
+  hiRaw: DataPoint[]; // upper percentile band, SOURCE units (for a price overlay)
+  midRaw: DataPoint[];
+  loRaw: DataPoint[];
 }
 
 /** Percent rank line + percentile bands (upper/mid/lower) of the close over a
@@ -86,9 +89,10 @@ export function computePercentRankBands(
   bars: OhlcBar[], window: number, pHi: number, pMid: number, pLo: number, method: "linear" | "nearest",
 ): PercentRankBands {
   const { t, c } = closesOf(bars);
-  const empty: PercentRankBands = { pr: [], srcN: [], hiN: [], midN: [], loN: [] };
+  const empty: PercentRankBands = { pr: [], srcN: [], hiN: [], midN: [], loN: [], hiRaw: [], midRaw: [], loRaw: [] };
   if (c.length < window || window < 5) return empty;
   const pr: DataPoint[] = [], srcN: DataPoint[] = [], hiN: DataPoint[] = [], midN: DataPoint[] = [], loN: DataPoint[] = [];
+  const hiRaw: DataPoint[] = [], midRaw: DataPoint[] = [], loRaw: DataPoint[] = [];
   for (let i = window - 1; i < c.length; i++) {
     const win = c.slice(i - window + 1, i + 1);
     const sorted = [...win].sort((a, b) => a - b);
@@ -97,13 +101,17 @@ export function computePercentRankBands(
     let below = 0;
     for (const v of win) if (v <= c[i]) below++;
     const time = t[i] as string;
+    const hv = percentileOf(sorted, pHi, method), mv = percentileOf(sorted, pMid, method), lv = percentileOf(sorted, pLo, method);
     pr.push({ time, value: ((below - 1) / (window - 1)) * 100 });
     srcN.push({ time, value: nrm(c[i]) });
-    hiN.push({ time, value: nrm(percentileOf(sorted, pHi, method)) });
-    midN.push({ time, value: nrm(percentileOf(sorted, pMid, method)) });
-    loN.push({ time, value: nrm(percentileOf(sorted, pLo, method)) });
+    hiN.push({ time, value: nrm(hv) });
+    midN.push({ time, value: nrm(mv) });
+    loN.push({ time, value: nrm(lv) });
+    hiRaw.push({ time, value: hv });
+    midRaw.push({ time, value: mv });
+    loRaw.push({ time, value: lv });
   }
-  return { pr, srcN, hiN, midN, loN };
+  return { pr, srcN, hiN, midN, loN, hiRaw, midRaw, loRaw };
 }
 
 /** Annualized realized volatility (%) of log returns over a trailing window. */

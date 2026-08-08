@@ -574,6 +574,38 @@ const KELTNER: IndicatorDef = {
   },
 };
 
+const PCTLBANDS: IndicatorDef = {
+  id: "pctlbands",
+  label: "Percentile Bands",
+  category: "Quant",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "window", label: "Lookback", default: 252, min: 20, max: 2520, defaultByFrequency: { weekly: 52, monthly: 36 } },
+    { key: "upperPct", label: "Upper %ile", default: 80, min: 50, max: 100 },
+    { key: "midPct", label: "Mid %ile", default: 50, min: 0, max: 100 },
+    { key: "lowerPct", label: "Lower %ile", default: 20, min: 0, max: 50 },
+    { key: "method", label: "Method", default: 0, min: 0, max: 1, options: [{ value: 0, label: "Linear interp" }, { value: 1, label: "Nearest rank" }] },
+  ],
+  colorKeys: ["pctlbands_upper", "pctlbands_mid", "pctlbands_lower"],
+  renderOverlay: (ctx, bars, p) => {
+    // Raw percentile VALUES in the source's own units — drawn on the price pane.
+    const r = computePercentRankBands(bars, p.window, p.upperPct, p.midPct, p.lowerPct, p.method >= 1 ? "nearest" : "linear");
+    if (!r.hiRaw.length) return;
+    const line = (data: { time: string; value: number }[], colorKey: string, title: string, dashed = false) => {
+      const s = ctx.chart.addSeries(LineSeries, {
+        color: ctx.colors[colorKey], lineWidth: 1, title,
+        ...(dashed ? { lineStyle: LineStyle.LargeDashed, crosshairMarkerVisible: false } : {}),
+      });
+      s.setData(asLine(data));
+      ctx.register(s);
+    };
+    line(r.hiRaw, "pctlbands_upper", `P${p.upperPct} ${p.window}${ctx.baseLabel}`);
+    line(r.midRaw, "pctlbands_mid", `P${p.midPct}`, true);
+    line(r.loRaw, "pctlbands_lower", `P${p.lowerPct}`);
+  },
+};
+
 const DONCHIAN: IndicatorDef = {
   id: "donchian",
   label: "Donchian Channels",
@@ -1181,7 +1213,7 @@ export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, AUTOCORR,
   ZSCORE, PCTRANK, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
-export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
+export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 
 const BY_ID = new Map(ALL_REGISTRY_INDICATORS.map((d) => [d.id, d]));
