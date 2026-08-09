@@ -287,6 +287,54 @@ export function computeVortex(bars: OhlcBar[], window = 14): { plus: DataPoint[]
   return { plus, minus };
 }
 
+export interface TtmSqueeze {
+  mom: DataPoint[];    // TTM momentum (linreg histogram value)
+  sqzOn: boolean[];    // squeeze state per mom point (BB inside Keltner)
+}
+
+/** TTM Squeeze: momentum histogram + squeeze state. Squeeze ON = Bollinger
+ *  Bands (length, bbMult σ) inside Keltner Channels (length, kcMult·SMA(TR)) —
+ *  volatility coiling / range. Momentum = linreg over `length` of
+ *  close − avg( (highestHigh+lowestLow)/2 , SMA(close) ). Rising momentum out
+ *  of a squeeze = trend breakout. */
+export function computeTTMSqueeze(bars: OhlcBar[], length = 20, bbMult = 2, kcMult = 1.5): TtmSqueeze {
+  const { t, h, l, c } = ohlcOf(bars);
+  const n = c.length, mom: DataPoint[] = [], sqzOn: boolean[] = [];
+  if (n < 2 * length || length < 3) return { mom, sqzOn };
+  const tr = new Array<number>(n).fill(NaN);
+  for (let i = 1; i < n; i++) { const pc = c[i - 1]; tr[i] = Math.max(h[i] - l[i], Math.abs(h[i] - pc), Math.abs(l[i] - pc)); }
+  // m[i] = close − avg( midpoint(highestHigh, lowestLow) , SMA(close) ) over `length`.
+  const m = new Array<number>(n).fill(NaN);
+  for (let i = length - 1; i < n; i++) {
+    let sum = 0, hi = -Infinity, lo = Infinity;
+    for (let j = i - length + 1; j <= i; j++) { sum += c[j]; if (h[j] > hi) hi = h[j]; if (l[j] < lo) lo = l[j]; }
+    m[i] = c[i] - ((hi + lo) / 2 + sum / length) / 2;
+  }
+  const sx = (length * (length - 1)) / 2;
+  const sxx = ((length - 1) * length * (2 * length - 1)) / 6;
+  const denom = length * sxx - sx * sx;
+  for (let i = 2 * length - 2; i < n; i++) {
+    // Linreg of m over the window, evaluated at the last point.
+    let sy = 0, sxy = 0;
+    for (let k = 0; k < length; k++) { const y = m[i - length + 1 + k]; sy += y; sxy += k * y; }
+    const b = denom !== 0 ? (length * sxy - sx * sy) / denom : 0;
+    const a = (sy - b * sx) / length;
+    // Bollinger + Keltner over the same window.
+    let cs = 0, trs = 0;
+    for (let j = i - length + 1; j <= i; j++) { cs += c[j]; trs += tr[j]; }
+    const basis = cs / length;
+    let ss = 0;
+    for (let j = i - length + 1; j <= i; j++) ss += (c[j] - basis) ** 2;
+    const sd = Math.sqrt(ss / length); // population σ, matching ta.stdev
+    const rangeMa = trs / length;
+    const bbUpper = basis + bbMult * sd, bbLower = basis - bbMult * sd;
+    const kcUpper = basis + kcMult * rangeMa, kcLower = basis - kcMult * rangeMa;
+    mom.push({ time: t[i] as string, value: a + b * (length - 1) });
+    sqzOn.push(bbLower > kcLower && bbUpper < kcUpper);
+  }
+  return { mom, sqzOn };
+}
+
 /** Annualized realized volatility (%) of log returns over a trailing window. */
 export function computeRealizedVol(bars: OhlcBar[], window = 21, periodsPerYear = 252): DataPoint[] {
   const { t, c } = closesOf(bars);

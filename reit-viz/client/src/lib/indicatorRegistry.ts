@@ -46,6 +46,7 @@ import {
   computeChoppiness,
   computeVHF,
   computeVortex,
+  computeTTMSqueeze,
   computeRealizedVol,
   computeRollingDrawdown,
   computeBollingerPctB,
@@ -1247,6 +1248,48 @@ const VORTEX: IndicatorDef = {
   },
 };
 
+const TTM_SQUEEZE: IndicatorDef = {
+  id: "ttmsqueeze",
+  label: "TTM Squeeze",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "length", label: "Length", default: 20, min: 5, max: 200, defaultByFrequency: { weekly: 20, monthly: 12 } },
+    { key: "bbMult", label: "BB σ", default: 2, min: 1, max: 4, step: 0.5 },
+    { key: "kcMult", label: "KC ATR", default: 1.5, min: 0.5, max: 4, step: 0.5 },
+  ],
+  colorKeys: ["ttm_up_strong", "ttm_up_weak", "ttm_dn_weak", "ttm_dn_strong", "ttm_sqz_on", "ttm_sqz_off", "ttm_zero"],
+  renderPane: (ctx, bars, p) => {
+    const { mom, sqzOn } = computeTTMSqueeze(bars, p.length, p.bbMult, p.kcMult);
+    if (!mom.length) return;
+    // Momentum histogram, 4-color: up rising / up falling / down falling / down rising.
+    const hist = ctx.chart.addSeries(HistogramSeries, { title: `TTM Squeeze ${p.length}${ctx.baseLabel}`, priceLineVisible: false });
+    hist.setData(mom.map((d, i) => {
+      const prev = i > 0 ? mom[i - 1].value : d.value;
+      const rising = d.value >= prev;
+      const color = d.value >= 0
+        ? (rising ? ctx.colors.ttm_up_strong : ctx.colors.ttm_up_weak)
+        : (rising ? ctx.colors.ttm_dn_weak : ctx.colors.ttm_dn_strong);
+      return { time: d.time as unknown as Time, value: d.value, color };
+    }));
+    ctx.register(hist);
+    // Squeeze dots on the zero line — two invisible-line series give 2-color
+    // per-bar point markers (amber = squeeze ON, gray = OFF).
+    const dots = (on: boolean, colorKey: string) => {
+      const s = ctx.chart.addSeries(LineSeries, {
+        color: ctx.colors[colorKey], lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 2,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      } as any);
+      s.setData(mom.map((d, i) => (sqzOn[i] === on ? { time: d.time as unknown as Time, value: 0 } : { time: d.time as unknown as Time })));
+      ctx.register(s);
+    };
+    dots(true, "ttm_sqz_on");
+    dots(false, "ttm_sqz_off");
+    ctx.refLine(0, ctx.colors.ttm_zero, String(mom[0].time), String(mom[mom.length - 1].time));
+  },
+};
+
 const MA_SLOPE: IndicatorDef = {
   id: "maslope",
   label: "MA Slope",
@@ -1292,7 +1335,7 @@ const MA_SLOPE: IndicatorDef = {
 };
 
 export const PANE_INDICATORS: IndicatorDef[] = [
-  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, AUTOCORR,
+  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, TTM_SQUEEZE, AUTOCORR,
   ZSCORE, PCTRANK, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
