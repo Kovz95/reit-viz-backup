@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence, computePctileDispersion } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -506,6 +506,37 @@ const technicalSignals: CatalogSignal[] = [
       const pers = alignToBars(b, computePersistence(closeBars(b), Number(p.window), Number(p.pct)));
       const run = Number(p.run);
       return detectCrossings(pers, dir === "long" ? (v) => v <= -run : (v) => v >= run);
+    },
+  },
+  {
+    // Inter-percentile dispersion (P90−P10 as % of median) z-scored vs its own
+    // history — a robust volatility-regime read. long = COMPRESSION (z low,
+    // ranges narrow → coiling), short = EXPANSION (z high, ranges wide).
+    id: "tech.pctldisp_extreme",
+    family: "technical",
+    label: "Percentile-dispersion regime",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "pd63z15", label: "63d, ±1.5σ", params: { window: 63, z: 1.5 } },
+      { id: "pd126z2", label: "126d, ±2σ", params: { window: 126, z: 2 } },
+      { id: "pd252z2", label: "252d, ±2σ", params: { window: 252, z: 2 } },
+    ],
+    detect: (b, p, dir) => {
+      const disp = computePctileDispersion(closeBars(b), Number(p.window));
+      if (disp.length === 0) return [];
+      const z = rollingZScore(disp.map((d) => d.value), Number(p.window));
+      const idx = dateIndex(b);
+      const aligned: (number | null)[] = new Array(b.dates.length).fill(null);
+      for (let i = 0; i < disp.length; i++) {
+        const j = idx.get(disp[i].time as string);
+        const zv = z[i];
+        if (j !== undefined && zv !== null && Number.isFinite(zv)) aligned[j] = zv;
+      }
+      const lim = Number(p.z);
+      return detectCrossings(aligned, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
     },
   },
   {

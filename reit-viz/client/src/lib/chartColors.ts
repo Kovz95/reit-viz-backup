@@ -163,6 +163,8 @@ export const INDICATOR_COLORS = {
   persistence_zero: 'rgba(148, 163, 184, 0.4)',
   rankroc_line: '#a3e635',
   rankroc_zero: 'rgba(148, 163, 184, 0.4)',
+  pctldisp_line: '#fca5a5',
+  pctldisp_ref: 'rgba(148, 163, 184, 0.4)',
   prpctl_rank: '#14b8a6',
   prpctl_src: '#fb923c',
   prpctl_upper: '#ef4444',

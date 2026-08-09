@@ -284,7 +284,7 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
-type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile" | "pctspread" | "winsorz" | "iqrpos" | "rankroc";
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile" | "pctspread" | "winsorz" | "iqrpos" | "rankroc" | "pctldisp";
 
 /** Linear-interpolated percentile of an ascending-sorted array. */
 function pctlLin(sorted: number[], p: number): number {
@@ -443,6 +443,34 @@ function rollingPctBandCentered(values: number[], window: number, hiPct = 80, lo
   return out;
 }
 
+/** Rolling z-score of the inter-percentile DISPERSION (P90−P10 as % of median):
+ *  a robust volatility measure standardized against its own recent history, so
+ *  ±threshold crossings flag unusually WIDE (expansion) or NARROW (compression)
+ *  ranges. Two-stage: dispersion over `window`, then z over a trailing `window`
+ *  of dispersions (≈2·window warm-up). */
+function rollingDispersionZ(values: number[], window: number): (number | null)[] {
+  const n = values.length;
+  const out: (number | null)[] = new Array(n).fill(null);
+  if (window < 5) return out;
+  const disp = new Array<number>(n).fill(NaN);
+  for (let i = window - 1; i < n; i++) {
+    const win = values.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const hi = pctlLin(win, 90), lo = pctlLin(win, 10), med = pctlLin(win, 50);
+    disp[i] = med > 0 ? ((hi - lo) / med) * 100 : hi - lo;
+  }
+  for (let i = 2 * (window - 1); i < n; i++) {
+    let sum = 0, cnt = 0;
+    for (let j = i - window + 1; j <= i; j++) if (Number.isFinite(disp[j])) { sum += disp[j]; cnt++; }
+    if (cnt < 3) continue;
+    const mean = sum / cnt;
+    let ss = 0;
+    for (let j = i - window + 1; j <= i; j++) if (Number.isFinite(disp[j])) ss += (disp[j] - mean) ** 2;
+    const sd = Math.sqrt(ss / cnt);
+    if (sd > 0) out[i] = (disp[i] - mean) / sd;
+  }
+  return out;
+}
+
 /** Build the standardized signal series (crossed at ±threshold) for a given
  *  source pre-transform. Robust-Z / Min-Max / Percentile / Percentile-Spread
  *  replace the z-score outright with their own bounded/robust standardizer;
@@ -455,6 +483,7 @@ function standardizedSignal(values: number[], window: number, transform: Transfo
   if (transform === "winsorz") return rollingWinsorZ(values, window);
   if (transform === "iqrpos") return rollingIqrCentered(values, window);
   if (transform === "rankroc") return rollingRankRocSignal(values, window);
+  if (transform === "pctldisp") return rollingDispersionZ(values, window);
   const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
     : transform === "detrend" ? regResidAligned(values, window)
       : values;
@@ -1012,7 +1041,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (["none", "robustz", "minmax", "pctile", "pctspread", "winsorz", "iqrpos", "rankroc", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
+    if (["none", "robustz", "minmax", "pctile", "pctspread", "winsorz", "iqrpos", "rankroc", "pctldisp", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1259,6 +1288,7 @@ export default function ZScoreOptimizer() {
                   <option value="winsorz">Winsorized-Z</option>
                   <option value="iqrpos">IQR Position</option>
                   <option value="rankroc">Rank RoC</option>
+                  <option value="pctldisp">Pctile Dispersion → Z</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
                   <option value="detrend">Detrend → Z</option>
                 </select>

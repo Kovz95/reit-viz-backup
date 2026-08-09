@@ -807,3 +807,22 @@ export function computeRankRoc(bars: OhlcBar[], window = 63, lookback = 10): Dat
   }
   return out;
 }
+
+/** Rolling INTER-PERCENTILE DISPERSION: the width between the hiPct and loPct
+ *  percentiles of the window, as a % of the window median — a robust,
+ *  outlier-resistant volatility proxy (P90−P10 by default; set 75/25 for the
+ *  IQR). Falls back to raw width when the median is ≤ 0. */
+export function computePctileDispersion(bars: OhlcBar[], window = 63, hiPct = 90, loPct = 10): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 5) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const hi = percentileOf(win, hiPct, "linear");
+    const lo = percentileOf(win, loPct, "linear");
+    const med = percentileOf(win, 50, "linear");
+    const width = hi - lo;
+    out.push({ time: t[i] as string, value: med > 0 ? (width / med) * 100 : width });
+  }
+  return out;
+}

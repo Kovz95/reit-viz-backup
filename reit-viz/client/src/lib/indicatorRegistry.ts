@@ -66,6 +66,7 @@ import {
   computeIqrPosition,
   computePersistence,
   computeRankRoc,
+  computePctileDispersion,
 } from "./quantIndicators";
 
 export type IndicatorParam = {
@@ -1189,6 +1190,28 @@ const PERSISTENCE: IndicatorDef = {
   },
 };
 
+const PCTL_DISP: IndicatorDef = {
+  id: "pctldisp",
+  label: "Percentile Dispersion",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [
+    { key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } },
+    { key: "hiPct", label: "Upper %", default: 90, min: 55, max: 99 },
+    { key: "loPct", label: "Lower %", default: 10, min: 1, max: 45 },
+  ],
+  colorKeys: ["pctldisp_line", "pctldisp_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computePctileDispersion(bars, p.window, p.hiPct, p.loPct),
+    "pctldisp_line",
+    (p) => `Disp ${p.hiPct}-${p.loPct} ${p.window}`,
+    // Robust % volatility — no natural fixed threshold; zero baseline only.
+    () => [{ level: 0, colorKey: "pctldisp_ref" }],
+  ),
+};
+
 const RANK_ROC: IndicatorDef = {
   id: "rankroc",
   label: "Rank Rate-of-Change",
@@ -1554,7 +1577,7 @@ const MA_SLOPE: IndicatorDef = {
 
 export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, TTM_SQUEEZE, AUTOCORR,
-  ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, WINSOR_Z, IQR_POS, PERSISTENCE, RANK_ROC, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+  ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, WINSOR_Z, IQR_POS, PERSISTENCE, RANK_ROC, PCTL_DISP, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
   SKEW, KURTOSIS, ENTROPY,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
