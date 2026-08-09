@@ -284,6 +284,67 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend";
+
+const medianOf = (a: number[]): number => {
+  const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
+  return n % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/** Rolling ROBUST z-score (median/MAD, ×1.4826 → σ-equivalent), INDEX-ALIGNED
+ *  with null warm-up — a drop-in standardizer swap for computeRollingZScores
+ *  that keeps the same ±σ crossing thresholds but resists outliers. */
+function rollingRobustZ(values: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 3) return out;
+  for (let i = window - 1; i < values.length; i++) {
+    const win = values.slice(i - window + 1, i + 1);
+    const med = medianOf(win);
+    const mad = medianOf(win.map((v) => Math.abs(v - med)));
+    if (mad > 0) out[i] = (values[i] - med) / (1.4826 * mad);
+  }
+  return out;
+}
+
+/** Rolling regression RESIDUAL (detrend), INDEX-ALIGNED with NaN warm-up:
+ *  value minus its local log-linear fit at the current bar, as % deviation when
+ *  the series is strictly positive (else raw residual). Feeds the rolling
+ *  z-score exactly like fracDiffAligned. */
+function regResidAligned(values: number[], window: number): number[] {
+  const n = values.length;
+  const out = new Array<number>(n).fill(NaN);
+  if (window < 10) return out;
+  const isLog = values.every((v) => v > 0);
+  const x = isLog ? values.map(Math.log) : values;
+  const mi = (window - 1) / 2;
+  let varI = 0;
+  for (let k = 0; k < window; k++) varI += (k - mi) ** 2;
+  for (let i = window - 1; i < n; i++) {
+    const from = i - window + 1;
+    let my = 0;
+    for (let k = 0; k < window; k++) my += x[from + k];
+    my /= window;
+    let cov = 0;
+    for (let k = 0; k < window; k++) cov += (k - mi) * (x[from + k] - my);
+    const b = cov / varI;
+    const fitted = my + b * ((window - 1) - mi);
+    const resid = x[i] - fitted;
+    out[i] = isLog ? (Math.exp(resid) - 1) * 100 : resid;
+  }
+  return out;
+}
+
+/** Build the standardized signal series (crossed at ±threshold) for a given
+ *  source pre-transform. Robust-Z replaces the z-score outright; Frac-Diff and
+ *  Detrend pre-transform the series and then z-score it (raw = plain z-score). */
+function standardizedSignal(values: number[], window: number, transform: TransformKind, fracDiffD: number): (number | null)[] {
+  if (transform === "robustz") return rollingRobustZ(values, window);
+  const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
+    : transform === "detrend" ? regResidAligned(values, window)
+      : values;
+  return computeRollingZScores(src, window);
+}
+
 function analyzeWindow(
   metricValues: number[],
   priceValues: number[],
@@ -294,9 +355,11 @@ function analyzeWindow(
   band: ReturnBand | null,
   signalType: "breakout" | "reversion" | "both",
   weeklyCloses?: number[],
-  weeklyResult?: { dailyIndexMap: number[] }
+  weeklyResult?: { dailyIndexMap: number[] },
+  transform: TransformKind = "none",
+  fracDiffD = 0.4,
 ): WindowResult {
-  const zScores = computeRollingZScores(metricValues, window);
+  const zScores = standardizedSignal(metricValues, window, transform, fracDiffD);
   const useBand = band !== null;
   const doBreakout = signalType === "breakout" || signalType === "both";
   const doReversion = signalType === "reversion" || signalType === "both";
@@ -387,7 +450,7 @@ export default function ZScoreOptimizer() {
   // Optional source pre-transform applied before the rolling z-score. "fracdiff"
   // fractionally-differences the metric (co-sweeping CANDIDATE_D in the sweep;
   // a single evalFracDiffD in Evaluate).
-  const [transform, setTransform] = useState<"none" | "fracdiff">("none");
+  const [transform, setTransform] = useState<TransformKind>("none");
   const [evalFracDiffD, setEvalFracDiffD] = useState(0.4);
   const [selectedTicker, setSelectedTicker] = useState("");
   const [mode, setMode] = useState<string>("single");
@@ -582,16 +645,15 @@ export default function ZScoreOptimizer() {
         const weeklyCloses = effFreq === "weekly" || effFreq === "monthly" ? priceVals : undefined;
         const weeklyResult = effFreq === "weekly" || effFreq === "monthly" ? resampled : undefined;
 
-        // Frac-diff pre-transform co-sweeps CANDIDATE_D; keep the best-scoring d
-        // per window so the results table stays one row per window.
+        // Frac-diff co-sweeps CANDIDATE_D; other transforms have no extra knob.
+        // Keep the best-scoring d per window so the table stays one row/window.
         const dList = transform === "fracdiff" ? CANDIDATE_D : [null];
         const windowResults: WindowResult[] = [];
         for (const w of CANDIDATE_WINDOWS) {
           if (w > metricSeries.length * 0.8) continue;
           let bestForW: WindowResult | null = null;
           for (const dd of dList) {
-            const mSeries = dd == null ? metricSeries : fracDiffAligned(metricSeries, dd);
-            const wr = analyzeWindow(mSeries, priceSeries, w, buyThreshold, sellThreshold, targetReturn, band, signalType, weeklyCloses, weeklyResult);
+            const wr = analyzeWindow(metricSeries, priceSeries, w, buyThreshold, sellThreshold, targetReturn, band, signalType, weeklyCloses, weeklyResult, transform, dd ?? 0.4);
             if (dd != null) wr.d = dd;
             if (!bestForW || wr.compositeScore > bestForW.compositeScore) bestForW = wr;
           }
@@ -756,8 +818,7 @@ export default function ZScoreOptimizer() {
         const wk = weeklyDownsamplePrices(metricVals, dates, frequency === "monthly_on_daily" ? "monthly" : undefined);
         metricVals = expandWeeklyToDaily(wk.prices, wk.weekIndex, metricVals.length).map((w) => (Number.isNaN(w) ? metricVals[0] : w));
       }
-      const metricForZ = transform === "fracdiff" ? fracDiffAligned(metricVals, evalFracDiffD) : metricVals;
-      const zScores = computeRollingZScores(metricForZ, evalWindow);
+      const zScores = standardizedSignal(metricVals, evalWindow, transform, evalFracDiffD);
       const doBreakout = evalSignalType === "breakout" || evalSignalType === "both";
       const doReversion = evalSignalType === "reversion" || evalSignalType === "both";
       const direction = evalSide === "long" ? "buy" : "sell";
@@ -835,7 +896,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (saved.transform === "none" || saved.transform === "fracdiff") setTransform(saved.transform);
+    if (["none", "robustz", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1073,9 +1134,11 @@ export default function ZScoreOptimizer() {
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Transform</label>
-                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={transform} onChange={(e) => setTransform(e.target.value as "none" | "fracdiff")} disabled={running} data-testid="optimizer-transform">
-                  <option value="none">None (raw)</option>
+                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={transform} onChange={(e) => setTransform(e.target.value as TransformKind)} disabled={running} data-testid="optimizer-transform">
+                  <option value="none">None (Z-Score)</option>
+                  <option value="robustz">Robust-Z (MAD)</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
+                  <option value="detrend">Detrend → Z</option>
                 </select>
               </div>
               {transform === "fracdiff" && (

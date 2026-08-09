@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -116,6 +116,12 @@ function toBars(b: SeriesBundle): OhlcBar[] | null {
   }
   barsMemo.set(b, bars);
   return bars;
+}
+
+/** Flat o=h=l=c bars from the bundle's closes — for the close-only quant
+ *  transforms (frac-diff / robust-z / min-max / regression residual). */
+function closeBars(b: SeriesBundle): OhlcBar[] {
+  return b.dates.map((time, i) => ({ time, open: b.closes[i], high: b.closes[i], low: b.closes[i], close: b.closes[i] }));
 }
 
 function dateIndex(b: SeriesBundle): Map<string, number> {
@@ -311,6 +317,70 @@ const technicalSignals: CatalogSignal[] = [
       }
       const lim = Number(p.z);
       return detectCrossings(aligned, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    // Robust (median/MAD) z-score extreme — outlier-resistant cousin of
+    // tech.zscore_revert; a single gap won't inflate the scale and mute later
+    // extremes. Fires on ±z crossings.
+    id: "tech.robustz_revert",
+    family: "technical",
+    label: "Robust z-score extreme (MAD)",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "rz63z2", label: "63d, ±2σ", params: { window: 63, z: 2 } },
+      { id: "rz126z2", label: "126d, ±2σ", params: { window: 126, z: 2 } },
+      { id: "rz252z2", label: "252d, ±2σ", params: { window: 252, z: 2 } },
+    ],
+    detect: (b, p, dir) => {
+      const rz = alignToBars(b, computeRobustZScore(closeBars(b), Number(p.window)));
+      const lim = Number(p.z);
+      return detectCrossings(rz, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    // Min-max (0–100) band extreme — linear position within the rolling range
+    // (Stochastic %K on any source). Long when it crosses below the low band
+    // (near the range floor), short above the high band.
+    id: "tech.minmax_extreme",
+    family: "technical",
+    label: "Min-max range extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "mm63", label: "63d, 20/80", params: { window: 63, lo: 20, hi: 80 } },
+      { id: "mm126", label: "126d, 20/80", params: { window: 126, lo: 20, hi: 80 } },
+      { id: "mm252", label: "252d, 10/90", params: { window: 252, lo: 10, hi: 90 } },
+    ],
+    detect: (b, p, dir) => {
+      const mm = alignToBars(b, computeMinMaxNorm(closeBars(b), Number(p.window)));
+      return detectCrossings(mm, dir === "long" ? (v) => v <= Number(p.lo) : (v) => v >= Number(p.hi));
+    },
+  },
+  {
+    // Regression residual (detrend) extreme — % deviation from the local
+    // log-linear trend. Long when price is >pct BELOW trend, short when >pct
+    // above. The mean-reversion companion to the RS-slope trend signals.
+    id: "tech.regresid_extreme",
+    family: "technical",
+    label: "Detrend residual extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "rr63p8", label: "63d, ±8%", params: { window: 63, pct: 8 } },
+      { id: "rr126p10", label: "126d, ±10%", params: { window: 126, pct: 10 } },
+      { id: "rr252p12", label: "252d, ±12%", params: { window: 252, pct: 12 } },
+    ],
+    detect: (b, p, dir) => {
+      const rr = alignToBars(b, computeRegResidual(closeBars(b), Number(p.window)));
+      const pct = Number(p.pct);
+      return detectCrossings(rr, dir === "long" ? (v) => v <= -pct : (v) => v >= pct);
     },
   },
   {
