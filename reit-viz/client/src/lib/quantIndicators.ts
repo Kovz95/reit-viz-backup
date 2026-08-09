@@ -521,3 +521,107 @@ export function computeRegSlope(
   }
   return { slope, r2 };
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Distribution / detrend transforms (close-only) — companions to the z-score
+// and percentile transforms above. Robust standardization, bounded scaling,
+// trend removal, and stationarization.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Median of a numeric array (does not mutate the input). */
+function medianOf(a: number[]): number {
+  const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
+  return n % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Rolling ROBUST z-score: (x − median) / (1.4826·MAD) over a trailing window.
+ *  MAD-based ⇒ outlier-resistant vs the mean/σ z-score (one earnings gap won't
+ *  inflate the scale and mute every later extreme). 1.4826 rescales MAD to a
+ *  σ-equivalent under normality, so the ±2/±3.5 thresholds read like a normal z
+ *  (|z|>3.5 = outlier, Iglewicz–Hoaglin). */
+export function computeRobustZScore(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 3) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1);
+    const med = medianOf(win);
+    const mad = medianOf(win.map((v) => Math.abs(v - med)));
+    if (mad > 0) out.push({ time: t[i] as string, value: (c[i] - med) / (1.4826 * mad) });
+  }
+  return out;
+}
+
+/** Rolling MIN-MAX normalization: (x − min)/(max − min)·100 over a trailing
+ *  window ⇒ 0 at the window low, 100 at the high. Stochastic %K generalized to
+ *  any source: the LINEAR position within the range (vs percentile's RANK
+ *  position). Bounds any series to a shared 0–100 scale for cross-comparison. */
+export function computeMinMaxNorm(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 2) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = i - window + 1; j <= i; j++) { if (c[j] < lo) lo = c[j]; if (c[j] > hi) hi = c[j]; }
+    if (hi > lo) out.push({ time: t[i] as string, value: ((c[i] - lo) / (hi - lo)) * 100 });
+  }
+  return out;
+}
+
+/** Rolling regression RESIDUAL (detrend): value minus its local linear-trend
+ *  fit at the current bar. On a positive series the fit is on ln(price) and the
+ *  residual is expressed as % deviation from trend; on a signed series it's the
+ *  raw residual. Zero = on trend; +/− = above/below the local line — the
+ *  cyclical/mean-reverting component left after the drift is removed. */
+export function computeRegResidual(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 10) return out;
+  const { x, isLog } = logOrRaw(c);
+  const mi = (window - 1) / 2;
+  let varI = 0;
+  for (let k = 0; k < window; k++) varI += (k - mi) ** 2;
+  for (let i = window - 1; i < x.length; i++) {
+    const from = i - window + 1;
+    let my = 0;
+    for (let k = 0; k < window; k++) my += x[from + k];
+    my /= window;
+    let cov = 0;
+    for (let k = 0; k < window; k++) cov += (k - mi) * (x[from + k] - my);
+    const b = cov / varI;                    // slope (per bar)
+    const fitted = my + b * ((window - 1) - mi); // fit at the last (current) point
+    const resid = x[i] - fitted;
+    const val = isLog ? (Math.exp(resid) - 1) * 100 : resid;
+    if (Number.isFinite(val)) out.push({ time: t[i] as string, value: val });
+  }
+  return out;
+}
+
+/** FRACTIONAL differencing (López de Prado, fixed-width window). Applies the
+ *  binomial fractional-difference weights of order d∈(0,1] so the series becomes
+ *  (near-)stationary while retaining maximum long memory — d=1 ≈ an ordinary
+ *  first difference (memory erased), small d keeps most of the level. Weights
+ *  w₀=1, wₖ = −wₖ₋₁·(d−k+1)/k, truncated where |wₖ| < thresh; the fracdiff value
+ *  is the dot product of the trailing window with those weights. Runs on
+ *  ln(price) when positive so it's scale-free. */
+export function computeFracDiff(bars: OhlcBar[], d = 0.4, thresh = 1e-4): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < 20 || d <= 0) return out;
+  const { x } = logOrRaw(c);
+  const w: number[] = [1];
+  let k = 1;
+  while (k < x.length) {
+    const wk = (-w[k - 1] * (d - k + 1)) / k;
+    if (Math.abs(wk) < thresh) break;
+    w.push(wk);
+    k++;
+  }
+  const width = w.length;
+  for (let i = width - 1; i < x.length; i++) {
+    let dot = 0;
+    for (let j = 0; j < width; j++) dot += w[j] * x[i - j];
+    if (Number.isFinite(dot)) out.push({ time: t[i] as string, value: dot });
+  }
+  return out;
+}

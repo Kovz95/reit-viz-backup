@@ -55,6 +55,10 @@ import {
   computeHurst,
   computeEfficiencyRatio,
   computeRegSlope,
+  computeRobustZScore,
+  computeMinMaxNorm,
+  computeRegResidual,
+  computeFracDiff,
 } from "./quantIndicators";
 
 export type IndicatorParam = {
@@ -990,6 +994,73 @@ const PCTRANK: IndicatorDef = {
   ),
 };
 
+const ROBUST_Z: IndicatorDef = {
+  id: "robustz",
+  label: "Robust Z-Score (MAD)",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["robustz_line", "robustz_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRobustZScore(bars, p.window),
+    "robustz_line",
+    (p) => `RobustZ ${p.window}`,
+    () => [{ level: 0 }, { level: 3.5, colorKey: "robustz_ref" }, { level: -3.5, colorKey: "robustz_ref" }],
+  ),
+};
+
+const MINMAX: IndicatorDef = {
+  id: "minmax",
+  label: "Min-Max Normalize",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 5, max: 2520, defaultByFrequency: { weekly: 52, monthly: 24 } }],
+  colorKeys: ["minmax_line", "minmax_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeMinMaxNorm(bars, p.window),
+    "minmax_line",
+    (p) => `MinMax ${p.window}`,
+    () => [{ level: 50 }, { level: 80, colorKey: "minmax_ref" }, { level: 20, colorKey: "minmax_ref" }],
+  ),
+};
+
+const REG_RESID: IndicatorDef = {
+  id: "regresid",
+  label: "Regression Residual",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 10, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["regresid_line", "regresid_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRegResidual(bars, p.window),
+    "regresid_line",
+    (p) => `Resid ${p.window}`,
+    () => [{ level: 0, colorKey: "regresid_zero" }],
+  ),
+};
+
+const FRACDIFF: IndicatorDef = {
+  id: "fracdiff",
+  label: "Fractional Difference",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "d", label: "Order d", default: 0.4, min: 0.05, max: 1, step: 0.05 }],
+  colorKeys: ["fracdiff_line", "fracdiff_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeFracDiff(bars, p.d),
+    "fracdiff_line",
+    (p) => `FracDiff d=${p.d}`,
+    () => [{ level: 0, colorKey: "fracdiff_zero" }],
+  ),
+};
+
 const PRPCTL: IndicatorDef = {
   id: "prpctl",
   label: "Percent Rank + Percentiles",
@@ -1336,7 +1407,7 @@ const MA_SLOPE: IndicatorDef = {
 
 export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, TTM_SQUEEZE, AUTOCORR,
-  ZSCORE, PCTRANK, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+  ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
