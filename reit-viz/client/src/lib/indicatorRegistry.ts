@@ -43,6 +43,9 @@ import {
   computeRollingPercentile,
   computePercentRankBands,
   type SmoothType,
+  computeChoppiness,
+  computeVHF,
+  computeVortex,
   computeRealizedVol,
   computeRollingDrawdown,
   computeBollingerPctB,
@@ -1185,6 +1188,65 @@ const REG_SLOPE: IndicatorDef = {
   },
 };
 
+// ── Trend-vs-range regime detectors ──
+const CHOPPINESS: IndicatorDef = {
+  id: "choppiness",
+  label: "Choppiness Index",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "period",
+  params: [{ key: "period", label: "Period", default: 14, min: 2, max: 250, defaultByFrequency: { weekly: 10, monthly: 8 } }],
+  colorKeys: ["chop_line", "chop_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeChoppiness(bars, p.period),
+    "chop_line",
+    (p) => `Chop ${p.period}`,
+    // >61.8 choppy/ranging, <38.2 trending (Fibonacci guides).
+    () => [{ level: 61.8, colorKey: "chop_ref" }, { level: 38.2, colorKey: "chop_ref" }],
+  ),
+};
+
+const VHF: IndicatorDef = {
+  id: "vhf",
+  label: "Vertical Horizontal Filter",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "period",
+  params: [{ key: "period", label: "Period", default: 28, min: 2, max: 250, defaultByFrequency: { weekly: 12, monthly: 8 } }],
+  colorKeys: ["vhf_line", "vhf_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeVHF(bars, p.period),
+    "vhf_line",
+    (p) => `VHF ${p.period}`,
+    // Higher = trending; ~0.35 is a common trend/range divider.
+    () => [{ level: 0.35, colorKey: "vhf_ref" }],
+  ),
+};
+
+const VORTEX: IndicatorDef = {
+  id: "vortex",
+  label: "Vortex Indicator",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [{ key: "period", label: "Period", default: 14, min: 2, max: 200, defaultByFrequency: { weekly: 10, monthly: 8 } }],
+  colorKeys: ["vortex_plus", "vortex_minus", "vortex_ref"],
+  renderPane: (ctx, bars, p) => {
+    const { plus, minus } = computeVortex(bars, p.period);
+    if (!plus.length) return;
+    const add = (data: { time: string; value: number }[], colorKey: string, title: string) => {
+      const s = ctx.chart.addSeries(LineSeries, { color: ctx.colors[colorKey], lineWidth: 1, title });
+      s.setData(asLine(data));
+      ctx.register(s);
+    };
+    add(plus, "vortex_plus", `VI+ ${p.period}${ctx.baseLabel}`);
+    add(minus, "vortex_minus", "VI−");
+    ctx.refLine(1, ctx.colors.vortex_ref, String(plus[0].time), String(plus[plus.length - 1].time));
+  },
+};
+
 const MA_SLOPE: IndicatorDef = {
   id: "maslope",
   label: "MA Slope",
@@ -1230,7 +1292,7 @@ const MA_SLOPE: IndicatorDef = {
 };
 
 export const PANE_INDICATORS: IndicatorDef[] = [
-  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, AUTOCORR,
+  ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, AUTOCORR,
   ZSCORE, PCTRANK, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];

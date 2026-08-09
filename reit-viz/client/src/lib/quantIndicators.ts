@@ -220,6 +220,73 @@ export function computePercentRankBands(
   };
 }
 
+/** OHLC arrays aligned to bars with a finite close; high/low fall back to
+ *  close (so these run on ratio/derived panes where o=h=l=c is synthesized). */
+function ohlcOf(bars: OhlcBar[]): { t: (string | number)[]; h: number[]; l: number[]; c: number[] } {
+  const t: (string | number)[] = [], h: number[] = [], l: number[] = [], c: number[] = [];
+  for (const b of bars) {
+    if (!Number.isFinite(b.close)) continue;
+    t.push(b.time); c.push(b.close);
+    h.push(Number.isFinite(b.high) ? b.high : b.close);
+    l.push(Number.isFinite(b.low) ? b.low : b.close);
+  }
+  return { t, h, l, c };
+}
+
+/** Choppiness Index (0-100): how trending vs. choppy the last `window` bars are.
+ *  100·log10(ΣTR / (maxHigh−minLow)) / log10(window). HIGH (>~61.8) = choppy/
+ *  ranging, LOW (<~38.2) = trending. */
+export function computeChoppiness(bars: OhlcBar[], window = 14): DataPoint[] {
+  const { t, h, l, c } = ohlcOf(bars);
+  const n = c.length, out: DataPoint[] = [];
+  if (n < window + 1 || window < 2) return out;
+  const tr = new Array<number>(n).fill(NaN);
+  for (let i = 1; i < n; i++) { const pc = c[i - 1]; tr[i] = Math.max(h[i] - l[i], Math.abs(h[i] - pc), Math.abs(l[i] - pc)); }
+  const logN = Math.log10(window);
+  for (let i = window; i < n; i++) {
+    let sumTr = 0, maxH = -Infinity, minL = Infinity;
+    for (let j = i - window + 1; j <= i; j++) { sumTr += tr[j]; if (h[j] > maxH) maxH = h[j]; if (l[j] < minL) minL = l[j]; }
+    const rng = maxH - minL;
+    if (rng > 0 && sumTr > 0) out.push({ time: t[i] as string, value: (100 * Math.log10(sumTr / rng)) / logN });
+  }
+  return out;
+}
+
+/** Vertical Horizontal Filter: |range of close over n| / Σ|Δclose| over n.
+ *  HIGH = trending (net move dominates noise), LOW = ranging. Close-only. */
+export function computeVHF(bars: OhlcBar[], window = 28): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window + 1 || window < 2) return out;
+  for (let i = window; i < c.length; i++) {
+    let maxC = -Infinity, minC = Infinity, sumChg = 0;
+    for (let j = i - window + 1; j <= i; j++) { if (c[j] > maxC) maxC = c[j]; if (c[j] < minC) minC = c[j]; sumChg += Math.abs(c[j] - c[j - 1]); }
+    if (sumChg > 0) out.push({ time: t[i] as string, value: (maxC - minC) / sumChg });
+  }
+  return out;
+}
+
+/** Vortex Indicator VI+ / VI− over a trailing window. VI+ > VI− = uptrend,
+ *  crossovers mark trend changes, both near 1 / converged = range. */
+export function computeVortex(bars: OhlcBar[], window = 14): { plus: DataPoint[]; minus: DataPoint[] } {
+  const { t, h, l, c } = ohlcOf(bars);
+  const n = c.length, plus: DataPoint[] = [], minus: DataPoint[] = [];
+  if (n < window + 1 || window < 2) return { plus, minus };
+  const vmP = new Array<number>(n).fill(NaN), vmM = new Array<number>(n).fill(NaN), tr = new Array<number>(n).fill(NaN);
+  for (let i = 1; i < n; i++) {
+    vmP[i] = Math.abs(h[i] - l[i - 1]);
+    vmM[i] = Math.abs(l[i] - h[i - 1]);
+    const pc = c[i - 1];
+    tr[i] = Math.max(h[i] - l[i], Math.abs(h[i] - pc), Math.abs(l[i] - pc));
+  }
+  for (let i = window; i < n; i++) {
+    let sp = 0, sm = 0, st = 0;
+    for (let j = i - window + 1; j <= i; j++) { sp += vmP[j]; sm += vmM[j]; st += tr[j]; }
+    if (st > 0) { plus.push({ time: t[i] as string, value: sp / st }); minus.push({ time: t[i] as string, value: sm / st }); }
+  }
+  return { plus, minus };
+}
+
 /** Annualized realized volatility (%) of log returns over a trailing window. */
 export function computeRealizedVol(bars: OhlcBar[], window = 21, periodsPerYear = 252): DataPoint[] {
   const { t, c } = closesOf(bars);
