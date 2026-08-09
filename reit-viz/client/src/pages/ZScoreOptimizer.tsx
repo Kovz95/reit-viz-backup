@@ -284,7 +284,7 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
-type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile";
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile" | "pctspread";
 
 const medianOf = (a: number[]): number => {
   const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
@@ -362,14 +362,38 @@ function rollingPercentileCentered(values: number[], window: number): (number | 
   return out;
 }
 
+/** Rolling PERCENTILE-BAND position (winsorized min-max): position of the value
+ *  within its [loPct, hiPct] band, CENTERED to a ±σ-like axis ((pos−50)/25).
+ *  Outlier-robust vs min-max — a single spike can't stretch the band. */
+function rollingPctBandCentered(values: number[], window: number, hiPct = 80, loPct = 20): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 5) return out;
+  const pctl = (sorted: number[], p: number): number => {
+    const n = sorted.length;
+    if (n === 1) return sorted[0];
+    const rank = (p / 100) * (n - 1), lo = Math.floor(rank), hi = Math.ceil(rank);
+    return lo === hi ? sorted[lo] : sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+  };
+  for (let i = window - 1; i < values.length; i++) {
+    const win = values.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const lo = pctl(win, loPct), hi = pctl(win, hiPct);
+    if (hi > lo) {
+      const pos = Math.max(0, Math.min(1, (values[i] - lo) / (hi - lo))) * 100;
+      out[i] = (pos - 50) / 25;
+    }
+  }
+  return out;
+}
+
 /** Build the standardized signal series (crossed at ±threshold) for a given
- *  source pre-transform. Robust-Z / Min-Max / Percentile replace the z-score
- *  outright with their own bounded/robust standardizer; Frac-Diff and Detrend
- *  pre-transform the series and then z-score it (raw = plain z-score). */
+ *  source pre-transform. Robust-Z / Min-Max / Percentile / Percentile-Spread
+ *  replace the z-score outright with their own bounded/robust standardizer;
+ *  Frac-Diff and Detrend pre-transform the series and then z-score it. */
 function standardizedSignal(values: number[], window: number, transform: TransformKind, fracDiffD: number): (number | null)[] {
   if (transform === "robustz") return rollingRobustZ(values, window);
   if (transform === "minmax") return rollingMinMaxCentered(values, window);
   if (transform === "pctile") return rollingPercentileCentered(values, window);
+  if (transform === "pctspread") return rollingPctBandCentered(values, window);
   const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
     : transform === "detrend" ? regResidAligned(values, window)
       : values;
@@ -927,7 +951,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (["none", "robustz", "minmax", "pctile", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
+    if (["none", "robustz", "minmax", "pctile", "pctspread", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1170,6 +1194,7 @@ export default function ZScoreOptimizer() {
                   <option value="robustz">Robust-Z (MAD)</option>
                   <option value="minmax">Min-Max (range)</option>
                   <option value="pctile">Percentile (rank)</option>
+                  <option value="pctspread">Pctile Spread (band)</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
                   <option value="detrend">Detrend → Z</option>
                 </select>

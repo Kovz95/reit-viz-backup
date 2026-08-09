@@ -568,6 +568,26 @@ export function computeMinMaxNorm(bars: OhlcBar[], window = 63): DataPoint[] {
   return out;
 }
 
+/** Position (0–100) of the current value within its rolling [loPct, hiPct]
+ *  percentile band — a WINSORIZED min-max: values at/below the lower percentile
+ *  read 0, at/above the upper read 100. Outlier-robust vs true-range min-max
+ *  (a single spike can't stretch the band). */
+export function computePctBandPosition(bars: OhlcBar[], window = 63, hiPct = 80, loPct = 20): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 5) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const lo = percentileOf(win, loPct, "linear");
+    const hi = percentileOf(win, hiPct, "linear");
+    if (hi > lo) {
+      const pos = Math.max(0, Math.min(1, (c[i] - lo) / (hi - lo))) * 100;
+      out.push({ time: t[i] as string, value: pos });
+    }
+  }
+  return out;
+}
+
 /** Rolling regression RESIDUAL (detrend): value minus its local linear-trend
  *  fit at the current bar. On a positive series the fit is on ln(price) and the
  *  residual is expressed as % deviation from trend; on a signed series it's the

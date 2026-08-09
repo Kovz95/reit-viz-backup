@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -402,6 +402,27 @@ const technicalSignals: CatalogSignal[] = [
     detect: (b, p, dir) => {
       const pr = alignToBars(b, computeRollingPercentile(closeBars(b), Number(p.window)));
       return detectCrossings(pr, dir === "long" ? (v) => v <= Number(p.lo) : (v) => v >= Number(p.hi));
+    },
+  },
+  {
+    // Percentile-band position (winsorized min-max): where the value sits within
+    // its rolling P20–P80 band. Long when it crosses below the low band, short
+    // above the high — outlier-robust vs true-range min-max.
+    id: "tech.pctspread_extreme",
+    family: "technical",
+    label: "Percentile-band position extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "ps63", label: "63d, 20/80", params: { window: 63, lo: 20, hi: 80 } },
+      { id: "ps126", label: "126d, 20/80", params: { window: 126, lo: 20, hi: 80 } },
+      { id: "ps252", label: "252d, 10/90", params: { window: 252, lo: 10, hi: 90 } },
+    ],
+    detect: (b, p, dir) => {
+      const pos = alignToBars(b, computePctBandPosition(closeBars(b), Number(p.window)));
+      return detectCrossings(pos, dir === "long" ? (v) => v <= Number(p.lo) : (v) => v >= Number(p.hi));
     },
   },
   {
