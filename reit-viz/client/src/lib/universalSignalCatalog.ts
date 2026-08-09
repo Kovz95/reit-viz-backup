@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -423,6 +423,89 @@ const technicalSignals: CatalogSignal[] = [
     detect: (b, p, dir) => {
       const pos = alignToBars(b, computePctBandPosition(closeBars(b), Number(p.window)));
       return detectCrossings(pos, dir === "long" ? (v) => v <= Number(p.lo) : (v) => v >= Number(p.hi));
+    },
+  },
+  {
+    // Winsorized z extreme — clip the tails, robust mean/σ, raw value vs it.
+    id: "tech.winsorz_revert",
+    family: "technical",
+    label: "Winsorized z-score extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "wz63z2", label: "63d, ±2σ", params: { window: 63, z: 2 } },
+      { id: "wz126z2", label: "126d, ±2σ", params: { window: 126, z: 2 } },
+      { id: "wz252z2", label: "252d, ±2σ", params: { window: 252, z: 2 } },
+    ],
+    detect: (b, p, dir) => {
+      const wz = alignToBars(b, computeWinsorizedZScore(closeBars(b), Number(p.window)));
+      const lim = Number(p.z);
+      return detectCrossings(wz, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    // Tukey-fence breach — value beyond Q3+mult·IQR (short) or Q1−mult·IQR
+    // (long). IQR position puts those fences at (1+mult)·100 / −mult·100.
+    id: "tech.iqr_fence",
+    family: "technical",
+    label: "IQR / Tukey-fence outlier",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "iq126m15", label: "126d, 1.5·IQR", params: { window: 126, mult: 1.5 } },
+      { id: "iq252m15", label: "252d, 1.5·IQR", params: { window: 252, mult: 1.5 } },
+      { id: "iq126m3", label: "126d, 3·IQR (far)", params: { window: 126, mult: 3 } },
+    ],
+    detect: (b, p, dir) => {
+      const pos = alignToBars(b, computeIqrPosition(closeBars(b), Number(p.window)));
+      const m = Number(p.mult);
+      const upper = (1 + m) * 100, lower = -m * 100;
+      return detectCrossings(pos, dir === "long" ? (v) => v <= lower : (v) => v >= upper);
+    },
+  },
+  {
+    // Rank rate-of-change extreme — the percentile rank moved > thr points over
+    // `lookback` bars (rank momentum). Long on a fast drop, short on a fast rise.
+    id: "tech.rankroc_extreme",
+    family: "technical",
+    label: "Rank rate-of-change extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "rr63l10", label: "63d, Δ10, ±40", params: { window: 63, lookback: 10, thr: 40 } },
+      { id: "rr126l20", label: "126d, Δ20, ±40", params: { window: 126, lookback: 20, thr: 40 } },
+      { id: "rr63l5", label: "63d, Δ5, ±50", params: { window: 63, lookback: 5, thr: 50 } },
+    ],
+    detect: (b, p, dir) => {
+      const rr = alignToBars(b, computeRankRoc(closeBars(b), Number(p.window), Number(p.lookback)));
+      const thr = Number(p.thr);
+      return detectCrossings(rr, dir === "long" ? (v) => v <= -thr : (v) => v >= thr);
+    },
+  },
+  {
+    // Band persistence — value has been stuck past the ±pct percentile band for
+    // `run` consecutive bars. Long after a low-band run, short after a high one.
+    id: "tech.persistence_band",
+    family: "technical",
+    label: "Band-persistence run",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "pb63r5", label: "63d, 20%, 5 bars", params: { window: 63, pct: 20, run: 5 } },
+      { id: "pb126r5", label: "126d, 20%, 5 bars", params: { window: 126, pct: 20, run: 5 } },
+      { id: "pb63r3", label: "63d, 10%, 3 bars", params: { window: 63, pct: 10, run: 3 } },
+    ],
+    detect: (b, p, dir) => {
+      const pers = alignToBars(b, computePersistence(closeBars(b), Number(p.window), Number(p.pct)));
+      const run = Number(p.run);
+      return detectCrossings(pers, dir === "long" ? (v) => v <= -run : (v) => v >= run);
     },
   },
   {

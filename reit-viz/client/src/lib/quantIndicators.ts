@@ -645,3 +645,165 @@ export function computeFracDiff(bars: OhlcBar[], d = 0.4, thresh = 1e-4): DataPo
   }
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Distribution-shape diagnostics (on log RETURNS) + robust position/dynamics
+// measures (on the LEVEL). Shape reads explain why percentile and ±σ bands
+// disagree; the level measures are outlier-robust alternatives to the z-score.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Trailing log-return series aligned to bars (ret[0]=NaN). */
+function logRetOf(c: number[]): number[] {
+  const r = new Array<number>(c.length).fill(NaN);
+  for (let i = 1; i < c.length; i++) r[i] = c[i] > 0 && c[i - 1] > 0 ? Math.log(c[i] / c[i - 1]) : 0;
+  return r;
+}
+
+/** Rolling SKEWNESS of window log-returns (0 = symmetric; + = fat upside tail). */
+export function computeRollingSkew(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window + 1 || window < 5) return out;
+  const r = logRetOf(c);
+  for (let i = window; i < c.length; i++) {
+    let mean = 0;
+    for (let j = i - window + 1; j <= i; j++) mean += r[j];
+    mean /= window;
+    let m2 = 0, m3 = 0;
+    for (let j = i - window + 1; j <= i; j++) { const d = r[j] - mean; m2 += d * d; m3 += d * d * d; }
+    m2 /= window; m3 /= window;
+    const sd = Math.sqrt(m2);
+    if (sd > 0) out.push({ time: t[i] as string, value: m3 / (sd * sd * sd) });
+  }
+  return out;
+}
+
+/** Rolling EXCESS KURTOSIS of window log-returns (0 = normal; >0 = fat tails,
+ *  so ±σ bands understate the true extremes). */
+export function computeRollingKurtosis(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window + 1 || window < 5) return out;
+  const r = logRetOf(c);
+  for (let i = window; i < c.length; i++) {
+    let mean = 0;
+    for (let j = i - window + 1; j <= i; j++) mean += r[j];
+    mean /= window;
+    let m2 = 0, m4 = 0;
+    for (let j = i - window + 1; j <= i; j++) { const d = r[j] - mean; const d2 = d * d; m2 += d2; m4 += d2 * d2; }
+    m2 /= window; m4 /= window;
+    if (m2 > 0) out.push({ time: t[i] as string, value: m4 / (m2 * m2) - 3 });
+  }
+  return out;
+}
+
+/** Rolling normalized SHANNON ENTROPY (0–1) of the window's log-returns binned
+ *  into `bins` equal-width buckets. 1 = maximally disordered/uniform (chop),
+ *  0 = concentrated (calm/trending). Level-independent. */
+export function computeRollingEntropy(bars: OhlcBar[], window = 63, bins = 8): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window + 1 || window < 8 || bins < 2) return out;
+  const r = logRetOf(c);
+  const invLogBins = 1 / Math.log(bins);
+  for (let i = window; i < c.length; i++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = i - window + 1; j <= i; j++) { if (r[j] < lo) lo = r[j]; if (r[j] > hi) hi = r[j]; }
+    if (hi <= lo) { out.push({ time: t[i] as string, value: 0 }); continue; }
+    const counts = new Array<number>(bins).fill(0);
+    for (let j = i - window + 1; j <= i; j++) {
+      let b = Math.floor(((r[j] - lo) / (hi - lo)) * bins);
+      if (b >= bins) b = bins - 1; if (b < 0) b = 0;
+      counts[b]++;
+    }
+    let H = 0;
+    for (const cnt of counts) if (cnt > 0) { const p = cnt / window; H -= p * Math.log(p); }
+    out.push({ time: t[i] as string, value: H * invLogBins });
+  }
+  return out;
+}
+
+/** Rolling WINSORIZED z-score: clip the window to [clipPct, 100−clipPct]
+ *  percentiles, take the clipped mean/σ (robust scale), then measure the RAW
+ *  current value against it — outliers still read large, but one spike no longer
+ *  inflates σ. Middle ground between raw z and median/MAD. */
+export function computeWinsorizedZScore(bars: OhlcBar[], window = 63, clipPct = 5): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 5) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const loV = percentileOf(win, clipPct, "linear");
+    const hiV = percentileOf(win, 100 - clipPct, "linear");
+    let sum = 0;
+    for (let k = 0; k < window; k++) { const cv = Math.min(Math.max(win[k], loV), hiV); sum += cv; }
+    const mean = sum / window;
+    let ss = 0;
+    for (let k = 0; k < window; k++) { const cv = Math.min(Math.max(win[k], loV), hiV); ss += (cv - mean) ** 2; }
+    const sd = Math.sqrt(ss / window);
+    if (sd > 0) out.push({ time: t[i] as string, value: (c[i] - mean) / sd });
+  }
+  return out;
+}
+
+/** Rolling IQR POSITION (unclamped): (x − Q1)/(Q3 − Q1)·100, so Q1→0, Q3→100.
+ *  The Tukey outlier fences Q1−1.5·IQR / Q3+1.5·IQR sit at position −150 / +250. */
+export function computeIqrPosition(bars: OhlcBar[], window = 63): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 5) return out;
+  for (let i = window - 1; i < c.length; i++) {
+    const win = c.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const q1 = percentileOf(win, 25, "linear"), q3 = percentileOf(win, 75, "linear");
+    const iqr = q3 - q1;
+    if (iqr > 0) out.push({ time: t[i] as string, value: ((c[i] - q1) / iqr) * 100 });
+  }
+  return out;
+}
+
+/** Rolling percentile rank (0–100) of the current level within its window —
+ *  helper for persistence + rank rate-of-change. */
+function rollPctRank(c: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(c.length).fill(null);
+  for (let i = window - 1; i < c.length; i++) {
+    let below = 0;
+    for (let j = i - window + 1; j <= i; j++) if (c[j] <= c[i]) below++;
+    out[i] = ((below - 1) / (window - 1)) * 100;
+  }
+  return out;
+}
+
+/** Rolling PERSISTENCE: signed run-length of consecutive bars the level has sat
+ *  past a percentile band. +N = N bars at/above the (100−pct)th percentile,
+ *  −N = N bars at/below the pctth, 0 = inside. Turns single-bar band touches
+ *  into a "how long has it been stuck there" read. */
+export function computePersistence(bars: OhlcBar[], window = 63, pct = 20): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window || window < 5) return out;
+  const rank = rollPctRank(c, window);
+  let run = 0, prevState = 0;
+  for (let i = window - 1; i < c.length; i++) {
+    const rk = rank[i];
+    const state = rk == null ? 0 : rk <= pct ? -1 : rk >= 100 - pct ? 1 : 0;
+    if (state !== 0 && state === prevState) run += 1; else run = state === 0 ? 0 : 1;
+    prevState = state;
+    out.push({ time: t[i] as string, value: state * run });
+  }
+  return out;
+}
+
+/** Rolling RATE-OF-CHANGE OF PERCENTILE RANK: rank[i] − rank[i−lookback]
+ *  (−100..+100). Positive = compressing UP out of a low band / pushing into a
+ *  high one; negative = expanding down. Reads the direction of the rank itself. */
+export function computeRankRoc(bars: OhlcBar[], window = 63, lookback = 10): DataPoint[] {
+  const { t, c } = closesOf(bars);
+  const out: DataPoint[] = [];
+  if (c.length < window + lookback || window < 5 || lookback < 1) return out;
+  const rank = rollPctRank(c, window);
+  for (let i = window - 1 + lookback; i < c.length; i++) {
+    const a = rank[i], b = rank[i - lookback];
+    if (a != null && b != null) out.push({ time: t[i] as string, value: a - b });
+  }
+  return out;
+}

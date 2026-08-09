@@ -59,6 +59,13 @@ import {
   computeMinMaxNorm,
   computeRegResidual,
   computeFracDiff,
+  computeRollingSkew,
+  computeRollingKurtosis,
+  computeRollingEntropy,
+  computeWinsorizedZScore,
+  computeIqrPosition,
+  computePersistence,
+  computeRankRoc,
 } from "./quantIndicators";
 
 export type IndicatorParam = {
@@ -1061,6 +1068,146 @@ const FRACDIFF: IndicatorDef = {
   ),
 };
 
+// ── Distribution-shape diagnostics (Statistics) + robust position/dynamics (Quant) ──
+
+const SKEW: IndicatorDef = {
+  id: "skew",
+  label: "Rolling Skewness",
+  category: "Statistics",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 10, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["skew_line", "skew_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingSkew(bars, p.window),
+    "skew_line",
+    (p) => `Skew ${p.window}`,
+    () => [{ level: 0, colorKey: "skew_zero" }],
+  ),
+};
+
+const KURTOSIS: IndicatorDef = {
+  id: "kurtosis",
+  label: "Rolling Kurtosis",
+  category: "Statistics",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 10, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } }],
+  colorKeys: ["kurt_line", "kurt_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingKurtosis(bars, p.window),
+    "kurt_line",
+    (p) => `Kurt ${p.window}`,
+    // Excess kurtosis: 0 = normal tails, >0 = fatter (σ-bands understate extremes).
+    () => [{ level: 0, colorKey: "kurt_zero" }],
+  ),
+};
+
+const ENTROPY: IndicatorDef = {
+  id: "entropy",
+  label: "Rolling Entropy",
+  category: "Statistics",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "window", label: "Window", default: 63, min: 16, max: 1000, defaultByFrequency: { weekly: 26, monthly: 16 } },
+    { key: "bins", label: "Bins", default: 8, min: 3, max: 32 },
+  ],
+  colorKeys: ["entropy_line", "entropy_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRollingEntropy(bars, p.window, p.bins),
+    "entropy_line",
+    (p) => `Entropy ${p.window}`,
+    // Normalized 0–1; 0.5 divides "ordered/trending" from "disordered/choppy".
+    () => [{ level: 0.5, colorKey: "entropy_ref" }],
+  ),
+};
+
+const WINSOR_Z: IndicatorDef = {
+  id: "winsorz",
+  label: "Winsorized Z-Score",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [
+    { key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } },
+    { key: "clipPct", label: "Clip %", default: 5, min: 1, max: 25 },
+  ],
+  colorKeys: ["winsorz_line", "winsorz_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeWinsorizedZScore(bars, p.window, p.clipPct),
+    "winsorz_line",
+    (p) => `WinsZ ${p.window}`,
+    () => [{ level: 0 }, { level: 2, colorKey: "winsorz_ref" }, { level: -2, colorKey: "winsorz_ref" }],
+  ),
+};
+
+const IQR_POS: IndicatorDef = {
+  id: "iqrpos",
+  label: "IQR Position",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "window",
+  params: [{ key: "window", label: "Window", default: 63, min: 5, max: 2520, defaultByFrequency: { weekly: 52, monthly: 24 } }],
+  colorKeys: ["iqrpos_line", "iqrpos_band", "iqrpos_fence"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeIqrPosition(bars, p.window),
+    "iqrpos_line",
+    (p) => `IQRpos ${p.window}`,
+    // Q1/Q3 at 0/100; Tukey fences (Q±1.5·IQR) at 250 / −150.
+    () => [{ level: 0, colorKey: "iqrpos_band" }, { level: 100, colorKey: "iqrpos_band" }, { level: 250, colorKey: "iqrpos_fence" }, { level: -150, colorKey: "iqrpos_fence" }],
+  ),
+};
+
+const PERSISTENCE: IndicatorDef = {
+  id: "persistence",
+  label: "Band Persistence",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } },
+    { key: "pct", label: "Band %", default: 20, min: 5, max: 45 },
+  ],
+  colorKeys: ["persistence_pos", "persistence_neg", "persistence_zero"],
+  renderPane: (ctx, bars, p) => {
+    const data = computePersistence(bars, p.window, p.pct);
+    if (!data.length) return;
+    // Signed run-length histogram: +N bars stuck in the high band, −N in the low.
+    const hist = ctx.chart.addSeries(HistogramSeries, { title: `Persistence ${p.window}${ctx.baseLabel}`, priceLineVisible: false });
+    hist.setData(data.map((d) => ({
+      time: d.time as unknown as Time,
+      value: d.value,
+      color: d.value >= 0 ? ctx.colors.persistence_pos : ctx.colors.persistence_neg,
+    })));
+    ctx.register(hist);
+    ctx.refLine(0, ctx.colors.persistence_zero, String(data[0].time), String(data[data.length - 1].time));
+  },
+};
+
+const RANK_ROC: IndicatorDef = {
+  id: "rankroc",
+  label: "Rank Rate-of-Change",
+  category: "Quant",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  params: [
+    { key: "window", label: "Window", default: 63, min: 5, max: 1000, defaultByFrequency: { weekly: 26, monthly: 12 } },
+    { key: "lookback", label: "Lookback", default: 10, min: 1, max: 200, defaultByFrequency: { weekly: 4, monthly: 3 } },
+  ],
+  colorKeys: ["rankroc_line", "rankroc_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeRankRoc(bars, p.window, p.lookback),
+    "rankroc_line",
+    (p) => `RankROC ${p.window}/${p.lookback}`,
+    () => [{ level: 0, colorKey: "rankroc_zero" }],
+  ),
+};
+
 const PRPCTL: IndicatorDef = {
   id: "prpctl",
   label: "Percent Rank + Percentiles",
@@ -1407,7 +1554,8 @@ const MA_SLOPE: IndicatorDef = {
 
 export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, TTM_SQUEEZE, AUTOCORR,
-  ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+  ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, WINSOR_Z, IQR_POS, PERSISTENCE, RANK_ROC, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
+  SKEW, KURTOSIS, ENTROPY,
 ];
 export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];

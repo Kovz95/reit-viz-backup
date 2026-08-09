@@ -284,7 +284,65 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
-type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile" | "pctspread";
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile" | "pctspread" | "winsorz" | "iqrpos" | "rankroc";
+
+/** Linear-interpolated percentile of an ascending-sorted array. */
+function pctlLin(sorted: number[], p: number): number {
+  const n = sorted.length;
+  if (n === 1) return sorted[0];
+  const rank = (p / 100) * (n - 1), lo = Math.floor(rank), hi = Math.ceil(rank);
+  return lo === hi ? sorted[lo] : sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+}
+
+/** Rolling WINSORIZED z-score (clip window to [clipPct,100−clipPct] then raw
+ *  value vs clipped mean/σ) — robust standardizer, ±σ crossings. */
+function rollingWinsorZ(values: number[], window: number, clipPct = 5): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 5) return out;
+  for (let i = window - 1; i < values.length; i++) {
+    const win = values.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const loV = pctlLin(win, clipPct), hiV = pctlLin(win, 100 - clipPct);
+    let sum = 0;
+    for (let k = 0; k < window; k++) sum += Math.min(Math.max(win[k], loV), hiV);
+    const mean = sum / window;
+    let ss = 0;
+    for (let k = 0; k < window; k++) { const cv = Math.min(Math.max(win[k], loV), hiV); ss += (cv - mean) ** 2; }
+    const sd = Math.sqrt(ss / window);
+    if (sd > 0) out[i] = (values[i] - mean) / sd;
+  }
+  return out;
+}
+
+/** Rolling IQR position centered so the Tukey fences (Q±1.5·IQR) land at ±2:
+ *  ((x−Q1)/IQR·100 − 50)/100. ±2 crossing = a Tukey-fence outlier. */
+function rollingIqrCentered(values: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 5) return out;
+  for (let i = window - 1; i < values.length; i++) {
+    const win = values.slice(i - window + 1, i + 1).sort((a, b) => a - b);
+    const q1 = pctlLin(win, 25), q3 = pctlLin(win, 75), iqr = q3 - q1;
+    if (iqr > 0) out[i] = (((values[i] - q1) / iqr) * 100 - 50) / 100;
+  }
+  return out;
+}
+
+/** Rolling rate-of-change of percentile rank, scaled /25 so a 50-point rank
+ *  move ≈ a ±2 crossing. Momentum of the rank itself. */
+function rollingRankRocSignal(values: number[], window: number, lookback = 10): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 5) return out;
+  const rank: (number | null)[] = new Array(values.length).fill(null);
+  for (let i = window - 1; i < values.length; i++) {
+    let below = 0;
+    for (let j = i - window + 1; j <= i; j++) if (values[j] <= values[i]) below++;
+    rank[i] = ((below - 1) / (window - 1)) * 100;
+  }
+  for (let i = window - 1 + lookback; i < values.length; i++) {
+    const a = rank[i], b = rank[i - lookback];
+    if (a != null && b != null) out[i] = (a - b) / 25;
+  }
+  return out;
+}
 
 const medianOf = (a: number[]): number => {
   const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
@@ -394,6 +452,9 @@ function standardizedSignal(values: number[], window: number, transform: Transfo
   if (transform === "minmax") return rollingMinMaxCentered(values, window);
   if (transform === "pctile") return rollingPercentileCentered(values, window);
   if (transform === "pctspread") return rollingPctBandCentered(values, window);
+  if (transform === "winsorz") return rollingWinsorZ(values, window);
+  if (transform === "iqrpos") return rollingIqrCentered(values, window);
+  if (transform === "rankroc") return rollingRankRocSignal(values, window);
   const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
     : transform === "detrend" ? regResidAligned(values, window)
       : values;
@@ -951,7 +1012,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (["none", "robustz", "minmax", "pctile", "pctspread", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
+    if (["none", "robustz", "minmax", "pctile", "pctspread", "winsorz", "iqrpos", "rankroc", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1195,6 +1256,9 @@ export default function ZScoreOptimizer() {
                   <option value="minmax">Min-Max (range)</option>
                   <option value="pctile">Percentile (rank)</option>
                   <option value="pctspread">Pctile Spread (band)</option>
+                  <option value="winsorz">Winsorized-Z</option>
+                  <option value="iqrpos">IQR Position</option>
+                  <option value="rankroc">Rank RoC</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
                   <option value="detrend">Detrend → Z</option>
                 </select>
