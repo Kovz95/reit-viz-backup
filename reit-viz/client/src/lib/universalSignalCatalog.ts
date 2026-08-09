@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -381,6 +381,27 @@ const technicalSignals: CatalogSignal[] = [
       const rr = alignToBars(b, computeRegResidual(closeBars(b), Number(p.window)));
       const pct = Number(p.pct);
       return detectCrossings(rr, dir === "long" ? (v) => v <= -pct : (v) => v >= pct);
+    },
+  },
+  {
+    // Percentile-rank band extreme — RANK position of price within its window
+    // (outlier-resistant vs min-max's linear position). Long when it crosses
+    // below the low percentile, short above the high.
+    id: "tech.pctile_extreme",
+    family: "technical",
+    label: "Percentile-rank extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "pr63", label: "63d, 20/80", params: { window: 63, lo: 20, hi: 80 } },
+      { id: "pr126", label: "126d, 20/80", params: { window: 126, lo: 20, hi: 80 } },
+      { id: "pr252", label: "252d, 10/90", params: { window: 252, lo: 10, hi: 90 } },
+    ],
+    detect: (b, p, dir) => {
+      const pr = alignToBars(b, computeRollingPercentile(closeBars(b), Number(p.window)));
+      return detectCrossings(pr, dir === "long" ? (v) => v <= Number(p.lo) : (v) => v >= Number(p.hi));
     },
   },
   {

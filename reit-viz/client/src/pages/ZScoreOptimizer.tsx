@@ -284,7 +284,7 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
-type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax";
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax" | "pctile";
 
 const medianOf = (a: number[]): number => {
   const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
@@ -348,13 +348,28 @@ function rollingMinMaxCentered(values: number[], window: number): (number | null
   return out;
 }
 
+/** Rolling PERCENTILE rank (0–100) of the current value within its window,
+ *  CENTERED to a ±σ-like axis ((pct−50)/25). The RANK-position cousin of
+ *  min-max's linear position — resistant to outliers stretching the range. */
+function rollingPercentileCentered(values: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 5) return out;
+  for (let i = window - 1; i < values.length; i++) {
+    let below = 0;
+    for (let j = i - window + 1; j <= i; j++) if (values[j] <= values[i]) below++;
+    out[i] = (((below - 1) / (window - 1)) * 100 - 50) / 25;
+  }
+  return out;
+}
+
 /** Build the standardized signal series (crossed at ±threshold) for a given
- *  source pre-transform. Robust-Z and Min-Max replace the z-score outright with
- *  their own bounded/robust standardizer; Frac-Diff and Detrend pre-transform the
- *  series and then z-score it (raw = plain z-score). */
+ *  source pre-transform. Robust-Z / Min-Max / Percentile replace the z-score
+ *  outright with their own bounded/robust standardizer; Frac-Diff and Detrend
+ *  pre-transform the series and then z-score it (raw = plain z-score). */
 function standardizedSignal(values: number[], window: number, transform: TransformKind, fracDiffD: number): (number | null)[] {
   if (transform === "robustz") return rollingRobustZ(values, window);
   if (transform === "minmax") return rollingMinMaxCentered(values, window);
+  if (transform === "pctile") return rollingPercentileCentered(values, window);
   const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
     : transform === "detrend" ? regResidAligned(values, window)
       : values;
@@ -912,7 +927,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (["none", "robustz", "minmax", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
+    if (["none", "robustz", "minmax", "pctile", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1154,6 +1169,7 @@ export default function ZScoreOptimizer() {
                   <option value="none">None (Z-Score)</option>
                   <option value="robustz">Robust-Z (MAD)</option>
                   <option value="minmax">Min-Max (range)</option>
+                  <option value="pctile">Percentile (rank)</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
                   <option value="detrend">Detrend → Z</option>
                 </select>
