@@ -284,7 +284,7 @@ function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
   return out;
 }
 
-type TransformKind = "none" | "fracdiff" | "robustz" | "detrend";
+type TransformKind = "none" | "fracdiff" | "robustz" | "detrend" | "minmax";
 
 const medianOf = (a: number[]): number => {
   const s = [...a].sort((x, y) => x - y), n = s.length, m = n >> 1;
@@ -334,11 +334,27 @@ function regResidAligned(values: number[], window: number): number[] {
   return out;
 }
 
+/** Rolling MIN-MAX position within the window, CENTERED and rescaled to a ±σ-like
+ *  axis: 0..100 → −2..+2 ((mm−50)/25). Lets the bounded range oscillator reuse the
+ *  optimizer's ±threshold crossing logic — ±2 = range extremes, ±1 = 25/75. */
+function rollingMinMaxCentered(values: number[], window: number): (number | null)[] {
+  const out: (number | null)[] = new Array(values.length).fill(null);
+  if (window < 2) return out;
+  for (let i = window - 1; i < values.length; i++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let j = i - window + 1; j <= i; j++) { if (values[j] < lo) lo = values[j]; if (values[j] > hi) hi = values[j]; }
+    if (hi > lo) out[i] = (((values[i] - lo) / (hi - lo)) * 100 - 50) / 25;
+  }
+  return out;
+}
+
 /** Build the standardized signal series (crossed at ±threshold) for a given
- *  source pre-transform. Robust-Z replaces the z-score outright; Frac-Diff and
- *  Detrend pre-transform the series and then z-score it (raw = plain z-score). */
+ *  source pre-transform. Robust-Z and Min-Max replace the z-score outright with
+ *  their own bounded/robust standardizer; Frac-Diff and Detrend pre-transform the
+ *  series and then z-score it (raw = plain z-score). */
 function standardizedSignal(values: number[], window: number, transform: TransformKind, fracDiffD: number): (number | null)[] {
   if (transform === "robustz") return rollingRobustZ(values, window);
+  if (transform === "minmax") return rollingMinMaxCentered(values, window);
   const src = transform === "fracdiff" ? fracDiffAligned(values, fracDiffD)
     : transform === "detrend" ? regResidAligned(values, window)
       : values;
@@ -896,7 +912,7 @@ export default function ZScoreOptimizer() {
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
-    if (["none", "robustz", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
+    if (["none", "robustz", "minmax", "fracdiff", "detrend"].includes(saved.transform)) setTransform(saved.transform);
     if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
@@ -1137,6 +1153,7 @@ export default function ZScoreOptimizer() {
                 <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={transform} onChange={(e) => setTransform(e.target.value as TransformKind)} disabled={running} data-testid="optimizer-transform">
                   <option value="none">None (Z-Score)</option>
                   <option value="robustz">Robust-Z (MAD)</option>
+                  <option value="minmax">Min-Max (range)</option>
                   <option value="fracdiff">Frac-Diff → Z</option>
                   <option value="detrend">Detrend → Z</option>
                 </select>
