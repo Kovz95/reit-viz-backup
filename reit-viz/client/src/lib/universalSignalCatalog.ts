@@ -26,6 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
+import { computeFracDiff } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -274,6 +275,42 @@ const technicalSignals: CatalogSignal[] = [
       const z = rollingZScore(b.closes, Number(p.window));
       const lim = Number(p.z);
       return detectCrossings(z, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    // Fractionally-difference ln(price) (stationary, keeps long memory) then
+    // take the rolling z-score of that series and fire on ±z extremes. Sweeps
+    // the frac-diff order d alongside the z window/threshold — the "frac-diff →
+    // z-score" pipeline, searched across the universe.
+    id: "tech.fracdiff_zscore",
+    family: "technical",
+    label: "Frac-diff z-score extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    optimizerRoute: "/z-optimizer",
+    paramPresets: [
+      { id: "d40w126z2", label: "d0.4, 126d, ±2σ", params: { d: 0.4, window: 126, z: 2 } },
+      { id: "d30w126z2", label: "d0.3, 126d, ±2σ", params: { d: 0.3, window: 126, z: 2 } },
+      { id: "d50w126z2", label: "d0.5, 126d, ±2σ", params: { d: 0.5, window: 126, z: 2 } },
+      { id: "d40w252z15", label: "d0.4, 252d, ±1.5σ", params: { d: 0.4, window: 252, z: 1.5 } },
+    ],
+    detect: (b, p, dir) => {
+      const bars: OhlcBar[] = b.dates.map((time, i) => ({
+        time, open: b.closes[i], high: b.closes[i], low: b.closes[i], close: b.closes[i],
+      }));
+      const fd = computeFracDiff(bars, Number(p.d));
+      if (fd.length === 0) return [];
+      const z = rollingZScore(fd.map((pt) => pt.value), Number(p.window));
+      const idx = dateIndex(b);
+      const aligned: (number | null)[] = new Array(b.dates.length).fill(null);
+      for (let i = 0; i < fd.length; i++) {
+        const j = idx.get(fd[i].time as string);
+        const zv = z[i];
+        if (j !== undefined && zv !== null && Number.isFinite(zv)) aligned[j] = zv;
+      }
+      const lim = Number(p.z);
+      return detectCrossings(aligned, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
     },
   },
   {

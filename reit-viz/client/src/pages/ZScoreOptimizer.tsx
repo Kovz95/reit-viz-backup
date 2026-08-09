@@ -52,6 +52,9 @@ import "@/lib/tva";
 // ── Constants ──
 
 const CANDIDATE_WINDOWS = [21, 42, 63, 126, 189, 252, 378, 504, 756, 1260];
+/** Fractional-differencing orders co-swept when the FracDiff pre-transform is
+ *  on. Small d retains long memory; d→1 approaches a first difference. */
+const CANDIDATE_D = [0.2, 0.3, 0.4, 0.5, 0.6];
 /** Window label in the active bar frequency's units + calendar equivalent
  *  (windows are BAR counts — "21" means 21 weekly bars in weekly mode). */
 function windowLabelFor(w: number, frequency: string): string {
@@ -204,6 +207,8 @@ interface PriceContext {
 
 interface WindowResult {
   window: number;
+  /** Winning frac-diff order for this window when the FracDiff transform is on. */
+  d?: number;
   buySummary: SignalSummary;
   sellSummary: SignalSummary;
   buyComposite: CompositeScore;
@@ -224,6 +229,7 @@ interface TickerResult {
   name: string;
   results: WindowResult[];
   bestWindow: number;
+  bestD?: number;
   bestScore: number;
   priceContext?: PriceContext;
 }
@@ -249,6 +255,33 @@ function computeRollingZScores(values: number[], window: number): (number | null
     if (std > 0) result[i] = (values[i] - mean) / std;
   }
   return result;
+}
+
+/** Fractional differencing (López de Prado, fixed-width) of a series, kept
+ *  INDEX-ALIGNED to the input: the first `width-1` warm-up bars are NaN and the
+ *  rest hold the frac-diff dot product, so it drops straight into
+ *  computeRollingZScores (a NaN-in-window yields a null z there) without
+ *  shifting the forward-return indexing against priceValues. Runs on ln(x) when
+ *  the series is strictly positive, matching lib/quantIndicators computeFracDiff. */
+function fracDiffAligned(values: number[], d: number, thresh = 1e-4): number[] {
+  const n = values.length;
+  const out = new Array<number>(n).fill(NaN);
+  if (n < 20 || d <= 0) return out;
+  const x = values.every((v) => v > 0) ? values.map(Math.log) : values;
+  const w: number[] = [1];
+  let k = 1;
+  while (k < n) {
+    const wk = (-w[k - 1] * (d - k + 1)) / k;
+    if (Math.abs(wk) < thresh) break;
+    w.push(wk); k++;
+  }
+  const width = w.length;
+  for (let i = width - 1; i < n; i++) {
+    let dot = 0;
+    for (let j = 0; j < width; j++) dot += w[j] * x[i - j];
+    out[i] = dot;
+  }
+  return out;
 }
 
 function analyzeWindow(
@@ -351,6 +384,11 @@ function analyzeWindow(
 export default function ZScoreOptimizer() {
   const [allTickers, setAllTickers] = useState<TickerMeta[]>([]);
   const [selectedMetric, setSelectedMetric] = useState("P/FFO LTM");
+  // Optional source pre-transform applied before the rolling z-score. "fracdiff"
+  // fractionally-differences the metric (co-sweeping CANDIDATE_D in the sweep;
+  // a single evalFracDiffD in Evaluate).
+  const [transform, setTransform] = useState<"none" | "fracdiff">("none");
+  const [evalFracDiffD, setEvalFracDiffD] = useState(0.4);
   const [selectedTicker, setSelectedTicker] = useState("");
   const [mode, setMode] = useState<string>("single");
   const [basketTickers, setBasketTickers] = useState<string[]>([]);
@@ -544,10 +582,20 @@ export default function ZScoreOptimizer() {
         const weeklyCloses = effFreq === "weekly" || effFreq === "monthly" ? priceVals : undefined;
         const weeklyResult = effFreq === "weekly" || effFreq === "monthly" ? resampled : undefined;
 
+        // Frac-diff pre-transform co-sweeps CANDIDATE_D; keep the best-scoring d
+        // per window so the results table stays one row per window.
+        const dList = transform === "fracdiff" ? CANDIDATE_D : [null];
         const windowResults: WindowResult[] = [];
         for (const w of CANDIDATE_WINDOWS) {
           if (w > metricSeries.length * 0.8) continue;
-          windowResults.push(analyzeWindow(metricSeries, priceSeries, w, buyThreshold, sellThreshold, targetReturn, band, signalType, weeklyCloses, weeklyResult));
+          let bestForW: WindowResult | null = null;
+          for (const dd of dList) {
+            const mSeries = dd == null ? metricSeries : fracDiffAligned(metricSeries, dd);
+            const wr = analyzeWindow(mSeries, priceSeries, w, buyThreshold, sellThreshold, targetReturn, band, signalType, weeklyCloses, weeklyResult);
+            if (dd != null) wr.d = dd;
+            if (!bestForW || wr.compositeScore > bestForW.compositeScore) bestForW = wr;
+          }
+          if (bestForW) windowResults.push(bestForW);
         }
         if (windowResults.length === 0) continue;
 
@@ -581,6 +629,7 @@ export default function ZScoreOptimizer() {
           name: item.name,
           results: windowResults,
           bestWindow: best.window,
+          bestD: best.d,
           bestScore: best.compositeScore,
           priceContext,
         });
@@ -590,7 +639,7 @@ export default function ZScoreOptimizer() {
 
     setResults(out);
     setRunning(false);
-  }, [tickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, selectedMetric, mode, buyThreshold, sellThreshold, targetReturn, returnMode, bandMin, bandMax, signalType, frequency, freqKey, dateRange, pairComboPicker.pairs, basketMode, baskets, filteredTickers]);
+  }, [tickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, selectedMetric, transform, mode, buyThreshold, sellThreshold, targetReturn, returnMode, bandMin, bandMax, signalType, frequency, freqKey, dateRange, pairComboPicker.pairs, basketMode, baskets, filteredTickers]);
   useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
 
   // ── Evaluate ──
@@ -707,7 +756,8 @@ export default function ZScoreOptimizer() {
         const wk = weeklyDownsamplePrices(metricVals, dates, frequency === "monthly_on_daily" ? "monthly" : undefined);
         metricVals = expandWeeklyToDaily(wk.prices, wk.weekIndex, metricVals.length).map((w) => (Number.isNaN(w) ? metricVals[0] : w));
       }
-      const zScores = computeRollingZScores(metricVals, evalWindow);
+      const metricForZ = transform === "fracdiff" ? fracDiffAligned(metricVals, evalFracDiffD) : metricVals;
+      const zScores = computeRollingZScores(metricForZ, evalWindow);
       const doBreakout = evalSignalType === "breakout" || evalSignalType === "both";
       const doReversion = evalSignalType === "reversion" || evalSignalType === "both";
       const direction = evalSide === "long" ? "buy" : "sell";
@@ -745,7 +795,7 @@ export default function ZScoreOptimizer() {
     } finally {
       setEvaluating(false);
     }
-  }, [mode, selectedTicker, pairTickerA, pairTickerB, tickers, selectedMetric, evalSignalType, evalWindow, evalThreshold, evalSide, targetReturn, evalHold, dateRange, basketTickers, basketMode, baskets, frequency, freqKey]);
+  }, [mode, selectedTicker, pairTickerA, pairTickerB, tickers, selectedMetric, transform, evalFracDiffD, evalSignalType, evalWindow, evalThreshold, evalSide, targetReturn, evalHold, dateRange, basketTickers, basketMode, baskets, frequency, freqKey]);
 
   const evalLabel = useMemo(() => {
     const t = `±${Math.abs(evalThreshold).toFixed(1)}σ`;
@@ -760,6 +810,8 @@ export default function ZScoreOptimizer() {
   // ── Workspace state ──
   const serializeState = useCallback(() => ({
     selectedMetric,
+    transform,
+    evalFracDiffD,
     selectedTicker,
     pairTickerA,
     pairTickerB,
@@ -778,11 +830,13 @@ export default function ZScoreOptimizer() {
     signalType,
     frequency,
     pairCombo: pairComboPicker.serialize(),
-  }), [selectedMetric, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, mode, buyThreshold, sellThreshold, returnMode, targetReturn, bandMin, bandMax, results, expandedTicker, sortBy, signalType, frequency, pairComboPicker]);
+  }), [selectedMetric, transform, evalFracDiffD, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, mode, buyThreshold, sellThreshold, returnMode, targetReturn, bandMin, bandMax, results, expandedTicker, sortBy, signalType, frequency, pairComboPicker]);
 
   const hydrateState = useCallback((saved: any) => {
     if (!saved) return;
     if (saved.selectedMetric) setSelectedMetric(saved.selectedMetric);
+    if (saved.transform === "none" || saved.transform === "fracdiff") setTransform(saved.transform);
+    if (typeof saved.evalFracDiffD === "number") setEvalFracDiffD(saved.evalFracDiffD);
     if (saved.selectedTicker) { setSelectedTicker(saved.selectedTicker); restoredTickerRef.current = true; }
     if (saved.pairTickerA) setPairTickerA(saved.pairTickerA);
     if (saved.pairTickerB) setPairTickerB(saved.pairTickerB);
@@ -816,13 +870,14 @@ export default function ZScoreOptimizer() {
   const enrichedResults = useMemo(() => results.map((e) => {
     let best = -Infinity;
     let bestWindow = e.bestWindow;
+    let bestD = e.bestD;
     for (const wr of e.results) {
       const b = scoreSignalStat(wr.buySummary, wr.buyComposite.score, "buy", scoreWeights);
       const s = scoreSignalStat(wr.sellSummary, wr.sellComposite.score, "sell", scoreWeights);
       const m = Math.max(b, s);
-      if (m > best) { best = m; bestWindow = wr.window; }
+      if (m > best) { best = m; bestWindow = wr.window; bestD = wr.d; }
     }
-    return { ...e, bestScore: best === -Infinity ? e.bestScore : best, bestWindow };
+    return { ...e, bestScore: best === -Infinity ? e.bestScore : best, bestWindow, bestD };
   }), [results, scoreWeights]);
 
   const sortedResults = useMemo(() => {
@@ -1016,6 +1071,21 @@ export default function ZScoreOptimizer() {
                   </optgroup>
                 </select>
               </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Transform</label>
+                <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={transform} onChange={(e) => setTransform(e.target.value as "none" | "fracdiff")} disabled={running} data-testid="optimizer-transform">
+                  <option value="none">None (raw)</option>
+                  <option value="fracdiff">Frac-Diff → Z</option>
+                </select>
+              </div>
+              {transform === "fracdiff" && (
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">d (Evaluate)</label>
+                  <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary" value={evalFracDiffD} onChange={(e) => setEvalFracDiffD(Number(e.target.value))} disabled={running} data-testid="optimizer-fracdiff-d">
+                    {CANDIDATE_D.map((e) => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="flex flex-col gap-0.5">
                 <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Mode</label>
                 <div className="flex gap-px">
@@ -1251,7 +1321,7 @@ export default function ZScoreOptimizer() {
                           <span className="text-xs font-mono font-bold text-foreground">{e.ticker}</span>
                           <span className="text-[10px] font-mono text-muted-foreground">{e.name}</span>
                           <span className="ml-auto text-[10px] font-mono">
-                            Best: <span className="text-primary font-bold">{windowLabelFor(e.bestWindow, frequency)}</span>{" "}Score: <span className="inline-block px-1 py-0 rounded font-bold" style={{ backgroundColor: scoreColor(e.bestScore), color: scoreTextColor(e.bestScore) }}>{e.bestScore}</span>
+                            Best: <span className="text-primary font-bold">{windowLabelFor(e.bestWindow, frequency)}</span>{e.bestD != null && <span className="text-primary font-bold"> · d={e.bestD}</span>}{" "}Score: <span className="inline-block px-1 py-0 rounded font-bold" style={{ backgroundColor: scoreColor(e.bestScore), color: scoreTextColor(e.bestScore) }}>{e.bestScore}</span>
                           </span>
                         </button>
                       )}
@@ -1286,7 +1356,7 @@ export default function ZScoreOptimizer() {
                                   <tr key={s.key} className={`${s.highlight ? "bg-primary/15 ring-1 ring-inset ring-primary/30" : signalType === "both" && x === 1 ? "bg-white/[0.02] border-b border-border/30" : "hover:bg-white/5"}`}>
                                     {x === 0 ? (
                                       <td className={`px-2 py-1 font-bold ${isBest ? "text-primary" : "text-foreground"}`} rowSpan={signalType === "both" ? subRows.length : 1}>
-                                        {windowLabelFor(r.window, frequency)}{isBest && " ★"}
+                                        {windowLabelFor(r.window, frequency)}{r.d != null && ` · d=${r.d}`}{isBest && " ★"}
                                       </td>
                                     ) : null}
                                     {signalType === "both" && <td className={`text-center px-2 py-1 font-bold ${s.label === "REV" ? "text-amber-400" : "text-blue-400"}`}>{s.label}</td>}
