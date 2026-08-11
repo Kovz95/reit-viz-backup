@@ -39,6 +39,8 @@ interface ChartsComparePanelProps {
     targetPaneId?: number,
   ) => void;
   onRemoveSeries: (id: string) => void;
+  /** Active Charts ticker — enables the one-click "vs peers" comparison. */
+  activeTicker?: string | null;
 }
 
 export default function ChartsComparePanel({
@@ -46,6 +48,7 @@ export default function ChartsComparePanel({
   plottedSeries,
   onAddSeriesWithMode,
   onRemoveSeries,
+  activeTicker,
 }: ChartsComparePanelProps) {
   const [selectedTickers, setSelectedTickers] = useState<string[]>([]);
   const [metric, setMetric] = useState("close");
@@ -91,6 +94,53 @@ export default function ChartsComparePanel({
   const handleRemoveTicker = useCallback((ticker: string) => {
     setSelectedTickers((prev) => prev.filter((t) => t !== ticker));
   }, []);
+
+  // Subindustry peers of the active ticker (excludes itself, capped for clarity).
+  const peerCount = useMemo(() => {
+    const meta = tickers.find((t) => t.ticker === activeTicker);
+    if (!meta?.subindustry) return 0;
+    return tickers.filter((t) => t.subindustry === meta.subindustry && t.ticker !== activeTicker).length;
+  }, [tickers, activeTicker]);
+
+  // One-click "vs peers": overlay the active ticker + its subindustry peers, all
+  // normalized to index-100 at the earliest common date, in a new pane.
+  const handleComparePeers = useCallback(async () => {
+    if (!activeTicker) return;
+    const meta = tickers.find((t) => t.ticker === activeTicker);
+    const sub = meta?.subindustry;
+    if (!sub) return;
+    const peers = tickers.filter((t) => t.subindustry === sub && t.ticker !== activeTicker).slice(0, 7).map((t) => t.ticker);
+    const set = [activeTicker, ...peers];
+    if (set.length < 2) return;
+    setLoading(true);
+    plottedSeries.filter((s) => s.id.startsWith("compare-")).forEach((s) => onRemoveSeries(s.id));
+    try {
+      const fetched = await Promise.all(set.map(async (ticker) => ({ ticker, data: await getMetricSeries(ticker, "close") })));
+      const valid = fetched.filter((f) => f.data && f.data.length > 0);
+      const firstTimes = valid.map((s) => s.data[0]?.time).filter(Boolean).sort();
+      const anchorDate = firstTimes[firstTimes.length - 1];
+      if (!anchorDate) { setLoading(false); return; }
+      const series = valid.map((entry, index) => {
+        const anchorIdx = entry.data.findIndex((d) => d.time >= anchorDate);
+        if (anchorIdx < 0) return null;
+        const anchorValue = entry.data[anchorIdx].value;
+        if (!anchorValue) return null;
+        const normalized = entry.data.slice(anchorIdx).map((d) => ({ time: d.time, value: (d.value / anchorValue) * 100 }));
+        return {
+          id: `compare-${entry.ticker}-close-${Date.now()}-${index}`,
+          ticker: entry.ticker, metric: "close",
+          color: COMPARE_COLORS[index % COMPARE_COLORS.length],
+          lineWidth: entry.ticker === activeTicker ? 3 : 2, lineStyle: 0,
+          paneIndex: 0, data: normalized, visible: true,
+          label: `${entry.ticker} (idx 100 @ ${anchorDate})`,
+        } as PlottedSeries;
+      }).filter(Boolean) as PlottedSeries[];
+      if (series.length > 0) onAddSeriesWithMode(series, "new-all");
+    } catch (error) {
+      console.error("Compare peers failed:", error);
+    }
+    setLoading(false);
+  }, [activeTicker, tickers, plottedSeries, onAddSeriesWithMode, onRemoveSeries]);
 
   const handleCompare = useCallback(async () => {
     if (selectedTickers.length < 2) return;
@@ -400,6 +450,20 @@ export default function ChartsComparePanel({
           ? "Loading..."
           : `Compare ${selectedTickers.length} tickers (indexed to 100)`}
       </Button>
+
+      {activeTicker && peerCount > 0 && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full h-7 text-xs mt-1"
+          onClick={handleComparePeers}
+          disabled={loading}
+          data-testid="compare-peers"
+          title="Overlay this ticker vs its subindustry peers, normalized to 100"
+        >
+          {loading ? "Loading..." : `vs ${activeTicker} peers (${Math.min(peerCount, 7)}, indexed)`}
+        </Button>
+      )}
     </div>
   );
 }

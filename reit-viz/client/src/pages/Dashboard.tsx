@@ -770,6 +770,22 @@ export default function Dashboard() {
     setColorByMap(state.colorByMap && typeof state.colorByMap === "object" ? state.colorByMap : {});
   }, [refetchSeriesData]);
 
+  // ── Layout undo (Ctrl/Cmd+Z) ── snapshot the layout before each destructive
+  // edit (remove pane/series, metric swap, preset pick, clear-all); Ctrl+Z pops
+  // and re-applies via restoreCharts. restoreCharts never pushes, so undo can't
+  // recurse. Capped at 25 levels.
+  const layoutHistoryRef = useRef<any[]>([]);
+  const pushLayoutHistory = useCallback(() => {
+    try {
+      layoutHistoryRef.current.push(serializeCharts());
+      if (layoutHistoryRef.current.length > 25) layoutHistoryRef.current.shift();
+    } catch {}
+  }, [serializeCharts]);
+  const undoLayout = useCallback(() => {
+    const snap = layoutHistoryRef.current.pop();
+    if (snap) restoreCharts(snap);
+  }, [restoreCharts]);
+
   // Register with workspace tab system so charts state is auto-saved/loaded
   useWorkspaceTab("charts", serializeCharts, restoreCharts);
 
@@ -957,10 +973,11 @@ export default function Dashboard() {
 
   // Remove a pane and its series
   const removePane = useCallback((paneId: number) => {
+    pushLayoutHistory();
     paneGeneration++;
     setPanes((prev) => prev.filter((p) => p.id !== paneId));
     setPlottedSeries((prev) => prev.filter((s) => s.paneIndex !== paneId));
-  }, []);
+  }, [pushLayoutHistory]);
 
   // Move a single series to a different existing pane (Current Layout up/down
   // arrows). Only repoints the series' paneIndex — panes/order are untouched.
@@ -1022,6 +1039,7 @@ export default function Dashboard() {
     if (!src || src.metric === newMetric) return;
     const tName = tickerDisplayName(src.ticker);
     const onlyOnPane = plottedSeriesRef.current.filter((s) => s.paneIndex === src.paneIndex).length === 1;
+    pushLayoutHistory();
     if (newMetric && !extraMetricsRef.current.includes(newMetric)) {
       extraMetricsRef.current = [...extraMetricsRef.current, newMetric];
     }
@@ -1032,7 +1050,7 @@ export default function Dashboard() {
     getMetricSeriesResolved(src.ticker, newMetric, resolveBasket)
       .then((data) => setPlottedSeries((prev) => prev.map((s) => (s.id === seriesId ? { ...s, data } : s))))
       .catch(() => {});
-  }, [resolveBasket, tickerDisplayName]);
+  }, [resolveBasket, tickerDisplayName, pushLayoutHistory]);
 
   // Reorder panes (Current Layout drag-drop): drop pane `fromId` into `toId`'s
   // slot. Pane ids are preserved, so per-pane indicators/color-by stay attached;
@@ -1071,6 +1089,7 @@ export default function Dashboard() {
       // freshly-picked preset. Wipe indicator state for a true reset. (color-by
       // is intentionally left intact so it persists across preset picks.)
       if (viewName) {
+        pushLayoutHistory(); // preset pick resets indicators — make it undoable
         extraMetricsRef.current = [];
         setIndicatorsMap({});
       }
@@ -1161,7 +1180,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    [activeView, allViews, resolveBasket, tickerDisplayName]
+    [activeView, allViews, resolveBasket, tickerDisplayName, pushLayoutHistory]
   );
 
   // Remap the CURRENT layout onto a different company (used by the carousel
@@ -1788,7 +1807,10 @@ export default function Dashboard() {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
         return;
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z") && !e.shiftKey) {
+        e.preventDefault();
+        undoLayout();
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
         e.preventDefault();
         navigateTicker("next");
       } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
@@ -1798,7 +1820,7 @@ export default function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [navigateTicker]);
+  }, [navigateTicker, undoLayout]);
 
   // Pending ticker from URL (set before tickerList loads)
   const pendingTickerRef = useRef<string | null>(null);
@@ -2049,6 +2071,7 @@ export default function Dashboard() {
   );
 
   const removeSeries = useCallback((id: string) => {
+    pushLayoutHistory();
     const gen = ++paneGeneration;
     // If this was a user-added metric and no other pane still uses it, stop
     // carrying it to the next company.
@@ -2071,11 +2094,12 @@ export default function Dashboard() {
         return currentSeries;
       });
     }, 50);
-  }, []);
+  }, [pushLayoutHistory]);
 
   // Clear All: wipe state then reload the default preset view
   const clearAllSeries = useCallback(() => {
     if (!activeTicker) return;
+    pushLayoutHistory();
     const ticker = activeTicker;
     const view = activeView;
     // First, fully clear state so React sees a real change
@@ -2087,7 +2111,7 @@ export default function Dashboard() {
     setTimeout(() => {
       loadViewForTicker(ticker, view);
     }, 0);
-  }, [activeTicker, activeView, loadViewForTicker]);
+  }, [activeTicker, activeView, loadViewForTicker, pushLayoutHistory]);
 
   // Add a formula-computed series to a new or existing pane. Returns the pane
   // id the series landed on so callers can overlay follow-up series onto a

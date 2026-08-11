@@ -1929,6 +1929,7 @@ export default function Sidebar({
                 plottedSeries={plottedSeries}
                 onAddSeriesWithMode={onAddSeriesWithMode}
                 onRemoveSeries={onRemoveSeries}
+                activeTicker={activeTicker}
               />
             </div>
           )}
