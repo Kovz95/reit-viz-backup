@@ -68,6 +68,9 @@ import {
   computeRankRoc,
   computePctileDispersion,
   computeTDSequential,
+  computeTDST,
+  computeDeMarker,
+  computeTDREI,
 } from "./quantIndicators";
 
 export type IndicatorParam = {
@@ -1576,51 +1579,128 @@ const MA_SLOPE: IndicatorDef = {
   },
 };
 
+// Shared TD Sequential / TD Combo marker renderer — count numbers pinned to
+// price bars via an invisible close-carrier + createSeriesMarkers.
+const renderTDMarkers = (ctx: OverlayRenderCtx, bars: OhlcBar[], seq: ReturnType<typeof computeTDSequential>) => {
+  if (!seq.length) return;
+  const carrier = ctx.chart.addSeries(LineSeries, {
+    color: "rgba(0,0,0,0)", lineVisible: false, title: "",
+    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+  });
+  carrier.setData(asLine(barsToCloses(bars)));
+  ctx.register(carrier);
+  const markers: SeriesMarker<Time>[] = seq.map((m) => {
+    const buy = m.side === "buy";
+    const done = (m.phase === "setup" && m.count === 9) || (m.phase === "countdown" && m.count === 13);
+    const color = m.phase === "countdown"
+      ? (buy ? ctx.colors.td_buy_cd : ctx.colors.td_sell_cd)
+      : (m.perfected ? (buy ? ctx.colors.td_buy_perfect : ctx.colors.td_sell_perfect) : (buy ? ctx.colors.td_buy : ctx.colors.td_sell));
+    return {
+      time: m.time as unknown as Time,
+      position: buy ? "belowBar" : "aboveBar",
+      color,
+      shape: done ? (buy ? "arrowUp" : "arrowDown") : "circle",
+      text: String(m.count),
+      size: done ? 2 : 0,
+    } as SeriesMarker<Time>;
+  });
+  createSeriesMarkers(carrier, markers);
+};
+
+const TD_SEQ_PARAMS: IndicatorParam[] = [
+  { key: "signalsOnly", label: "Show", default: 0, min: 0, max: 1, options: [{ value: 0, label: "All counts" }, { value: 1, label: "Signals only (9/13)" }] },
+  { key: "aggressive", label: "Countdown", default: 0, min: 0, max: 1, options: [{ value: 0, label: "Standard" }, { value: 1, label: "Aggressive (low/high)" }] },
+];
+const TD_COLOR_KEYS = ["td_buy", "td_buy_perfect", "td_buy_cd", "td_sell", "td_sell_perfect", "td_sell_cd"];
+
 const TD_SEQUENTIAL: IndicatorDef = {
   id: "tdseq",
   label: "TD Sequential (DeMark)",
   category: "Trend",
   renderTarget: "overlay",
   worksOnCloseOnly: true,
-  params: [
-    { key: "signalsOnly", label: "Show", default: 0, min: 0, max: 1, options: [{ value: 0, label: "All counts" }, { value: 1, label: "Signals only (9/13)" }] },
-  ],
-  colorKeys: ["td_buy", "td_buy_perfect", "td_buy_cd", "td_sell", "td_sell_perfect", "td_sell_cd"],
-  renderOverlay: (ctx, bars, p) => {
-    const seq = computeTDSequential(bars, p.signalsOnly);
-    if (!seq.length) return;
-    // Invisible carrier at the closes so the count markers pin to price bars.
-    const carrier = ctx.chart.addSeries(LineSeries, {
-      color: "rgba(0,0,0,0)", lineVisible: false, title: "",
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
-    });
-    carrier.setData(asLine(barsToCloses(bars)));
-    ctx.register(carrier);
-    const markers: SeriesMarker<Time>[] = seq.map((m) => {
-      const buy = m.side === "buy";
-      const done = (m.phase === "setup" && m.count === 9) || (m.phase === "countdown" && m.count === 13);
-      const color = m.phase === "countdown"
-        ? (buy ? ctx.colors.td_buy_cd : ctx.colors.td_sell_cd)
-        : (m.perfected ? (buy ? ctx.colors.td_buy_perfect : ctx.colors.td_sell_perfect) : (buy ? ctx.colors.td_buy : ctx.colors.td_sell));
-      return {
-        time: m.time as unknown as Time,
-        position: buy ? "belowBar" : "aboveBar",
-        color,
-        shape: done ? (buy ? "arrowUp" : "arrowDown") : "circle",
-        text: String(m.count),
-        size: done ? 2 : 0,
-      } as SeriesMarker<Time>;
-    });
-    createSeriesMarkers(carrier, markers);
+  params: TD_SEQ_PARAMS,
+  colorKeys: TD_COLOR_KEYS,
+  renderOverlay: (ctx, bars, p) => renderTDMarkers(ctx, bars, computeTDSequential(bars, p.signalsOnly, p.aggressive, 0)),
+};
+
+const TD_COMBO: IndicatorDef = {
+  id: "tdcombo",
+  label: "TD Combo (DeMark)",
+  category: "Trend",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: TD_SEQ_PARAMS,
+  colorKeys: TD_COLOR_KEYS,
+  // Same Setup; STRICTER countdown (close≤low[-2] AND lower low AND lower close).
+  renderOverlay: (ctx, bars, p) => renderTDMarkers(ctx, bars, computeTDSequential(bars, p.signalsOnly, p.aggressive, 1)),
+};
+
+const TDST: IndicatorDef = {
+  id: "tdst",
+  label: "TD Setup Trend (TDST)",
+  category: "Trend",
+  renderTarget: "overlay",
+  worksOnCloseOnly: true,
+  params: [],
+  colorKeys: ["tdst_resistance", "tdst_support"],
+  renderOverlay: (ctx, bars) => {
+    const { resistance, support } = computeTDST(bars);
+    const stepped = (data: { time: string | number; value: number }[], colorKey: string, title: string) => {
+      if (!data.length) return;
+      const s = ctx.chart.addSeries(LineSeries, {
+        color: ctx.colors[colorKey], lineWidth: 1, lineStyle: LineStyle.Dashed,
+        lineType: 1 /* WithSteps */, title: `${title}${ctx.baseLabel}`,
+        lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData(asLine(data as { time: string; value: number }[]));
+      ctx.register(s);
+    };
+    stepped(resistance, "tdst_resistance", "TDST R");
+    stepped(support, "tdst_support", "TDST S");
   },
+};
+
+const DEMARKER: IndicatorDef = {
+  id: "demarker",
+  label: "TD DeMarker (DeM)",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "period",
+  params: [{ key: "period", label: "Period", default: 13, min: 3, max: 100, defaultByFrequency: { weekly: 10, monthly: 8 } }],
+  colorKeys: ["demarker_line", "demarker_ref"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeDeMarker(bars, p.period),
+    "demarker_line",
+    (p) => `DeM ${p.period}`,
+    () => [{ level: 0.7, colorKey: "demarker_ref" }, { level: 0.3, colorKey: "demarker_ref" }, { level: 0.5 }],
+  ),
+};
+
+const TD_REI: IndicatorDef = {
+  id: "tdrei",
+  label: "TD REI (Range Expansion)",
+  category: "Trend",
+  renderTarget: "pane",
+  worksOnCloseOnly: true,
+  multiInstanceParam: "period",
+  params: [{ key: "period", label: "Period", default: 5, min: 2, max: 100, defaultByFrequency: { weekly: 5, monthly: 4 } }],
+  colorKeys: ["tdrei_line", "tdrei_ref", "tdrei_zero"],
+  renderPane: simpleLinePane(
+    (bars, p) => computeTDREI(bars, p.period),
+    "tdrei_line",
+    (p) => `REI ${p.period}`,
+    () => [{ level: 0, colorKey: "tdrei_zero" }, { level: 40, colorKey: "tdrei_ref" }, { level: -40, colorKey: "tdrei_ref" }],
+  ),
 };
 
 export const PANE_INDICATORS: IndicatorDef[] = [
   ADX, CCI, WILLIAMS_R, SLOW_STOCH, AROON, MA_DIST, MA_SLOPE, CHOPPINESS, VHF, VORTEX, TTM_SQUEEZE, AUTOCORR,
   ZSCORE, PCTRANK, ROBUST_Z, MINMAX, REG_RESID, FRACDIFF, WINSOR_Z, IQR_POS, PERSISTENCE, RANK_ROC, PCTL_DISP, PRPCTL, REALIZED_VOL, DRAWDOWN, BB_PCTB, BB_WIDTH, HALF_LIFE, HURST, EFF_RATIO, REG_SLOPE,
-  SKEW, KURTOSIS, ENTROPY,
+  SKEW, KURTOSIS, ENTROPY, DEMARKER, TD_REI,
 ];
-export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME, TD_SEQUENTIAL];
+export const OVERLAY_INDICATORS: IndicatorDef[] = [SUPERTREND, PSAR, KELTNER, DONCHIAN, PCTLBANDS, ICHIMOKU, KALMAN, CUSUM_CP, HMM_REGIME, TD_SEQUENTIAL, TD_COMBO, TDST];
 export const ALL_REGISTRY_INDICATORS: IndicatorDef[] = [...PANE_INDICATORS, ...OVERLAY_INDICATORS];
 
 const BY_ID = new Map(ALL_REGISTRY_INDICATORS.map((d) => [d.id, d]));

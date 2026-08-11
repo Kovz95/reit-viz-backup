@@ -846,8 +846,10 @@ export interface TDMarker {
  *  low(8|9)≤low(6&7) [buy] / high(8|9)≥high(6&7) [sell]. Countdown (after a 9):
  *  count bars, not necessarily consecutive, where close≤low[-2] [buy] /
  *  close≥high[-2] [sell] up to 13; an opposite setup completion cancels it.
- *  `signalsOnly` emits only the 9s and 13s. */
-export function computeTDSequential(bars: OhlcBar[], signalsOnly = 0): TDMarker[] {
+ *  `signalsOnly` emits only the 9s and 13s. `aggressive` counts the countdown
+ *  off the bar's own low/high instead of the close. `combo` uses the stricter
+ *  TD Combo countdown (close≤low[-2] AND lower low AND lower close [buy]). */
+export function computeTDSequential(bars: OhlcBar[], signalsOnly = 0, aggressive = 0, combo = 0): TDMarker[] {
   const { t, h, l, c } = ohlcOf(bars);
   const n = c.length;
   const out: TDMarker[] = [];
@@ -891,16 +893,101 @@ export function computeTDSequential(bars: OhlcBar[], signalsOnly = 0): TDMarker[
     else if (completedSell) { cdSide = "sell"; cdCount = 0; }
 
     if (i >= 2) {
-      if (cdSide === "buy" && c[i] <= l[i - 2]) {
+      const buyQual = combo
+        ? c[i] <= l[i - 2] && l[i] < l[i - 1] && c[i] < c[i - 1]
+        : aggressive ? l[i] <= l[i - 2] : c[i] <= l[i - 2];
+      const sellQual = combo
+        ? c[i] >= h[i - 2] && h[i] > h[i - 1] && c[i] > c[i - 1]
+        : aggressive ? h[i] >= h[i - 2] : c[i] >= h[i - 2];
+      if (cdSide === "buy" && buyQual) {
         cdCount += 1;
         emit({ time: t[i], phase: "countdown", side: "buy", count: cdCount });
         if (cdCount >= 13) cdSide = null;
-      } else if (cdSide === "sell" && c[i] >= h[i - 2]) {
+      } else if (cdSide === "sell" && sellQual) {
         cdCount += 1;
         emit({ time: t[i], phase: "countdown", side: "sell", count: cdCount });
         if (cdCount >= 13) cdSide = null;
       }
     }
+  }
+  return out;
+}
+
+/** TD Setup Trend (TDST): support/resistance from completed setups. A BUY setup
+ *  (falling price) prints RESISTANCE = the highest true-high of its 9 bars; a
+ *  SELL setup prints SUPPORT = the lowest true-low. Each level holds (stepped)
+ *  until the next same-type setup replaces it — a close beyond TDST negates the
+ *  opposing setup's exhaustion signal. */
+export function computeTDST(bars: OhlcBar[]): { resistance: DataPoint[]; support: DataPoint[] } {
+  const { t, h, l, c } = ohlcOf(bars);
+  const n = c.length;
+  const resistance: DataPoint[] = [], support: DataPoint[] = [];
+  if (n < 6) return { resistance, support };
+  const trueHigh = (i: number) => (i > 0 ? Math.max(h[i], c[i - 1]) : h[i]);
+  const trueLow = (i: number) => (i > 0 ? Math.min(l[i], c[i - 1]) : l[i]);
+  let buyS = 0, sellS = 0;
+  const buyRun: number[] = [], sellRun: number[] = [];
+  let curRes: number | null = null, curSup: number | null = null;
+  for (let i = 4; i < n; i++) {
+    const down = c[i] < c[i - 4], up = c[i] > c[i - 4];
+    if (down) {
+      buyS += 1; sellS = 0; sellRun.length = 0; buyRun.push(i); if (buyRun.length > 9) buyRun.shift();
+      if (buyS === 9) { let mx = -Infinity; for (const b of buyRun) mx = Math.max(mx, trueHigh(b)); curRes = mx; }
+    } else if (up) {
+      sellS += 1; buyS = 0; buyRun.length = 0; sellRun.push(i); if (sellRun.length > 9) sellRun.shift();
+      if (sellS === 9) { let mn = Infinity; for (const b of sellRun) mn = Math.min(mn, trueLow(b)); curSup = mn; }
+    } else { buyS = 0; sellS = 0; buyRun.length = 0; sellRun.length = 0; }
+    if (curRes !== null) resistance.push({ time: t[i] as string, value: curRes });
+    if (curSup !== null) support.push({ time: t[i] as string, value: curSup });
+  }
+  return { resistance, support };
+}
+
+/** TD DeMarker (DeM): momentum oscillator 0–1 from bar-to-bar high/low
+ *  expansion — SMA(up-moves)/(SMA(up)+SMA(down)) over `period`. Overbought >0.7,
+ *  oversold <0.3. Smoother / fewer whipsaws than RSI (uses highs & lows). */
+export function computeDeMarker(bars: OhlcBar[], period = 13): DataPoint[] {
+  const { t, h, l } = ohlcOf(bars);
+  const n = h.length;
+  const out: DataPoint[] = [];
+  if (n < period + 1 || period < 2) return out;
+  const deMax = new Array<number>(n).fill(0), deMin = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    deMax[i] = h[i] > h[i - 1] ? h[i] - h[i - 1] : 0;
+    deMin[i] = l[i] < l[i - 1] ? l[i - 1] - l[i] : 0;
+  }
+  for (let i = period; i < n; i++) {
+    let sMax = 0, sMin = 0;
+    for (let j = i - period + 1; j <= i; j++) { sMax += deMax[j]; sMin += deMin[j]; }
+    const denom = sMax + sMin;
+    out.push({ time: t[i] as string, value: denom > 0 ? sMax / denom : 0.5 });
+  }
+  return out;
+}
+
+/** TD Range Expansion Index (REI): −100…+100 momentum oscillator over `period`
+ *  (5). Sum of the 2-bar high + low expansion over the window, divided by the
+ *  sum of its absolute magnitude → bounded ±100, +ve in up-expansion, −ve in
+ *  down. Less whippy than RSI (built on highs & lows). +40/−40 = strong momentum.
+ *  (Range-expansion form; the full DeMark condition-gating has several published
+ *  variants and zeros the read during clean trends, so this uses the ungated
+ *  momentum core.) */
+export function computeTDREI(bars: OhlcBar[], period = 5): DataPoint[] {
+  const { t, h, l } = ohlcOf(bars);
+  const n = h.length;
+  const out: DataPoint[] = [];
+  if (n < period + 2 || period < 2) return out;
+  for (let i = period + 1; i < n; i++) {
+    let num = 0, den = 0;
+    for (let k = 0; k < period; k++) {
+      const j = i - k;
+      if (j < 2) continue;
+      const hd = h[j] - h[j - 2];
+      const ld = l[j] - l[j - 2];
+      num += hd + ld;
+      den += Math.abs(hd) + Math.abs(ld);
+    }
+    out.push({ time: t[i] as string, value: den > 0 ? (num / den) * 100 : 0 });
   }
   return out;
 }
