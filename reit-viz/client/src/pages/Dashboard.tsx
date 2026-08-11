@@ -979,9 +979,15 @@ export default function Dashboard() {
     const src = plottedSeriesRef.current.find((s) => s.id === seriesId);
     if (!src) return;
     const newPaneId = nextPaneId++;
+    // Guarantee a UNIQUE id — nextSeriesSeq is reset on view loads, so a bare
+    // `${ticker}:${metric}:${seq++}` can collide with the source's own id (which
+    // would React-key-collide and make removeSeries filter BOTH series).
+    const existingIds = new Set(plottedSeriesRef.current.map((s) => s.id));
+    let cloneId = `${src.ticker}:${src.metric}:${nextSeriesSeq++}`;
+    while (existingIds.has(cloneId)) cloneId = `${src.ticker}:${src.metric}:${nextSeriesSeq++}`;
     const clone: PlottedSeries = {
       ...src,
-      id: `${src.ticker}:${src.metric}:${nextSeriesSeq++}`,
+      id: cloneId,
       paneIndex: newPaneId,
       data: src.data.map((d) => ({ ...d })),
     };
