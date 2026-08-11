@@ -98,6 +98,7 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronRight,
+  Copy,
   X,
   Eye,
   EyeOff,
@@ -179,6 +180,8 @@ interface SidebarProps {
   onRemovePane: (paneId: number) => void;
   /** Move a series to a different existing pane (Current Layout up/down arrows). */
   onMoveSeriesToPane: (seriesId: string, targetPaneId: number) => void;
+  /** Duplicate a series into a brand-new pane (Current Layout duplicate button). */
+  onDuplicateSeries: (seriesId: string) => void;
   /** Reorder panes by dropping pane `fromId` into `toId`'s slot (drag-drop). */
   onReorderPanes: (fromId: number, toId: number) => void;
   onClearAll: () => void;
@@ -235,6 +238,7 @@ export default function Sidebar({
   onRemoveSeries,
   onRemovePane,
   onMoveSeriesToPane,
+  onDuplicateSeries,
   onReorderPanes,
   onClearAll,
   onToggleVisibility,
@@ -1730,6 +1734,15 @@ export default function Sidebar({
                             data-testid={`move-series-down-${s.id}`}
                           >
                             <ChevronDown className="w-3 h-3" />
+                          </button>
+                          {/* Duplicate this series into a brand-new pane (copy, not move) */}
+                          <button
+                            className="opacity-0 group-hover:opacity-100 p-0.5 text-muted-foreground/60 hover:text-foreground"
+                            onClick={() => onDuplicateSeries(s.id)}
+                            title="Duplicate to new pane"
+                            data-testid={`duplicate-series-${s.id}`}
+                          >
+                            <Copy className="w-3 h-3" />
                           </button>
                           <button
                             className="opacity-0 group-hover:opacity-100 p-0.5"

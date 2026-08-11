@@ -970,6 +970,43 @@ export default function Dashboard() {
     );
   }, []);
 
+  // Duplicate a single series into a brand-new pane (Current Layout duplicate
+  // button): clone the series (metric + style + data) with a fresh id, allocate
+  // a new pane, and copy the SOURCE pane's indicators so the new pane faithfully
+  // mirrors what was showing. Unlike the up/down arrows this COPIES (source
+  // stays put) and creates a new pane rather than needing one to exist.
+  const duplicateSeriesToNewPane = useCallback((seriesId: string) => {
+    const src = plottedSeriesRef.current.find((s) => s.id === seriesId);
+    if (!src) return;
+    const newPaneId = nextPaneId++;
+    const clone: PlottedSeries = {
+      ...src,
+      id: `${src.ticker}:${src.metric}:${nextSeriesSeq++}`,
+      paneIndex: newPaneId,
+      data: src.data.map((d) => ({ ...d })),
+    };
+    if (src.metric && !extraMetricsRef.current.includes(src.metric)) {
+      extraMetricsRef.current = [...extraMetricsRef.current, src.metric];
+    }
+    setPanes((prev) => [
+      ...prev,
+      {
+        id: newPaneId,
+        label: `${tickerDisplayName(src.ticker)} — ${src.metric}`,
+        ticker: src.ticker,
+        freq: prev.find((p) => p.id === src.paneIndex)?.freq,
+      },
+    ]);
+    setPlottedSeries((prev) => [...prev, clone]);
+    // Carry the source pane's per-pane indicators onto the new pane (JSON-safe
+    // deep copy so the two panes don't share indicator state).
+    setIndicatorsMap((prev) => {
+      const srcInd = prev[src.paneIndex];
+      if (!srcInd) return prev;
+      try { return { ...prev, [newPaneId]: JSON.parse(JSON.stringify(srcInd)) }; } catch { return prev; }
+    });
+  }, [tickerDisplayName]);
+
   // Reorder panes (Current Layout drag-drop): drop pane `fromId` into `toId`'s
   // slot. Pane ids are preserved, so per-pane indicators/color-by stay attached;
   // only the render order (and thus grid placement) changes.
@@ -2102,6 +2139,7 @@ export default function Dashboard() {
           onRemoveSeries={removeSeries}
           onRemovePane={removePane}
           onMoveSeriesToPane={moveSeriesToPane}
+          onDuplicateSeries={duplicateSeriesToNewPane}
           onReorderPanes={reorderPanes}
           onClearAll={clearAllSeries}
           onToggleVisibility={toggleSeriesVisibility}
