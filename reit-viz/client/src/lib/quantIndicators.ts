@@ -826,3 +826,81 @@ export function computePctileDispersion(bars: OhlcBar[], window = 63, hiPct = 90
   }
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// DeMark TD Sequential — Setup (1–9, price-flip + perfection) then Countdown
+// (1–13). Trend-exhaustion timing. Returns per-bar markers for the overlay.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface TDMarker {
+  time: string | number;
+  phase: "setup" | "countdown";
+  side: "buy" | "sell";
+  count: number;        // 1..9 (setup) or 1..13 (countdown)
+  perfected?: boolean;  // set on a perfected setup 9
+}
+
+/** DeMark TD Sequential. Setup: 9 consecutive closes each below (buy) / above
+ *  (sell) the close 4 bars earlier — the streak resets on the opposite
+ *  relationship, so count 1 IS the TD price flip; the 9 is "perfected" when the
+ *  low(8|9)≤low(6&7) [buy] / high(8|9)≥high(6&7) [sell]. Countdown (after a 9):
+ *  count bars, not necessarily consecutive, where close≤low[-2] [buy] /
+ *  close≥high[-2] [sell] up to 13; an opposite setup completion cancels it.
+ *  `signalsOnly` emits only the 9s and 13s. */
+export function computeTDSequential(bars: OhlcBar[], signalsOnly = 0): TDMarker[] {
+  const { t, h, l, c } = ohlcOf(bars);
+  const n = c.length;
+  const out: TDMarker[] = [];
+  if (n < 6) return out;
+  const emit = (m: TDMarker) => {
+    if (!signalsOnly || (m.phase === "setup" && m.count === 9) || (m.phase === "countdown" && m.count === 13)) out.push(m);
+  };
+
+  let buyS = 0, sellS = 0;             // consecutive setup counts
+  const buyRun: number[] = [], sellRun: number[] = []; // bar indices of the current setup run
+  let cdSide: "buy" | "sell" | null = null;
+  let cdCount = 0;
+
+  for (let i = 4; i < n; i++) {
+    const down = c[i] < c[i - 4];
+    const up = c[i] > c[i - 4];
+    let completedBuy = false, completedSell = false;
+
+    if (down) {
+      buyS += 1; sellS = 0; sellRun.length = 0;
+      buyRun.push(i); if (buyRun.length > 9) buyRun.shift();
+      if (buyS <= 9) {
+        const perfected = buyS === 9 && Math.min(l[buyRun[7]], l[buyRun[8]]) <= Math.min(l[buyRun[5]], l[buyRun[6]]);
+        emit({ time: t[i], phase: "setup", side: "buy", count: buyS, perfected });
+        if (buyS === 9) completedBuy = true;
+      }
+    } else if (up) {
+      sellS += 1; buyS = 0; buyRun.length = 0;
+      sellRun.push(i); if (sellRun.length > 9) sellRun.shift();
+      if (sellS <= 9) {
+        const perfected = sellS === 9 && Math.max(h[sellRun[7]], h[sellRun[8]]) >= Math.max(h[sellRun[5]], h[sellRun[6]]);
+        emit({ time: t[i], phase: "setup", side: "sell", count: sellS, perfected });
+        if (sellS === 9) completedSell = true;
+      }
+    } else {
+      buyS = 0; sellS = 0; buyRun.length = 0; sellRun.length = 0;
+    }
+
+    // Countdown starts on a setup 9; opposite setup cancels an active countdown.
+    if (completedBuy) { cdSide = "buy"; cdCount = 0; }
+    else if (completedSell) { cdSide = "sell"; cdCount = 0; }
+
+    if (i >= 2) {
+      if (cdSide === "buy" && c[i] <= l[i - 2]) {
+        cdCount += 1;
+        emit({ time: t[i], phase: "countdown", side: "buy", count: cdCount });
+        if (cdCount >= 13) cdSide = null;
+      } else if (cdSide === "sell" && c[i] >= h[i - 2]) {
+        cdCount += 1;
+        emit({ time: t[i], phase: "countdown", side: "sell", count: cdCount });
+        if (cdCount >= 13) cdSide = null;
+      }
+    }
+  }
+  return out;
+}
