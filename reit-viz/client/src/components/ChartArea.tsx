@@ -65,6 +65,7 @@ import {
   Tag,
   EyeOff,
   Minus,
+  Repeat,
 } from "lucide-react";
 import { FilterDropdown, emptyClassFilters, type ClassFilters } from "./ClassificationFilters";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "./GridLayoutPicker";
@@ -170,6 +171,12 @@ interface ChartAreaProps {
   onOpenMacroOverlay?: () => void;
   /** Called to add a computed series (e.g. rolling correlation) to the chart */
   onAddFormulaSeries?: (series: PlottedSeries, targetPaneId?: number) => number;
+  /** Right-click pane menu handlers (Charts) — threaded to each ChartPane. */
+  onDuplicateSeries?: (seriesId: string) => void;
+  onRemovePane?: (paneId: number) => void;
+  onReorderPanes?: (fromId: number, toId: number) => void;
+  /** Inline metric swap: change a series' metric in place (refetches data). */
+  onChangeSeriesMetric?: (seriesId: string, newMetric: string) => void;
   /** Optional slot rendered at the right side of the top toolbar */
   toolbarRight?: React.ReactNode;
   /** Fires when crosshair time changes (for syncing data table) */
@@ -268,6 +275,10 @@ export default function ChartArea({
   ohlcCache,
   onOpenMacroOverlay,
   onAddFormulaSeries,
+  onDuplicateSeries,
+  onRemovePane,
+  onReorderPanes,
+  onChangeSeriesMetric,
   toolbarRight,
   onCrosshairTimeChange,
   pairsPresets,
@@ -589,6 +600,7 @@ export default function ChartArea({
   const [colorByDataMap, setColorByDataMap] = useState<Record<number, { data: Map<string, number>; range: { min: number; max: number } }>>({});
   // Popover open state per pane
   const [colorByPopoverOpen, setColorByPopoverOpen] = useState<number | null>(null);
+  const [metricSwapOpen, setMetricSwapOpen] = useState<number | null>(null);
 
   // ── Annotations data (bundle gc/bs/hl + Ws/dl/Xu mutations) ──
   const queryClient = useQueryClient();
@@ -2846,7 +2858,54 @@ export default function ChartArea({
                       return next;
                     });
                   }}
+                  onDuplicateSeries={onDuplicateSeries}
+                  onRemovePane={onRemovePane}
+                  onMovePaneUp={(() => {
+                    const i = panes.findIndex((p) => p.id === pane.id);
+                    return i > 0 && onReorderPanes ? () => onReorderPanes(pane.id, panes[i - 1].id) : undefined;
+                  })()}
+                  onMovePaneDown={(() => {
+                    const i = panes.findIndex((p) => p.id === pane.id);
+                    return i >= 0 && i < panes.length - 1 && onReorderPanes ? () => onReorderPanes(pane.id, panes[i + 1].id) : undefined;
+                  })()}
                 />
+                {/* Per-pane metric-swap button (single-series panes): change the
+                    metric in place without remove + re-add. */}
+                {onChangeSeriesMetric && paneSeriesView.length === 1 && (
+                  <Popover open={metricSwapOpen === pane.id} onOpenChange={(open) => setMetricSwapOpen(open ? pane.id : null)}>
+                    <PopoverTrigger asChild>
+                      <button
+                        className={`absolute top-1 z-10 p-0.5 rounded bg-background/80 hover:bg-accent transition-colors text-muted-foreground hover:text-foreground ${panes.length > 1 ? "right-14" : "right-8"}`}
+                        title="Change this pane's metric"
+                        data-testid={`metric-swap-${pane.id}`}
+                      >
+                        <Repeat className="w-3 h-3" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto min-w-[16rem] max-w-[30rem] p-0" align="end">
+                      <Command>
+                        <CommandInput placeholder="Change metric..." className="h-8" />
+                        <CommandList className="max-h-[min(70vh,560px)]">
+                          <CommandEmpty>No metric found.</CommandEmpty>
+                          {colorByMetricGroups.map(({ category, metrics }) => (
+                            <CommandGroup key={category} heading={category}>
+                              {metrics.map((m) => (
+                                <CommandItem
+                                  key={m}
+                                  onSelect={() => { onChangeSeriesMetric(paneSeriesView[0].id, m); setMetricSwapOpen(null); }}
+                                  data-testid={`metric-swap-opt-${pane.id}-${m}`}
+                                >
+                                  {paneSeriesView[0].metric === m && <Check className="w-3 h-3 mr-1.5" />}
+                                  <span className="text-xs whitespace-nowrap">{m}</span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          ))}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
                 {/* Per-pane color-by picker button */}
                 <Popover open={colorByPopoverOpen === pane.id} onOpenChange={(open) => setColorByPopoverOpen(open ? pane.id : null)}>
                   <PopoverTrigger asChild>

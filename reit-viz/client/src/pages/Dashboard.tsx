@@ -1013,6 +1013,27 @@ export default function Dashboard() {
     });
   }, [tickerDisplayName]);
 
+  // Inline metric swap (per-pane picker): change a series' metric in place and
+  // refetch its data — no remove + re-add. Optimistically retitles the series
+  // (and the pane, if that's the pane's only series), blanks the data, then
+  // fills it from getMetricSeriesResolved.
+  const changeSeriesMetric = useCallback((seriesId: string, newMetric: string) => {
+    const src = plottedSeriesRef.current.find((s) => s.id === seriesId);
+    if (!src || src.metric === newMetric) return;
+    const tName = tickerDisplayName(src.ticker);
+    const onlyOnPane = plottedSeriesRef.current.filter((s) => s.paneIndex === src.paneIndex).length === 1;
+    if (newMetric && !extraMetricsRef.current.includes(newMetric)) {
+      extraMetricsRef.current = [...extraMetricsRef.current, newMetric];
+    }
+    setPlottedSeries((prev) => prev.map((s) => (s.id === seriesId ? { ...s, metric: newMetric, label: `${tName} - ${newMetric}`, data: [] } : s)));
+    if (onlyOnPane) {
+      setPanes((prev) => prev.map((p) => (p.id === src.paneIndex ? { ...p, label: `${tName} — ${newMetric === "close" ? "Price" : newMetric}` } : p)));
+    }
+    getMetricSeriesResolved(src.ticker, newMetric, resolveBasket)
+      .then((data) => setPlottedSeries((prev) => prev.map((s) => (s.id === seriesId ? { ...s, data } : s))))
+      .catch(() => {});
+  }, [resolveBasket, tickerDisplayName]);
+
   // Reorder panes (Current Layout drag-drop): drop pane `fromId` into `toId`'s
   // slot. Pane ids are preserved, so per-pane indicators/color-by stay attached;
   // only the render order (and thus grid placement) changes.
@@ -2202,6 +2223,10 @@ export default function Dashboard() {
             setForceOpenSection("macro");
           }}
           onAddFormulaSeries={addFormulaSeries}
+          onDuplicateSeries={duplicateSeriesToNewPane}
+          onRemovePane={removePane}
+          onReorderPanes={reorderPanes}
+          onChangeSeriesMetric={changeSeriesMetric}
           onCrosshairTimeChange={setCrosshairTime}
           pairsPresets={PAIRS_PRESETS}
           onLoadPairsPreset={loadPairsPreset}

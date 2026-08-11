@@ -52,7 +52,7 @@ import { GradientLinePrimitive } from "@/lib/gradientLinePrimitive";
 import { attachQuarterShading } from "@/lib/quarterShading";
 import { applyTransform } from "@/lib/transforms";
 import type { DataTransform } from "@/lib/transforms";
-import { Info, Maximize2, Minimize2, Trash2, Rows3, X, EyeOff } from "lucide-react";
+import { Info, Maximize2, Minimize2, Trash2, Rows3, X, EyeOff, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { MeasurePrimitive } from "@/lib/measurePrimitive";
 import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
@@ -396,6 +396,13 @@ interface ChartPaneProps {
   colorByRange?: { min: number; max: number } | null;
   /** Callback to clear color-by for this pane */
   onClearColorBy?: () => void;
+  /** Right-click pane menu (Charts): duplicate a series into a new pane. */
+  onDuplicateSeries?: (seriesId: string) => void;
+  /** Right-click pane menu: remove this whole pane. */
+  onRemovePane?: (paneId: number) => void;
+  /** Right-click pane menu: reorder this pane up/down (undefined at the ends). */
+  onMovePaneUp?: () => void;
+  onMovePaneDown?: () => void;
 }
 
 // Background grid line color by the user's prominence setting. "normal" is a
@@ -1437,6 +1444,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   colorByMetric,
   colorByRange = null,
   onClearColorBy,
+  onDuplicateSeries,
+  onRemovePane,
+  onMovePaneUp,
+  onMovePaneDown,
 }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -1634,7 +1645,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const [drawingMenu, setDrawingMenu] = useState<{
     clientX: number;
     clientY: number;
-    kind: "drawing" | "fractal";
+    kind: "drawing" | "fractal" | "pane";
     id?: string;
     label: string;
   } | null>(null);
@@ -2961,11 +2972,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, kind: "fractal", label: "fractal lines" });
         return;
       }
+      // Empty pane area — open the pane-management menu (duplicate/remove/move).
+      if (onDuplicateSeries || onRemovePane || onMovePaneUp || onMovePaneDown) {
+        e.preventDefault();
+        setDrawingMenu({ clientX: e.clientX, clientY: e.clientY, kind: "pane", label: "pane" });
+        return;
+      }
       setDrawingMenu(null);
     };
     container.addEventListener("contextmenu", onContextMenu);
     return () => container.removeEventListener("contextmenu", onContextMenu);
-  }, [chartReady, pickDrawingAt, pickFractalAt]);
+  }, [chartReady, pickDrawingAt, pickFractalAt, onDuplicateSeries, onRemovePane, onMovePaneUp, onMovePaneDown]);
 
   // Dismiss the drawing menu on any outside click, wheel scroll, or Escape.
   useEffect(() => {
@@ -4851,6 +4868,49 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           onMouseDown={(e) => e.stopPropagation()}
           data-testid={`drawing-menu-${paneId}`}
         >
+          {drawingMenu.kind === "pane" ? (
+            <>
+              {paneSeries.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-accent w-full text-left whitespace-nowrap"
+                  onClick={() => { onDuplicateSeries?.(s.id); setDrawingMenu(null); }}
+                  data-testid={`pane-menu-duplicate-${paneId}-${s.id}`}
+                >
+                  <Copy className="w-3 h-3" />
+                  Duplicate{paneSeries.length > 1 ? ` "${s.label}"` : ""} to new pane
+                </button>
+              ))}
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-accent w-full text-left disabled:opacity-30 border-t border-border/60"
+                disabled={!onMovePaneUp}
+                onClick={() => { onMovePaneUp?.(); setDrawingMenu(null); }}
+                data-testid={`pane-menu-up-${paneId}`}
+              >
+                <ArrowUp className="w-3 h-3" /> Move pane up
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-accent w-full text-left disabled:opacity-30"
+                disabled={!onMovePaneDown}
+                onClick={() => { onMovePaneDown?.(); setDrawingMenu(null); }}
+                data-testid={`pane-menu-down-${paneId}`}
+              >
+                <ArrowDown className="w-3 h-3" /> Move pane down
+              </button>
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-destructive hover:bg-destructive/10 w-full text-left border-t border-border/60"
+                onClick={() => { onRemovePane?.(paneId); setDrawingMenu(null); }}
+                data-testid={`pane-menu-remove-${paneId}`}
+              >
+                <Trash2 className="w-3 h-3" /> Remove pane
+              </button>
+            </>
+          ) : (
+            <>
           <button
             type="button"
             className="flex items-center gap-1.5 px-3 py-1.5 text-destructive hover:bg-destructive/10 w-full text-left"
@@ -4877,6 +4937,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             <Rows3 className="w-3 h-3" />
             Delete on all panes
           </button>
+            </>
+          )}
         </div>
       )}
       {/* Sub-indicator charts (RSI, MACD, HA) stacked below. Double-click one

@@ -646,15 +646,33 @@ export function RegistryIndicatorControls({
     update(def.id, { params: { ...(cur.params ?? {}), [key]: value } });
   };
 
+  // Free-text filter across the (now large) registry — matches label / id /
+  // category so the user can jump straight to "kurtosis", "vortex", "winsor", …
+  const [indSearch, setIndSearch] = useState("");
+  const q = indSearch.trim().toLowerCase();
+  const matchDef = (d: IndicatorDef) =>
+    !q || d.label.toLowerCase().includes(q) || d.id.toLowerCase().includes(q) || d.category.toLowerCase().includes(q);
+
   const categories: string[] = [];
-  for (const d of ALL_REGISTRY_INDICATORS) if (!categories.includes(d.category)) categories.push(d.category);
+  for (const d of ALL_REGISTRY_INDICATORS) if (matchDef(d) && !categories.includes(d.category)) categories.push(d.category);
 
   return (
     <div className="space-y-4">
+      <Input
+        type="text"
+        placeholder="Search indicators…"
+        value={indSearch}
+        onChange={(e) => setIndSearch(e.target.value)}
+        className="h-7 text-xs"
+        data-testid="indicator-search"
+      />
+      {categories.length === 0 && (
+        <div className="text-[10px] text-muted-foreground/50 px-0.5">No indicators match “{indSearch}”.</div>
+      )}
       {categories.map((cat) => (
         <div key={cat} className="space-y-3">
           <div className="text-[9px] text-muted-foreground/70 font-semibold uppercase tracking-wider">{cat}</div>
-          {ALL_REGISTRY_INDICATORS.filter((d) => d.category === cat).map((def) => {
+          {ALL_REGISTRY_INDICATORS.filter((d) => d.category === cat && matchDef(d)).map((def) => {
             const st = reg[def.id];
             const enabled = !!st?.enabled;
             const p = resolveParams(def, st, frequency);
