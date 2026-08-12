@@ -26,7 +26,7 @@ import {
   type DataPoint,
   type OhlcBar,
 } from "@/lib/indicators";
-import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence, computePctileDispersion } from "@/lib/quantIndicators";
+import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence, computePctileDispersion, computeTDSequential, computeDeMarker, computeTDREI } from "@/lib/quantIndicators";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "pair";
 export type SignalDirection = "long" | "short";
@@ -537,6 +537,88 @@ const technicalSignals: CatalogSignal[] = [
       }
       const lim = Number(p.z);
       return detectCrossings(aligned, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+  {
+    // DeMark TD Sequential Setup completion (9). A BUY setup (9 down-closes) is
+    // bullish exhaustion → long; a SELL setup → short.
+    id: "tech.td_setup9",
+    family: "technical",
+    label: "TD Sequential Setup 9",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [{ id: "s9", label: "Setup 9", params: {} }],
+    detect: (b, dir_p, dir) => {
+      const bars = toBars(b) ?? closeBars(b);
+      const seq = computeTDSequential(bars);
+      const want = dir === "long" ? "buy" : "sell";
+      const idx = dateIndex(b);
+      const out: number[] = [];
+      for (const m of seq) if (m.phase === "setup" && m.count === 9 && m.side === want) { const j = idx.get(m.time as string); if (j !== undefined) out.push(j); }
+      return out;
+    },
+  },
+  {
+    // TD Sequential Countdown completion (13) — the stronger exhaustion signal.
+    id: "tech.td_countdown13",
+    family: "technical",
+    label: "TD Sequential Countdown 13",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "cd", label: "Countdown 13", params: { combo: 0 } },
+      { id: "cdc", label: "Combo 13 (stricter)", params: { combo: 1 } },
+    ],
+    detect: (b, p, dir) => {
+      const bars = toBars(b) ?? closeBars(b);
+      const seq = computeTDSequential(bars, 0, 0, Number(p.combo) || 0);
+      const want = dir === "long" ? "buy" : "sell";
+      const idx = dateIndex(b);
+      const out: number[] = [];
+      for (const m of seq) if (m.phase === "countdown" && m.count === 13 && m.side === want) { const j = idx.get(m.time as string); if (j !== undefined) out.push(j); }
+      return out;
+    },
+  },
+  {
+    // TD DeMarker overbought/oversold — long on oversold, short on overbought.
+    id: "tech.demarker_extreme",
+    family: "technical",
+    label: "TD DeMarker extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "dem13", label: "DeM 13, 0.3/0.7", params: { period: 13, low: 0.3, high: 0.7 } },
+      { id: "dem13x", label: "DeM 13, 0.2/0.8", params: { period: 13, low: 0.2, high: 0.8 } },
+      { id: "dem21", label: "DeM 21, 0.3/0.7", params: { period: 21, low: 0.3, high: 0.7 } },
+    ],
+    detect: (b, p, dir) => {
+      const bars = toBars(b) ?? closeBars(b);
+      const dem = alignToBars(b, computeDeMarker(bars, Number(p.period)));
+      return detectCrossings(dem, dir === "long" ? (v) => v <= Number(p.low) : (v) => v >= Number(p.high));
+    },
+  },
+  {
+    // TD REI momentum extreme — long when REI is deeply negative (down-expansion
+    // exhausted), short when deeply positive.
+    id: "tech.rei_extreme",
+    family: "technical",
+    label: "TD REI extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: {},
+    paramPresets: [
+      { id: "rei5_40", label: "REI 5, ±40", params: { period: 5, thr: 40 } },
+      { id: "rei5_45", label: "REI 5, ±45", params: { period: 5, thr: 45 } },
+      { id: "rei8_40", label: "REI 8, ±40", params: { period: 8, thr: 40 } },
+    ],
+    detect: (b, p, dir) => {
+      const bars = toBars(b) ?? closeBars(b);
+      const rei = alignToBars(b, computeTDREI(bars, Number(p.period)));
+      const thr = Number(p.thr);
+      return detectCrossings(rei, dir === "long" ? (v) => v <= -thr : (v) => v >= thr);
     },
   },
   {
