@@ -70,6 +70,29 @@ export async function fetchTickerRaw(ticker: string): Promise<RawTicker | null> 
   }
 }
 
+// Off-universe symbols only: fetch daily OHLCV from Yahoo as a self-describing
+// {dates, metrics} record. Returns null for a curated universe ticker (a gap
+// there is genuine, not a Yahoo case) or when Yahoo has nothing.
+async function yahooTickerRaw(ticker: string): Promise<RawTicker | null> {
+  const key = ticker.toUpperCase();
+  try {
+    const { getTickers } = await import("@/lib/dataService");
+    const metas = await getTickers();
+    if (metas.some((t: any) => String(t.ticker).toUpperCase() === key)) return null;
+  } catch { /* universe unknown — still attempt Yahoo */ }
+  const { fetchYahooDaily } = await import("@/lib/yahooFallback");
+  const y = await fetchYahooDaily(key);
+  if (!y || !y.dates.length) return null;
+  const metrics: Record<string, any[]> = {
+    close: y.closes,
+    open: y.opens,
+    high: y.highs,
+    low: y.lows,
+  };
+  if (y.volumes.length === y.dates.length) metrics.volume = y.volumes;
+  return { dates: y.dates, metrics };
+}
+
 async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
   if (_cache.has(ticker)) return _cache.get(ticker)!;
   const existing = _inFlight.get(ticker);
@@ -100,6 +123,19 @@ async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
         void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`td:${ticker}`, result)).catch(() => {});
       }
     }
+
+    // Off-universe Yahoo fallback: no workbook static/API data for a symbol that
+    // isn't a curated universe ticker (AAPL, SPY, ^TNX typed into an optimizer
+    // picker). This model is self-describing, so map Yahoo's arrays 1:1 onto
+    // `dates` — no global-axis remap needed here.
+    if (!result || result.dates.length === 0) {
+      const y = await yahooTickerRaw(ticker);
+      if (y) {
+        result = y;
+        void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`td:${ticker}`, y)).catch(() => {});
+      }
+    }
+
     _cache.set(ticker, result);
     _inFlight.delete(ticker);
     return result;

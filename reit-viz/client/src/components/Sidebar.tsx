@@ -1025,15 +1025,20 @@ export default function Sidebar({
                     </div>
                     {expandedGroups.has("__yahoo__") &&
                       yahooTickers.map((sym) => {
+                        // Plot the BARE symbol — the data layer auto-detects an
+                        // off-universe ticker and pulls daily OHLCV from Yahoo
+                        // (dataService/tickerData fallbacks). A "YAHOO:" prefix id
+                        // would be treated as an unknown ticker everywhere
+                        // downstream and never plot.
                         const id = `YAHOO:${sym}`;
                         return (
                           <div
                             key={id}
-                            className={`group flex items-center gap-2 w-full text-left px-3 py-1 text-xs rounded ${activeTicker === id ? "bg-primary/15 text-primary" : "hover:bg-accent"}`}
+                            className={`group flex items-center gap-2 w-full text-left px-3 py-1 text-xs rounded ${activeTicker === sym ? "bg-primary/15 text-primary" : "hover:bg-accent"}`}
                           >
                             <button
                               className="flex items-center gap-2 flex-1 min-w-0 text-left"
-                              onClick={() => selectTicker(id)}
+                              onClick={() => selectTicker(sym)}
                               data-testid={`ticker-${id}`}
                             >
                               <span className="font-mono font-semibold w-12 text-sky-300">

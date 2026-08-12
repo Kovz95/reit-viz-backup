@@ -559,6 +559,43 @@ export async function getTickerRaw(symbol: string): Promise<RawTickerData> {
   }
 }
 
+// Off-universe symbols only: fetch daily OHLCV from Yahoo and remap onto the
+// global trading-date axis (the tuple model's [globalDateIndex, value] shape).
+// Returns {} for a universe ticker (a curated ticker with no data is a genuine
+// gap, not a Yahoo case) or when Yahoo has nothing. Any Yahoo date outside the
+// workbook's global axis is dropped — off-universe data shares the same axis as
+// the rest of the app.
+async function yahooRawForKey(key: string): Promise<RawTickerData> {
+  try {
+    const metas = await getTickers();
+    if (metas.some((t) => String(t.ticker).toUpperCase() === key)) return {};
+  } catch { /* universe unknown — still attempt Yahoo */ }
+  const { fetchYahooDaily } = await import("@/lib/yahooFallback");
+  const y = await fetchYahooDaily(key);
+  if (!y || !y.dates.length) return {};
+  const globalDates = await getDates();
+  const idxOf = new Map<string, number>();
+  for (let i = 0; i < globalDates.length; i++) idxOf.set(globalDates[i], i);
+  const close: RawMetricData = [];
+  const open: RawMetricData = [];
+  const high: RawMetricData = [];
+  const low: RawMetricData = [];
+  const volume: RawMetricData = [];
+  for (let i = 0; i < y.dates.length; i++) {
+    const gi = idxOf.get(y.dates[i]);
+    if (gi === undefined) continue;
+    if (Number.isFinite(y.closes[i])) close.push([gi, y.closes[i]]);
+    if (Number.isFinite(y.opens[i])) open.push([gi, y.opens[i]]);
+    if (Number.isFinite(y.highs[i])) high.push([gi, y.highs[i]]);
+    if (Number.isFinite(y.lows[i])) low.push([gi, y.lows[i]]);
+    if (Number.isFinite(y.volumes[i])) volume.push([gi, y.volumes[i]]);
+  }
+  if (!close.length) return {};
+  const out: RawTickerData = { close, open, high, low };
+  if (volume.length) out.volume = volume;
+  return out;
+}
+
 async function getTickerRawBase(key: string): Promise<RawTickerData> {
   if (tickerDataCache.has(key)) return tickerDataCache.get(key)!;
 
@@ -579,18 +616,15 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
         }
       } catch { /* IDB unavailable — network path below */ }
 
+      let tupleData: RawTickerData = {};
+
       // Try API first (returns {dates, metrics} with decoded flat arrays)
       try {
         const { API_BASE } = await import("@/lib/queryClient");
         const resp = await fetch(`${API_BASE}/api/ticker/${key}`);
         if (resp.ok) {
           const apiData = await resp.json() as { dates: string[]; metrics: Record<string, (number | null)[]> };
-          const tupleData = flatToTuples(apiData.metrics);
-          tickerDataCache.set(key, tupleData);
-          if (Object.keys(tupleData).length > 0) {
-            void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`ds:${key}`, tupleData)).catch(() => {});
-          }
-          return tupleData;
+          tupleData = flatToTuples(apiData.metrics);
         }
       } catch (_) {
         // API not available, fall back to static file
@@ -598,21 +632,29 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
 
       // Static file: contains raw RLE-encoded metric data (NOT tuple format)
       // Format: { close: [v1, v2, "~3", v3, ...], open: [...], ... }
-      try {
-        const raw = await fetchJSON<Record<string, (number | string | null)[]>>(`tickers/${key}.json`);
-        const tupleData = flatToTuples(raw);
-        tickerDataCache.set(key, tupleData);
-        return tupleData;
-      } catch {
-        // Neither the API nor a static file has data for this symbol (e.g. a
-        // delisted ticker, or a locally-unprovisioned data dir). Degrade
-        // gracefully: cache and return empty so a single dataless ticker
-        // renders an empty chart instead of throwing "Failed to load view"
-        // and blanking the entire workspace.
-        const empty: RawTickerData = {};
-        tickerDataCache.set(key, empty);
-        return empty;
+      if (Object.keys(tupleData).length === 0) {
+        try {
+          const raw = await fetchJSON<Record<string, (number | string | null)[]>>(`tickers/${key}.json`);
+          tupleData = flatToTuples(raw);
+        } catch {
+          // Neither the API nor a static file has data for this symbol.
+        }
       }
+
+      // Off-universe Yahoo fallback: a symbol with no workbook data that is NOT
+      // one of the curated REIT universe tickers (e.g. AAPL, SPY, ^TNX typed into
+      // a Charts / optimizer picker). Map Yahoo's daily OHLCV onto the global
+      // trading-date axis so it lives in the same tuple model every consumer
+      // expects. Returns {} (empty chart, not a throw) if Yahoo has nothing.
+      if (Object.keys(tupleData).length === 0) {
+        tupleData = await yahooRawForKey(key);
+      }
+
+      tickerDataCache.set(key, tupleData);
+      if (Object.keys(tupleData).length > 0) {
+        void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`ds:${key}`, tupleData)).catch(() => {});
+      }
+      return tupleData;
     } finally {
       releaseFetchSlot();
       inFlightTickerFetches.delete(key);

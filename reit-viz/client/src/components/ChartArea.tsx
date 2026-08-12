@@ -66,6 +66,7 @@ import {
   EyeOff,
   Minus,
   Repeat,
+  Plus,
 } from "lucide-react";
 import { FilterDropdown, emptyClassFilters, type ClassFilters } from "./ClassificationFilters";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "./GridLayoutPicker";
@@ -1508,6 +1509,38 @@ export default function ChartArea({
                           {ok
                             ? "plot the ratio — keeps the current layout"
                             : `no ticker or basket matches "${!A ? termA : termB}"`}
+                        </span>
+                      </CommandItem>
+                    </CommandGroup>
+                  );
+                })()}
+                {(() => {
+                  // Off-universe symbol: anything typed that isn't a ratio and
+                  // isn't already a curated workbook ticker can be plotted with
+                  // live daily price data pulled from Yahoo (mapped onto the
+                  // global date axis by the data layer). This is the Charts entry
+                  // point for "add a symbol that isn't in the uploaded universe".
+                  const q = tickerQuery.trim();
+                  if (!q || q.includes("/")) return null; // ratios handled above
+                  const up = q.toUpperCase();
+                  if (tickerList.some((t) => t.ticker === up)) return null; // already in universe
+                  return (
+                    <CommandGroup heading="Off-universe" forceMount>
+                      <CommandItem
+                        value={up}
+                        forceMount
+                        onSelect={() => {
+                          onSelectTicker(up);
+                          setTickerPopoverOpen(false);
+                          setTickerQuery("");
+                        }}
+                        className="text-xs"
+                        data-testid="carousel-add-yahoo"
+                      >
+                        <Plus className="w-3 h-3 mr-1.5 flex-shrink-0 text-primary" />
+                        <span className="font-mono font-semibold mr-2">{up}</span>
+                        <span className="text-muted-foreground">
+                          add daily price data from Yahoo (not in the workbook)
                         </span>
                       </CommandItem>
                     </CommandGroup>

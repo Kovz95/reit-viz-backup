@@ -144,6 +144,7 @@ export interface PairsPresetDef {
 }
 
 import type { ActiveIndicators } from "@/components/ChartPane";
+import { useToast } from "@/hooks/use-toast";
 
 const PAIRS_PRESETS: PairsPresetDef[] = [
   {
@@ -816,6 +817,24 @@ export default function Dashboard() {
     queryKey: ["tickers"],
     queryFn: getTickers,
   });
+  const tickersRef = useRef<TickerMeta[]>([]);
+  tickersRef.current = tickers;
+
+  const { toast } = useToast();
+  // Surface an explicit message instead of a silent blank when a picked ticker
+  // resolves to NO plottable data. Charts plots the workbook/universe price set
+  // (/api/ticker/<sym>) — an off-universe symbol has no data there, so nothing
+  // draws; say so rather than leaving empty panes.
+  const warnNoData = useCallback((ticker: string) => {
+    const inUniverse = tickersRef.current.some((t) => t.ticker === ticker);
+    toast({
+      title: `No price data for ${ticker}`,
+      description: inUniverse
+        ? "No series is available for this ticker right now — try reloading or another ticker."
+        : `“${ticker}” isn’t in the REIT workbook universe, so Charts has no price data to plot for it.`,
+      variant: "destructive",
+    });
+  }, [toast]);
 
   // Gather all unique tickers used in panes (synthetic tickers have no
   // server-side OHLC to fetch)
@@ -1138,6 +1157,15 @@ export default function Dashboard() {
           return;
         }
 
+        // Every metric came back empty for a plain symbol → no plottable data
+        // (usually an off-universe ticker). Tell the user instead of blanking.
+        if (
+          ticker && !ticker.includes("/") && !isBasketTicker(ticker) && !SYNTHETIC_TICKERS.has(ticker) &&
+          !results.some((r) => r.data && r.data.length > 0)
+        ) {
+          warnNoData(ticker);
+        }
+
         nextPaneId = 1;
         const newPanes: PaneInfo[] = [];
         const newSeries: PlottedSeries[] = [];
@@ -1180,7 +1208,7 @@ export default function Dashboard() {
       }
       setIsLoadingView(false);
     },
-    [activeView, allViews, resolveBasket, tickerDisplayName, pushLayoutHistory]
+    [activeView, allViews, resolveBasket, tickerDisplayName, pushLayoutHistory, warnNoData]
   );
 
   // Remap the CURRENT layout onto a different company (used by the carousel
@@ -1268,25 +1296,35 @@ export default function Dashboard() {
         // Refetch each remapped series and patch it in by id. Per-series so the
         // layout fills progressively; a per-metric failure just leaves that
         // series empty (mirrors loadViewForTicker's isolation).
-        await Promise.all(
+        const fetchedLens = await Promise.all(
           remapped.map(async (s) => {
             try {
               const data = await getMetricSeriesResolved(newTicker, s.metric, resolveBasket, basketCache);
-              if (paneGeneration !== gen) return;
+              if (paneGeneration !== gen) return -1;
               setPlottedSeries((prev) =>
                 prev.map((ps) => (ps.id === s.id ? { ...ps, data } : ps))
               );
+              return data?.length ?? 0;
             } catch (err) {
               console.warn(`No data for ${newTicker} / ${s.metric}`, err);
+              return 0;
             }
           })
         );
+        // Nothing came back for any remapped series → surface it (off-universe).
+        if (
+          paneGeneration === gen && remapped.length > 0 &&
+          !newTicker.includes("/") && !isBasketTicker(newTicker) && !SYNTHETIC_TICKERS.has(newTicker) &&
+          fetchedLens.every((n) => n <= 0)
+        ) {
+          warnNoData(newTicker);
+        }
       } catch (e) {
         console.error("Failed to remap layout", e);
       }
       if (paneGeneration === gen) setIsLoadingView(false);
     },
-    [loadViewForTicker, resolveBasket, tickerDisplayName]
+    [loadViewForTicker, resolveBasket, tickerDisplayName, warnNoData]
   );
 
   // Load the Re-Rating "jump to charts" analysis: 5 stacked panes for one ticker —
