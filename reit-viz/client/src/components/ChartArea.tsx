@@ -3003,6 +3003,20 @@ export default function ChartArea({
                 return next;
               })
             }
+            onCopyIndicatorToPane={(defId, srcPaneId, target) =>
+              // Merge ONE indicator's state into the target pane(s) atomically.
+              setIndicatorsMap(prev => {
+                const src = prev[srcPaneId]?.registry?.[defId];
+                if (!src) return prev;
+                const ids = target === "all" ? panes.filter(p => p.id !== srcPaneId).map(p => p.id) : [target];
+                const next = { ...prev };
+                for (const id of ids) {
+                  const cur = next[id] || {};
+                  next[id] = { ...cur, registry: { ...(cur.registry || {}), [defId]: JSON.parse(JSON.stringify(src)) } };
+                }
+                return next;
+              })
+            }
             onClose={() => setShowIndicators(false)}
             frequency={frequency}
           />

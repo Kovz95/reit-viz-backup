@@ -994,6 +994,16 @@ export function PairsIndicatorsPanel({
       if (c.id !== activeChartId) onChangeIndicators(c.id, { ...activeIndicators });
     }
   };
+  // Copy ONE indicator's state from the active chart to a target chart (or all).
+  const copyIndicatorToChart = (defId: string, target: string | "all") => {
+    const src = activeIndicators.registry?.[defId];
+    if (!src) return;
+    const ids = target === "all" ? charts.filter((c) => c.id !== activeChartId).map((c) => c.id) : [target];
+    for (const id of ids) {
+      const cur = indicatorsMap[id] || {};
+      onChangeIndicators(id, { ...cur, registry: { ...(cur.registry ?? {}), [defId]: JSON.parse(JSON.stringify(src)) } });
+    }
+  };
 
   // Per-section collapse state (Charts-tab parity) — empty set = all expanded.
   const PAIRS_SECTIONS = [
@@ -1573,7 +1583,12 @@ export function PairsIndicatorsPanel({
             className="mb-3"
           />
           {!isCollapsed("More Indicators") && (
-            <RegistryIndicatorControls activeIndicators={activeIndicators} onChange={setIndicators} />
+            <RegistryIndicatorControls
+              activeIndicators={activeIndicators}
+              onChange={setIndicators}
+              copyTargets={charts.length > 1 ? charts.filter((c) => c.id !== activeChartId).map((c) => ({ id: c.id, label: c.title })) : undefined}
+              onCopyIndicator={charts.length > 1 ? (defId, target) => copyIndicatorToChart(defId, target as string | "all") : undefined}
+            />
           )}
         </div>
 

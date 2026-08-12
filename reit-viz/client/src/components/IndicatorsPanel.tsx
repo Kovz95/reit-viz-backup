@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import DateInput from "@/components/DateInput";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -175,6 +176,9 @@ interface IndicatorsPanelProps {
    * Must be a single state write — looping onChangeIndicators clobbers, since
    * the host composes each call off the same (stale) map. */
   onApplyToAllPanes: (indicators: ActiveIndicators) => void;
+  /** Copy ONE indicator from a source pane to a target pane (or "all") — a
+   *  single atomic merge in the host so it doesn't clobber the other panes. */
+  onCopyIndicatorToPane?: (defId: string, srcPaneId: number, target: number | "all") => void;
   onClose: () => void;
   /** Chart bar frequency — threaded to registry controls so param inputs show
    *  frequency-specific defaults. */
@@ -625,6 +629,8 @@ export function RegistryIndicatorControls({
   onChange,
   frequency,
   renderExtra,
+  copyTargets,
+  onCopyIndicator,
 }: {
   activeIndicators: ActiveIndicators;
   onChange: (i: ActiveIndicators) => void;
@@ -635,6 +641,10 @@ export function RegistryIndicatorControls({
    *  enabled (e.g. the Charts panel's Best-Lag helper under Autocorrelation).
    *  Callers without extra context (Pairs/Macro) simply omit it. */
   renderExtra?: (def: IndicatorDef, params: Record<string, number>) => ReactNode;
+  /** Other panes/charts this indicator can be copied to (id + label). */
+  copyTargets?: { id: number | string; label: string }[];
+  /** Copy ONE enabled indicator's state to a target pane/chart (or "all"). */
+  onCopyIndicator?: (defId: string, target: number | string | "all") => void;
 }) {
   const reg = activeIndicators.registry ?? {};
   const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
@@ -685,11 +695,51 @@ export function RegistryIndicatorControls({
                       {def.renderTarget === "pane" ? "sub-pane" : "overlay"}
                     </span>
                   </div>
-                  <Switch
-                    checked={enabled}
-                    onCheckedChange={(on) => update(def.id, { enabled: on })}
-                    data-testid={`toggle-${def.id}`}
-                  />
+                  <div className="flex items-center gap-1">
+                    {enabled && onCopyIndicator && copyTargets && copyTargets.length > 0 && (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            className="p-0.5 text-muted-foreground/60 hover:text-foreground"
+                            title="Copy this indicator to another pane"
+                            data-testid={`copy-indicator-${def.id}`}
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto min-w-[9rem] p-1" align="end">
+                          <div className="text-[9px] text-muted-foreground/70 px-1.5 py-0.5 uppercase tracking-wider truncate">Copy “{def.label}” to</div>
+                          {copyTargets.map((t) => (
+                            <button
+                              key={String(t.id)}
+                              type="button"
+                              className="block w-full text-left text-[11px] px-1.5 py-1 rounded hover:bg-accent truncate"
+                              onClick={() => onCopyIndicator(def.id, t.id)}
+                              data-testid={`copy-indicator-${def.id}-to-${t.id}`}
+                            >
+                              {t.label}
+                            </button>
+                          ))}
+                          {copyTargets.length > 1 && (
+                            <button
+                              type="button"
+                              className="block w-full text-left text-[11px] px-1.5 py-1 mt-0.5 pt-1 rounded hover:bg-accent border-t border-border/50"
+                              onClick={() => onCopyIndicator(def.id, "all")}
+                              data-testid={`copy-indicator-${def.id}-to-all`}
+                            >
+                              All others
+                            </button>
+                          )}
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                    <Switch
+                      checked={enabled}
+                      onCheckedChange={(on) => update(def.id, { enabled: on })}
+                      data-testid={`toggle-${def.id}`}
+                    />
+                  </div>
                 </div>
                 {enabled && def.params.length > 0 && (
                   <div className="flex flex-wrap gap-x-2 gap-y-1 items-center pl-0.5">
@@ -778,6 +828,7 @@ export default function IndicatorsPanel({
   onSelectPane,
   onChangeIndicators,
   onApplyToAllPanes,
+  onCopyIndicatorToPane,
   onClose,
   frequency,
 }: IndicatorsPanelProps) {
@@ -946,6 +997,19 @@ export default function IndicatorsPanel({
                 <Copy className="w-3 h-3" />
                 All
               </Button>
+            )}
+            {panes.length > 1 && selectedPaneId !== null && (
+              <Select value="" onValueChange={(v) => onChangeIndicators(parseInt(v, 10), activeIndicators)}>
+                <SelectTrigger className="h-7 w-auto px-2 text-[10px] gap-1 flex-shrink-0" title="Copy this pane's indicators to one chosen pane" data-testid="copy-indicators-to-pane">
+                  <Copy className="w-3 h-3" />
+                  <span>To…</span>
+                </SelectTrigger>
+                <SelectContent>
+                  {panes.filter((p) => p.id !== selectedPaneId).map((p) => (
+                    <SelectItem key={p.id} value={String(p.id)} data-testid={`copy-set-to-${p.id}`}>{p.label || `Pane ${p.id}`}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
           </div>
           {panes.length > 1 && (
@@ -1634,6 +1698,12 @@ export default function IndicatorsPanel({
                   />
                 ) : null
               }
+              copyTargets={onCopyIndicatorToPane && selectedPaneId !== null
+                ? panes.filter((p) => p.id !== selectedPaneId).map((p) => ({ id: p.id, label: p.label || `Pane ${p.id}` }))
+                : undefined}
+              onCopyIndicator={onCopyIndicatorToPane && selectedPaneId !== null
+                ? (defId, target) => onCopyIndicatorToPane(defId, selectedPaneId, target as number | "all")
+                : undefined}
             />
           )}
         </div>
