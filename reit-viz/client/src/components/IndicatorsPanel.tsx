@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
 
 import { ResizableSidebar } from "@/components/ResizableSidebar";
-import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus, Layers } from "lucide-react";
+import { X, TrendingUp, Copy, ChevronsDownUp, ChevronsUpDown, ChevronDown, Palette, RotateCcw, Plus, Layers, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import DateInput from "@/components/DateInput";
@@ -15,8 +15,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { indicatorPeriods } from "./ChartPane";
-import type { ActiveIndicators, IndicatorOverlay } from "./ChartPane";
+import { indicatorPeriods, getMaLines, setMaLines } from "./ChartPane";
+import type { ActiveIndicators, IndicatorOverlay, MaLine, MaKey } from "./ChartPane";
 import { FindBestMAPanel } from "./FindBestMAPanel";
 import type { PaneInfo } from "@/pages/Dashboard";
 import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
@@ -304,35 +304,39 @@ export function PeriodMultiSelect({
   );
 }
 
-function MaRow({
+/** One moving-average type row. Renders a LIST of line instances, each with its
+ *  own period + compute frequency, so the same period can appear at multiple
+ *  frequencies at once (e.g. SMA 200 daily AND SMA 200 weekly). Exported so
+ *  every charting surface (Charts, Pairs, …) shows the identical control. */
+export function MaRow({
   label,
   presets,
   defaultLen,
-  active,
-  onToggle,
-  freq,
-  onFreqChange,
+  lines,
+  onChangeLines,
 }: {
   label: string;
   presets: number[];
   defaultLen: number;
-  active: number | number[] | undefined;
-  onToggle: (val: number[] | undefined) => void;
-  /** Compute frequency for this MA (weekly/monthly resample the closes first
-   *  — e.g. a monthly SMA overlaid on a daily chart). */
-  freq?: "chart" | "weekly" | "monthly";
-  onFreqChange?: (f: "chart" | "weekly" | "monthly") => void;
+  /** Current line instances (period + freq) for this MA type. */
+  lines: MaLine[];
+  onChangeLines: (lines: MaLine[]) => void;
 }) {
-  const activeList = indicatorPeriods(active);
+  const on = lines.length > 0;
   // Remember the last non-empty selection so the on/off switch restores it.
-  const lastRef = useRef<number[]>(activeList.length ? activeList : [defaultLen]);
-  if (activeList.length) lastRef.current = activeList;
+  const lastRef = useRef<MaLine[]>(lines.length ? lines : [{ p: defaultLen, f: "chart" }]);
+  if (lines.length) lastRef.current = lines;
 
-  // Each MA's colour key is its lowercased label (sma, ema, dema, …). Show an
-  // inline colour dot so the line colour is editable right where it's toggled;
-  // it drives the same store as the "Colors" section, so both stay in sync.
+  // Each MA's colour key is its lowercased label (sma, ema, dema, …). Show
+  // inline colour/width/style controls so the line styling is editable right
+  // where it's toggled; it drives the same store as the "Colors" section.
   const colorKey = label.toLowerCase();
   const hasColor = colorKey in INDICATOR_COLORS;
+
+  const setLine = (i: number, patch: Partial<MaLine>) =>
+    onChangeLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const removeLine = (i: number) => onChangeLines(lines.filter((_, j) => j !== i));
+  const addLine = (p = defaultLen, f: MaLine["f"] = "chart") => onChangeLines([...lines, { p, f }]);
 
   return (
     <div className="space-y-2">
@@ -346,33 +350,73 @@ function MaRow({
           <Label className="text-xs font-medium ml-0.5">{label}</Label>
         </div>
         <Switch
-          checked={activeList.length > 0}
-          onCheckedChange={(on) => onToggle(on ? lastRef.current : undefined)}
-          data-testid={`toggle-${label.toLowerCase()}`}
+          checked={on}
+          onCheckedChange={(v) => onChangeLines(v ? lastRef.current : [])}
+          data-testid={`toggle-${colorKey}`}
         />
       </div>
-      <div className="flex gap-1 items-center flex-wrap">
-        <PeriodMultiSelect
-          presets={presets}
-          active={active}
-          onChange={onToggle}
-          testid={`custom-${label.toLowerCase()}`}
-          min={1}
-        />
-        {onFreqChange && activeList.length > 0 && (
-          <select
-            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-            value={freq ?? "chart"}
-            onChange={(e) => onFreqChange(e.target.value as "chart" | "weekly" | "monthly")}
-            title={`Compute ${label} on the chart's bars, or on weekly/monthly resampled bars (e.g. monthly ${label} on a daily chart)`}
-            data-testid={`freq-${label.toLowerCase()}`}
-          >
-            <option value="chart">Chart</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        )}
-      </div>
+      {on && (
+        <div className="space-y-1 pl-0.5">
+          {lines.map((l, i) => (
+            <div key={i} className="flex items-center gap-1" data-testid={`ma-line-${colorKey}-${i}`}>
+              <Input
+                type="number"
+                className="h-6 w-16 text-[10px] px-1.5"
+                value={l.p}
+                min={1}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v > 0) setLine(i, { p: v });
+                }}
+                data-testid={`ma-period-${colorKey}-${i}`}
+              />
+              <select
+                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                value={l.f ?? "chart"}
+                onChange={(e) => setLine(i, { f: e.target.value as MaLine["f"] })}
+                title={`Compute this ${label} line on the chart's bars, or on weekly/monthly resampled bars`}
+                data-testid={`ma-freq-${colorKey}-${i}`}
+              >
+                <option value="chart">Chart</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => removeLine(i)}
+                className="p-0.5 text-muted-foreground/60 hover:text-foreground"
+                title={`Remove this ${label} line`}
+                data-testid={`ma-remove-${colorKey}-${i}`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              type="button"
+              onClick={() => addLine()}
+              className="h-6 px-1.5 text-[10px] rounded border border-input flex items-center gap-1 hover:bg-accent"
+              title={`Add another ${label} line (own period + frequency)`}
+              data-testid={`ma-add-${colorKey}`}
+            >
+              <Plus className="w-3 h-3" /> Add line
+            </button>
+            {presets.map((pv) => (
+              <button
+                key={pv}
+                type="button"
+                onClick={() => addLine(pv)}
+                className="h-6 px-1.5 text-[10px] rounded border border-input hover:bg-accent"
+                title={`Add a ${label} ${pv} (chart freq)`}
+                data-testid={`ma-preset-${colorKey}-${pv}`}
+              >
+                +{pv}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -647,6 +691,7 @@ export function RegistryIndicatorControls({
   onCopyIndicator?: (defId: string, target: number | string | "all") => void;
 }) {
   const reg = activeIndicators.registry ?? {};
+  const { colors } = useIndicatorColors();
   const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
     const cur = reg[id] ?? {};
     onChange({ ...activeIndicators, registry: { ...reg, [id]: { ...cur, ...patch } } });
@@ -811,6 +856,34 @@ export function RegistryIndicatorControls({
                     ))}
                   </div>
                 )}
+                {enabled && def.components && def.components.length > 0 && (
+                  <div className="flex flex-wrap gap-1 items-center pl-0.5" data-testid={`components-${def.id}`}>
+                    <span className="text-[9px] text-muted-foreground/70">Lines</span>
+                    {def.components.map((c) => {
+                      const hidden = (st?.hiddenParts ?? []).includes(c.key);
+                      const tint = c.colorKey ? colors[c.colorKey as IndicatorColorKey] : undefined;
+                      return (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => {
+                            const cur = new Set(reg[def.id]?.hiddenParts ?? []);
+                            if (cur.has(c.key)) cur.delete(c.key);
+                            else cur.add(c.key);
+                            update(def.id, { hiddenParts: [...cur] });
+                          }}
+                          className={`flex items-center gap-1 h-6 px-1.5 rounded border border-input text-[10px] transition-opacity ${hidden ? "opacity-40" : ""}`}
+                          title={hidden ? `Show ${c.label}` : `Hide ${c.label}`}
+                          data-testid={`component-${def.id}-${c.key}`}
+                        >
+                          {tint && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: tint }} />}
+                          {hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          {c.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {enabled && renderExtra?.(def, p)}
               </div>
             );
@@ -864,16 +937,14 @@ export default function IndicatorsPanel({
 
   const activeTicker = panes.find((p) => p.id === selectedPaneId)?.ticker ?? null;
 
-  // Per-MA compute-frequency props for MaRow (monthly SMA on a daily chart, …).
-  // "chart" clears the override so the stored map stays sparse.
-  const maFreqProps = (key: keyof NonNullable<ActiveIndicators["maFreq"]>) => ({
-    freq: activeIndicators.maFreq?.[key],
-    onFreqChange: (f: "chart" | "weekly" | "monthly") => {
-      const next = { ...(activeIndicators.maFreq ?? {}) };
-      if (f === "chart") delete next[key];
-      else next[key] = f;
-      setActiveIndicators({ ...activeIndicators, maFreq: Object.keys(next).length ? next : undefined });
-    },
+  // Per-instance MA line props for MaRow. Each MA type holds a LIST of
+  // {period, freq} instances (so the same period can appear at more than one
+  // frequency — e.g. SMA 200 daily AND SMA 200 weekly). Writes the per-instance
+  // `maLines` map (source of truth) and keeps the legacy period field in sync so
+  // the on/off switch and any legacy readers still work. See getMaLines/setMaLines.
+  const maLinesProps = (key: MaKey) => ({
+    lines: getMaLines(activeIndicators, key),
+    onChangeLines: (lines: MaLine[]) => setActiveIndicators(setMaLines(activeIndicators, key, lines)),
   });
 
   // Copy the current pane's indicators to every pane (one-time, atomic).
@@ -1076,108 +1147,84 @@ export default function IndicatorsPanel({
               label="SMA"
               presets={[20, 50, 100, 200]}
               defaultLen={50}
-              active={activeIndicators.sma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, sma: v })}
-              {...maFreqProps("sma")}
+              {...maLinesProps("sma")}
             />
 
             <MaRow
               label="EMA"
               presets={[9, 21, 50, 100]}
               defaultLen={21}
-              active={activeIndicators.ema}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, ema: v })}
-              {...maFreqProps("ema")}
+              {...maLinesProps("ema")}
             />
 
             <MaRow
               label="HMA"
               presets={[9, 20, 50, 100]}
               defaultLen={20}
-              active={activeIndicators.hma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, hma: v })}
-              {...maFreqProps("hma")}
+              {...maLinesProps("hma")}
             />
 
             <MaRow
               label="WMA"
               presets={[9, 20, 50, 100]}
               defaultLen={20}
-              active={activeIndicators.wma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, wma: v })}
-              {...maFreqProps("wma")}
+              {...maLinesProps("wma")}
             />
 
             <MaRow
               label="DEMA"
               presets={[9, 21, 50, 100]}
               defaultLen={21}
-              active={activeIndicators.dema}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, dema: v })}
-              {...maFreqProps("dema")}
+              {...maLinesProps("dema")}
             />
 
             <MaRow
               label="TEMA"
               presets={[9, 21, 50, 100]}
               defaultLen={21}
-              active={activeIndicators.tema}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, tema: v })}
-              {...maFreqProps("tema")}
+              {...maLinesProps("tema")}
             />
 
             <MaRow
               label="KAMA"
               presets={[10, 20, 50, 100]}
               defaultLen={20}
-              active={activeIndicators.kama}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, kama: v })}
-              {...maFreqProps("kama")}
+              {...maLinesProps("kama")}
             />
 
             <MaRow
               label="FRAMA"
               presets={[16, 26, 50, 100]}
               defaultLen={26}
-              active={activeIndicators.frama}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, frama: v })}
-              {...maFreqProps("frama")}
+              {...maLinesProps("frama")}
             />
 
             <MaRow
               label="T3"
               presets={[5, 10, 21, 50]}
               defaultLen={10}
-              active={activeIndicators.t3}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, t3: v })}
-              {...maFreqProps("t3")}
+              {...maLinesProps("t3")}
             />
 
             <MaRow
               label="ALMA"
               presets={[9, 21, 50, 100]}
               defaultLen={21}
-              active={activeIndicators.alma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, alma: v })}
-              {...maFreqProps("alma")}
+              {...maLinesProps("alma")}
             />
 
             <MaRow
               label="LSMA"
               presets={[14, 25, 50, 100]}
               defaultLen={25}
-              active={activeIndicators.lsma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, lsma: v })}
-              {...maFreqProps("lsma")}
+              {...maLinesProps("lsma")}
             />
 
             <MaRow
               label="SLSMA"
               presets={[14, 25, 50, 100]}
               defaultLen={25}
-              active={activeIndicators.slsma}
-              onToggle={(v) => setActiveIndicators({ ...activeIndicators, slsma: v })}
-              {...maFreqProps("slsma")}
+              {...maLinesProps("slsma")}
             />
 
             <FindBestMAPanel

@@ -212,6 +212,16 @@ export function overlayPaneLabel(o: IndicatorOverlay): string {
   return `${o.type.toUpperCase()}${o.period} on ${src}`;
 }
 
+/** Per-MA compute frequency. Absent/"chart" = the pane's own bars. */
+export type MaFreqOpt = "chart" | "weekly" | "monthly";
+/** One moving-average line instance: a period at a compute frequency. Storing a
+ *  LIST of these per MA type is what lets the SAME period exist at more than one
+ *  frequency at once (e.g. SMA 200 daily AND SMA 200 weekly on one chart). */
+export type MaLine = { p: number; f?: MaFreqOpt };
+/** The 12 moving-average overlay types (keys into ActiveIndicators). */
+export const MA_KEYS = ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const;
+export type MaKey = typeof MA_KEYS[number];
+
 export interface ActiveIndicators {
   /** Hover lookback-window lines (dashed vline N bars behind the crosshair
    *  per period indicator). Default ON; set false to hide. */
@@ -223,6 +233,13 @@ export interface ActiveIndicators {
    *  (e.g. monthly SMA overlaid on a daily chart; points land on period-end
    *  dates of the chart axis). Absent/"chart" = the pane's own bars. */
   maFreq?: Partial<Record<"sma" | "ema" | "hma" | "wma" | "dema" | "tema" | "kama" | "frama" | "t3" | "alma" | "lsma" | "slsma", "chart" | "weekly" | "monthly">>;
+  /** Per-instance MA lines (period + own compute frequency). When present for a
+   *  type, this is the source of truth for its lines and supports the SAME period
+   *  at multiple frequencies. When absent, lines are derived from the legacy
+   *  period list (`sma`/`ema`/…) + single `maFreq[type]` — see getMaLines. The
+   *  legacy period field is kept in sync (periods only) so the on/off switch and
+   *  any legacy readers keep working. */
+  maLines?: Partial<Record<"sma" | "ema" | "hma" | "wma" | "dema" | "tema" | "kama" | "frama" | "t3" | "alma" | "lsma" | "slsma", MaLine[]>>;
   // MA overlays: one period or a list (one line per period — see indicatorPeriods).
   sma?: number | number[];
   ema?: number | number[];
@@ -271,6 +288,43 @@ export interface ActiveIndicators {
    *  keyed by indicator id. Each new indicator is one entry here at runtime —
    *  no typed field per indicator. */
   registry?: Record<string, RegistryIndicatorState>;
+}
+
+/** Resolve the MA line instances (period + frequency) for one MA type.
+ *  Prefers the per-instance `maLines`; otherwise derives them from the legacy
+ *  period list + single `maFreq[type]` so saved workspaces render unchanged.
+ *  Chart-frequency is normalized to `f: "chart"`. */
+export function getMaLines(ind: ActiveIndicators, key: MaKey): MaLine[] {
+  const explicit = ind.maLines?.[key];
+  if (explicit && explicit.length) {
+    return explicit
+      .filter((l) => l && typeof l.p === "number" && Number.isFinite(l.p) && l.p > 0)
+      .map((l) => ({ p: l.p, f: l.f === "weekly" || l.f === "monthly" ? l.f : "chart" }));
+  }
+  const f: MaFreqOpt = ind.maFreq?.[key] ?? "chart";
+  return indicatorPeriods(ind[key] as number | number[] | undefined).map((p) => ({ p, f }));
+}
+
+/** Write the MA line instances for one type. Stores them in `maLines` (the
+ *  per-instance source of truth), keeps the legacy period field (`sma`/…) in
+ *  sync with the periods for the on/off switch + legacy readers, and drops the
+ *  now-superseded single `maFreq[key]`. Returns a new ActiveIndicators. */
+export function setMaLines(ind: ActiveIndicators, key: MaKey, lines: MaLine[]): ActiveIndicators {
+  const clean = lines
+    .filter((l) => l && typeof l.p === "number" && Number.isFinite(l.p) && l.p > 0)
+    .map((l) => ({ p: l.p, ...(l.f && l.f !== "chart" ? { f: l.f } : {}) }));
+  const next: ActiveIndicators = { ...ind };
+  const periods = clean.map((l) => l.p);
+  (next as Record<string, unknown>)[key] = periods.length ? (periods.length === 1 ? periods[0] : periods) : undefined;
+  const ml = { ...(ind.maLines ?? {}) };
+  if (clean.length) ml[key] = clean; else delete ml[key];
+  next.maLines = Object.keys(ml).length ? ml : undefined;
+  if (ind.maFreq?.[key]) {
+    const mf = { ...ind.maFreq };
+    delete mf[key];
+    next.maFreq = Object.keys(mf).length ? mf : undefined;
+  }
+  return next;
 }
 
 interface Drawing {
@@ -3292,28 +3346,29 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         );
       };
 
-      // ── SMA / EMA / HMA (one line per period — see indicatorPeriods) ──
-      // Per-MA compute frequency (activeIndicators.maFreq): weekly/monthly
-      // resample the closes first so a daily chart can carry a monthly SMA —
-      // same pattern as rsiFreq (points on period-end dates of the chart axis).
+      // ── SMA / EMA / HMA (one line per instance — see getMaLines) ──
+      // Per-instance compute frequency: weekly/monthly resample the closes first
+      // so a daily chart can carry a monthly SMA — same pattern as rsiFreq (points
+      // on period-end dates of the chart axis). Each MA type can hold multiple
+      // instances at DIFFERENT frequencies (e.g. SMA 200 daily AND 200 weekly),
+      // so the source is resolved per instance from its own freq, not per type.
       const maFreqSrcCache: Partial<Record<"weekly" | "monthly", typeof closeData>> = {};
-      const maSourceFor = (key: string): { src: typeof closeData; suffix: string } => {
-        const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
-        if (mf !== "weekly" && mf !== "monthly") return { src: closeData, suffix: "" };
+      const maSourceFor = (freq: MaFreqOpt): { src: typeof closeData; suffix: string } => {
+        if (freq !== "weekly" && freq !== "monthly") return { src: closeData, suffix: "" };
         // A target at/below the primary series' effective bar frequency
         // (chart freq, or the per-series/pane display freq; hourly epoch axes
         // too) is a no-op — compute on the series' bars and drop the W/M
         // suffix so e.g. "weekly SMA" on a monthly series isn't mislabeled.
-        if (chartBarsPerIndicatorBar(primaryFreqEff ?? (chartConfig as { frequency?: string }).frequency, mf) <= 1) {
+        if (chartBarsPerIndicatorBar(primaryFreqEff ?? (chartConfig as { frequency?: string }).frequency, freq) <= 1) {
           return { src: closeData, suffix: "" };
         }
-        if (!maFreqSrcCache[mf]) {
-          maFreqSrcCache[mf] = resampleIndicatorBars(
+        if (!maFreqSrcCache[freq]) {
+          maFreqSrcCache[freq] = resampleIndicatorBars(
             closeData.map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
-            mf,
+            freq,
           ).map((b) => ({ time: b.time as unknown as Time, value: b.close })) as typeof closeData;
         }
-        return { src: maFreqSrcCache[mf]!, suffix: mf === "weekly" ? "W" : "M" };
+        return { src: maFreqSrcCache[freq]!, suffix: freq === "weekly" ? "W" : "M" };
       };
       const CORE_MA: Array<["sma" | "ema" | "hma", string, (d: typeof closeData, p: number) => typeof closeData]> = [
         ["sma", "SMA", computeSMA],
@@ -3321,8 +3376,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         ["hma", "HMA", computeHMA],
       ];
       for (const [key, name, compute] of CORE_MA) {
-        const { src, suffix } = maSourceFor(key);
-        indicatorPeriods(activeIndicators[key]).forEach((p, pi) => {
+        getMaLines(activeIndicators, key).forEach(({ p, f }, pi) => {
+          const { src, suffix } = maSourceFor(f ?? "chart");
           const maData = compute(src, p);
           if (maData.length === 0) return;
           const grad = !!IC_G[key];
@@ -3353,9 +3408,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         ["slsma", "SLSMA", 2, IC.slsma],
       ];
       for (const [field, maType, width, color] of EXTRA_MA) {
-        const { src, suffix } = maSourceFor(field as string);
-        const srcVals = src.map((d: any) => d.value as number);
-        indicatorPeriods(activeIndicators[field] as number | number[] | undefined).forEach((period, pi) => {
+        getMaLines(activeIndicators, field as MaKey).forEach(({ p: period, f }, pi) => {
+          const { src, suffix } = maSourceFor(f ?? "chart");
+          const srcVals = src.map((d: any) => d.value as number);
           const series = computeMaByType(srcVals, period, maType);
           const maData: { time: Time; value: number }[] = [];
           for (let i = 0; i < src.length; i++) {
@@ -3457,7 +3512,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             bars = resampleIndicatorBars(bars, regSt.freq);
           }
           try {
-            def.renderOverlay(octx, bars, resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily"));
+            const octxP = def.components?.length
+              ? { ...octx, hiddenParts: new Set(regSt.hiddenParts ?? []) }
+              : octx;
+            def.renderOverlay(octxP, bars, resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily"));
           } catch {
             // Never let one indicator's failure blank the whole chart.
           }
@@ -3486,11 +3544,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lbEntries.push({ bars: Math.round(bars * paneBarMult), color, label });
           }
         };
-        for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const) {
-          // A weekly/monthly maFreq means the period counts RESAMPLED bars —
-          // scale to chart bars so the line marks the real span.
-          const maMult = chartBarsPerIndicatorBar(lbBaseFreq, activeIndicators.maFreq?.[k]);
-          for (const p of indicatorPeriods((activeIndicators as any)[k])) {
+        for (const k of MA_KEYS) {
+          // A weekly/monthly MA line means the period counts RESAMPLED bars —
+          // scale each instance to chart bars so the line marks the real span.
+          for (const { p, f } of getMaLines(activeIndicators, k)) {
+            const maMult = chartBarsPerIndicatorBar(lbBaseFreq, f === "chart" ? undefined : f);
             pushLb(p * maMult, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
           }
         }
@@ -3941,6 +3999,27 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
       } catch {
         try { chart.timeScale().fitContent(); } catch {}
+      }
+    }
+
+    // Re-apply the toolbar "Labels" / "Px line" toggle state to every series we
+    // just (re)built. Indicator series are cleared and recreated on EVERY run of
+    // this effect — including runs triggered by panning/crosshair moves (a
+    // click-drag fires subscribeCrosshairMove, which re-renders ChartArea and
+    // feeds fresh-reference props like srLevelResults/detectorOhlc back in here).
+    // The dedicated toggle effect below only re-runs when the toggle itself
+    // changes, so without re-applying here, freshly-recreated series would
+    // resurrect hidden labels/price lines after a drag. Passing the price-line
+    // flag as a real boolean forces it onto ALL lines (indicators included).
+    {
+      const labelsOn = (chartConfig as { axisLabels?: boolean }).axisLabels !== false;
+      const pxLinesOn = (chartConfig as { priceLines?: boolean }).priceLines !== false;
+      for (const [key, s] of seriesMapRef.current) {
+        if (key.endsWith(":markers")) continue;
+        setSeriesAxisLabels(s, labelsOn, pxLinesOn);
+      }
+      for (const s of indicatorSeriesRef.current) {
+        setSeriesAxisLabels(s, labelsOn, pxLinesOn);
       }
     }
 

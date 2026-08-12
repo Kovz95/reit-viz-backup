@@ -101,6 +101,9 @@ export type RegistryIndicatorState = {
    *  indicator runs (results plot on period-end dates of the chart axis).
    *  Default "chart" = the pane's own bar frequency. */
   freq?: "chart" | "weekly" | "monthly";
+  /** Component keys hidden by the user (see IndicatorDef.components) — e.g. the
+   *  individual Ichimoku lines / cloud. Absent = all components visible. */
+  hiddenParts?: string[];
 };
 
 /** Resample bars to weekly/monthly periods. Each output bar carries the
@@ -157,6 +160,10 @@ export type OverlayRenderCtx = {
   colors: Colors;
   baseLabel: string;
   register: (s: ISeriesApi<any>) => void;
+  /** Component keys the user has hidden (see IndicatorDef.components). A
+   *  multi-part overlay (e.g. Ichimoku) checks this to skip drawing individual
+   *  lines / fills. Absent/empty = draw everything. */
+  hiddenParts?: Set<string>;
 };
 
 export type IndicatorDef = {
@@ -176,6 +183,12 @@ export type IndicatorDef = {
    *  the sub-chart renders the indicator once per value, extra instances in
    *  shaded colors. Only meaningful for renderTarget "pane". */
   multiInstanceParam?: string;
+  /** Individually show/hide-able sub-parts of a multi-line indicator (e.g. the
+   *  five Ichimoku lines + the cloud). When set, the panel renders a toggle chip
+   *  per component; hidden keys land in RegistryIndicatorState.hiddenParts and
+   *  are passed to renderOverlay/renderPane via ctx.hiddenParts. `colorKey` (if
+   *  given) tints the chip so it reads like the line it controls. */
+  components?: { key: string; label: string; colorKey?: string }[];
 };
 
 /** Resolve effective params for an indicator: state overrides, else the
@@ -713,10 +726,20 @@ const ICHIMOKU: IndicatorDef = {
     "ichimoku_lead_b",
     "ichimoku_lagging",
   ],
+  // Each Ichimoku line and the cloud can be shown/hidden independently.
+  components: [
+    { key: "tenkan", label: "Tenkan", colorKey: "ichimoku_conversion" },
+    { key: "kijun", label: "Kijun", colorKey: "ichimoku_base" },
+    { key: "senkouA", label: "Senkou A", colorKey: "ichimoku_lead_a" },
+    { key: "senkouB", label: "Senkou B", colorKey: "ichimoku_lead_b" },
+    { key: "chikou", label: "Chikou", colorKey: "ichimoku_lagging" },
+    { key: "cloud", label: "Cloud", colorKey: "ichimoku_lead_a" },
+  ],
   renderOverlay: (ctx, bars, p) => {
     const ich = computeIchimoku(bars, p.conv, p.base, p.spanB, p.displacement);
     if (!ich.conversion.length) return;
     const disp = p.displacement;
+    const hidden = ctx.hiddenParts ?? new Set<string>();
 
     const dates = bars.map((b) => b.time);
     const dateIndex = new Map(dates.map((t, i) => [t, i]));
@@ -735,7 +758,10 @@ const ICHIMOKU: IndicatorDef = {
       return out;
     };
 
-    const draw = (data: LinePoint[], color: string, title: string, style?: LineStyle) => {
+    // `visible=false` keeps the series (so the cloud primitive still has a
+    // carrier + price scale) but hides its line — used when the cloud is shown
+    // while its Senkou A line is toggled off.
+    const draw = (data: LinePoint[], color: string, title: string, style?: LineStyle, visible = true) => {
       if (!data.length) return undefined;
       const s = ctx.chart.addSeries(LineSeries, {
         color,
@@ -743,6 +769,7 @@ const ICHIMOKU: IndicatorDef = {
         title,
         lastValueVisible: false,
         priceLineVisible: false,
+        lineVisible: visible,
         ...(style !== undefined ? { lineStyle: style } : {}),
       });
       s.setData(data);
@@ -753,14 +780,21 @@ const ICHIMOKU: IndicatorDef = {
     const leadAData = shift(ich.leadA, disp);
     const leadBData = shift(ich.leadB, disp);
 
-    draw(asLine(ich.conversion), ctx.colors.ichimoku_conversion, `Tenkan ${p.conv}${ctx.baseLabel}`);
-    draw(asLine(ich.base), ctx.colors.ichimoku_base, `Kijun ${p.base}`);
-    const leadASeries = draw(leadAData, ctx.colors.ichimoku_lead_a, "Senkou A", LineStyle.Solid);
-    draw(leadBData, ctx.colors.ichimoku_lead_b, "Senkou B", LineStyle.Solid);
-    draw(shift(ich.lagging, -disp), ctx.colors.ichimoku_lagging, "Chikou", LineStyle.Dotted);
+    if (!hidden.has("tenkan")) draw(asLine(ich.conversion), ctx.colors.ichimoku_conversion, `Tenkan ${p.conv}${ctx.baseLabel}`);
+    if (!hidden.has("kijun")) draw(asLine(ich.base), ctx.colors.ichimoku_base, `Kijun ${p.base}`);
+    if (!hidden.has("chikou")) draw(shift(ich.lagging, -disp), ctx.colors.ichimoku_lagging, "Chikou", LineStyle.Dotted);
+    if (!hidden.has("senkouB")) draw(leadBData, ctx.colors.ichimoku_lead_b, "Senkou B", LineStyle.Solid);
+
+    // Senkou A doubles as the cloud primitive's carrier — draw it (possibly
+    // line-hidden) whenever either it or the cloud is visible.
+    const wantSenkouA = !hidden.has("senkouA");
+    const wantCloud = !hidden.has("cloud");
+    const leadASeries = (wantSenkouA || wantCloud)
+      ? draw(leadAData, ctx.colors.ichimoku_lead_a, "Senkou A", LineStyle.Solid, wantSenkouA)
+      : undefined;
 
     // Fill the kumo cloud between the two leading spans (behind the lines).
-    if (leadASeries && leadAData.length > 1 && leadBData.length > 1) {
+    if (wantCloud && leadASeries && leadAData.length > 1 && leadBData.length > 1) {
       const cloud = new IchimokuCloudPrimitive(
         leadAData as unknown as CloudPoint[],
         leadBData as unknown as CloudPoint[],

@@ -76,8 +76,8 @@ import { computeMaByType, type MaType } from "@/lib/maEngine";
 import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
-import type { ActiveIndicators } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays, SectionHeader } from "@/components/IndicatorsPanel";
+import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays, SectionHeader, MaRow } from "@/components/IndicatorsPanel";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { downsampleSeries } from "@/lib/chartFrequency";
@@ -86,7 +86,7 @@ import { getPatternSettings } from "@/lib/patternSettings";
 import PatternsPanel from "@/components/PatternsPanel";
 import DateInput from "@/components/DateInput";
 import { ResizableSidebar } from "@/components/ResizableSidebar";
-import { indicatorPeriods, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
+import { indicatorPeriods, getMaLines, setMaLines, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
 import type { IndicatorOverlay } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
@@ -1178,18 +1178,10 @@ export function PairsIndicatorsPanel({
           ["ALMA", "alma", [9, 21, 50, 100], 21],
           ["LSMA", "lsma", [14, 25, 50, 100], 25],
           ["SLSMA", "slsma", [14, 25, 50, 100], 25],
-        ] as [string, keyof ActiveIndicators, number[], number][]).map(([label, field, presets, defaultLen]) => (
-          <MiniMaRow key={field} label={label} presets={presets} defaultLen={defaultLen}
-            active={activeIndicators[field] as number | number[] | undefined}
-            onToggle={(v) => setIndicators({ ...activeIndicators, [field]: v })}
-            freq={activeIndicators.maFreq?.[field as keyof NonNullable<ActiveIndicators["maFreq"]>]}
-            onFreqChange={(f) => {
-              const key = field as keyof NonNullable<ActiveIndicators["maFreq"]>;
-              const next = { ...(activeIndicators.maFreq ?? {}) };
-              if (f === "chart") delete next[key];
-              else next[key] = f;
-              setIndicators({ ...activeIndicators, maFreq: Object.keys(next).length ? next : undefined });
-            }} />
+        ] as [string, MaKey, number[], number][]).map(([label, field, presets, defaultLen]) => (
+          <MaRow key={field} label={label} presets={presets} defaultLen={defaultLen}
+            lines={getMaLines(activeIndicators, field)}
+            onChangeLines={(lines) => setIndicators(setMaLines(activeIndicators, field, lines))} />
         ))}
 
         {/* ───── Oscillators ───── */}
@@ -1633,49 +1625,6 @@ export function PairsIndicatorsPanel({
         <IndicatorColorEditor />
       </div>
     </ResizableSidebar>
-  );
-}
-
-function MiniMaRow({ label, presets, defaultLen, active, onToggle, freq, onFreqChange }: {
-  label: string; presets: number[]; defaultLen: number;
-  active: number | number[] | undefined; onToggle: (v: number[] | undefined) => void;
-  /** Compute frequency for this MA (weekly/monthly resample first — e.g. a
-   *  monthly SMA on the daily ratio chart). Charts-panel parity. */
-  freq?: "chart" | "weekly" | "monthly";
-  onFreqChange?: (f: "chart" | "weekly" | "monthly") => void;
-}) {
-  const activeList = indicatorPeriods(active);
-  const lastRef = useRef<number[]>(activeList.length ? activeList : [defaultLen]);
-  if (activeList.length) lastRef.current = activeList;
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs font-medium">{label}</Label>
-        <Switch checked={activeList.length > 0} onCheckedChange={(on) => onToggle(on ? lastRef.current : undefined)} />
-      </div>
-      <div className="flex gap-1 items-center flex-wrap">
-        <PeriodMultiSelect
-          presets={presets}
-          active={active}
-          onChange={onToggle}
-          testid={`custom-${label.toLowerCase()}`}
-          min={1}
-        />
-        {onFreqChange && activeList.length > 0 && (
-          <select
-            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-            value={freq ?? "chart"}
-            onChange={(e) => onFreqChange(e.target.value as "chart" | "weekly" | "monthly")}
-            title={`Compute ${label} on the chart's bars, or on weekly/monthly resampled bars (e.g. monthly ${label} on the daily ratio)`}
-            data-testid={`pairs-freq-${label.toLowerCase()}`}
-          >
-            <option value="chart">Chart</option>
-            <option value="weekly">W</option>
-            <option value="monthly">M</option>
-          </select>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -2918,75 +2867,69 @@ export function MiniChart({
       // Shadow: every indicator/overlay/fractal computation in this block runs
       // on the finite subset (null warm-up bars excluded).
       const data = finiteData;
-      // Per-MA compute frequency (activeIndicators.maFreq, Charts parity):
-      // weekly/monthly resample the series first so a daily ratio chart can
-      // carry a monthly SMA — points land on period-end dates of the axis.
+      // Per-instance MA compute frequency (Charts parity): each MA line carries
+      // its own frequency, so the same period can appear at multiple frequencies
+      // (e.g. SMA 200 daily AND 200 weekly). weekly/monthly resample the series
+      // first — points land on period-end dates of the axis.
       const maFreqSrcCache: Partial<Record<"weekly" | "monthly", typeof data>> = {};
-      const maSourceFor = (key: string): { src: typeof data; suffix: string } => {
-        const mf = activeIndicators.maFreq?.[key as keyof NonNullable<ActiveIndicators["maFreq"]>];
-        if (mf !== "weekly" && mf !== "monthly") return { src: data, suffix: "" };
-        if (!maFreqSrcCache[mf]) {
-          maFreqSrcCache[mf] = resampleIndicatorBars(
+      const maSourceFor = (freq: MaLine["f"]): { src: typeof data; suffix: string } => {
+        if (freq !== "weekly" && freq !== "monthly") return { src: data, suffix: "" };
+        if (!maFreqSrcCache[freq]) {
+          maFreqSrcCache[freq] = resampleIndicatorBars(
             data.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
-            mf,
+            freq,
           ).map((b) => ({ time: b.time, value: b.close })) as typeof data;
         }
-        return { src: maFreqSrcCache[mf]!, suffix: mf === "weekly" ? "W" : "M" };
+        return { src: maFreqSrcCache[freq]!, suffix: freq === "weekly" ? "W" : "M" };
       };
-      // SMA (one line per period)
-      {
-        const { src, suffix } = maSourceFor("sma");
-        for (const p of indicatorPeriods(activeIndicators.sma)) {
-          const smaData = computeSMA(src, p);
-          if (smaData.length > 0) {
-            const s = chart.addSeries(LineSeries, {
-              color: IC.sma, lineWidth: 1,
-              title: `SMA ${p}${suffix}`, lineStyle: LineStyle.Dashed,
-            });
-            s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
-          }
+      // SMA (one line per instance)
+      for (const { p, f } of getMaLines(activeIndicators, "sma")) {
+        const { src, suffix } = maSourceFor(f);
+        const smaData = computeSMA(src, p);
+        if (smaData.length > 0) {
+          const s = chart.addSeries(LineSeries, {
+            color: IC.sma, lineWidth: 1,
+            title: `SMA ${p}${suffix}`, lineStyle: LineStyle.Dashed,
+          });
+          s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
         }
       }
-      // EMA (one line per period)
-      {
-        const { src, suffix } = maSourceFor("ema");
-        for (const p of indicatorPeriods(activeIndicators.ema)) {
-          const emaData = computeEMA(src, p);
-          if (emaData.length > 0) {
-            const s = chart.addSeries(LineSeries, {
-              color: IC.ema, lineWidth: 1,
-              title: `EMA ${p}${suffix}`,
-            });
-            s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
-          }
+      // EMA (one line per instance)
+      for (const { p, f } of getMaLines(activeIndicators, "ema")) {
+        const { src, suffix } = maSourceFor(f);
+        const emaData = computeEMA(src, p);
+        if (emaData.length > 0) {
+          const s = chart.addSeries(LineSeries, {
+            color: IC.ema, lineWidth: 1,
+            title: `EMA ${p}${suffix}`,
+          });
+          s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
         }
       }
-      // HMA (one line per period)
-      {
-        const { src, suffix } = maSourceFor("hma");
-        for (const p of indicatorPeriods(activeIndicators.hma)) {
-          const hmaData = computeHMA(src, p);
-          if (hmaData.length > 0) {
-            const s = chart.addSeries(LineSeries, {
-              color: IC.hma, lineWidth: 2,
-              title: `HMA ${p}${suffix}`,
-            });
-            s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
-          }
+      // HMA (one line per instance)
+      for (const { p, f } of getMaLines(activeIndicators, "hma")) {
+        const { src, suffix } = maSourceFor(f);
+        const hmaData = computeHMA(src, p);
+        if (hmaData.length > 0) {
+          const s = chart.addSeries(LineSeries, {
+            color: IC.hma, lineWidth: 2,
+            title: `HMA ${p}${suffix}`,
+          });
+          s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
         }
       }
       // Extended MAs (WMA/DEMA/TEMA/KAMA/FRAMA/T3/ALMA/LSMA/SLSMA) — same
       // engine + colors as the Charts tab.
       {
-        const EXTRA_MA: Array<[keyof ActiveIndicators, MaType, number]> = [
+        const EXTRA_MA: Array<[MaKey, MaType, number]> = [
           ["wma", "WMA", 1], ["dema", "DEMA", 2], ["tema", "TEMA", 2],
           ["kama", "KAMA", 2], ["frama", "FRAMA", 2], ["t3", "T3", 2],
           ["alma", "ALMA", 1], ["lsma", "LSMA", 1], ["slsma", "SLSMA", 2],
         ];
         for (const [field, maType, width] of EXTRA_MA) {
-          const { src, suffix } = maSourceFor(field as string);
-          const srcVals = src.map((d) => d.value);
-          for (const p of indicatorPeriods(activeIndicators[field] as number | number[] | undefined)) {
+          for (const { p, f } of getMaLines(activeIndicators, field)) {
+            const { src, suffix } = maSourceFor(f);
+            const srcVals = src.map((d) => d.value);
             const series = computeMaByType(srcVals, p, maType);
             const maData: { time: Time; value: number }[] = [];
             for (let i = 0; i < src.length; i++) {
@@ -3130,6 +3073,7 @@ export function MiniChart({
                   colors: IC as unknown as Record<string, string>,
                   baseLabel: "",
                   register: () => {},
+                  ...(def.components?.length ? { hiddenParts: new Set(st?.hiddenParts ?? []) } : {}),
                 },
                 defBars,
                 p,

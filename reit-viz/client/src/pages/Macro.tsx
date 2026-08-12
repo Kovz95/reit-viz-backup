@@ -11,7 +11,7 @@ import {
   LineStyle,
   PriceScaleMode,
 } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, Time, LineWidth } from "lightweight-charts";
 import { PANE_HANDLERS, PANE_TIME_SCALE, makeViewPreserver, seriesFingerprint } from "@/lib/chartView";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -30,8 +30,9 @@ import {
   X as XIcon,
 } from "lucide-react";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
-import { indicatorPeriods } from "@/components/ChartPane";
-import type { ActiveIndicators } from "@/components/ChartPane";
+import { indicatorPeriods, getMaLines } from "@/components/ChartPane";
+import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
+import { computeMaByType, type MaType } from "@/lib/maEngine";
 import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
 import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
@@ -289,86 +290,69 @@ function MacroPane({
     indicatorSeriesRef.current = [];
     const primaryData = resolvedSeries[0]?.data;
     if (primaryData && primaryData.length > 0) {
-      // SMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.sma)) {
-        const smaData = computeSMA(primaryData, p);
-        if (smaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: INDICATOR_COLORS.sma,
-            lineWidth: 1,
-            title: `SMA ${p}`,
-            lineStyle: LineStyle.Dashed,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          s.setData(smaData.map(d => ({ time: d.time as Time, value: d.value })));
-          indicatorSeriesRef.current.push(s);
+      // Moving averages — full Charts parity: all 12 MA types, one line per
+      // instance, each honoring its own compute frequency (so the same period
+      // can appear at multiple frequencies, e.g. SMA 200 daily AND 200 weekly).
+      const maFreqSrcCache: Partial<Record<"weekly" | "monthly", typeof primaryData>> = {};
+      const maSourceFor = (freq: MaLine["f"]): { src: typeof primaryData; suffix: string } => {
+        if (freq !== "weekly" && freq !== "monthly") return { src: primaryData, suffix: "" };
+        if (!maFreqSrcCache[freq]) {
+          maFreqSrcCache[freq] = resampleIndicatorBars(
+            primaryData.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
+            freq,
+          ).map((b) => ({ time: b.time as unknown as Time, value: b.close })) as typeof primaryData;
+        }
+        return { src: maFreqSrcCache[freq]!, suffix: freq === "weekly" ? "W" : "M" };
+      };
+      const CORE_MA: Array<[MaKey, string, (d: typeof primaryData, p: number) => { time: unknown; value: number }[]]> = [
+        ["sma", "SMA", computeSMA],
+        ["ema", "EMA", computeEMA],
+        ["hma", "HMA", computeHMA],
+      ];
+      for (const [key, name, compute] of CORE_MA) {
+        for (const { p, f } of getMaLines(activeIndicators, key)) {
+          const { src, suffix } = maSourceFor(f);
+          const maData = compute(src, p);
+          if (maData.length > 0) {
+            const s = chart.addSeries(LineSeries, {
+              color: (INDICATOR_COLORS as Record<string, string>)[key],
+              lineWidth: key === "hma" ? 2 : 1,
+              title: `${name} ${p}${suffix}`,
+              ...(key === "sma" ? { lineStyle: LineStyle.Dashed } : {}),
+              priceLineVisible: false,
+              lastValueVisible: false,
+            });
+            s.setData(maData.map((d) => ({ time: d.time as Time, value: d.value })));
+            indicatorSeriesRef.current.push(s);
+          }
         }
       }
-
-      // EMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.ema)) {
-        const emaData = computeEMA(primaryData, p);
-        if (emaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: INDICATOR_COLORS.ema,
-            lineWidth: 1,
-            title: `EMA ${p}`,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          s.setData(emaData.map(d => ({ time: d.time as Time, value: d.value })));
-          indicatorSeriesRef.current.push(s);
-        }
-      }
-
-      // HMA (one line per period)
-      for (const p of indicatorPeriods(activeIndicators.hma)) {
-        const hmaData = computeHMA(primaryData, p);
-        if (hmaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: INDICATOR_COLORS.hma,
-            lineWidth: 2,
-            title: `HMA ${p}`,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          s.setData(hmaData.map(d => ({ time: d.time as Time, value: d.value })));
-          indicatorSeriesRef.current.push(s);
-        }
-      }
-
-      // LSMA (one line per period)
-      for (const p of indicatorPeriods((activeIndicators as any).lsma)) {
-        if (!(IndicatorMath as any).computeLSMA) break;
-        const lsmaData = (IndicatorMath as any).computeLSMA(primaryData, p, 0);
-        if (lsmaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: (INDICATOR_COLORS as any).lsma,
-            lineWidth: 1,
-            title: `LSMA ${p}`,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          s.setData(lsmaData.map((d: any) => ({ time: d.time as Time, value: d.value })));
-          indicatorSeriesRef.current.push(s);
-        }
-      }
-
-      // SLSMA (one line per period)
-      for (const p of indicatorPeriods((activeIndicators as any).slsma)) {
-        if (!(IndicatorMath as any).computeSLSMA) break;
-        const slsmaData = (IndicatorMath as any).computeSLSMA(primaryData, p, 0);
-        if (slsmaData.length > 0) {
-          const s = chart.addSeries(LineSeries, {
-            color: (INDICATOR_COLORS as any).slsma,
-            lineWidth: 2,
-            title: `SLSMA ${p}`,
-            priceLineVisible: false,
-            lastValueVisible: false,
-          });
-          s.setData(slsmaData.map((d: any) => ({ time: d.time as Time, value: d.value })));
-          indicatorSeriesRef.current.push(s);
+      const EXTRA_MA: Array<[MaKey, MaType, number]> = [
+        ["wma", "WMA", 1], ["dema", "DEMA", 2], ["tema", "TEMA", 2],
+        ["kama", "KAMA", 2], ["frama", "FRAMA", 2], ["t3", "T3", 2],
+        ["alma", "ALMA", 1], ["lsma", "LSMA", 1], ["slsma", "SLSMA", 2],
+      ];
+      for (const [field, maType, width] of EXTRA_MA) {
+        for (const { p, f } of getMaLines(activeIndicators, field)) {
+          const { src, suffix } = maSourceFor(f);
+          const srcVals = src.map((d) => d.value);
+          const series = computeMaByType(srcVals, p, maType);
+          const maData: { time: Time; value: number }[] = [];
+          for (let i = 0; i < src.length; i++) {
+            const v = series[i];
+            if (v != null && Number.isFinite(v)) maData.push({ time: src[i].time as Time, value: v });
+          }
+          if (maData.length > 0) {
+            const s = chart.addSeries(LineSeries, {
+              color: (INDICATOR_COLORS as Record<string, string>)[field] ?? "#94a3b8",
+              lineWidth: width as LineWidth,
+              title: `${maType} ${p}${suffix}`,
+              priceLineVisible: false,
+              lastValueVisible: false,
+            });
+            s.setData(maData);
+            indicatorSeriesRef.current.push(s);
+          }
         }
       }
 
@@ -696,7 +680,8 @@ function MacroPane({
           try {
             if (def.renderTarget === "overlay" && def.renderOverlay) {
               def.renderOverlay(
-                { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register },
+                { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register,
+                  ...(def.components?.length ? { hiddenParts: new Set(st.hiddenParts ?? []) } : {}) },
                 defBars, p,
               );
             } else if (def.renderPane) {
