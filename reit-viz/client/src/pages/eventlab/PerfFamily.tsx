@@ -1380,21 +1380,16 @@ export default function PerfFamily() {
               {basketsComputing && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
               Baskets{showBaskets && baskets.length > 0 ? ` (${basketRowData ? baskets.length : "…"})` : ""}
             </Button>
-            {/* Pair ratio rows: robust A/B picker; chips remove */}
+            {/* Pair ratio rows: robust A/B picker; chips live inside the popover */}
             <div className="flex items-center gap-1">
               <AddPairControl
                 tickers={perfData ?? []}
                 onAdd={addPair}
                 existing={pairDefs}
+                onRemove={(p) => setPairDefs((prev) => prev.filter((x) => x !== p))}
                 testIdPrefix="perf-pair"
               />
               {pairsComputing && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
-              {pairDefs.map((p) => (
-                <span key={p} className="flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 text-[10px] font-mono" data-testid={`perf-pair-chip-${p.replace("/", "-")}`}>
-                  {p}
-                  <button className="hover:text-foreground" onClick={() => setPairDefs((prev) => prev.filter((x) => x !== p))} title="Remove pair">×</button>
-                </span>
-              ))}
             </div>
             <BasketScopeSelect scope={basketScope} className="h-6 text-[11px] w-auto min-w-[130px]" />
             <Button

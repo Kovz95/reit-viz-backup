@@ -2264,35 +2264,17 @@ export default function SigmaFamily({ onOpenStudy }: {
             </div>
           )}
 
-          {/* Add pair ratio (A/B — both legs Yahoo symbols, σ on the ratio series) */}
+          {/* Add pair ratio (A/B — both legs Yahoo symbols, σ on the ratio series).
+              Chips live inside the popover to keep this toolbar compact. */}
           {!isEarningsMode && (
-            <div className="flex items-center gap-1">
-              <AddPairControl
-                tickers={tickerList as any[]}
-                onAdd={addCustomPair}
-                existing={customPairs}
-                testIdPrefix="sigma-pair"
-                buttonClassName="h-7 px-2 text-[11px]"
-              />
-              {customPairs.map((p) => (
-                <span
-                  key={p}
-                  className="inline-flex items-center gap-0.5 h-6 pl-1.5 pr-0.5 text-[10px] font-mono bg-amber-500/10 border border-amber-500/30 rounded"
-                  data-testid={`sigma-pair-chip-${p.replace("/", "-")}`}
-                >
-                  {p}
-                  <button
-                    type="button"
-                    onClick={() => removeCustomPair(p)}
-                    className="p-0.5 text-muted-foreground hover:text-foreground rounded"
-                    aria-label={`Remove ${p}`}
-                    data-testid={`btn-remove-pair-${p.replace("/", "-")}`}
-                  >
-                    <XIcon className="w-3 h-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
+            <AddPairControl
+              tickers={tickerList as any[]}
+              onAdd={addCustomPair}
+              existing={customPairs}
+              onRemove={removeCustomPair}
+              testIdPrefix="sigma-pair"
+              buttonClassName="h-7 px-2 text-[11px]"
+            />
           )}
 
           {/* Refresh quotes (live mode) */}

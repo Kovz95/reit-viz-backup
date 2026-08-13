@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 
 const LEG_RE = /^[A-Z0-9.\-^=]{1,12}$/;
 
@@ -17,14 +17,17 @@ interface AddPairControlProps {
   tickers: Array<{ ticker: string; name?: string } | string> | null | undefined;
   /** Called with validated, uppercased legs. */
   onAdd: (a: string, b: string) => void;
-  /** Existing pair keys ("A/B") for duplicate detection. */
+  /** Existing pair keys ("A/B") for duplicate detection + the in-popover chip list. */
   existing?: string[];
+  /** When provided, existing pairs render as removable chips inside the popover
+   *  (and the trigger shows a count) — keeps toolbars uncluttered. */
+  onRemove?: (pair: string) => void;
   testIdPrefix?: string;
   /** Trigger button height class (default h-6 to match toolbar chips). */
   buttonClassName?: string;
 }
 
-export function AddPairControl({ tickers, onAdd, existing, testIdPrefix = "add-pair", buttonClassName = "h-6 px-2 text-[11px]" }: AddPairControlProps) {
+export function AddPairControl({ tickers, onAdd, existing, onRemove, testIdPrefix = "add-pair", buttonClassName = "h-6 px-2 text-[11px]" }: AddPairControlProps) {
   const [open, setOpen] = useState(false);
   const [legA, setLegA] = useState("");
   const [legB, setLegB] = useState("");
@@ -52,7 +55,9 @@ export function AddPairControl({ tickers, onAdd, existing, testIdPrefix = "add-p
     onAdd(a, b);
     setLegA(""); setLegB(""); setQuick("");
     setEpoch((e) => e + 1);
-    setOpen(false);
+    // With the in-popover chip list, stay open so several pairs can be added
+    // and managed in one visit; legacy callers (no onRemove) keep close-on-add.
+    if (!onRemove) setOpen(false);
   };
 
   const tryQuick = () => {
@@ -71,12 +76,15 @@ export function AddPairControl({ tickers, onAdd, existing, testIdPrefix = "add-p
           title="Add a pair ratio row (A/B) — searchable workbook pickers; any Yahoo symbol works as a leg"
           data-testid={`${testIdPrefix}-open`}
         >
-          <Plus className="w-3 h-3 mr-1" /> Pair
+          <Plus className="w-3 h-3 mr-1" /> Pair{onRemove && existing?.length ? ` (${existing.length})` : ""}
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        align="start"
-        className="w-[320px] p-3 flex flex-col gap-2.5"
+        align="end"
+        collisionPadding={8}
+        // Wide enough that the 440px picker dropdown stays INSIDE the popover
+        // (it used to spill past the right viewport edge and get cut off).
+        className="w-[480px] p-3 flex flex-col gap-2.5"
         data-testid={`${testIdPrefix}-popover`}
         // Don't auto-focus the leg-A picker on open — its dropdown would
         // immediately blanket the rest of the popover.
@@ -114,6 +122,31 @@ export function AddPairControl({ tickers, onAdd, existing, testIdPrefix = "add-p
           data-testid={`${testIdPrefix}-quick`}
         />
         {error && <div className="text-[10px] text-red-400" data-testid={`${testIdPrefix}-error`}>{error}</div>}
+        {onRemove && (existing?.length ?? 0) > 0 && (
+          <div className="flex flex-col gap-1">
+            <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">Active pairs</span>
+            <div className="flex items-center gap-1 flex-wrap">
+              {existing!.map((p) => (
+                <span
+                  key={p}
+                  className="inline-flex items-center gap-0.5 pl-1.5 pr-0.5 py-0.5 rounded border border-purple-500/40 bg-purple-500/10 text-purple-300 text-[10px] font-mono"
+                  data-testid={`${testIdPrefix}-chip-${p.replace("/", "-")}`}
+                >
+                  {p}
+                  <button
+                    type="button"
+                    className="p-0.5 hover:text-foreground"
+                    onClick={() => onRemove(p)}
+                    title={`Remove ${p}`}
+                    data-testid={`${testIdPrefix}-remove-${p.replace("/", "-")}`}
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" className="h-7 text-[11px]" onClick={() => setOpen(false)}>Cancel</Button>
           <Button
