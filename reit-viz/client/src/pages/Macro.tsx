@@ -34,7 +34,7 @@ import { indicatorPeriods, getMaLines } from "@/components/ChartPane";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
 import { computeMaByType, type MaType } from "@/lib/maEngine";
 import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
-import { getInstances, effGroup } from "@/lib/indicatorInstances";
+import { getInstances, effGroup, subChartKeyFor, type IndicatorInstance } from "@/lib/indicatorInstances";
 import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
@@ -305,6 +305,17 @@ function MacroPane({
         }
         return { src: maFreqSrcCache[freq]!, suffix: freq === "weekly" ? "W" : "M" };
       };
+      // Panel-chip hide/solo support: bands whose instance-group key is in
+      // hiddenSubCharts simply don't render (Macro has no true sub-panes to
+      // unmount — skipping the band is the equivalent).
+      const hiddenSet = new Set(activeIndicators.hiddenSubCharts ?? []);
+      const groupHidden = (baseId: string, inst: IndicatorInstance) =>
+        hiddenSet.has(subChartKeyFor(baseId, effGroup(inst)));
+      const instNum = (inst: IndicatorInstance, key: string, dflt: number): number => {
+        const v = inst.params[key];
+        const nv = Array.isArray(v) ? v[0] : v;
+        return typeof nv === "number" && Number.isFinite(nv) ? nv : dflt;
+      };
       const CORE_MA: Array<[MaKey, string, (d: typeof primaryData, p: number) => { time: unknown; value: number }[]]> = [
         ["sma", "SMA", computeSMA],
         ["ema", "EMA", computeEMA],
@@ -357,14 +368,19 @@ function MacroPane({
         }
       }
 
-      // RSI (first period only — Macro's facade band shows one RSI)
-      for (const p of indicatorPeriods(activeIndicators.rsi).slice(0, 1)) {
-        const rsiData = computeRSI(primaryData, p);
+      // RSI band — one line per INSTANCE (own period + compute frequency, so
+      // RSI 14 daily + RSI 14 weekly draw together; hidden groups skipped)
+      let rsiRefsDrawn = false;
+      for (const inst of getInstances(activeIndicators, "rsi")) {
+        if (groupHidden("rsi", inst)) continue;
+        const p = instNum(inst, "period", 14);
+        const { src: rsiSrc, suffix: rsiSfx } = maSourceFor(inst.freq);
+        const rsiData = computeRSI(rsiSrc, p);
         if (rsiData.length > 0) {
           const rsiLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.rsi_line,
             lineWidth: 1,
-            title: `RSI ${p}`,
+            title: `RSI ${p}${rsiSfx}`,
             priceScaleId: "rsi",
             priceLineVisible: false,
             lastValueVisible: false,
@@ -374,10 +390,10 @@ function MacroPane({
 
           const first = rsiData[0].time as Time;
           const last = rsiData[rsiData.length - 1].time as Time;
-          for (const [level, color] of [
+          for (const [level, color] of (rsiRefsDrawn ? [] : [
             [70, INDICATOR_COLORS.rsi_overbought],
             [30, INDICATOR_COLORS.rsi_oversold],
-          ] as [number, string][]) {
+          ]) as [number, string][]) {
             const ref = chart.addSeries(LineSeries, {
               color,
               lineWidth: 1,
@@ -397,17 +413,20 @@ function MacroPane({
           rsiLine.priceScale().applyOptions({
             scaleMargins: { top: 0.75, bottom: 0 },
           });
+          rsiRefsDrawn = true;
         }
       }
 
-      // MACD
-      if (activeIndicators.macd) {
-        const macd = computeMACD(primaryData, 12, 26, 9);
+      // MACD band — one line pair per instance (own params + freq)
+      for (const inst of getInstances(activeIndicators, "macd")) {
+        if (groupHidden("macd", inst)) continue;
+        const { src: macdSrc, suffix: macdSfx } = maSourceFor(inst.freq);
+        const macd = computeMACD(macdSrc, instNum(inst, "fast", 12), instNum(inst, "slow", 26), instNum(inst, "signal", 9));
         if (macd.macdLine.length > 0) {
           const ml = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.macd_line,
             lineWidth: 1,
-            title: "MACD",
+            title: macdSfx ? `MACD ${macdSfx}` : "MACD",
             priceScaleId: "macd",
             priceLineVisible: false,
             lastValueVisible: false,
@@ -525,10 +544,12 @@ function MacroPane({
         }
       }
 
-      // Bollinger Bands
-      if (activeIndicators.bollinger) {
-        const { period, mult } = activeIndicators.bollinger;
-        const bb = computeBollingerBands(primaryData, period, mult);
+      // Bollinger Bands — one band set per instance (own period/sigma + freq)
+      for (const inst of getInstances(activeIndicators, "bollinger")) {
+        const period = instNum(inst, "period", 20);
+        const mult = instNum(inst, "mult", 2);
+        const { src: bbSrc } = maSourceFor(inst.freq);
+        const bb = computeBollingerBands(bbSrc, period, mult);
         if (bb.basis.length > 0) {
           const ml = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.bollinger_basis,
@@ -565,14 +586,17 @@ function MacroPane({
         }
       }
 
-      // ROC (first period only — Macro's facade band shows one ROC)
-      for (const p of indicatorPeriods(activeIndicators.roc).slice(0, 1)) {
-        const rocData = computeROC(primaryData, p);
+      // ROC band — one line per instance (own period + freq; hidden skipped)
+      for (const inst of getInstances(activeIndicators, "roc")) {
+        if (groupHidden("roc", inst)) continue;
+        const p = instNum(inst, "period", 12);
+        const { src: rocSrc, suffix: rocSfx } = maSourceFor(inst.freq);
+        const rocData = computeROC(rocSrc, p);
         if (rocData.length > 0) {
           const rocLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.roc,
             lineWidth: 1,
-            title: `ROC ${p}`,
+            title: `ROC ${p}${rocSfx}`,
             priceScaleId: "roc",
             priceLineVisible: false,
             lastValueVisible: false,
@@ -603,15 +627,18 @@ function MacroPane({
         }
       }
 
-      // Stochastic
-      if (activeIndicators.stochastic) {
-        const { kPeriod, dPeriod } = activeIndicators.stochastic;
-        const stoch = computeStochastic(primaryData, kPeriod, dPeriod);
+      // Stochastic band — one %K/%D pair per instance (hidden groups skipped)
+      for (const inst of getInstances(activeIndicators, "stochastic")) {
+        if (groupHidden("stochastic", inst)) continue;
+        const kPeriod = instNum(inst, "kPeriod", 14);
+        const dPeriod = instNum(inst, "dPeriod", 3);
+        const { src: stochSrc, suffix: stochSfx } = maSourceFor(inst.freq);
+        const stoch = computeStochastic(stochSrc, kPeriod, dPeriod);
         if (stoch.k.length > 0) {
           const kLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.stoch_k,
             lineWidth: 1,
-            title: `%K ${kPeriod}`,
+            title: `%K ${kPeriod}${stochSfx}`,
             priceScaleId: "stoch",
             priceLineVisible: false,
             lastValueVisible: false,
@@ -679,6 +706,8 @@ function MacroPane({
         for (const def of ALL_REGISTRY_INDICATORS) {
           const insts = getInstances(activeIndicators, def.id);
           for (const inst of insts) {
+            // Panel-chip hide/solo: skip hidden pane groups (band equivalent).
+            if (def.renderTarget === "pane" && groupHidden(def.id, inst)) continue;
             const defBars = barsAt(inst.freq);
             const p = resolveParams(def, { enabled: true, params: inst.params });
             const register = (s: ISeriesApi<any>) => { indicatorSeriesRef.current.push(s); };
