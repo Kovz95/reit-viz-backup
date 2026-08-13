@@ -43,6 +43,7 @@ import {
   nextIid,
   effGroup,
   instanceLabel,
+  chartFreqLabel,
   type IndicatorInstance,
   type InstanceParamSpec,
 } from "@/lib/indicatorInstances";
@@ -335,6 +336,7 @@ export function MaRow({
   defaultLen,
   lines,
   onChangeLines,
+  frequency,
 }: {
   label: string;
   presets: number[];
@@ -342,6 +344,8 @@ export function MaRow({
   /** Current line instances (period + freq) for this MA type. */
   lines: MaLine[];
   onChangeLines: (lines: MaLine[]) => void;
+  /** The chart's own bar frequency — labels the "Chart" option ("Chart (D)"). */
+  frequency?: string;
 }) {
   const on = lines.length > 0;
   // Remember the last non-empty selection so the on/off switch restores it.
@@ -398,7 +402,7 @@ export function MaRow({
                 title={`Compute this ${label} line on the chart's bars, or on weekly/monthly resampled bars`}
                 data-testid={`ma-freq-${colorKey}-${i}`}
               >
-                <option value="chart">Chart</option>
+                <option value="chart">{chartFreqLabel(frequency)}</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
               </select>
@@ -460,6 +464,7 @@ export function InstanceRows({
   presets = [],
   multiParamKey,
   components,
+  frequency,
 }: {
   indKey: string;
   label: string;
@@ -475,6 +480,8 @@ export function InstanceRows({
   multiParamKey?: string;
   /** Per-instance show/hide-able sub-parts (Ichimoku lines/cloud …). */
   components?: IndicatorDef["components"];
+  /** The chart's own bar frequency — labels the "Chart" option ("Chart (D)"). */
+  frequency?: string;
 }) {
   const { colors } = useIndicatorColors();
   const defaultsFor = (): Record<string, number> =>
@@ -569,7 +576,7 @@ export function InstanceRows({
                 title={`Compute this ${label} on the chart's bars, or on weekly/monthly resampled bars`}
                 data-testid={`inst-freq-${indKey}-${i}`}
               >
-                <option value="chart">Chart</option>
+                <option value="chart">{chartFreqLabel(frequency)}</option>
                 <option value="weekly">W</option>
                 <option value="monthly">M</option>
               </select>
@@ -674,6 +681,7 @@ export function BuiltinInstanceSection({
   onChange,
   presets,
   className,
+  frequency,
 }: {
   indKey: keyof typeof BUILTIN_INSTANCE_DEFS;
   title: string;
@@ -681,6 +689,8 @@ export function BuiltinInstanceSection({
   onChange: (i: ActiveIndicators) => void;
   presets?: number[];
   className?: string;
+  /** The chart's own bar frequency — labels the "Chart" freq option. */
+  frequency?: string;
 }) {
   const def = BUILTIN_INSTANCE_DEFS[indKey];
   const instances = getInstances(activeIndicators, indKey);
@@ -709,6 +719,7 @@ export function BuiltinInstanceSection({
           onChange={write}
           showPane={def.target === "pane"}
           presets={presets}
+          frequency={frequency}
         />
       )}
     </div>
@@ -1099,6 +1110,7 @@ export function RegistryIndicatorControls({
                     showPane={def.renderTarget === "pane"}
                     multiParamKey={def.multiInstanceParam}
                     components={def.components}
+                    frequency={frequency}
                   />
                 )}
                 {enabled && renderExtra?.(def, p)}
@@ -1162,6 +1174,7 @@ export default function IndicatorsPanel({
   const maLinesProps = (key: MaKey) => ({
     lines: getMaLines(activeIndicators, key),
     onChangeLines: (lines: MaLine[]) => setActiveIndicators(setMaLines(activeIndicators, key, lines)),
+    frequency,
   });
 
   // Copy the current pane's indicators to every pane (one-time, atomic).
@@ -1465,6 +1478,7 @@ export default function IndicatorsPanel({
           {/* RSI — instance rows: each row = period + freq + pane, so RSI 14
               daily and RSI 14 weekly can run at once (see indicatorInstances) */}
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="rsi"
             title="RSI"
             activeIndicators={activeIndicators}
@@ -1473,6 +1487,7 @@ export default function IndicatorsPanel({
           />
 
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="macd"
             title="MACD"
             activeIndicators={activeIndicators}
@@ -1481,6 +1496,7 @@ export default function IndicatorsPanel({
           />
 
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="stochastic"
             title="Stochastic"
             activeIndicators={activeIndicators}
@@ -1489,6 +1505,7 @@ export default function IndicatorsPanel({
           />
 
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="roc"
             title="ROC (Rate of Change)"
             activeIndicators={activeIndicators}
@@ -1512,6 +1529,7 @@ export default function IndicatorsPanel({
           {/* Bollinger Bands — instance rows (period/σ × freq); overlay, so no
               pane dropdown. Two instances = two band sets (e.g. 20/2 + 50/2.5) */}
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="bollinger"
             title="Bollinger Bands"
             activeIndicators={activeIndicators}
@@ -1520,6 +1538,7 @@ export default function IndicatorsPanel({
           />
 
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="atr"
             title="ATR"
             activeIndicators={activeIndicators}
@@ -1569,6 +1588,7 @@ export default function IndicatorsPanel({
           {!isCollapsed("Volume") && (<>
           {/* OBV — parameterless; instances differ by freq/pane */}
           <BuiltinInstanceSection
+            frequency={frequency}
             indKey="obv"
             title="OBV"
             activeIndicators={activeIndicators}

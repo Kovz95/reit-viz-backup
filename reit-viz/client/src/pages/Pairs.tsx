@@ -1186,7 +1186,7 @@ export function PairsIndicatorsPanel({
           ["LSMA", "lsma", [14, 25, 50, 100], 25],
           ["SLSMA", "slsma", [14, 25, 50, 100], 25],
         ] as [string, MaKey, number[], number][]).map(([label, field, presets, defaultLen]) => (
-          <MaRow key={field} label={label} presets={presets} defaultLen={defaultLen}
+          <MaRow key={field} label={label} presets={presets} defaultLen={defaultLen} frequency="daily"
             lines={getMaLines(activeIndicators, field)}
             onChangeLines={(lines) => setIndicators(setMaLines(activeIndicators, field, lines))} />
         ))}
@@ -1202,13 +1202,13 @@ export function PairsIndicatorsPanel({
           {!isCollapsed("Oscillators") && (<>
           {/* Instance rows (shared with Charts): each row = params + freq +
               pane, so RSI 14 daily and RSI 14 weekly can run at once. */}
-          <BuiltinInstanceSection indKey="rsi" title="RSI"
+          <BuiltinInstanceSection frequency="daily" indKey="rsi" title="RSI"
             activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} />
-          <BuiltinInstanceSection indKey="macd" title="MACD"
+          <BuiltinInstanceSection frequency="daily" indKey="macd" title="MACD"
             activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
-          <BuiltinInstanceSection indKey="stochastic" title="Stochastic"
+          <BuiltinInstanceSection frequency="daily" indKey="stochastic" title="Stochastic"
             activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
-          <BuiltinInstanceSection indKey="roc" title="ROC (Rate of Change)"
+          <BuiltinInstanceSection frequency="daily" indKey="roc" title="ROC (Rate of Change)"
             activeIndicators={activeIndicators} onChange={setIndicators} presets={[9, 12, 20, 50]} className="mt-3" />
           </>)}
         </div>
@@ -1223,9 +1223,9 @@ export function PairsIndicatorsPanel({
           />
           {!isCollapsed("Volatility") && (<>
           {/* Bollinger — instance rows (overlay: no pane dropdown); ATR below. */}
-          <BuiltinInstanceSection indKey="bollinger" title="Bollinger Bands"
+          <BuiltinInstanceSection frequency="daily" indKey="bollinger" title="Bollinger Bands"
             activeIndicators={activeIndicators} onChange={setIndicators} presets={[10, 20, 50]} />
-          <BuiltinInstanceSection indKey="atr" title="ATR"
+          <BuiltinInstanceSection frequency="daily" indKey="atr" title="ATR"
             activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} className="mt-3" />
           </>)}
         </div>
@@ -1259,7 +1259,7 @@ export function PairsIndicatorsPanel({
             className="mb-3"
           />
           {!isCollapsed("Volume") && (
-          <BuiltinInstanceSection indKey="obv" title="OBV"
+          <BuiltinInstanceSection frequency="daily" indKey="obv" title="OBV"
             activeIndicators={activeIndicators} onChange={setIndicators} />
           )}
         </div>

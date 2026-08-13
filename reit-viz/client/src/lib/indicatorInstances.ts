@@ -101,6 +101,19 @@ export function freqSuffix(f: InstFreq | undefined): string {
   return f === "weekly" ? "W" : f === "monthly" ? "M" : "";
 }
 
+/** Label for the "Chart" frequency option, spelling out what the chart's own
+ *  bar frequency actually is ("Chart (D)" on a daily chart). Falls back to
+ *  plain "Chart" when the surface doesn't know its frequency. */
+export function chartFreqLabel(chartFreq?: string): string {
+  const tag =
+    chartFreq === "hourly" ? "1H"
+    : chartFreq === "daily" ? "D"
+    : chartFreq === "weekly" ? "W"
+    : chartFreq === "monthly" ? "M"
+    : "";
+  return tag ? `Chart (${tag})` : "Chart";
+}
+
 function sanitize(list: IndicatorInstance[]): IndicatorInstance[] {
   const out: IndicatorInstance[] = [];
   for (const i of list) {
