@@ -1958,6 +1958,15 @@ function PairsSubIndicatorChart({
     }
 
     let firstSeries: ISeriesApi<any> | null = null;
+    // Per-instance labels/px-line overrides, applied AT CREATION — the global
+    // pass at the end of this effect only ever turns chrome OFF, so a hidden
+    // instance stays hidden; re-enabling rebuilds the chart (instances is in
+    // the effect deps). Charts-tab parity (see ChartPane applyInstChrome).
+    const applyInstChrome = (sr: ISeriesApi<any>, inst: IndicatorInstance) => {
+      if (inst.labelsOff || inst.priceLineOff) {
+        setSeriesAxisLabels(sr, chrome.axisLabels && !inst.labelsOff, inst.priceLineOff ? false : undefined);
+      }
+    };
 
     // Invisible spacer spanning the parent's FULL axis: indicator series are
     // trimmed by their warmup, so without it the sub-chart's axis is shorter
@@ -2047,6 +2056,7 @@ function PairsSubIndicatorChart({
             title: `RSI ${p}${freqSuffix(eff)}`,
           });
           rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
+          applyInstChrome(rsiLine, inst);
           if (!firstSeries) firstSeries = rsiLine;
           if (!refDrawn) {
             refDrawn = true;
@@ -2093,11 +2103,13 @@ function PairsSubIndicatorChart({
           color: shadePairs(IC.macd_line, ii), lineWidth: 1, title: sfx ? `MACD ${sfx}` : "MACD",
         });
         ml.setData(macd.macdLine.map(d => ({ time: d.time as Time, value: d.value })));
+        applyInstChrome(ml, inst);
         if (!firstSeries) firstSeries = ml;
         const sl = chart.addSeries(LineSeries, {
           color: shadePairs(IC.macd_signal, ii), lineWidth: 1, title: sfx ? `Signal ${sfx}` : "Signal", crosshairMarkerVisible: false,
         });
         sl.setData(macd.signalLine.map(d => ({ time: d.time as Time, value: d.value })));
+        applyInstChrome(sl, inst);
         if (!zeroSpan.length) zeroSpan = macd.macdLine as { time: Time; value: number }[];
       });
       if (zeroSpan.length >= 2) {
@@ -2149,6 +2161,7 @@ function PairsSubIndicatorChart({
             color: shadePairs(IC.roc, rocIdx), lineWidth: 1, title: `ROC ${p}${freqSuffix(eff)}`,
           });
           rocLine.setData(rocData.map(d => ({ time: d.time as Time, value: d.value })));
+          applyInstChrome(rocLine, inst);
           if (!firstSeries) firstSeries = rocLine;
           if (!zeroDrawn && rocData.length >= 2) {
             zeroDrawn = true;
@@ -2181,12 +2194,14 @@ function PairsSubIndicatorChart({
           color: shadePairs(IC.stoch_k, ii), lineWidth: 1, title: `%K(${kPeriod})${sfx}`,
         });
         kLine.setData(stoch.k.map(d => ({ time: d.time as Time, value: d.value })));
+        applyInstChrome(kLine, inst);
         if (!firstSeries) firstSeries = kLine;
         if (stoch.d.length > 0) {
           const dLine = chart.addSeries(LineSeries, {
             color: shadePairs(IC.stoch_d, ii), lineWidth: 1, title: `%D(${dPeriod})${sfx}`, crosshairMarkerVisible: false,
           });
           dLine.setData(stoch.d.map(d => ({ time: d.time as Time, value: d.value })));
+          applyInstChrome(dLine, inst);
         }
         if (!refSpan.length) refSpan = stoch.k as { time: Time; value: number }[];
       });
@@ -2216,6 +2231,7 @@ function PairsSubIndicatorChart({
             color: shadePairs(IC.atr, atrIdx), lineWidth: 1, title: `ATR ${p}${freqSuffix(eff)}`,
           });
           atrLine.setData(atrData.map(d => ({ time: d.time as Time, value: d.value })));
+          applyInstChrome(atrLine, inst);
           if (!firstSeries) firstSeries = atrLine;
           chart.timeScale().fitContent();
           atrIdx++;
@@ -2235,6 +2251,7 @@ function PairsSubIndicatorChart({
           color: shadePairs(IC.obv, ii), lineWidth: 1, title: sfx ? `OBV ${sfx}` : "OBV",
         });
         obvLine.setData(obvData.map(d => ({ time: d.time as Time, value: d.value })));
+        applyInstChrome(obvLine, inst);
         if (!firstSeries) firstSeries = obvLine;
         chart.timeScale().fitContent();
       });
@@ -2276,7 +2293,7 @@ function PairsSubIndicatorChart({
                 chart,
                 colors,
                 baseLabel: instLabel2,
-                register: (s) => { if (!firstSeries) firstSeries = s; },
+                register: (s) => { applyInstChrome(s, inst); if (!firstSeries) firstSeries = s; },
                 refLine: instIdx === 0 && iv === instValues[0]
                   ? (level, color, first, last) => {
                       const rl = chart.addSeries(LineSeries, {
@@ -3001,6 +3018,14 @@ export function MiniChart({
       }
       // Bollinger Bands (overlay) — one band set per instance (period/σ ×
       // own compute frequency; Charts parity)
+      // Per-instance labels/px-line overrides for main-chart overlay
+      // indicators — creation-time application (the global chrome pass below
+      // is off-only, so this survives it; Charts parity).
+      const applyOvlChrome = (sr: ISeriesApi<any>, inst2: IndicatorInstance) => {
+        if (inst2.labelsOff || inst2.priceLineOff) {
+          setSeriesAxisLabels(sr, chrome.axisLabels && !inst2.labelsOff, inst2.priceLineOff ? false : undefined);
+        }
+      };
       getInstances(activeIndicators, "bollinger").forEach((inst, bi) => {
         const bbP = typeof inst.params.period === "number" ? inst.params.period : 20;
         const bbM = typeof inst.params.mult === "number" ? inst.params.mult : 2;
@@ -3012,16 +3037,19 @@ export function MiniChart({
             title: `BB ${bbP},${bbM}${suffix}`, lineStyle: LineStyle.LargeDashed,
           });
           basisLine.setData(bb.basis.map(d => ({ time: d.time as Time, value: d.value })));
+          applyOvlChrome(basisLine, inst);
           const upperLine = chart.addSeries(LineSeries, {
             color: shadePairs(IC.bollinger_band, bi), lineWidth: 1,
             title: suffix ? `Upper ${suffix}` : `Upper`, lineStyle: LineStyle.Dotted,
           });
           upperLine.setData(bb.upper.map(d => ({ time: d.time as Time, value: d.value })));
+          applyOvlChrome(upperLine, inst);
           const lowerLine = chart.addSeries(LineSeries, {
             color: shadePairs(IC.bollinger_band, bi), lineWidth: 1,
             title: suffix ? `Lower ${suffix}` : `Lower`, lineStyle: LineStyle.Dotted,
           });
           lowerLine.setData(bb.lower.map(d => ({ time: d.time as Time, value: d.value })));
+          applyOvlChrome(lowerLine, inst);
         }
       });
       // VWAP (overlay)
@@ -3087,7 +3115,7 @@ export function MiniChart({
                   chart,
                   colors,
                   baseLabel: f ? freqSuffix(f) : "",
-                  register: () => {},
+                  register: (sr) => applyOvlChrome(sr, inst),
                   ...(def.components?.length ? { hiddenParts: new Set(inst.hiddenParts ?? []) } : {}),
                 },
                 defBars,

@@ -408,6 +408,24 @@ export function MaRow({
               </select>
               <button
                 type="button"
+                onClick={() => setLine(i, { labelsOff: l.labelsOff ? undefined : true })}
+                className={`h-6 px-1 text-[9px] rounded border border-input ${l.labelsOff ? "opacity-40 line-through" : "text-muted-foreground"}`}
+                title={l.labelsOff ? "Show this line's axis label" : "Hide this line's axis label"}
+                data-testid={`ma-labels-${colorKey}-${i}`}
+              >
+                L
+              </button>
+              <button
+                type="button"
+                onClick={() => setLine(i, { priceLineOff: l.priceLineOff ? undefined : true })}
+                className={`h-6 px-1 text-[9px] rounded border border-input ${l.priceLineOff ? "opacity-40 line-through" : "text-muted-foreground"}`}
+                title={l.priceLineOff ? "Show this line's price line" : "Hide this line's dashed current-value line"}
+                data-testid={`ma-pxline-${colorKey}-${i}`}
+              >
+                P
+              </button>
+              <button
+                type="button"
                 onClick={() => removeLine(i)}
                 className="p-0.5 text-muted-foreground/60 hover:text-foreground"
                 title={`Remove this ${label} line`}
@@ -602,6 +620,35 @@ export function InstanceRows({
                   {inst.pane && <option value={inst.pane}>Pane {groups.indexOf(effGroup(inst)) + 1}</option>}
                 </select>
               )}
+              {/* Per-instance chrome: hide just this instance's axis labels /
+                  current-value line (pane-wide toolbar toggles stay master) */}
+              <button
+                type="button"
+                onClick={() => setInst(i, { labelsOff: inst.labelsOff ? undefined : true })}
+                className={`h-6 px-1 text-[9px] rounded border border-input ${inst.labelsOff ? "opacity-40 line-through" : "text-muted-foreground"}`}
+                title={inst.labelsOff ? "Show this instance's axis labels" : "Hide this instance's axis labels"}
+                data-testid={`inst-labels-${indKey}-${i}`}
+              >
+                L
+              </button>
+              <button
+                type="button"
+                onClick={() => setInst(i, { priceLineOff: inst.priceLineOff ? undefined : true })}
+                className={`h-6 px-1 text-[9px] rounded border border-input ${inst.priceLineOff ? "opacity-40 line-through" : "text-muted-foreground"}`}
+                title={inst.priceLineOff ? "Show this instance's price line" : "Hide this instance's dashed current-value line"}
+                data-testid={`inst-pxline-${indKey}-${i}`}
+              >
+                P
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange([...instances, { ...inst, iid: nextIid(instances), pane: undefined }])}
+                className="p-0.5 text-muted-foreground/60 hover:text-foreground"
+                title={`Duplicate this ${label} instance (own pane)`}
+                data-testid={`inst-dup-${indKey}-${i}`}
+              >
+                <Copy className="w-3 h-3" />
+              </button>
               <button
                 type="button"
                 onClick={() => removeInstance(i)}

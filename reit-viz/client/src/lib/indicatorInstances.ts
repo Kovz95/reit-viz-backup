@@ -40,6 +40,13 @@ export interface IndicatorInstance {
   pane?: string;
   /** Per-instance hidden component keys (see IndicatorDef.components). */
   hiddenParts?: string[];
+  /** Hide THIS instance's axis-label badges/title chips (the global toolbar
+   *  "Labels" toggle stays the master switch — this only ever turns them OFF
+   *  for one instance while the rest of the pane keeps its labels). */
+  labelsOff?: boolean;
+  /** Hide THIS instance's dashed current-value price line (same override-off
+   *  semantics as labelsOff, vs the toolbar "Px line" toggle). */
+  priceLineOff?: boolean;
 }
 
 export type InstanceParamSpec = { key: string; label: string; default: number; min?: number; step?: number };
@@ -132,6 +139,8 @@ function sanitize(list: IndicatorInstance[]): IndicatorInstance[] {
       ...(normFreq(i.freq) ? { freq: normFreq(i.freq) } : {}),
       ...(typeof i.pane === "string" && i.pane ? { pane: i.pane } : {}),
       ...(Array.isArray(i.hiddenParts) && i.hiddenParts.length ? { hiddenParts: i.hiddenParts.filter((p) => typeof p === "string") } : {}),
+      ...(i.labelsOff ? { labelsOff: true } : {}),
+      ...(i.priceLineOff ? { priceLineOff: true } : {}),
     });
   }
   return out;
@@ -323,6 +332,163 @@ export function instanceLabel(key: string, inst: IndicatorInstance): string {
   return `${base}${shown.length ? " " + shown.join(",") : ""}${sfx ? (shown.length ? sfx : " " + sfx) : ""}`;
 }
 
+// ── Sidebar "Current Layout" chip deletion ──
+// Every chip the sidebar emits carries one of these descriptors; deleting is
+// a pure ActiveIndicators mutation so any surface that owns an indicatorsMap
+// can wire it with a one-line callback.
+
+export type BadgeDel =
+  | { kind: "sub"; key: string }                              // sub-pane group / "ovl:<id>" pane / "ha"
+  | { kind: "ma"; key: string }                               // a whole MA type (sma/ema/…)
+  | { kind: "inst"; id: string; iid: string }                 // one overlay instance (bollinger/registry)
+  | { kind: "flag"; field: "mean" | "vwap" | "fractalLines" } // boolean/config overlays
+  | { kind: "ovl"; id: string };                              // same-domain indicator-on-indicator overlay
+
+function purgeHiddenKey(ind: ActiveIndicators, key: string): ActiveIndicators {
+  if (!ind.hiddenSubCharts?.includes(key)) return ind;
+  const rest = ind.hiddenSubCharts.filter((t) => t !== key);
+  return { ...ind, hiddenSubCharts: rest.length ? rest : undefined };
+}
+
+/** Remove the indicator a sidebar chip stands for. Mirrors the sub-pane ✕
+ *  route for "sub" kinds (instance-group aware, hiddenSubCharts purged) and
+ *  the panel's own clear paths for overlay kinds (setMaLines(…, []) semantics
+ *  for MA types — legacy field + maLines + maFreq all cleared). */
+export function deleteIndicatorBadge(ind: ActiveIndicators, del: BadgeDel): ActiveIndicators {
+  switch (del.kind) {
+    case "sub": {
+      // "ovl:" panes first — their ids may themselves contain "#" via the
+      // source subKey, so parseSubChartKey must not see them.
+      if (del.key.startsWith("ovl:")) {
+        const id = del.key.slice(4);
+        const overlays = ((ind as { indicatorOverlays?: { id: string }[] }).indicatorOverlays ?? []).filter((o) => o.id !== id);
+        const next = { ...ind, indicatorOverlays: overlays.length ? overlays : undefined } as ActiveIndicators;
+        return purgeHiddenKey(next, del.key);
+      }
+      const { baseId, group } = parseSubChartKey(del.key);
+      if (baseId === "ha") {
+        const next = { ...ind } as ActiveIndicators & { heikinAshi?: unknown };
+        delete next.heikinAshi;
+        return purgeHiddenKey(next, del.key);
+      }
+      const remaining = getInstances(ind, baseId).filter((i) => effGroup(i) !== group);
+      return purgeHiddenKey(setInstances(ind, baseId, remaining), del.key);
+    }
+    case "ma": {
+      // setMaLines(ind, key, []) equivalent, kept here to avoid a runtime
+      // import cycle with ChartPane: clear the per-instance lines, the legacy
+      // period field and the legacy per-type freq.
+      const next = { ...ind } as ActiveIndicators & Record<string, unknown>;
+      next[del.key] = undefined;
+      const ml = { ...((ind as { maLines?: Record<string, unknown> }).maLines ?? {}) };
+      delete ml[del.key];
+      (next as { maLines?: unknown }).maLines = Object.keys(ml).length ? ml : undefined;
+      const mf = { ...((ind as { maFreq?: Record<string, unknown> }).maFreq ?? {}) };
+      delete mf[del.key];
+      (next as { maFreq?: unknown }).maFreq = Object.keys(mf).length ? mf : undefined;
+      return next;
+    }
+    case "inst":
+      return setInstances(ind, del.id, getInstances(ind, del.id).filter((i) => i.iid !== del.iid));
+    case "flag": {
+      const next = { ...ind } as ActiveIndicators & Record<string, unknown>;
+      delete next[del.field];
+      return next;
+    }
+    case "ovl": {
+      const overlays = ((ind as { indicatorOverlays?: { id: string }[] }).indicatorOverlays ?? []).filter((o) => o.id !== del.id);
+      return { ...ind, indicatorOverlays: overlays.length ? overlays : undefined } as ActiveIndicators;
+    }
+  }
+}
+
+/** Apply a labels/px-line chrome patch to everything a sidebar chip stands
+ *  for (all instances of a pane group, one overlay instance, or every line of
+ *  an MA type). Passing `false` clears the flag. "flag"/"ovl" kinds have no
+ *  per-series chrome — returned unchanged. */
+export function setBadgeChrome(
+  ind: ActiveIndicators,
+  del: BadgeDel,
+  patch: { labelsOff?: boolean; priceLineOff?: boolean },
+): ActiveIndicators {
+  const applyTo = (i: IndicatorInstance): IndicatorInstance => ({
+    ...i,
+    ...(patch.labelsOff !== undefined ? { labelsOff: patch.labelsOff || undefined } : {}),
+    ...(patch.priceLineOff !== undefined ? { priceLineOff: patch.priceLineOff || undefined } : {}),
+  });
+  switch (del.kind) {
+    case "sub": {
+      if (del.key.startsWith("ovl:")) return ind;
+      const { baseId, group } = parseSubChartKey(del.key);
+      if (baseId === "ha") return ind;
+      const list = getInstances(ind, baseId).map((i) => (effGroup(i) === group ? applyTo(i) : i));
+      return list.length ? setInstances(ind, baseId, list) : ind;
+    }
+    case "inst": {
+      const list = getInstances(ind, del.id).map((i) => (i.iid === del.iid ? applyTo(i) : i));
+      return list.length ? setInstances(ind, del.id, list) : ind;
+    }
+    case "ma": {
+      // Mirror setMaLines' write shape structurally (see deleteIndicatorBadge
+      // for why ChartPane's helper isn't imported here): derive the current
+      // lines (explicit maLines or legacy periods × maFreq), patch every one.
+      type Line = { p: number; f?: string; labelsOff?: boolean; priceLineOff?: boolean };
+      const indAny = ind as ActiveIndicators & {
+        maLines?: Record<string, Line[]>;
+        maFreq?: Record<string, string>;
+      } & Record<string, unknown>;
+      const existing = indAny.maLines?.[del.key];
+      const legacy = periodList(indAny[del.key] as number | number[] | undefined);
+      const f = indAny.maFreq?.[del.key];
+      const lines: Line[] = existing?.length
+        ? existing
+        : legacy.map((p) => ({ p, ...(f === "weekly" || f === "monthly" ? { f } : {}) }));
+      if (!lines.length) return ind;
+      const patched = lines.map((l) => ({
+        ...l,
+        ...(patch.labelsOff !== undefined ? { labelsOff: patch.labelsOff || undefined } : {}),
+        ...(patch.priceLineOff !== undefined ? { priceLineOff: patch.priceLineOff || undefined } : {}),
+      }));
+      const next = { ...ind } as typeof indAny;
+      next.maLines = { ...(indAny.maLines ?? {}), [del.key]: patched };
+      const ps = patched.map((l) => l.p);
+      next[del.key] = ps.length === 1 ? ps[0] : ps;
+      if (indAny.maFreq?.[del.key]) {
+        const mf = { ...indAny.maFreq };
+        delete mf[del.key];
+        next.maFreq = Object.keys(mf).length ? mf : undefined;
+      }
+      return next;
+    }
+    default:
+      return ind;
+  }
+}
+
+/** Current chrome state of what a chip stands for (first matching instance /
+ *  line), or null when the kind has no chrome. */
+export function badgeChromeState(ind: ActiveIndicators, del: BadgeDel): ChromeOverride | null {
+  switch (del.kind) {
+    case "sub": {
+      if (del.key.startsWith("ovl:")) return null;
+      const { baseId, group } = parseSubChartKey(del.key);
+      if (baseId === "ha") return null;
+      const i = getInstances(ind, baseId).find((x) => effGroup(x) === group);
+      return i ? { labelsOff: !!i.labelsOff, priceLineOff: !!i.priceLineOff } : null;
+    }
+    case "inst": {
+      const i = getInstances(ind, del.id).find((x) => x.iid === del.iid);
+      return i ? { labelsOff: !!i.labelsOff, priceLineOff: !!i.priceLineOff } : null;
+    }
+    case "ma": {
+      const l = (ind as { maLines?: Record<string, { labelsOff?: boolean; priceLineOff?: boolean }[]> }).maLines?.[del.key]?.[0];
+      return { labelsOff: !!l?.labelsOff, priceLineOff: !!l?.priceLineOff };
+    }
+    default:
+      return null;
+  }
+}
+
 // ── Shared per-frequency resample cache ──
 // One weekly/monthly resample per pane, shared by every instance that needs it
 // (5 weekly indicators ⇒ 1 weekly resample, not 5).
@@ -334,6 +500,50 @@ export type FreqSourceCache = {
   /** Real OHLC bars at the given frequency (chart/undefined = as-is). */
   ohlc: (freq: InstFreq | undefined) => OhlcBar[];
 };
+
+// ── Per-instance chart-chrome overrides (axis labels / price lines) ──
+// The toolbar "Labels"/"Px line" toggles stay the pane-wide master switches;
+// these overrides only ever turn chrome OFF for one instance/line. Series are
+// tagged at creation (tagSeries) because they carry no other identity — the
+// apply loops in ChartPane look tags up in this map.
+
+export type ChromeOverride = { labelsOff: boolean; priceLineOff: boolean };
+
+/** Tag an indicator series with its instance identity ("bollinger#i2",
+ *  "sma#0") so the label/price-line apply loops can find its override. */
+export function tagSeries(s: unknown, tag: string): void {
+  try { (s as { __indTag?: string }).__indTag = tag; } catch {}
+}
+
+/** Read a tagged series' chrome override from the map (undefined = none). */
+export function seriesChromeOverride(s: unknown, overrides: Map<string, ChromeOverride>): ChromeOverride | undefined {
+  const t = (s as { __indTag?: string }).__indTag;
+  return t ? overrides.get(t) : undefined;
+}
+
+/** All explicit per-instance / per-MA-line chrome overrides on one pane.
+ *  Keys: `${indKey}#${iid}` for instances, `${maKey}#${lineIndex}` for MA
+ *  lines. Legacy-derived state can't carry flags, so only explicit
+ *  `instances` / `maLines` entries are consulted. */
+export function chromeOverrides(ind: ActiveIndicators): Map<string, ChromeOverride> {
+  const out = new Map<string, ChromeOverride>();
+  for (const [key, list] of Object.entries(ind.instances ?? {})) {
+    for (const i of list ?? []) {
+      if (i.labelsOff || i.priceLineOff) {
+        out.set(`${key}#${i.iid}`, { labelsOff: !!i.labelsOff, priceLineOff: !!i.priceLineOff });
+      }
+    }
+  }
+  const maLines = (ind as { maLines?: Record<string, { labelsOff?: boolean; priceLineOff?: boolean }[]> }).maLines ?? {};
+  for (const [key, lines] of Object.entries(maLines)) {
+    (lines ?? []).forEach((l, idx) => {
+      if (l && (l.labelsOff || l.priceLineOff)) {
+        out.set(`${key}#${idx}`, { labelsOff: !!l.labelsOff, priceLineOff: !!l.priceLineOff });
+      }
+    });
+  }
+  return out;
+}
 
 export function makeFreqSourceCache(closeData: LineDatum[], ohlcBars: OhlcBar[]): FreqSourceCache {
   const closeMemo = new Map<string, LineDatum[]>();

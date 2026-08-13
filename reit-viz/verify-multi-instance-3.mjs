@@ -44,7 +44,7 @@ const settle = (ms = 900) => new Promise((r) => setTimeout(r, ms));
 const subPanes = (base, prefix = 'sub-indicator-') => page.evaluate((b, pfx) => {
   return [...document.querySelectorAll(`[data-testid^="${pfx}"]`)]
     .map((el) => el.getAttribute('data-testid'))
-    .filter((t) => !/-(close|hide|maximize|resize)$/.test(t) && !/-readout$/.test(t))
+    .filter((t) => !/-(close|hide|maximize|resize|up|down)$/.test(t) && !/-readout$/.test(t))
     .filter((t) => t === `${pfx}${b}` || t.startsWith(`${pfx}${b}#`));
 }, base, prefix);
 const chipOf = (subTestid) => page.$eval(`${sel(subTestid)} span`, (el) => el.textContent).catch(() => null);
@@ -152,12 +152,33 @@ try {
   check(macroErrs === 0, 'Macro: no console errors');
 } catch (e) { check(false, 'Macro section errored: ' + String(e).slice(0, 160)); }
 
-// ══ 4. Correlation: shared ChartPane — RSI two instances ══
+// ══ 4. Correlation: shared ChartPane + IndicatorsPanel — RSI daily + weekly ══
 await page.goto(`${BASE}/#/correlation`, { waitUntil: 'networkidle2', timeout: 60000 });
 try {
-  await settle(8000); // correlation settle (memory: slow hydrate)
+  await settle(8000); // hydration gate (server-prefs template restore)
   const corrHasCharts = await page.evaluate(() => document.querySelectorAll('canvas').length > 0);
   check(corrHasCharts, 'Correlation page renders charts (shared ChartPane path)');
+  if (await has('corr-toggle-indicators')) {
+    await click('corr-toggle-indicators');
+    await settle(1200);
+    await click('toggle-rsi');
+    await settle();
+    await click('inst-add-rsi');
+    await settle();
+    await setControl('inst-freq-rsi-1', 'weekly');
+    await settle(1800);
+    const corrRsi = await subPanes('rsi');
+    check(corrRsi.length === 2, `Correlation: two RSI panes (${corrRsi.join(',')})`);
+    const c0 = await paneHash(corrRsi[0]);
+    const c1 = await paneHash(corrRsi[1]);
+    check(c0 !== null && c1 !== null && c0 !== c1, `Correlation: daily vs weekly RSI differ (${c0} vs ${c1})`);
+    // Clean up the probe's indicator state so it can't autosave anywhere
+    // (writes are POST-blocked anyway, but leave the page as found).
+    await click('toggle-rsi');
+    await settle();
+  } else {
+    check(false, 'Correlation: indicators toggle not present (no LWC panes configured?)');
+  }
 } catch (e) { check(false, 'Correlation section errored: ' + String(e).slice(0, 160)); }
 
 log('console errors:', errs.filter((e) => !/ERR_FAILED/.test(e)).slice(0, 8));

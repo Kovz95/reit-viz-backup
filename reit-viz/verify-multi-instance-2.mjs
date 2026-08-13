@@ -47,7 +47,7 @@ const chartReady = async () => page.evaluate(() => {
 const subPanes = (base) => page.evaluate((b) => {
   return [...document.querySelectorAll('[data-testid^="sub-indicator-"]')]
     .map((el) => el.getAttribute('data-testid'))
-    .filter((t) => /^sub-indicator-[^#]+(#.+)?$/.test(t) && !/-(close|hide|maximize|resize)$/.test(t))
+    .filter((t) => /^sub-indicator-[^#]+(#.+)?$/.test(t) && !/-(close|hide|maximize|resize|up|down)$/.test(t))
     .filter((t) => t === `sub-indicator-${b}` || t.startsWith(`sub-indicator-${b}#`));
 }, base);
 const chipOf = (subTestid) => page.$eval(`${sel(subTestid)} span`, (el) => el.textContent).catch(() => null);

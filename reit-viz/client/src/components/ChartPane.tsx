@@ -56,6 +56,9 @@ import {
   freqSuffix,
   makeFreqSourceCache,
   type FreqSourceCache,
+  tagSeries,
+  chromeOverrides,
+  seriesChromeOverride,
 } from "@/lib/indicatorInstances";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
@@ -231,8 +234,10 @@ export function overlayPaneLabel(o: IndicatorOverlay): string {
 export type MaFreqOpt = "chart" | "weekly" | "monthly";
 /** One moving-average line instance: a period at a compute frequency. Storing a
  *  LIST of these per MA type is what lets the SAME period exist at more than one
- *  frequency at once (e.g. SMA 200 daily AND SMA 200 weekly on one chart). */
-export type MaLine = { p: number; f?: MaFreqOpt };
+ *  frequency at once (e.g. SMA 200 daily AND SMA 200 weekly on one chart).
+ *  labelsOff/priceLineOff hide just this line's axis badge / current-value
+ *  line (override-off vs the toolbar toggles — see chromeOverrides). */
+export type MaLine = { p: number; f?: MaFreqOpt; labelsOff?: boolean; priceLineOff?: boolean };
 /** The 12 moving-average overlay types (keys into ActiveIndicators). */
 export const MA_KEYS = ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"] as const;
 export type MaKey = typeof MA_KEYS[number];
@@ -310,6 +315,10 @@ export interface ActiveIndicators {
    *  getInstances/setInstances, the generalization of getMaLines/setMaLines).
    *  This is what lets RSI 14 daily and RSI 14 weekly exist at once. */
   instances?: Record<string, IndicatorInstance[]>;
+  /** User-chosen vertical order of the sub-panes (sub-chart keys, top first).
+   *  Keys not listed keep their natural order after the listed ones; "ovl:"
+   *  panes always follow their source pane and are never listed here. */
+  subPaneOrder?: string[];
 }
 
 /** Resolve the MA line instances (period + frequency) for one MA type.
@@ -321,7 +330,12 @@ export function getMaLines(ind: ActiveIndicators, key: MaKey): MaLine[] {
   if (explicit && explicit.length) {
     return explicit
       .filter((l) => l && typeof l.p === "number" && Number.isFinite(l.p) && l.p > 0)
-      .map((l) => ({ p: l.p, f: l.f === "weekly" || l.f === "monthly" ? l.f : "chart" }));
+      .map((l) => ({
+        p: l.p,
+        f: l.f === "weekly" || l.f === "monthly" ? l.f : "chart",
+        ...(l.labelsOff ? { labelsOff: true } : {}),
+        ...(l.priceLineOff ? { priceLineOff: true } : {}),
+      }));
   }
   const f: MaFreqOpt = ind.maFreq?.[key] ?? "chart";
   return indicatorPeriods(ind[key] as number | number[] | undefined).map((p) => ({ p, f }));
@@ -334,7 +348,12 @@ export function getMaLines(ind: ActiveIndicators, key: MaKey): MaLine[] {
 export function setMaLines(ind: ActiveIndicators, key: MaKey, lines: MaLine[]): ActiveIndicators {
   const clean = lines
     .filter((l) => l && typeof l.p === "number" && Number.isFinite(l.p) && l.p > 0)
-    .map((l) => ({ p: l.p, ...(l.f && l.f !== "chart" ? { f: l.f } : {}) }));
+    .map((l) => ({
+      p: l.p,
+      ...(l.f && l.f !== "chart" ? { f: l.f } : {}),
+      ...(l.labelsOff ? { labelsOff: true } : {}),
+      ...(l.priceLineOff ? { priceLineOff: true } : {}),
+    }));
   const next: ActiveIndicators = { ...ind };
   const periods = clean.map((l) => l.p);
   (next as Record<string, unknown>)[key] = periods.length ? (periods.length === 1 ? periods[0] : periods) : undefined;
@@ -451,6 +470,9 @@ interface ChartPaneProps {
   /** Eye on a sub-indicator chart — toggles it into hiddenSubCharts (subplot
    *  unmounts, indicator state preserved). */
   onToggleHideSubIndicator?: (type: string) => void;
+  /** Header up/down arrows on a sub-pane: persist the pane's new sub-pane
+   *  order (complete base-key list, top first → ActiveIndicators.subPaneOrder). */
+  onReorderSubChart?: (order: string[]) => void;
   isActive?: boolean;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
@@ -569,6 +591,7 @@ function SubIndicatorChart({
   onToggleMaximize,
   onClose,
   onHide,
+  onReorder,
   height,
   onResizeStart,
   gridColor,
@@ -618,6 +641,8 @@ function SubIndicatorChart({
   onClose?: () => void;
   /** Temporarily hide this subplot (state kept — see hiddenSubCharts). */
   onHide?: () => void;
+  /** Move this subplot up (-1) / down (+1) in the stack (header arrows). */
+  onReorder?: (dir: -1 | 1) => void;
   height?: number;
   onResizeStart?: (defaultH: number, e: React.MouseEvent) => void;
   gridColor: string;
@@ -646,6 +671,7 @@ function SubIndicatorChart({
 
     // Destroy old chart
     if (chartRef.current) {
+      try { (window as any).__subCharts?.delete(chartRef.current); } catch {}
       try { chartRef.current.remove(); } catch {}
       chartRef.current = null;
     }
@@ -686,6 +712,15 @@ function SubIndicatorChart({
     let firstSubSeries: any = null;
     // Collect all named series in this sub-chart for value extraction
     const subSeriesList: any[] = [];
+    // Per-instance labels/px-line overrides, applied AT CREATION: the global
+    // pass at the end of this effect only ever turns chrome OFF, so a hidden
+    // instance stays hidden while the rest of the pane keeps its labels;
+    // re-enabling rebuilds this chart (instances is in the effect deps).
+    const applyInstChrome = (s: any, inst: IndicatorInstance) => {
+      if (inst.labelsOff || inst.priceLineOff) {
+        setSeriesAxisLabels(s, axisLabelsVisible && !inst.labelsOff, inst.priceLineOff ? false : undefined);
+      }
+    };
 
     // Invisible spacer spanning the full global date axis — identical to the one
     // the main panes carry (see the `spacerSeriesRef` effect below). Without it,
@@ -800,6 +835,7 @@ function SubIndicatorChart({
             title: `RSI ${p}${freqSuffix(eff)}${baseLabel}`,
           });
           rsiLine.setData(data);
+          applyInstChrome(rsiLine, inst);
           subSeriesList.push(rsiLine);
           if (!firstSubSeries) firstSubSeries = rsiLine;
           if (!rsiData.length) rsiData = data as any;
@@ -861,6 +897,7 @@ function SubIndicatorChart({
           title: `MACD${sfx ? ` ${sfx}` : ""}${baseLabel}`,
         });
         ml.setData(macd.macdLine);
+        applyInstChrome(ml, inst);
         subSeriesList.push(ml);
         if (!firstSubSeries) firstSubSeries = ml;
 
@@ -871,6 +908,7 @@ function SubIndicatorChart({
           crosshairMarkerVisible: false,
         });
         sl.setData(macd.signalLine);
+        applyInstChrome(sl, inst);
         subSeriesList.push(sl);
         if (!zeroSpan.length) zeroSpan = macd.macdLine as any;
       });
@@ -928,6 +966,7 @@ function SubIndicatorChart({
             title: `ATR ${p}${freqSuffix(eff)}${baseLabel}`,
           });
           atrLine.setData(atrData);
+          applyInstChrome(atrLine, inst);
           subSeriesList.push(atrLine);
           if (!firstSubSeries) firstSubSeries = atrLine;
           chart.timeScale().fitContent();
@@ -952,6 +991,7 @@ function SubIndicatorChart({
             title: `ROC ${p}${freqSuffix(eff)}${baseLabel}`,
           });
           rocLine.setData(data);
+          applyInstChrome(rocLine, inst);
           subSeriesList.push(rocLine);
           if (!firstSubSeries) firstSubSeries = rocLine;
           if (!rocData.length) rocData = data as any;
@@ -994,6 +1034,7 @@ function SubIndicatorChart({
           title: `%K(${kPeriod})${sfx}${baseLabel}`,
         });
         kLine.setData(stoch.k);
+        applyInstChrome(kLine, inst);
         subSeriesList.push(kLine);
         if (!firstSubSeries) firstSubSeries = kLine;
 
@@ -1005,6 +1046,7 @@ function SubIndicatorChart({
             crosshairMarkerVisible: false,
           });
           dLine.setData(stoch.d);
+          applyInstChrome(dLine, inst);
           subSeriesList.push(dLine);
         }
         if (!refSpan.length) refSpan = stoch.k as any;
@@ -1043,6 +1085,7 @@ function SubIndicatorChart({
           title: `OBV${freqSuffix(eff) ? ` ${freqSuffix(eff)}` : ""}${baseLabel}`,
         });
         obvLine.setData(obvData);
+        applyInstChrome(obvLine, inst);
         subSeriesList.push(obvLine);
         if (!firstSubSeries) firstSubSeries = obvLine;
         chart.timeScale().fitContent();
@@ -1107,6 +1150,7 @@ function SubIndicatorChart({
               colors,
               baseLabel: instLabel,
               register: (s) => {
+                applyInstChrome(s, inst);
                 subSeriesList.push(s);
                 if (!firstSubSeries) firstSubSeries = s;
               },
@@ -1456,7 +1500,13 @@ function SubIndicatorChart({
       } catch {}
     }
 
+    // Verification hook (mirrors Pairs' window.__pairsCharts): sub-charts
+    // aren't in window.__chartsPanes, so headless probes read series state
+    // (titles, label/px-line visibility) through this Set instead of pixels.
+    try { ((window as any).__subCharts ??= new Set()).add(chart); } catch {}
+
     return () => {
+      try { (window as any).__subCharts?.delete(chart); } catch {}
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
@@ -1511,6 +1561,26 @@ function SubIndicatorChart({
         </span>
       </div>
       <div className="absolute right-1.5 top-0.5 z-10 flex items-center gap-0.5">
+        {onReorder && !isMaximized && (
+          <>
+            <button
+              className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+              onClick={(e) => { e.stopPropagation(); onReorder(-1); }}
+              title={`Move ${label} up`}
+              data-testid={`sub-indicator-${type}-up`}
+            >
+              <ArrowUp className="w-3 h-3" />
+            </button>
+            <button
+              className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+              onClick={(e) => { e.stopPropagation(); onReorder(1); }}
+              title={`Move ${label} down`}
+              data-testid={`sub-indicator-${type}-down`}
+            >
+              <ArrowDown className="w-3 h-3" />
+            </button>
+          </>
+        )}
         {onToggleMaximize && (
           <button
             className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
@@ -1574,6 +1644,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   onDeleteFractalAll,
   onCloseSubIndicator,
   onToggleHideSubIndicator,
+  onReorderSubChart,
   isActive,
   onChartReady,
   onChartDestroyed,
@@ -3479,6 +3550,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lineVisible: !grad,
           });
           s.setData(maData);
+          tagSeries(s, `${key}#${pi}`);
           indicatorSeriesRef.current.push(s);
           if (grad) attachGradient(s, maData, key, base);
         });
@@ -3517,6 +3589,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               lineVisible: !grad,
             });
             s.setData(maData);
+            tagSeries(s, `${field as string}#${pi}`);
             indicatorSeriesRef.current.push(s);
             if (grad) attachGradient(s, maData, field as string, base);
           }
@@ -3538,6 +3611,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lineStyle: LineStyle.LargeDashed,
           });
           basisLine.setData(bb.basis);
+          tagSeries(basisLine, `bollinger#${inst.iid}`);
           indicatorSeriesRef.current.push(basisLine);
 
           const upperLine = chart.addSeries(LineSeries, {
@@ -3547,6 +3621,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lineStyle: LineStyle.Dotted,
           });
           upperLine.setData(bb.upper);
+          tagSeries(upperLine, `bollinger#${inst.iid}`);
           indicatorSeriesRef.current.push(upperLine);
 
           const lowerLine = chart.addSeries(LineSeries, {
@@ -3556,6 +3631,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lineStyle: LineStyle.Dotted,
           });
           lowerLine.setData(bb.lower);
+          tagSeries(lowerLine, `bollinger#${inst.iid}`);
           indicatorSeriesRef.current.push(lowerLine);
         }
       });
@@ -3626,6 +3702,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
                 ...octx,
                 colors,
                 baseLabel: f ? `${f === "weekly" ? "W" : "M"}${baseLabel}` : baseLabel,
+                // Tag every series this instance draws so the label/px-line
+                // apply loops can find its per-instance chrome override.
+                register: (s: ISeriesApi<any>) => {
+                  tagSeries(s, `${def.id}#${inst.iid}`);
+                  indicatorSeriesRef.current.push(s);
+                },
                 ...(def.components?.length ? { hiddenParts: new Set(inst.hiddenParts ?? []) } : {}),
               };
               const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
@@ -4140,8 +4222,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         if (key.endsWith(":markers")) continue;
         setSeriesAxisLabels(s, labelsOn, pxLinesOn);
       }
+      // Indicator series honor per-instance overrides (labels/px-line hidden
+      // for ONE instance while the pane's toggles stay on — see chromeOverrides).
+      const chrome = chromeOverrides(activeIndicators);
       for (const s of indicatorSeriesRef.current) {
-        setSeriesAxisLabels(s, labelsOn, pxLinesOn);
+        const o = seriesChromeOverride(s, chrome);
+        setSeriesAxisLabels(s, labelsOn && !o?.labelsOff, pxLinesOn && !o?.priceLineOff);
       }
     }
 
@@ -4162,8 +4248,12 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (key.endsWith(":markers")) continue;
       setSeriesAxisLabels(s, axisLabelsOn, priceLinesOn);
     }
+    // Per-instance overrides survive the global toggle round-trip (see the
+    // matching loop in the render effect above).
+    const chrome = chromeOverrides(activeIndicators);
     for (const s of indicatorSeriesRef.current) {
-      setSeriesAxisLabels(s, axisLabelsOn, priceLinesOn);
+      const o = seriesChromeOverride(s, chrome);
+      setSeriesAxisLabels(s, axisLabelsOn && !o?.labelsOff, priceLinesOn && !o?.priceLineOff);
     }
   }, [axisLabelsOn, priceLinesOn, chartReady, paneSeries, ohlcData, activeIndicators, chartConfig, dataTransform, IC, IC_W, IC_S, IC_O, IC_G, colorByData]);
 
@@ -4779,6 +4869,21 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     pushGroups("obv");
     // Registry-driven sub-pane indicators (see indicatorRegistry.ts).
     for (const def of PANE_INDICATORS) pushGroups(def.id);
+    // User-chosen vertical order (header up/down arrows): listed keys first
+    // in that order, unlisted keys keep their natural order after them. Base
+    // panes only — ovl panes are interleaved AFTER sorting so they stay
+    // glued to their source pane.
+    const order = activeIndicators.subPaneOrder;
+    if (order?.length) {
+      const natural = descs.map((d) => d.subKey);
+      descs.sort((a, b) => {
+        const ia = order.indexOf(a.subKey);
+        const ib = order.indexOf(b.subKey);
+        const ra = ia < 0 ? order.length + natural.indexOf(a.subKey) : ia;
+        const rb = ib < 0 ? order.length + natural.indexOf(b.subKey) : ib;
+        return ra - rb;
+      });
+    }
     // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
     // in right after their source pane (source = the pane's subKey).
     const paneOverlayDefs = (activeIndicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
@@ -5206,6 +5311,17 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
               onHide={onToggleHideSubIndicator ? () => {
                 setMaxSub((cur) => (cur === st ? null : cur));
                 onToggleHideSubIndicator(st);
+              } : undefined}
+              onReorder={onReorderSubChart && !st.startsWith("ovl:") ? (dir) => {
+                // Swap with the adjacent BASE pane; ovl panes follow their
+                // source automatically (interleaved after sorting).
+                const baseKeys = subPaneDescs.filter((d) => !d.subKey.startsWith("ovl:")).map((d) => d.subKey);
+                const idx = baseKeys.indexOf(st);
+                const j = idx + dir;
+                if (idx < 0 || j < 0 || j >= baseKeys.length) return;
+                const next = [...baseKeys];
+                [next[idx], next[j]] = [next[j], next[idx]];
+                onReorderSubChart(next);
               } : undefined}
               height={subHeights[st]}
               onResizeStart={(defaultH, e) => startSubResize(st, defaultH, e)}

@@ -144,6 +144,7 @@ export interface PairsPresetDef {
 }
 
 import type { ActiveIndicators } from "@/components/ChartPane";
+import { deleteIndicatorBadge, setBadgeChrome } from "@/lib/indicatorInstances";
 import { useToast } from "@/hooks/use-toast";
 
 const PAIRS_PRESETS: PairsPresetDef[] = [
@@ -2221,6 +2222,33 @@ export default function Dashboard() {
                 : [...hidden, type];
               return { ...prev, [paneId]: { ...cur, hiddenSubCharts: next.length ? next : undefined } };
             })
+          }
+          onDeleteIndicator={(paneId, del) =>
+            // Chip hover ✕ — remove the indicator outright (vs hide above).
+            setIndicatorsMap((prev) => ({
+              ...prev,
+              [paneId]: deleteIndicatorBadge(prev[paneId] ?? {}, del),
+            }))
+          }
+          onSetHiddenSubCharts={(paneId, hidden) =>
+            // Chip menu Solo — replace the pane's hidden set wholesale.
+            setIndicatorsMap((prev) => {
+              const cur = prev[paneId];
+              if (!cur) return prev;
+              return { ...prev, [paneId]: { ...cur, hiddenSubCharts: hidden?.length ? hidden : undefined } };
+            })
+          }
+          onBadgeChrome={(paneId, del, patch) =>
+            // Chip menu Labels/Px-line — per-group chrome override.
+            setIndicatorsMap((prev) => ({
+              ...prev,
+              [paneId]: setBadgeChrome(prev[paneId] ?? {}, del, patch),
+            }))
+          }
+          onClearIndicators={(paneId) =>
+            // Current Layout trash (confirmed in a popover) — wipe the pane's
+            // indicator state; plotted series and drawings are untouched.
+            setIndicatorsMap((prev) => ({ ...prev, [paneId]: {} }))
           }
           activeTicker={activeTicker}
           onSetActiveTicker={handleSetActiveTicker}

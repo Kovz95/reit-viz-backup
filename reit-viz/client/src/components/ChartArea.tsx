@@ -2878,6 +2878,13 @@ export default function ChartArea({
                   onDeleteFractalAll={handleDeleteFractalAll}
                   onCloseSubIndicator={(type) => handleCloseSubIndicator(pane.id, type)}
                   onToggleHideSubIndicator={(type) => handleToggleSubChartHidden(pane.id, type)}
+                  onReorderSubChart={(order) =>
+                    // Header up/down arrows — persist the pane's sub-pane order.
+                    setIndicatorsMap((prev) => ({
+                      ...prev,
+                      [pane.id]: { ...(prev[pane.id] ?? {}), subPaneOrder: order },
+                    }))
+                  }
                   isActive={showIndicators && pane.id === (indicatorPaneId ?? (panes.length > 0 ? panes[0].id : null))}
                   onChartReady={handleChartReady}
                   onChartDestroyed={handleChartDestroyed}

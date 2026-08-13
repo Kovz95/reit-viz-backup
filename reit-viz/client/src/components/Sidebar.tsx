@@ -5,26 +5,42 @@ import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import { indicatorPeriods, PANE_OVERLAY_TYPES, overlayPaneLabel, type ActiveIndicators } from "@/components/ChartPane";
 import { ALL_REGISTRY_INDICATORS } from "@/lib/indicatorRegistry";
-import { getInstances, paneGroups, subChartKeyFor, instanceLabel } from "@/lib/indicatorInstances";
+import { getInstances, paneGroups, subChartKeyFor, instanceLabel, badgeChromeState, type BadgeDel } from "@/lib/indicatorInstances";
 import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 
 /** Compact badges for a pane's enabled indicators (Current Layout list).
  *  `subChart` is set for indicators that render as their own subplot — those
- *  chips become show/hide toggles (hiddenSubCharts). */
+ *  chips become show/hide toggles (hiddenSubCharts). `del` describes how to
+ *  REMOVE the indicator (the chip's hover ✕ — see deleteIndicatorBadge). */
 interface IndicatorBadge {
   label: string;
   subChart?: string;
   hidden?: boolean;
+  del?: BadgeDel;
 }
+/** Every sub-pane key currently active on a pane (instance groups, HA, ovl
+ *  panes) — drives the chip menu's Solo action. */
+function allSubPaneKeys(ind: ActiveIndicators): string[] {
+  const keys: string[] = [];
+  const push = (baseId: string) => {
+    for (const g of paneGroups(ind, baseId)) keys.push(subChartKeyFor(baseId, g.group));
+  };
+  for (const b of ["rsi", "macd", "atr", "roc", "stochastic", "obv"]) push(b);
+  if ((ind as any).heikinAshi) keys.push("ha");
+  for (const def of ALL_REGISTRY_INDICATORS) if (def.renderTarget === "pane") push(def.id);
+  for (const o of ind.indicatorOverlays ?? []) if (PANE_OVERLAY_TYPES.has(o.type)) keys.push(`ovl:${o.id}`);
+  return keys;
+}
+
 function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
   if (!ind) return [];
   const hiddenSet = new Set(ind.hiddenSubCharts ?? []);
   const out: IndicatorBadge[] = [];
   const sub = (label: string, subChart: string) =>
-    out.push({ label, subChart, hidden: hiddenSet.has(subChart) });
+    out.push({ label, subChart, hidden: hiddenSet.has(subChart), del: { kind: "sub", key: subChart } });
   for (const k of ["sma", "ema", "hma", "wma", "dema", "tema", "kama", "frama", "t3", "alma", "lsma", "slsma"]) {
     const ps = indicatorPeriods((ind as any)[k]);
-    if (ps.length) out.push({ label: `${k.toUpperCase()} ${ps.join("/")}` });
+    if (ps.length) out.push({ label: `${k.toUpperCase()} ${ps.join("/")}`, del: { kind: "ma", key: k } });
   }
   // Instance-aware sub-pane indicators: one chip per pane GROUP, labeled by
   // its instance(s) ("RSI 14W", "ROC 12/ROC 20"), keyed by the group's
@@ -38,25 +54,29 @@ function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
   subGroups("rsi");
   subGroups("macd");
   // Bollinger draws on the price chart — plain badge per instance.
-  for (const inst of getInstances(ind, "bollinger")) out.push({ label: instanceLabel("bollinger", inst) });
+  for (const inst of getInstances(ind, "bollinger")) {
+    out.push({ label: instanceLabel("bollinger", inst), del: { kind: "inst", id: "bollinger", iid: inst.iid } });
+  }
   subGroups("atr");
   subGroups("roc");
   subGroups("stochastic");
   if ((ind as any).heikinAshi) sub("HA", "ha");
   subGroups("obv");
-  if (ind.mean) out.push({ label: ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean" });
-  if ((ind as any).vwap) out.push({ label: "VWAP" });
-  if (ind.fractalLines) out.push({ label: "Fractals" });
+  if (ind.mean) out.push({ label: ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean", del: { kind: "flag", field: "mean" } });
+  if ((ind as any).vwap) out.push({ label: "VWAP", del: { kind: "flag", field: "vwap" } });
+  if (ind.fractalLines) out.push({ label: "Fractals", del: { kind: "flag", field: "fractalLines" } });
   for (const def of ALL_REGISTRY_INDICATORS) {
     if (def.renderTarget === "pane") subGroups(def.id);
-    else for (const inst of getInstances(ind, def.id)) out.push({ label: instanceLabel(def.id, inst) });
+    else for (const inst of getInstances(ind, def.id)) {
+      out.push({ label: instanceLabel(def.id, inst), del: { kind: "inst", id: def.id, iid: inst.iid } });
+    }
   }
   // Indicator-on-indicator overlays: MACD/RSI/ROC/Autocorr render as their
   // own sub-chart pane (hide/show like any subplot); same-domain overlays
   // (MAs, Bollinger, …) stay plain badges.
   for (const o of ind.indicatorOverlays ?? []) {
     if (PANE_OVERLAY_TYPES.has(o.type)) sub(overlayPaneLabel(o), `ovl:${o.id}`);
-    else out.push({ label: overlayPaneLabel(o) });
+    else out.push({ label: overlayPaneLabel(o), del: { kind: "ovl", id: o.id } });
   }
   return out;
 }
@@ -124,6 +144,7 @@ import {
   Bookmark,
   Save,
   Loader2,
+  MoreVertical,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -167,6 +188,15 @@ interface SidebarProps {
   /** Toggle a subplot (RSI, ROC, …) in/out of hiddenSubCharts for a pane —
    *  the Current Layout chips become show/hide buttons when provided. */
   onToggleSubChart?: (paneId: number, type: string) => void;
+  /** REMOVE the indicator a chip stands for (the hover ✕ on every Current
+   *  Layout chip — see deleteIndicatorBadge in lib/indicatorInstances). */
+  onDeleteIndicator?: (paneId: number, del: BadgeDel) => void;
+  /** Replace a pane's hiddenSubCharts wholesale (chip menu Solo). */
+  onSetHiddenSubCharts?: (paneId: number, hidden: string[] | undefined) => void;
+  /** Toggle a chip's labels/px-line chrome (see setBadgeChrome). */
+  onBadgeChrome?: (paneId: number, del: BadgeDel, patch: { labelsOff?: boolean; priceLineOff?: boolean }) => void;
+  /** Remove EVERY indicator from a pane (Current Layout trash, confirmed). */
+  onClearIndicators?: (paneId: number) => void;
   panes: PaneInfo[];
   activeTicker: string | null;
   onSetActiveTicker: (t: string | null) => void;
@@ -230,6 +260,10 @@ export default function Sidebar({
   plottedSeries,
   indicatorsMap,
   onToggleSubChart,
+  onDeleteIndicator,
+  onSetHiddenSubCharts,
+  onBadgeChrome,
+  onClearIndicators,
   panes,
   activeTicker,
   onSetActiveTicker,
@@ -1576,30 +1610,130 @@ export default function Sidebar({
                         const badges = indicatorBadges(indicatorsMap?.[pane.id]);
                         return badges.length > 0 ? (
                           <div className="flex flex-wrap gap-0.5 pl-4 pb-0.5" data-testid={`layout-indicators-${pane.id}`}>
-                            {badges.map((b, bi) =>
-                              b.subChart && onToggleSubChart ? (
-                                <button
-                                  // subChart keys are unique per pane group; labels can
-                                  // repeat (two "RSI 14" instances in separate panes).
-                                  key={b.subChart}
-                                  type="button"
-                                  onClick={() => onToggleSubChart(pane.id, b.subChart!)}
-                                  title={b.hidden ? `Show the ${b.label} subplot` : `Hide the ${b.label} subplot (keeps its settings)`}
-                                  data-testid={`layout-subchart-${pane.id}-${b.subChart}`}
-                                  className={`flex items-center gap-0.5 px-1 py-px rounded text-[9px] leading-tight whitespace-nowrap transition-colors ${
-                                    b.hidden
-                                      ? "bg-muted text-muted-foreground/60 line-through hover:text-foreground"
-                                      : "bg-primary/10 text-primary/80 hover:bg-primary/20"
-                                  }`}
-                                >
-                                  {b.hidden ? <EyeOff className="w-2.5 h-2.5 shrink-0" /> : <Eye className="w-2.5 h-2.5 shrink-0 opacity-50" />}
-                                  {b.label}
-                                </button>
-                              ) : (
-                                <span key={`${b.label}-${bi}`} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
-                                  {b.label}
-                                </span>
-                              )
+                            {badges.map((b, bi) => (
+                              // subChart keys are unique per pane group; labels can
+                              // repeat (two "RSI 14" instances in separate panes).
+                              <span
+                                key={b.subChart ?? `${b.label}-${bi}`}
+                                className={`group/chip inline-flex items-center rounded text-[9px] leading-tight whitespace-nowrap transition-colors ${
+                                  b.hidden
+                                    ? "bg-muted text-muted-foreground/60"
+                                    : "bg-primary/10 text-primary/80"
+                                }`}
+                              >
+                                {b.subChart && onToggleSubChart ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onToggleSubChart(pane.id, b.subChart!)}
+                                    title={b.hidden ? `Show the ${b.label} subplot` : `Hide the ${b.label} subplot (keeps its settings)`}
+                                    data-testid={`layout-subchart-${pane.id}-${b.subChart}`}
+                                    className={`flex items-center gap-0.5 px-1 py-px rounded-l ${
+                                      b.hidden ? "line-through hover:text-foreground" : "hover:bg-primary/20"
+                                    }`}
+                                  >
+                                    {b.hidden ? <EyeOff className="w-2.5 h-2.5 shrink-0" /> : <Eye className="w-2.5 h-2.5 shrink-0 opacity-50" />}
+                                    {b.label}
+                                  </button>
+                                ) : (
+                                  <span className="px-1 py-px">{b.label}</span>
+                                )}
+                                {b.del && (onBadgeChrome || onDeleteIndicator || onSetHiddenSubCharts) && (() => {
+                                  const ind = indicatorsMap?.[pane.id];
+                                  const chrome = ind && b.del ? badgeChromeState(ind, b.del) : null;
+                                  const entry = "block w-full text-left text-[11px] px-1.5 py-1 rounded hover:bg-accent whitespace-nowrap";
+                                  return (
+                                    <Popover>
+                                      <PopoverTrigger asChild>
+                                        <button
+                                          type="button"
+                                          title={`${b.label} actions`}
+                                          data-testid={`layout-menu-${pane.id}-${b.subChart ?? bi}`}
+                                          className="px-0 py-px opacity-0 group-hover/chip:opacity-100 hover:text-foreground transition-opacity"
+                                        >
+                                          <MoreVertical className="w-2.5 h-2.5" />
+                                        </button>
+                                      </PopoverTrigger>
+                                      <PopoverContent className="w-auto min-w-[8rem] p-1" align="start">
+                                        <div className="text-[9px] text-muted-foreground/70 px-1.5 py-0.5 uppercase tracking-wider truncate">{b.label}</div>
+                                        {b.subChart && onToggleSubChart && (
+                                          <button type="button" className={entry} data-testid="chip-hide"
+                                            onClick={() => onToggleSubChart(pane.id, b.subChart!)}>
+                                            {b.hidden ? "Show subplot" : "Hide subplot"}
+                                          </button>
+                                        )}
+                                        {b.subChart && onSetHiddenSubCharts && ind && (
+                                          <button type="button" className={entry} data-testid="chip-solo"
+                                            onClick={() => {
+                                              // Solo = hide every OTHER sub-pane; soloing again unhides all.
+                                              const others = allSubPaneKeys(ind).filter((k) => k !== b.subChart);
+                                              const hidden = new Set(ind.hiddenSubCharts ?? []);
+                                              const soloed = others.length > 0 && others.every((k) => hidden.has(k)) && !hidden.has(b.subChart!);
+                                              onSetHiddenSubCharts(pane.id, soloed ? undefined : others);
+                                            }}>
+                                            Solo (again to unhide all)
+                                          </button>
+                                        )}
+                                        {chrome && onBadgeChrome && (
+                                          <button type="button" className={entry} data-testid="chip-labels"
+                                            onClick={() => onBadgeChrome(pane.id, b.del!, { labelsOff: !chrome.labelsOff })}>
+                                            {chrome.labelsOff ? "Show axis labels" : "Hide axis labels"}
+                                          </button>
+                                        )}
+                                        {chrome && onBadgeChrome && (
+                                          <button type="button" className={entry} data-testid="chip-pxline"
+                                            onClick={() => onBadgeChrome(pane.id, b.del!, { priceLineOff: !chrome.priceLineOff })}>
+                                            {chrome.priceLineOff ? "Show price line" : "Hide price line"}
+                                          </button>
+                                        )}
+                                        {onDeleteIndicator && (
+                                          <button type="button" className={`${entry} text-destructive hover:text-destructive`} data-testid="chip-delete"
+                                            onClick={() => onDeleteIndicator(pane.id, b.del!)}>
+                                            Delete
+                                          </button>
+                                        )}
+                                      </PopoverContent>
+                                    </Popover>
+                                  );
+                                })()}
+                                {b.del && onDeleteIndicator && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteIndicator(pane.id, b.del!)}
+                                    title={`Remove ${b.label} from this pane`}
+                                    data-testid={`layout-del-${pane.id}-${bi}`}
+                                    className="px-0.5 py-px rounded-r opacity-0 group-hover/chip:opacity-100 hover:text-destructive transition-opacity"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                )}
+                              </span>
+                            ))}
+                            {onClearIndicators && (
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <button
+                                    type="button"
+                                    title="Remove ALL indicators from this pane"
+                                    data-testid={`layout-clear-indicators-${pane.id}`}
+                                    className="px-1 py-px rounded text-muted-foreground/50 hover:text-destructive"
+                                  >
+                                    <Trash2 className="w-2.5 h-2.5" />
+                                  </button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-2" align="start">
+                                  <div className="text-[10px] text-muted-foreground mb-1.5">
+                                    Clear {badges.length} indicator{badges.length === 1 ? "" : "s"} from this pane?
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="w-full h-6 px-2 text-[10px] rounded border border-destructive/50 text-destructive hover:bg-destructive/10"
+                                    data-testid="layout-clear-indicators-confirm"
+                                    onClick={() => onClearIndicators(pane.id)}
+                                  >
+                                    Clear all
+                                  </button>
+                                </PopoverContent>
+                              </Popover>
                             )}
                           </div>
                         ) : null;
