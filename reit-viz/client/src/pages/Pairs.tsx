@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, Filter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { ArrowUp, ArrowDown, Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, Filter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -89,9 +89,12 @@ import {
   effectiveFreq,
   freqSuffix,
   makeFreqSourceCache,
+  deleteIndicatorBadge,
+  setBadgeChrome,
   type IndicatorInstance,
   type FreqSourceCache,
 } from "@/lib/indicatorInstances";
+import { IndicatorChipsRow } from "@/components/IndicatorChips";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { downsampleSeries } from "@/lib/chartFrequency";
@@ -1149,6 +1152,25 @@ export function PairsIndicatorsPanel({
               </Button>
             )}
           </div>
+          {/* Active-indicator chips for the selected chart — same component as
+              the Charts sidebar's Current Layout (show/hide, hover ✕ delete,
+              ⋮ menu w/ solo + labels/px-line, clear-all). Pairs key space:
+              registry sub-panes carry "reg:", HA is a main-chart overlay. */}
+          <IndicatorChipsRow
+            ind={activeIndicators}
+            idKey={activeChartId}
+            opts={{ regPrefix: true, haAsOverlay: true }}
+            className="flex flex-wrap gap-0.5 pt-1"
+            onToggleSubChart={(t) => {
+              const hidden = activeIndicators.hiddenSubCharts ?? [];
+              const next = hidden.includes(t) ? hidden.filter((x) => x !== t) : [...hidden, t];
+              setIndicators({ ...activeIndicators, hiddenSubCharts: next.length ? next : undefined });
+            }}
+            onDelete={(del) => setIndicators(deleteIndicatorBadge(activeIndicators, del))}
+            onBadgeChrome={(del, patch) => setIndicators(setBadgeChrome(activeIndicators, del, patch))}
+            onSetHiddenSubCharts={(h) => setIndicators({ ...activeIndicators, hiddenSubCharts: h?.length ? h : undefined })}
+            onClearIndicators={() => setIndicators({})}
+          />
         </div>
       )}
 
@@ -1828,6 +1850,20 @@ function getActiveSubPanes(indicators: ActiveIndicators): PairsSubPaneDesc[] {
   for (const def of ALL_REGISTRY_INDICATORS) {
     if (def.renderTarget === "pane") pushGroups(def.id, "reg:");
   }
+  // User-chosen vertical order (header up/down arrows): listed keys first,
+  // unlisted keep natural order after them — sorted BEFORE the ovl interleave
+  // so overlay panes stay glued to their source (Charts parity).
+  const order = indicators.subPaneOrder;
+  if (order?.length) {
+    const natural = out.map((d) => d.subKey as string);
+    out.sort((a, b) => {
+      const ia = order.indexOf(a.subKey as string);
+      const ib = order.indexOf(b.subKey as string);
+      const ra = ia < 0 ? order.length + natural.indexOf(a.subKey as string) : ia;
+      const rb = ib < 0 ? order.length + natural.indexOf(b.subKey as string) : ib;
+      return ra - rb;
+    });
+  }
   // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
   // in right after their source pane — same as the Charts tab. Overlay
   // sources are Charts-style subKeys ("adx", "rsi#i2"); Pairs pane ids carry
@@ -1865,6 +1901,7 @@ function PairsSubIndicatorChart({
   onToggleMaximize,
   onHide,
   onClose,
+  onReorder,
   height,
   onResizeStart,
 }: {
@@ -1898,6 +1935,8 @@ function PairsSubIndicatorChart({
   onToggleMaximize?: () => void;
   onHide?: () => void;
   onClose?: () => void;
+  /** Move this subplot up (-1) / down (+1) in the stack (header arrows). */
+  onReorder?: (dir: -1 | 1) => void;
   height?: number;
   onResizeStart?: (defaultH: number, e: ReactMouseEvent) => void;
 }) {
@@ -1944,6 +1983,9 @@ function PairsSubIndicatorChart({
       handleScale: { mouseWheel: true, pinch: true },
     });
     chartRef.current = chart;
+    // Verification hook — same Set ChartPane's sub-charts use, so headless
+    // probes can read sub-pane series state (titles, label visibility).
+    try { (((window as any).__subCharts ||= new Set()) as Set<unknown>).add(chart); } catch {}
 
     // Record every series created so the global Labels/Px-line preference can
     // be applied at the end without touching each addSeries site.
@@ -2501,6 +2543,7 @@ function PairsSubIndicatorChart({
     }
 
     return () => {
+      try { ((window as any).__subCharts as Set<unknown> | undefined)?.delete(chart); } catch {}
       chartRef.current = null;
       removeParentSubs?.();
       setHoverReadout(null);
@@ -2551,6 +2594,26 @@ function PairsSubIndicatorChart({
         </span>
       </div>
       <div className="absolute right-1.5 top-0.5 z-10 flex items-center gap-0.5">
+        {onReorder && !isMaximized && (
+          <>
+            <button
+              className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+              onClick={(e) => { e.stopPropagation(); onReorder(-1); }}
+              title={`Move ${label} up`}
+              data-testid={`pairs-sub-indicator-${type}-up`}
+            >
+              <ArrowUp className="w-3 h-3" />
+            </button>
+            <button
+              className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
+              onClick={(e) => { e.stopPropagation(); onReorder(1); }}
+              title={`Move ${label} down`}
+              data-testid={`pairs-sub-indicator-${type}-down`}
+            >
+              <ArrowDown className="w-3 h-3" />
+            </button>
+          </>
+        )}
         {onToggleMaximize && (
           <button
             className="text-muted-foreground/50 hover:text-foreground bg-background/80 rounded p-0.5"
@@ -3546,6 +3609,17 @@ export function MiniChart({
               onToggleMaximize={() => setMaxSub((cur) => (cur === sc ? null : sc))}
               onClose={onChangeIndicators ? () => { setMaxSub((cur) => (cur === sc ? null : cur)); closeSub(sc); } : undefined}
               onHide={onChangeIndicators ? () => { setMaxSub((cur) => (cur === sc ? null : cur)); hideSub(sc); } : undefined}
+              onReorder={onChangeIndicators && !sc.startsWith("ovl:") ? (dir) => {
+                // Swap with the adjacent BASE pane; ovl panes follow their
+                // source automatically (interleaved after sorting).
+                const baseKeys = subPaneDescs.filter((d) => !d.subKey.startsWith("ovl:")).map((d) => d.subKey as string);
+                const idx = baseKeys.indexOf(sc);
+                const j = idx + dir;
+                if (idx < 0 || j < 0 || j >= baseKeys.length) return;
+                const next = [...baseKeys];
+                [next[idx], next[j]] = [next[j], next[idx]];
+                onChangeIndicators({ ...activeIndicators, subPaneOrder: next });
+              } : undefined}
               height={subHeights[sc]}
               onResizeStart={(defaultH, e) => startSubResize(sc, defaultH, e)}
             />

@@ -365,7 +365,9 @@ export function deleteIndicatorBadge(ind: ActiveIndicators, del: BadgeDel): Acti
         const next = { ...ind, indicatorOverlays: overlays.length ? overlays : undefined } as ActiveIndicators;
         return purgeHiddenKey(next, del.key);
       }
-      const { baseId, group } = parseSubChartKey(del.key);
+      // Pairs registry sub-panes carry a "reg:" prefix — strip it for the
+      // parse only; hiddenSubCharts stores the full (prefixed) key.
+      const { baseId, group } = parseSubChartKey(del.key.startsWith("reg:") ? del.key.slice(4) : del.key);
       if (baseId === "ha") {
         const next = { ...ind } as ActiveIndicators & { heikinAshi?: unknown };
         delete next.heikinAshi;
@@ -419,7 +421,7 @@ export function setBadgeChrome(
   switch (del.kind) {
     case "sub": {
       if (del.key.startsWith("ovl:")) return ind;
-      const { baseId, group } = parseSubChartKey(del.key);
+      const { baseId, group } = parseSubChartKey(del.key.startsWith("reg:") ? del.key.slice(4) : del.key);
       if (baseId === "ha") return ind;
       const list = getInstances(ind, baseId).map((i) => (effGroup(i) === group ? applyTo(i) : i));
       return list.length ? setInstances(ind, baseId, list) : ind;
@@ -471,7 +473,7 @@ export function badgeChromeState(ind: ActiveIndicators, del: BadgeDel): ChromeOv
   switch (del.kind) {
     case "sub": {
       if (del.key.startsWith("ovl:")) return null;
-      const { baseId, group } = parseSubChartKey(del.key);
+      const { baseId, group } = parseSubChartKey(del.key.startsWith("reg:") ? del.key.slice(4) : del.key);
       if (baseId === "ha") return null;
       const i = getInstances(ind, baseId).find((x) => effGroup(x) === group);
       return i ? { labelsOff: !!i.labelsOff, priceLineOff: !!i.priceLineOff } : null;

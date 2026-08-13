@@ -124,6 +124,13 @@ let fs = await firstChartSeries();
 const sma200 = () => fs.find((x) => /^SMA 200/.test(x.title));
 const sma50 = () => fs.find((x) => /^SMA 50/.test(x.title));
 check(!!sma200() && !!sma50(), 'SMA 200 + 50 plotted on the active pane');
+// The restored chart config may have the GLOBAL Labels/Px-line toggles off
+// (they're the master switches) — normalize both to ON before testing the
+// per-line overrides.
+if (sma50() && sma50().shownTitle === '') { await click('toggle-axis-labels'); await settle(1200); }
+if (sma50() && sma50().priceLineVisible === false) { await click('toggle-price-lines'); await settle(1200); }
+fs = await firstChartSeries();
+check(sma50()?.shownTitle !== '' && sma50()?.priceLineVisible === true, 'globals normalized ON');
 await click('ma-labels-sma-0');
 await click('ma-pxline-sma-0');
 await settle(1800);
