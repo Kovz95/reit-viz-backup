@@ -19,6 +19,7 @@ import { parsePairTicker } from "@/pages/Dashboard";
 import { useBaskets } from "@/lib/useBaskets";
 import type { TickerMeta } from "@shared/schema";
 import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
+import { parseSubChartKey, getInstances, setInstances, effGroup } from "@/lib/indicatorInstances";
 import type { IChartApi } from "lightweight-charts";
 import ChartPane, { gridColorFor } from "./ChartPane";
 import IndicatorsPanel from "./IndicatorsPanel";
@@ -1300,18 +1301,23 @@ export default function ChartArea({
         }
         return { ...prev, [paneId]: next };
       }
-      switch (type) {
-        case "rsi": delete next.rsi; delete next.rsiFreq; break;
-        case "macd": delete next.macd; break;
-        case "ha": delete next.heikinAshi; break;
-        case "atr": delete next.atr; break;
-        case "roc": delete next.roc; break;
-        case "stochastic": delete next.stochastic; break;
-        case "obv": delete next.obv; break;
-        default:
-          if (next.registry?.[type]?.enabled) {
-            next.registry = { ...next.registry, [type]: { ...next.registry[type], enabled: false } };
-          }
+      // Instance panes ("rsi", "rsi#i2", registry ids…): drop just the
+      // instances of that pane GROUP; setInstances keeps the legacy fields in
+      // sync (closing the last RSI pane clears rsi + rsiFreq, closing the last
+      // registry pane flips registry[id].enabled off). "ha" stays a singleton.
+      const { baseId, group } = parseSubChartKey(type);
+      if (baseId === "ha") {
+        delete next.heikinAshi;
+      } else {
+        const remaining = getInstances(next, baseId).filter((i) => effGroup(i) !== group);
+        const updated = setInstances(next, baseId, remaining);
+        // Drop the closed pane's key from hiddenSubCharts so a later pane
+        // with the same key doesn't come back pre-hidden.
+        if (updated.hiddenSubCharts?.includes(type)) {
+          updated.hiddenSubCharts = updated.hiddenSubCharts.filter((t) => t !== type);
+          if (!updated.hiddenSubCharts.length) delete updated.hiddenSubCharts;
+        }
+        return { ...prev, [paneId]: updated };
       }
       return { ...prev, [paneId]: next };
     });
@@ -3038,14 +3044,17 @@ export default function ChartArea({
             }
             onCopyIndicatorToPane={(defId, srcPaneId, target) =>
               // Merge ONE indicator's state into the target pane(s) atomically.
+              // Copies the full INSTANCE list (all panes/frequencies of that
+              // indicator), replacing the target's — works for registry ids
+              // and instance-enabled built-ins alike (setInstances keeps the
+              // legacy single-slot fields in sync on the target).
               setIndicatorsMap(prev => {
-                const src = prev[srcPaneId]?.registry?.[defId];
-                if (!src) return prev;
+                const src = getInstances(prev[srcPaneId] || {}, defId);
+                if (!src.length) return prev;
                 const ids = target === "all" ? panes.filter(p => p.id !== srcPaneId).map(p => p.id) : [target];
                 const next = { ...prev };
                 for (const id of ids) {
-                  const cur = next[id] || {};
-                  next[id] = { ...cur, registry: { ...(cur.registry || {}), [defId]: JSON.parse(JSON.stringify(src)) } };
+                  next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
                 }
                 return next;
               })

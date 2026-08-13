@@ -77,7 +77,21 @@ import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, PeriodMultiSelect, IndicatorOverlays, SectionHeader, MaRow } from "@/components/IndicatorsPanel";
+import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, IndicatorOverlays, SectionHeader, MaRow, BuiltinInstanceSection } from "@/components/IndicatorsPanel";
+import {
+  getInstances,
+  setInstances,
+  paneGroups,
+  subChartKeyFor,
+  parseSubChartKey,
+  effGroup,
+  instanceLabel,
+  effectiveFreq,
+  freqSuffix,
+  makeFreqSourceCache,
+  type IndicatorInstance,
+  type FreqSourceCache,
+} from "@/lib/indicatorInstances";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { downsampleSeries } from "@/lib/chartFrequency";
@@ -89,7 +103,7 @@ import { ResizableSidebar } from "@/components/ResizableSidebar";
 import { indicatorPeriods, getMaLines, setMaLines, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
 import type { IndicatorOverlay } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
-import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
+import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resolveParamList, resampleIndicatorBars, type RegistryIndicatorState } from "@/lib/indicatorRegistry";
 import ExportMenu from "@/components/ExportMenu";
 import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 import { useBaskets } from "@/lib/useBaskets";
@@ -994,14 +1008,16 @@ export function PairsIndicatorsPanel({
       if (c.id !== activeChartId) onChangeIndicators(c.id, { ...activeIndicators });
     }
   };
-  // Copy ONE indicator's state from the active chart to a target chart (or all).
+  // Copy ONE indicator's state from the active chart to a target chart (or
+  // all). Copies the full INSTANCE list (every pane/frequency of it),
+  // replacing the target's — works for registry ids and instance-enabled
+  // built-ins alike (setInstances keeps legacy fields in sync on the target).
   const copyIndicatorToChart = (defId: string, target: string | "all") => {
-    const src = activeIndicators.registry?.[defId];
-    if (!src) return;
+    const src = getInstances(activeIndicators, defId);
+    if (!src.length) return;
     const ids = target === "all" ? charts.filter((c) => c.id !== activeChartId).map((c) => c.id) : [target];
     for (const id of ids) {
-      const cur = indicatorsMap[id] || {};
-      onChangeIndicators(id, { ...cur, registry: { ...(cur.registry ?? {}), [defId]: JSON.parse(JSON.stringify(src)) } });
+      onChangeIndicators(id, setInstances(indicatorsMap[id] || {}, defId, JSON.parse(JSON.stringify(src))));
     }
   };
 
@@ -1026,15 +1042,6 @@ export function PairsIndicatorsPanel({
   const meanCfg = activeIndicators.mean;
   const [meanRolling, setMeanRolling] = useState(meanCfg?.rolling ?? false);
   const [meanPeriod, setMeanPeriod] = useState(meanCfg?.period ?? 200);
-  const [rsiPeriod, setRsiPeriod] = useState(
-    typeof activeIndicators.rsi === "number" ? activeIndicators.rsi : 14
-  );
-  const [bbPeriod, setBbPeriod] = useState(activeIndicators.bollinger?.period ?? 20);
-  const [bbMult, setBbMult] = useState(activeIndicators.bollinger?.mult ?? 2);
-  const [atrPeriod, setAtrPeriod] = useState(typeof activeIndicators.atr === "number" ? activeIndicators.atr : 14);
-  const [rocPeriod, setRocPeriod] = useState(typeof activeIndicators.roc === "number" ? activeIndicators.roc : 12);
-  const [stochK, setStochK] = useState(activeIndicators.stochastic?.kPeriod ?? 14);
-  const [stochD, setStochD] = useState(activeIndicators.stochastic?.dPeriod ?? 3);
   const [ovlCollapsed, setOvlCollapsed] = useState(false);
   const [fractalN, setFractalN] = useState(activeIndicators.fractalLines?.n ?? 10);
 
@@ -1193,90 +1200,16 @@ export function PairsIndicatorsPanel({
             className="mb-3"
           />
           {!isCollapsed("Oscillators") && (<>
-          {/* RSI — multi-period, one line per period (Charts parity) */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">RSI</Label>
-              <Switch checked={indicatorPeriods(activeIndicators.rsi).length > 0}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, rsi: on ? [rsiPeriod] : undefined })} data-testid="toggle-rsi" />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[7, 14, 21]}
-                active={activeIndicators.rsi}
-                onChange={(list) => {
-                  if (list?.length) setRsiPeriod(list[0]);
-                  setIndicators({ ...activeIndicators, rsi: list });
-                }}
-                testid="custom-rsi"
-              />
-              <select
-                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-                value={activeIndicators.rsiFreq ?? "chart"}
-                onChange={(e) => setIndicators({ ...activeIndicators, rsiFreq: e.target.value as any })}
-                title="Compute RSI on the chart's bars, or on weekly/monthly resampled closes (weekly RSI on a daily chart)"
-                data-testid="pairs-freq-rsi"
-              >
-                <option value="chart">Chart</option>
-                <option value="weekly">W</option>
-                <option value="monthly">M</option>
-              </select>
-            </div>
-          </div>
-          {/* MACD */}
-          <div className="flex items-center justify-between mt-3">
-            <Label className="text-xs font-medium">MACD (12, 26, 9)</Label>
-            <Switch checked={!!activeIndicators.macd}
-              onCheckedChange={(on) => setIndicators({ ...activeIndicators, macd: on || undefined })} data-testid="toggle-macd" />
-          </div>
-          {/* Stochastic */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Stochastic</Label>
-              <Switch checked={activeIndicators.stochastic !== undefined}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, stochastic: on ? { kPeriod: stochK, dPeriod: stochD } : undefined })} data-testid="toggle-stochastic" />
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-8">%K:</span>
-              {[9, 14, 21].map((p) => (
-                <Button key={p} variant={stochK === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setStochK(p); if (activeIndicators.stochastic) setIndicators({ ...activeIndicators, stochastic: { kPeriod: p, dPeriod: stochD } }); }}>
-                  {p}
-                </Button>
-              ))}
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-8">%D:</span>
-              {[3, 5, 7].map((p) => (
-                <Button key={p} variant={stochD === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setStochD(p); if (activeIndicators.stochastic) setIndicators({ ...activeIndicators, stochastic: { kPeriod: stochK, dPeriod: p } }); }}>
-                  {p}
-                </Button>
-              ))}
-            </div>
-          </div>
-          {/* ROC — multi-period (Charts parity) */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">ROC (Rate of Change)</Label>
-              <Switch checked={indicatorPeriods(activeIndicators.roc).length > 0}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, roc: on ? [rocPeriod] : undefined })} data-testid="toggle-roc" />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[9, 12, 20, 50]}
-                active={activeIndicators.roc}
-                onChange={(list) => {
-                  if (list?.length) setRocPeriod(list[0]);
-                  setIndicators({ ...activeIndicators, roc: list });
-                }}
-                testid="custom-roc"
-                min={1}
-              />
-            </div>
-          </div>
+          {/* Instance rows (shared with Charts): each row = params + freq +
+              pane, so RSI 14 daily and RSI 14 weekly can run at once. */}
+          <BuiltinInstanceSection indKey="rsi" title="RSI"
+            activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} />
+          <BuiltinInstanceSection indKey="macd" title="MACD"
+            activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
+          <BuiltinInstanceSection indKey="stochastic" title="Stochastic"
+            activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
+          <BuiltinInstanceSection indKey="roc" title="ROC (Rate of Change)"
+            activeIndicators={activeIndicators} onChange={setIndicators} presets={[9, 12, 20, 50]} className="mt-3" />
           </>)}
         </div>
 
@@ -1289,53 +1222,11 @@ export function PairsIndicatorsPanel({
             className="mb-3"
           />
           {!isCollapsed("Volatility") && (<>
-          {/* Bollinger Bands */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Bollinger Bands</Label>
-              <Switch checked={activeIndicators.bollinger !== undefined}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, bollinger: on ? { period: bbPeriod, mult: bbMult } : undefined })} data-testid="toggle-bollinger" />
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-12">Period:</span>
-              {[10, 20, 50].map((p) => (
-                <Button key={p} variant={bbPeriod === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setBbPeriod(p); if (activeIndicators.bollinger) setIndicators({ ...activeIndicators, bollinger: { period: p, mult: bbMult } }); }}>
-                  {p}
-                </Button>
-              ))}
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-12">Width:</span>
-              {[1, 1.5, 2, 2.5, 3].map((m) => (
-                <Button key={m} variant={bbMult === m ? "default" : "secondary"} size="sm"
-                  className="h-6 px-1.5 text-[10px] flex-1"
-                  onClick={() => { setBbMult(m); if (activeIndicators.bollinger) setIndicators({ ...activeIndicators, bollinger: { period: bbPeriod, mult: m } }); }}>
-                  {m}σ
-                </Button>
-              ))}
-            </div>
-          </div>
-          {/* ATR — multi-period (Charts parity) */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">ATR</Label>
-              <Switch checked={indicatorPeriods(activeIndicators.atr).length > 0}
-                onCheckedChange={(on) => setIndicators({ ...activeIndicators, atr: on ? [atrPeriod] : undefined })} data-testid="toggle-atr" />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[7, 14, 21]}
-                active={activeIndicators.atr}
-                onChange={(list) => {
-                  if (list?.length) setAtrPeriod(list[0]);
-                  setIndicators({ ...activeIndicators, atr: list });
-                }}
-                testid="custom-atr"
-              />
-            </div>
-          </div>
+          {/* Bollinger — instance rows (overlay: no pane dropdown); ATR below. */}
+          <BuiltinInstanceSection indKey="bollinger" title="Bollinger Bands"
+            activeIndicators={activeIndicators} onChange={setIndicators} presets={[10, 20, 50]} />
+          <BuiltinInstanceSection indKey="atr" title="ATR"
+            activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} className="mt-3" />
           </>)}
         </div>
 
@@ -1368,14 +1259,8 @@ export function PairsIndicatorsPanel({
             className="mb-3"
           />
           {!isCollapsed("Volume") && (
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-xs font-medium">OBV</Label>
-              <p className="text-[10px] text-muted-foreground mt-0.5">On Balance Volume sub-pane</p>
-            </div>
-            <Switch checked={!!activeIndicators.obv}
-              onCheckedChange={(on) => setIndicators({ ...activeIndicators, obv: on || undefined })} data-testid="toggle-obv" />
-          </div>
+          <BuiltinInstanceSection indKey="obv" title="OBV"
+            activeIndicators={activeIndicators} onChange={setIndicators} />
           )}
         </div>
 
@@ -1578,6 +1463,7 @@ export function PairsIndicatorsPanel({
             <RegistryIndicatorControls
               activeIndicators={activeIndicators}
               onChange={setIndicators}
+              frequency="daily"
               copyTargets={charts.length > 1 ? charts.filter((c) => c.id !== activeChartId).map((c) => ({ id: c.id, label: c.title })) : undefined}
               onCopyIndicator={charts.length > 1 ? (defId, target) => copyIndicatorToChart(defId, target as string | "all") : undefined}
             />
@@ -1848,9 +1734,18 @@ function OlsScatterChart({
 // ── Which indicators get their own sub-pane (oscillators/separate-scale) ──
 // Registry-driven sub-pane indicators (ADX, CCI, Aroon, …) are encoded as
 // "reg:<id>" so one component handles both the bespoke and registry kinds.
-type PairsSubChartType = "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv" | `reg:${string}` | `ovl:${string}`;
+// Pane keys: bare ids for the legacy instance group ("rsi", "reg:adx"), or
+// instance-group keys ("rsi#i2", "reg:adx#i2") — see lib/indicatorInstances.
+type PairsSubChartType =
+  | "rsi" | "macd" | "ha" | "roc" | "stochastic" | "atr" | "obv"
+  | `${"rsi" | "macd" | "roc" | "stochastic" | "atr" | "obv"}#${string}`
+  | `reg:${string}` | `ovl:${string}`;
 
 const SUB_CHART_HEIGHT = 80;
+
+// Stable empty fallback — a fresh [] per render would defeat the sub-chart
+// effect's dependency check and recreate charts constantly.
+const EMPTY_PAIR_INSTANCES: IndicatorInstance[] = [];
 
 // Pairs plots are line series (ratio/z-score/price); registry indicators take
 // OHLC bars, so synthesize flat bars (o=h=l=c) — the same degradation the
@@ -1869,43 +1764,83 @@ function fmtReadoutVal(v: number): string {
   return v.toFixed(4);
 }
 
+// Distinct-but-related color for the idx-th line of one indicator — local
+// copy of ChartPane's shadeHex (not exported there).
+function shadePairs(color: string, idx: number): string {
+  if (idx === 0 || !/^#[0-9a-f]{6}$/i.test(color)) return color;
+  const v = parseInt(color.slice(1), 16);
+  let r = (v >> 16) & 255, g = (v >> 8) & 255, b = v & 255;
+  const step = Math.ceil(idx / 2);
+  const a = Math.min(0.55, 0.3 * step);
+  const t = idx % 2 === 1 ? 255 : 0; // odd instances lighter, even darker
+  r = Math.round(r + (t - r) * a);
+  g = Math.round(g + (t - g) * a);
+  b = Math.round(b + (t - b) * a);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+// Strip the Pairs "reg:" pane prefix, leaving a Charts-style sub-chart key
+// ("adx", "adx#i2", "rsi#i2") for parseSubChartKey/overlay-source matching.
+function stripReg(t: string): string {
+  return t.startsWith("reg:") ? t.slice(4) : t;
+}
+
 // Human label for a sub-pane type — shared by the sub-pane chip and the
-// panel's "Hidden Sub-Panes" restore row.
+// panel's "Hidden Sub-Panes" restore row. Instance panes ("rsi#i2",
+// "reg:adx#i2") label by their instance ("RSI 14W") so twins read apart.
 function pairsSubChartLabel(type: string, indicators: ActiveIndicators): string {
   if (type.startsWith("ovl:")) {
     const o = (indicators.indicatorOverlays ?? []).find((x) => `ovl:${x.id}` === type);
     return o ? overlayPaneLabel(o) : type;
   }
-  return type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
-    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic" : type === "obv" ? "OBV"
-    : type.startsWith("reg:") ? (getIndicatorDef(type.slice(4))?.label ?? type) : type;
+  const { baseId, group } = parseSubChartKey(stripReg(type));
+  const insts = getInstances(indicators, baseId).filter((i) => effGroup(i) === group);
+  if (insts.length === 1) return instanceLabel(baseId, insts[0]);
+  return baseId === "rsi" ? "RSI" : baseId === "macd" ? "MACD" : baseId === "ha" ? "Heikin-Ashi"
+    : baseId === "atr" ? "ATR" : baseId === "roc" ? "ROC" : baseId === "stochastic" ? "Stochastic" : baseId === "obv" ? "OBV"
+    : (getIndicatorDef(baseId)?.label ?? baseId);
 }
 
-function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
-  const out: PairsSubChartType[] = [];
-  if (indicatorPeriods(indicators.rsi).length > 0) out.push("rsi");
-  if (indicators.macd) out.push("macd");
-  // HA is now rendered as an overlay inside MiniChart, not as a sub-pane
-  // if (indicators.heikinAshi) out.push("ha");
-  if (indicatorPeriods(indicators.roc).length > 0) out.push("roc");
-  if (indicators.stochastic) out.push("stochastic");
-  if (indicatorPeriods(indicators.atr).length > 0) out.push("atr");
-  if (indicators.obv) out.push("obv");
-  for (const def of ALL_REGISTRY_INDICATORS) {
-    if (def.renderTarget === "pane" && indicators.registry?.[def.id]?.enabled) {
-      out.push(`reg:${def.id}`);
+// One sub-pane per instance GROUP of each indicator (see indicatorInstances).
+// Untouched legacy state derives one LEGACY_GROUP per indicator whose subKey
+// is the bare id ("rsi", "reg:adx"), so saved hiddenSubCharts/subHeights/
+// overlay-source keys keep matching byte-identically.
+type PairsSubPaneDesc = { subKey: PairsSubChartType; baseId: string; instances: IndicatorInstance[] };
+
+function getActiveSubPanes(indicators: ActiveIndicators): PairsSubPaneDesc[] {
+  const out: PairsSubPaneDesc[] = [];
+  const pushGroups = (baseId: string, prefix = "") => {
+    for (const g of paneGroups(indicators, baseId)) {
+      out.push({
+        subKey: `${prefix}${subChartKeyFor(baseId, g.group)}` as PairsSubChartType,
+        baseId,
+        instances: g.instances,
+      });
     }
+  };
+  pushGroups("rsi");
+  pushGroups("macd");
+  // HA is now rendered as an overlay inside MiniChart, not as a sub-pane
+  pushGroups("roc");
+  pushGroups("stochastic");
+  pushGroups("atr");
+  pushGroups("obv");
+  for (const def of ALL_REGISTRY_INDICATORS) {
+    if (def.renderTarget === "pane") pushGroups(def.id, "reg:");
   }
   // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
   // in right after their source pane — same as the Charts tab. Overlay
-  // sources use the plain registry id ("adx"), Pairs pane ids are "reg:adx".
+  // sources are Charts-style subKeys ("adx", "rsi#i2"); Pairs pane ids carry
+  // the "reg:" prefix, so match on the stripped key.
   const paneOvls = (indicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
   if (paneOvls.length > 0) {
-    const interleaved: PairsSubChartType[] = [];
-    for (const st of out) {
-      interleaved.push(st);
-      const src = st.startsWith("reg:") ? st.slice(4) : st;
-      for (const o of paneOvls) if (o.source === src) interleaved.push(`ovl:${o.id}`);
+    const interleaved: PairsSubPaneDesc[] = [];
+    for (const d of out) {
+      interleaved.push(d);
+      const src = stripReg(d.subKey);
+      for (const o of paneOvls) {
+        if (o.source === src) interleaved.push({ subKey: `ovl:${o.id}`, baseId: "", instances: [] });
+      }
     }
     return interleaved;
   }
@@ -1915,6 +1850,9 @@ function getActiveSubCharts(indicators: ActiveIndicators): PairsSubChartType[] {
 // ── Sub-chart for oscillators rendered below the main Pairs MiniChart ──
 function PairsSubIndicatorChart({
   type,
+  indKey = "",
+  instances = EMPTY_PAIR_INSTANCES,
+  freqSources,
   closeData,
   axisTimes,
   activeIndicators,
@@ -1931,6 +1869,15 @@ function PairsSubIndicatorChart({
   onResizeStart,
 }: {
   type: PairsSubChartType;
+  /** Base indicator id this pane renders ("rsi", registry id) — `type` is
+   *  the pane KEY ("rsi", "rsi#i2", "reg:adx#i2"). Empty for "ovl:" panes. */
+  indKey?: string;
+  /** The indicator instances rendered in THIS pane group — one line-set per
+   *  instance (own params + compute frequency). */
+  instances?: IndicatorInstance[];
+  /** Shared per-frequency resample cache (one weekly/monthly resample per
+   *  pane, reused by every instance). */
+  freqSources?: FreqSourceCache;
   closeData: DataPoint[];
   /** Full parent axis (incl. whitespace warm-up bars) for the spacer series;
    *  defaults to closeData's times. */
@@ -2084,49 +2031,54 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // RSI (one line per period; optional weekly/monthly compute frequency —
-    // resample the closes first, same as the Charts tab)
-    if (type === "rsi") {
-      const rsiFreq = activeIndicators.rsiFreq;
-      const rsiInput =
-        rsiFreq === "weekly" || rsiFreq === "monthly"
-          ? resampleIndicatorBars(
-              closeData.map((d) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
-              rsiFreq,
-            ).map((b) => ({ time: b.time, value: b.close }))
-          : closeData;
-      const rsiSuffix = rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : "";
+    // RSI — one line per INSTANCE (period × own compute frequency, so RSI 14
+    // daily and RSI 14 weekly coexist; same instance loop as the Charts tab).
+    if (indKey === "rsi" && instances.length > 0) {
       let refDrawn = false;
-      for (const p of indicatorPeriods(activeIndicators.rsi)) {
-        const rsiData = computeRSI(rsiInput, p);
-        if (rsiData.length === 0) continue;
-        const rsiLine = chart.addSeries(LineSeries, {
-          color: IC.rsi_line, lineWidth: 1,
-          title: `RSI ${p}${rsiSuffix}`,
-        });
-        rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
-        if (!firstSeries) firstSeries = rsiLine;
-        if (!refDrawn) {
-          refDrawn = true;
-          const first = rsiData[0].time as Time;
-          const last = rsiData[rsiData.length - 1].time as Time;
-          for (const [level, clr] of [[70, IC.rsi_overbought], [30, IC.rsi_oversold]] as [number, string][]) {
-            const ref = chart.addSeries(LineSeries, {
-              color: clr, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
-            });
-            ref.setData([{ time: first, value: level }, { time: last, value: level }]);
+      let lineIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(undefined, inst);
+        const rsiInput = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const rsiData = computeRSI(rsiInput, p);
+          if (rsiData.length === 0) continue;
+          const rsiLine = chart.addSeries(LineSeries, {
+            color: shadePairs(IC.rsi_line, lineIdx), lineWidth: 1,
+            title: `RSI ${p}${freqSuffix(eff)}`,
+          });
+          rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
+          if (!firstSeries) firstSeries = rsiLine;
+          if (!refDrawn) {
+            refDrawn = true;
+            const first = rsiData[0].time as Time;
+            const last = rsiData[rsiData.length - 1].time as Time;
+            for (const [level, clr] of [[70, IC.rsi_overbought], [30, IC.rsi_oversold]] as [number, string][]) {
+              const ref = chart.addSeries(LineSeries, {
+                color: clr, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
+              });
+              ref.setData([{ time: first, value: level }, { time: last, value: level }]);
+            }
           }
+          chart.timeScale().fitContent();
+          lineIdx++;
         }
-        chart.timeScale().fitContent();
       }
     }
 
-    // MACD
-    if (type === "macd" && activeIndicators.macd) {
-      const macd = computeMACD(closeData, 12, 26, 9);
-      if (macd.macdLine.length > 0) {
+    // MACD — one per instance (own fast/slow/signal + freq). Histogram only
+    // for the FIRST instance of a merged pane; extras get shaded line pairs.
+    if (indKey === "macd" && instances.length > 0) {
+      let zeroSpan: { time: Time; value: number }[] = [];
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(undefined, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        const fast = typeof inst.params.fast === "number" ? inst.params.fast : 12;
+        const slow = typeof inst.params.slow === "number" ? inst.params.slow : 26;
+        const signal = typeof inst.params.signal === "number" ? inst.params.signal : 9;
+        const macd = computeMACD(input, fast, slow, signal);
+        if (macd.macdLine.length === 0) return;
         // Histogram first so the lines draw on top of the bars.
-        if (macd.histogram.length > 0) {
+        if (ii === 0 && macd.histogram.length > 0) {
           const hist = chart.addSeries(HistogramSeries, {
             title: "", base: 0, lastValueVisible: false, priceLineVisible: false,
           });
@@ -2136,26 +2088,28 @@ function PairsSubIndicatorChart({
             color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
           })));
         }
+        const sfx = freqSuffix(eff);
         const ml = chart.addSeries(LineSeries, {
-          color: IC.macd_line, lineWidth: 1, title: "MACD",
+          color: shadePairs(IC.macd_line, ii), lineWidth: 1, title: sfx ? `MACD ${sfx}` : "MACD",
         });
         ml.setData(macd.macdLine.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = ml;
+        if (!firstSeries) firstSeries = ml;
         const sl = chart.addSeries(LineSeries, {
-          color: IC.macd_signal, lineWidth: 1, title: "Signal", crosshairMarkerVisible: false,
+          color: shadePairs(IC.macd_signal, ii), lineWidth: 1, title: sfx ? `Signal ${sfx}` : "Signal", crosshairMarkerVisible: false,
         });
         sl.setData(macd.signalLine.map(d => ({ time: d.time as Time, value: d.value })));
-        if (macd.macdLine.length >= 2) {
-          const zl = chart.addSeries(LineSeries, {
-            color: "rgba(255,255,255,0.15)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
-          });
-          zl.setData([
-            { time: macd.macdLine[0].time as Time, value: 0 },
-            { time: macd.macdLine[macd.macdLine.length - 1].time as Time, value: 0 },
-          ]);
-        }
-        chart.timeScale().fitContent();
+        if (!zeroSpan.length) zeroSpan = macd.macdLine as { time: Time; value: number }[];
+      });
+      if (zeroSpan.length >= 2) {
+        const zl = chart.addSeries(LineSeries, {
+          color: "rgba(255,255,255,0.15)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
+        });
+        zl.setData([
+          { time: zeroSpan[0].time as Time, value: 0 },
+          { time: zeroSpan[zeroSpan.length - 1].time as Time, value: 0 },
+        ]);
       }
+      if (zeroSpan.length > 0) chart.timeScale().fitContent();
     }
 
     // Heikin-Ashi
@@ -2181,49 +2135,64 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // ROC (one line per period)
-    if (type === "roc") {
+    // ROC — one line per instance (period × own compute frequency)
+    if (indKey === "roc" && instances.length > 0) {
       let zeroDrawn = false;
-      for (const p of indicatorPeriods(activeIndicators.roc)) {
-        const rocData = computeROC(closeData, p);
-        if (rocData.length === 0) continue;
-        const rocLine = chart.addSeries(LineSeries, {
-          color: IC.roc, lineWidth: 1, title: `ROC ${p}`,
-        });
-        rocLine.setData(rocData.map(d => ({ time: d.time as Time, value: d.value })));
-        if (!firstSeries) firstSeries = rocLine;
-        if (!zeroDrawn && rocData.length >= 2) {
-          zeroDrawn = true;
-          const zl = chart.addSeries(LineSeries, {
-            color: "rgba(255,255,255,0.15)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
+      let rocIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(undefined, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const rocData = computeROC(input, p);
+          if (rocData.length === 0) continue;
+          const rocLine = chart.addSeries(LineSeries, {
+            color: shadePairs(IC.roc, rocIdx), lineWidth: 1, title: `ROC ${p}${freqSuffix(eff)}`,
           });
-          zl.setData([
-            { time: rocData[0].time as Time, value: 0 },
-            { time: rocData[rocData.length - 1].time as Time, value: 0 },
-          ]);
+          rocLine.setData(rocData.map(d => ({ time: d.time as Time, value: d.value })));
+          if (!firstSeries) firstSeries = rocLine;
+          if (!zeroDrawn && rocData.length >= 2) {
+            zeroDrawn = true;
+            const zl = chart.addSeries(LineSeries, {
+              color: "rgba(255,255,255,0.15)", lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
+            });
+            zl.setData([
+              { time: rocData[0].time as Time, value: 0 },
+              { time: rocData[rocData.length - 1].time as Time, value: 0 },
+            ]);
+          }
+          chart.timeScale().fitContent();
+          rocIdx++;
         }
-        chart.timeScale().fitContent();
       }
     }
 
-    // Stochastic
-    if (type === "stochastic" && activeIndicators.stochastic) {
-      const { kPeriod, dPeriod } = activeIndicators.stochastic;
-      const stoch = computeStochastic(closeData, kPeriod, dPeriod);
-      if (stoch.k.length > 0) {
+    // Stochastic — one %K/%D pair per instance
+    if (indKey === "stochastic" && instances.length > 0) {
+      let refSpan: { time: Time; value: number }[] = [];
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(undefined, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        const kPeriod = typeof inst.params.kPeriod === "number" ? inst.params.kPeriod : 14;
+        const dPeriod = typeof inst.params.dPeriod === "number" ? inst.params.dPeriod : 3;
+        const stoch = computeStochastic(input, kPeriod, dPeriod);
+        if (stoch.k.length === 0) return;
+        const sfx = freqSuffix(eff);
         const kLine = chart.addSeries(LineSeries, {
-          color: IC.stoch_k, lineWidth: 1, title: `%K(${kPeriod})`,
+          color: shadePairs(IC.stoch_k, ii), lineWidth: 1, title: `%K(${kPeriod})${sfx}`,
         });
         kLine.setData(stoch.k.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = kLine;
+        if (!firstSeries) firstSeries = kLine;
         if (stoch.d.length > 0) {
           const dLine = chart.addSeries(LineSeries, {
-            color: IC.stoch_d, lineWidth: 1, title: `%D(${dPeriod})`, crosshairMarkerVisible: false,
+            color: shadePairs(IC.stoch_d, ii), lineWidth: 1, title: `%D(${dPeriod})${sfx}`, crosshairMarkerVisible: false,
           });
           dLine.setData(stoch.d.map(d => ({ time: d.time as Time, value: d.value })));
         }
-        const first = stoch.k[0].time as Time;
-        const last = stoch.k[stoch.k.length - 1].time as Time;
+        if (!refSpan.length) refSpan = stoch.k as { time: Time; value: number }[];
+      });
+      if (refSpan.length > 0) {
+        const first = refSpan[0].time as Time;
+        const last = refSpan[refSpan.length - 1].time as Time;
         for (const [level, clr] of [[80, IC.stoch_overbought], [20, IC.stoch_oversold]] as [number, string][]) {
           const ref = chart.addSeries(LineSeries, {
             color: clr, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "", crosshairMarkerVisible: false,
@@ -2234,62 +2203,98 @@ function PairsSubIndicatorChart({
       }
     }
 
-    // ATR (one line per period)
-    if (type === "atr") {
-      for (const p of indicatorPeriods(activeIndicators.atr)) {
-        const atrData = computeATR(closeData, p);
-        if (atrData.length === 0) continue;
-        const atrLine = chart.addSeries(LineSeries, {
-          color: IC.atr, lineWidth: 1, title: `ATR ${p}`,
-        });
-        atrLine.setData(atrData.map(d => ({ time: d.time as Time, value: d.value })));
-        if (!firstSeries) firstSeries = atrLine;
-        chart.timeScale().fitContent();
+    // ATR — one line per instance (period × own compute frequency)
+    if (indKey === "atr" && instances.length > 0) {
+      let atrIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(undefined, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const atrData = computeATR(input, p);
+          if (atrData.length === 0) continue;
+          const atrLine = chart.addSeries(LineSeries, {
+            color: shadePairs(IC.atr, atrIdx), lineWidth: 1, title: `ATR ${p}${freqSuffix(eff)}`,
+          });
+          atrLine.setData(atrData.map(d => ({ time: d.time as Time, value: d.value })));
+          if (!firstSeries) firstSeries = atrLine;
+          chart.timeScale().fitContent();
+          atrIdx++;
+        }
       }
     }
 
-    // OBV
-    if (type === "obv" && activeIndicators.obv) {
-      const obvData = computeOBV(closeData);
-      if (obvData.length > 0) {
+    // OBV — parameterless; instances differ only by compute frequency
+    if (indKey === "obv" && instances.length > 0) {
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(undefined, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as DataPoint[]) : closeData;
+        const obvData = computeOBV(input);
+        if (obvData.length === 0) return;
+        const sfx = freqSuffix(eff);
         const obvLine = chart.addSeries(LineSeries, {
-          color: IC.obv, lineWidth: 1, title: "OBV",
+          color: shadePairs(IC.obv, ii), lineWidth: 1, title: sfx ? `OBV ${sfx}` : "OBV",
         });
         obvLine.setData(obvData.map(d => ({ time: d.time as Time, value: d.value })));
-        firstSeries = obvLine;
+        if (!firstSeries) firstSeries = obvLine;
         chart.timeScale().fitContent();
-      }
+      });
     }
 
-    // Registry-driven sub-pane indicators (ADX, CCI, Williams %R, Aroon, Slow Stoch, …)
+    // Registry-driven sub-pane indicators (ADX, CCI, Williams %R, Aroon, Slow
+    // Stoch, …) — one render per INSTANCE (own params + compute frequency);
+    // extras get shaded colors and skip the reference lines.
     if (type.startsWith("reg:")) {
-      const def = getIndicatorDef(type.slice(4));
-      if (def?.renderPane) {
-        const regSt = activeIndicators.registry?.[def.id];
-        let bars = lineToBars(closeData);
-        // Per-indicator compute frequency (weekly/monthly resample).
-        if (regSt?.freq === "weekly" || regSt?.freq === "monthly") {
-          bars = resampleIndicatorBars(bars, regSt.freq);
-        }
-        const p = resolveParams(def, regSt);
-        def.renderPane(
-          {
-            chart,
-            colors: IC as unknown as Record<string, string>,
-            baseLabel: "",
-            register: (s) => { if (!firstSeries) firstSeries = s; },
-            refLine: (level, color, first, last) => {
-              const rl = chart.addSeries(LineSeries, {
-                color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
-                crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
-              });
-              rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
-            },
-          },
-          bars,
-          p,
-        );
-        chart.timeScale().fitContent();
+      const def = getIndicatorDef(indKey || stripReg(type));
+      if (def?.renderPane && instances.length > 0) {
+        // Resample the flat bars once per frequency (weekly high = max close
+        // over the week — matches the pre-instance behavior exactly).
+        const regBarsCache: Partial<Record<"weekly" | "monthly", OhlcBar[]>> = {};
+        const baseBars = lineToBars(closeData);
+        let drewAny = false;
+        let lineIdx = 0; // shading index across instances AND multi-param values
+        instances.forEach((inst, instIdx) => {
+          const f = inst.freq === "weekly" || inst.freq === "monthly" ? inst.freq : undefined;
+          const bars = f ? (regBarsCache[f] ??= resampleIndicatorBars(baseBars, f)) : baseBars;
+          if (!bars.length) return;
+          const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+          const params = resolveParams(def, regSt);
+          // Multi-instance param (e.g. autocorr lag list) still renders once
+          // per value WITHIN this instance.
+          const instValues: (number | null)[] = def.multiInstanceParam
+            ? resolveParamList(def, regSt, undefined, def.multiInstanceParam)
+            : [null];
+          const instLabel2 = f ? freqSuffix(f) : "";
+          instValues.forEach((iv) => {
+            const p2 = iv === null ? params : { ...params, [def.multiInstanceParam!]: iv };
+            const lineKey = def.colorKeys[0];
+            const colors =
+              lineIdx === 0
+                ? (IC as unknown as Record<string, string>)
+                : { ...(IC as unknown as Record<string, string>), [lineKey]: shadePairs((IC as unknown as Record<string, string>)[lineKey], lineIdx) };
+            def.renderPane!(
+              {
+                chart,
+                colors,
+                baseLabel: instLabel2,
+                register: (s) => { if (!firstSeries) firstSeries = s; },
+                refLine: instIdx === 0 && iv === instValues[0]
+                  ? (level, color, first, last) => {
+                      const rl = chart.addSeries(LineSeries, {
+                        color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
+                        crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false,
+                      });
+                      rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
+                    }
+                  : () => {},
+              },
+              bars,
+              p2,
+            );
+            drewAny = true;
+            lineIdx++;
+          });
+        });
+        if (drewAny) chart.timeScale().fitContent();
       }
     }
 
@@ -2484,7 +2489,7 @@ function PairsSubIndicatorChart({
       setHoverReadout(null);
       try { chart.remove(); } catch {}
     };
-  }, [closeData, axisTimes, activeIndicators, type, parentChart, parentSeries, IC, gridColor, chrome, overlayDef, sourceData, onPrimaryData]);
+  }, [closeData, axisTimes, activeIndicators, type, indKey, instances, freqSources, parentChart, parentSeries, IC, gridColor, chrome, overlayDef, sourceData, onPrimaryData]);
 
   // Resize
   useEffect(() => {
@@ -2994,28 +2999,31 @@ export function MiniChart({
           }
         }
       }
-      // Bollinger Bands (overlay)
-      if (activeIndicators.bollinger) {
-        const { period: bbP, mult: bbM } = activeIndicators.bollinger;
-        const bb = computeBollingerBands(data, bbP, bbM);
+      // Bollinger Bands (overlay) — one band set per instance (period/σ ×
+      // own compute frequency; Charts parity)
+      getInstances(activeIndicators, "bollinger").forEach((inst, bi) => {
+        const bbP = typeof inst.params.period === "number" ? inst.params.period : 20;
+        const bbM = typeof inst.params.mult === "number" ? inst.params.mult : 2;
+        const { src, suffix } = maSourceFor(inst.freq ?? "chart");
+        const bb = computeBollingerBands(src, bbP, bbM);
         if (bb.basis.length > 0) {
           const basisLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_basis, lineWidth: 1,
-            title: `BB ${bbP},${bbM}`, lineStyle: LineStyle.LargeDashed,
+            color: shadePairs(IC.bollinger_basis, bi), lineWidth: 1,
+            title: `BB ${bbP},${bbM}${suffix}`, lineStyle: LineStyle.LargeDashed,
           });
           basisLine.setData(bb.basis.map(d => ({ time: d.time as Time, value: d.value })));
           const upperLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_band, lineWidth: 1,
-            title: `Upper`, lineStyle: LineStyle.Dotted,
+            color: shadePairs(IC.bollinger_band, bi), lineWidth: 1,
+            title: suffix ? `Upper ${suffix}` : `Upper`, lineStyle: LineStyle.Dotted,
           });
           upperLine.setData(bb.upper.map(d => ({ time: d.time as Time, value: d.value })));
           const lowerLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_band, lineWidth: 1,
-            title: `Lower`, lineStyle: LineStyle.Dotted,
+            color: shadePairs(IC.bollinger_band, bi), lineWidth: 1,
+            title: suffix ? `Lower ${suffix}` : `Lower`, lineStyle: LineStyle.Dotted,
           });
           lowerLine.setData(bb.lower.map(d => ({ time: d.time as Time, value: d.value })));
         }
-      }
+      });
       // VWAP (overlay)
       if (activeIndicators.vwap) {
         const vwapData = computeVWAP(data);
@@ -3051,35 +3059,42 @@ export function MiniChart({
       }
 
       // Registry-driven overlays (Supertrend, PSAR, Keltner, Donchian, Ichimoku) —
-      // same registry as the Charts tab, computed on flat bars from the line data.
+      // same registry as the Charts tab, computed on flat bars from the line
+      // data. One render per INSTANCE (own params + freq + hiddenParts);
+      // extra instances get shaded line colors.
       {
-        const regState = activeIndicators.registry ?? {};
-        const anyOverlayOn = ALL_REGISTRY_INDICATORS.some(
-          (d) => d.renderTarget === "overlay" && regState[d.id]?.enabled,
-        );
-        if (anyOverlayOn) {
-          const overlayBars = lineToBars(data);
-          for (const def of ALL_REGISTRY_INDICATORS) {
-            if (def.renderTarget !== "overlay" || !regState[def.id]?.enabled || !def.renderOverlay) continue;
-            const st = regState[def.id];
-            const defBars = st?.freq === "weekly" || st?.freq === "monthly"
-              ? resampleIndicatorBars(overlayBars, st.freq)
-              : overlayBars;
-            const p = resolveParams(def, st);
+        const overlayBars = lineToBars(data);
+        // One resample per frequency, shared across overlay defs.
+        const ovlBarsCache: Partial<Record<"weekly" | "monthly", OhlcBar[]>> = {};
+        for (const def of ALL_REGISTRY_INDICATORS) {
+          if (def.renderTarget !== "overlay" || !def.renderOverlay) continue;
+          getInstances(activeIndicators, def.id).forEach((inst, ii) => {
+            const f = inst.freq === "weekly" || inst.freq === "monthly" ? inst.freq : undefined;
+            const defBars = f ? (ovlBarsCache[f] ??= resampleIndicatorBars(overlayBars, f)) : overlayBars;
+            const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+            const p = resolveParams(def, regSt);
             try {
-              def.renderOverlay(
+              const colors =
+                ii === 0
+                  ? (IC as unknown as Record<string, string>)
+                  : Object.fromEntries(
+                      Object.entries(IC as unknown as Record<string, string>).map(([k, v]) =>
+                        def.colorKeys.includes(k) ? [k, shadePairs(v, ii)] : [k, v],
+                      ),
+                    );
+              def.renderOverlay!(
                 {
                   chart,
-                  colors: IC as unknown as Record<string, string>,
-                  baseLabel: "",
+                  colors,
+                  baseLabel: f ? freqSuffix(f) : "",
                   register: () => {},
-                  ...(def.components?.length ? { hiddenParts: new Set(st?.hiddenParts ?? []) } : {}),
+                  ...(def.components?.length ? { hiddenParts: new Set(inst.hiddenParts ?? []) } : {}),
                 },
                 defBars,
                 p,
               );
             } catch { /* one bad indicator must not kill the chart */ }
-          }
+          });
         }
       }
 
@@ -3288,14 +3303,25 @@ export function MiniChart({
   const axisTimes = useMemo(() => data.map((d) => String(d.time)), [data]);
 
   // Hidden sub-panes unmount (state stays enabled) — same as the Charts tab.
+  // Memoized: the descriptors' instance arrays flow into the sub-chart
+  // effect's deps — fresh arrays every render would recreate every sub-chart.
+  const subPaneDescs = useMemo(() => getActiveSubPanes(activeIndicators), [activeIndicators]);
   const hiddenSubSet = new Set(activeIndicators.hiddenSubCharts ?? []);
-  const subCharts = getActiveSubCharts(activeIndicators).filter((sc) => !hiddenSubSet.has(sc));
+  const subPanes = subPaneDescs.filter((d) => !hiddenSubSet.has(d.subKey));
+
+  // Shared per-frequency resample cache for every sub-pane instance (five
+  // weekly indicators cost ONE weekly resample). Pairs plots are line data —
+  // no real OHLC, so the cache only serves closes.
+  const freqSources = useMemo(
+    () => makeFreqSourceCache(finiteData.map((d) => ({ time: String(d.time), value: d.value })), []),
+    [finiteData],
+  );
 
   // Which sub-pane is expanded to fill the plot (null = none) + per-sub-pane
   // drag heights — mirrors ChartPane's maxSub/subHeights/startSubResize.
   const [maxSub, setMaxSub] = useState<PairsSubChartType | null>(null);
   const [subHeights, setSubHeights] = useState<Partial<Record<string, number>>>({});
-  const effMaxSub = maxSub !== null && subCharts.includes(maxSub) ? maxSub : null;
+  const effMaxSub = maxSub !== null && subPanes.some((d) => d.subKey === maxSub) ? maxSub : null;
   const startSubResize = useCallback((type: string, defaultH: number, e: ReactMouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -3316,28 +3342,20 @@ export function MiniChart({
     window.addEventListener("mouseup", onUp);
   }, [subHeights]);
 
-  // ✕ on a sub-pane: turn its indicator off (same mapping as the Charts tab).
+  // ✕ on a sub-pane: drop just that pane GROUP's instances (same mapping as
+  // the Charts tab) — setInstances keeps the legacy fields in sync, so
+  // closing the last RSI pane clears rsi + rsiFreq and closing the last
+  // registry pane flips registry[id].enabled off.
   const closeSub = useCallback((t: PairsSubChartType) => {
     if (!onChangeIndicators) return;
-    const next = { ...activeIndicators };
+    let next = { ...activeIndicators };
     if (t.startsWith("ovl:")) {
       const oid = t.slice(4);
       next.indicatorOverlays = (next.indicatorOverlays ?? []).filter((o) => o.id !== oid);
       if (!next.indicatorOverlays.length) delete next.indicatorOverlays;
-    } else if (t.startsWith("reg:")) {
-      const rid = t.slice(4);
-      if (next.registry?.[rid]?.enabled) {
-        next.registry = { ...next.registry, [rid]: { ...next.registry[rid], enabled: false } };
-      }
     } else {
-      switch (t) {
-        case "rsi": delete next.rsi; delete next.rsiFreq; break;
-        case "macd": delete next.macd; break;
-        case "roc": delete next.roc; break;
-        case "stochastic": delete next.stochastic; break;
-        case "atr": delete next.atr; break;
-        case "obv": delete next.obv; break;
-      }
+      const { baseId, group } = parseSubChartKey(stripReg(t));
+      next = setInstances(next, baseId, getInstances(next, baseId).filter((i) => effGroup(i) !== group));
     }
     if (next.hiddenSubCharts?.includes(t)) {
       const rest = next.hiddenSubCharts.filter((x) => x !== t);
@@ -3474,7 +3492,8 @@ export function MiniChart({
       {/* Sub-pane indicator charts (MACD, RSI, Stochastic, ROC, ATR, OBV, registry).
           Double-click one (or its expand button) to fill the plot; drag a top
           border to resize — same behavior as the Charts tab. */}
-      {subCharts.map(sc => {
+      {subPanes.map(desc => {
+        const sc = desc.subKey;
         const ovlDef = sc.startsWith("ovl:")
           ? (activeIndicators.indicatorOverlays ?? []).find(o => `ovl:${o.id}` === sc) ?? null
           : null;
@@ -3484,6 +3503,9 @@ export function MiniChart({
           <div key={sc} className={hiddenWhileMax ? "hidden" : "contents"}>
             <PairsSubIndicatorChart
               type={sc}
+              indKey={desc.baseId}
+              instances={desc.instances}
+              freqSources={freqSources}
               closeData={finiteData}
               axisTimes={axisTimes}
               activeIndicators={activeIndicators}

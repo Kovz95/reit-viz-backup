@@ -34,6 +34,18 @@ import {
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS, MA_LINE_STYLES, MA_LINE_STYLE_LABELS, MA_OPACITY_STEPS, type MaLineStyle } from "@/lib/chartColors";
+import {
+  BUILTIN_INSTANCE_DEFS,
+  getInstances,
+  setInstances,
+  paneGroups as instancePaneGroups,
+  subChartKeyFor,
+  nextIid,
+  effGroup,
+  instanceLabel,
+  type IndicatorInstance,
+  type InstanceParamSpec,
+} from "@/lib/indicatorInstances";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import PatternsPanel from "./PatternsPanel";
@@ -96,11 +108,20 @@ export function IndicatorSetsSection({
     setIndicatorSets(next);
     saveServerPref(INDICATOR_SETS_KEY, next);
   };
-  /** Human summary of what a set contains, e.g. "SMA, RSI, BOLLINGER +2". */
+  /** Human summary of what a set contains, e.g. "SMA, RSI, BOLLINGER +2".
+   *  Bookkeeping containers (instances/registry/…) expand to the indicator
+   *  names they hold instead of appearing as opaque keys. */
   const summarizeSet = (s: IndicatorSet): string => {
-    const keys = Object.keys(s.indicators || {}).filter(
-      (k) => (s.indicators as any)[k] !== undefined && (s.indicators as any)[k] !== false
-    );
+    const ind = (s.indicators || {}) as any;
+    const names: string[] = [];
+    for (const k of Object.keys(ind)) {
+      if (ind[k] === undefined || ind[k] === false) continue;
+      if (k === "instances") names.push(...Object.keys(ind.instances ?? {}));
+      else if (k === "registry") names.push(...Object.keys(ind.registry ?? {}).filter((id) => ind.registry[id]?.enabled));
+      else if (k === "maLines" || k === "maFreq" || k === "hiddenSubCharts" || k === "rsiFreq") continue;
+      else names.push(k);
+    }
+    const keys = [...new Set(names)];
     if (keys.length === 0) return "empty (clears indicators)";
     const shown = keys.slice(0, 3).map((k) => k.toUpperCase());
     return shown.join(", ") + (keys.length > 3 ? ` +${keys.length - 3}` : "");
@@ -421,6 +442,279 @@ export function MaRow({
   );
 }
 
+/** Instance rows for one indicator (built-in or registry): one row per
+ *  INSTANCE, each with its own params + compute frequency + pane placement.
+ *  Generalizes MaRow to every indicator — this is what lets RSI 14 daily and
+ *  RSI 14 weekly run at once, or ROC 14 and ROC 20 sit in separate panes.
+ *  New instances default to their OWN pane; the pane dropdown merges an
+ *  instance into another instance's pane (same indicator only). Exported so
+ *  every charting surface (Charts, Pairs, Macro, …) shows the identical
+ *  control. The enclosing on/off Switch stays with the caller. */
+export function InstanceRows({
+  indKey,
+  label,
+  params,
+  instances,
+  onChange,
+  showPane = true,
+  presets = [],
+  multiParamKey,
+  components,
+}: {
+  indKey: string;
+  label: string;
+  /** Param schema: BUILTIN_INSTANCE_DEFS[key].params or an IndicatorDef's. */
+  params: InstanceParamSpec[] | IndicatorDef["params"];
+  instances: IndicatorInstance[];
+  onChange: (list: IndicatorInstance[]) => void;
+  /** False for overlay indicators — they draw on the price chart. */
+  showPane?: boolean;
+  /** Quick-add buttons seeding the FIRST param with the preset value. */
+  presets?: number[];
+  /** Registry multiInstanceParam key — that param edits as a value list. */
+  multiParamKey?: string;
+  /** Per-instance show/hide-able sub-parts (Ichimoku lines/cloud …). */
+  components?: IndicatorDef["components"];
+}) {
+  const { colors } = useIndicatorColors();
+  const defaultsFor = (): Record<string, number> =>
+    Object.fromEntries(params.map((p) => [p.key, p.default]));
+  const setInst = (i: number, patch: Partial<IndicatorInstance>) =>
+    onChange(instances.map((inst, j) => (j === i ? { ...inst, ...patch } : inst)));
+  const setParam = (i: number, key: string, v: number | number[] | undefined) => {
+    const inst = instances[i];
+    const nextParams = { ...inst.params };
+    if (v === undefined) delete nextParams[key];
+    else nextParams[key] = v;
+    setInst(i, { params: nextParams });
+  };
+  const addInstance = (firstParamValue?: number) => {
+    const last = instances[instances.length - 1];
+    const p = last ? { ...last.params } : defaultsFor();
+    if (firstParamValue !== undefined && params.length > 0) p[params[0].key] = firstParamValue;
+    // Own pane by default: no `pane` field ⇒ group = its own iid.
+    onChange([...instances, { iid: nextIid(instances), params: p }]);
+  };
+  const removeInstance = (i: number) => onChange(instances.filter((_, j) => j !== i));
+
+  // Pane groups in first-appearance order — the dropdown labels them Pane 1…N.
+  const groups: string[] = [];
+  for (const inst of instances) {
+    const g = effGroup(inst);
+    if (!groups.includes(g)) groups.push(g);
+  }
+
+  const paramValue = (inst: IndicatorInstance, key: string, dflt: number): number => {
+    const v = inst.params[key];
+    const n = Array.isArray(v) ? v[0] : v;
+    return typeof n === "number" && Number.isFinite(n) ? n : dflt;
+  };
+
+  return (
+    <div className="space-y-1 pl-0.5">
+      {instances.map((inst, i) => {
+        const own = effGroup(inst);
+        return (
+          <div key={inst.iid} className="space-y-1" data-testid={`inst-row-${indKey}-${i}`}>
+            <div className="flex items-center gap-1 flex-wrap">
+              {params.map((pr) =>
+                multiParamKey && pr.key === multiParamKey ? (
+                  <PeriodMultiSelect
+                    key={pr.key}
+                    presets={[]}
+                    active={(inst.params[pr.key] as number | number[] | undefined) ?? pr.default}
+                    onChange={(list) =>
+                      setParam(i, pr.key, list?.length ? (list.length === 1 ? list[0] : list) : undefined)
+                    }
+                    testid={`inst-param-${indKey}-${i}-${pr.key}`}
+                    min={(pr as IndicatorDef["params"][number]).min}
+                  />
+                ) : (pr as IndicatorDef["params"][number]).options ? (
+                  <select
+                    key={pr.key}
+                    className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                    value={paramValue(inst, pr.key, pr.default)}
+                    onChange={(e) => setParam(i, pr.key, Number(e.target.value))}
+                    title={pr.label}
+                    data-testid={`inst-param-${indKey}-${i}-${pr.key}`}
+                  >
+                    {(pr as IndicatorDef["params"][number]).options!.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    key={pr.key}
+                    type="number"
+                    className="h-6 w-14 text-[10px] px-1.5"
+                    value={paramValue(inst, pr.key, pr.default)}
+                    min={pr.min}
+                    step={pr.step ?? 1}
+                    title={pr.label}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v)) setParam(i, pr.key, v);
+                    }}
+                    data-testid={`inst-param-${indKey}-${i}-${pr.key}`}
+                  />
+                ),
+              )}
+              <select
+                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                value={inst.freq ?? "chart"}
+                onChange={(e) => {
+                  const f = e.target.value;
+                  setInst(i, { freq: f === "weekly" || f === "monthly" ? f : undefined });
+                }}
+                title={`Compute this ${label} on the chart's bars, or on weekly/monthly resampled bars`}
+                data-testid={`inst-freq-${indKey}-${i}`}
+              >
+                <option value="chart">Chart</option>
+                <option value="weekly">W</option>
+                <option value="monthly">M</option>
+              </select>
+              {showPane && (
+                <select
+                  className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
+                  value={inst.pane ?? "__own"}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setInst(i, { pane: v === "__own" ? undefined : v });
+                  }}
+                  title="Draw this instance in its own sub-pane, or merge it into another instance's pane"
+                  data-testid={`inst-pane-${indKey}-${i}`}
+                >
+                  <option value="__own">Own pane</option>
+                  {groups
+                    .filter((g) => g !== (inst.pane ?? "") && g !== inst.iid)
+                    .map((g) => (
+                      <option key={g} value={g}>
+                        Pane {groups.indexOf(g) + 1}
+                      </option>
+                    ))}
+                  {inst.pane && <option value={inst.pane}>Pane {groups.indexOf(effGroup(inst)) + 1}</option>}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => removeInstance(i)}
+                className="p-0.5 text-muted-foreground/60 hover:text-foreground"
+                title={`Remove this ${label} instance`}
+                data-testid={`inst-remove-${indKey}-${i}`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+              <span className="text-[9px] text-muted-foreground/50 truncate max-w-[70px]" title={instanceLabel(indKey, inst)}>
+                {instanceLabel(indKey, inst)}
+              </span>
+            </div>
+            {components && components.length > 0 && (
+              <div className="flex flex-wrap gap-1 items-center" data-testid={`inst-components-${indKey}-${i}`}>
+                {components.map((c) => {
+                  const hidden = (inst.hiddenParts ?? []).includes(c.key);
+                  const tint = c.colorKey ? colors[c.colorKey as IndicatorColorKey] : undefined;
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => {
+                        const cur = new Set(inst.hiddenParts ?? []);
+                        if (cur.has(c.key)) cur.delete(c.key);
+                        else cur.add(c.key);
+                        setInst(i, { hiddenParts: [...cur] });
+                      }}
+                      className={`flex items-center gap-1 h-5 px-1 rounded border border-input text-[9px] transition-opacity ${hidden ? "opacity-40" : ""}`}
+                      title={hidden ? `Show ${c.label}` : `Hide ${c.label}`}
+                      data-testid={`inst-component-${indKey}-${i}-${c.key}`}
+                    >
+                      {tint && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: tint }} />}
+                      {hidden ? <EyeOff className="w-2.5 h-2.5" /> : <Eye className="w-2.5 h-2.5" />}
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-1 flex-wrap">
+        <button
+          type="button"
+          onClick={() => addInstance()}
+          className="h-6 px-1.5 text-[10px] rounded border border-input flex items-center gap-1 hover:bg-accent"
+          title={`Add another ${label} instance (own params + frequency, in its own pane)`}
+          data-testid={`inst-add-${indKey}`}
+        >
+          <Plus className="w-3 h-3" /> Add
+        </button>
+        {presets.map((pv) => (
+          <button
+            key={pv}
+            type="button"
+            onClick={() => addInstance(pv)}
+            className="h-6 px-1.5 text-[10px] rounded border border-input hover:bg-accent"
+            title={`Add a ${label} ${pv} (chart freq, own pane)`}
+            data-testid={`inst-preset-${indKey}-${pv}`}
+          >
+            +{pv}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Built-in indicator section: label + on/off Switch + InstanceRows, with the
+ *  MaRow-style "remember last selection" restore on re-toggle. */
+export function BuiltinInstanceSection({
+  indKey,
+  title,
+  activeIndicators,
+  onChange,
+  presets,
+  className,
+}: {
+  indKey: keyof typeof BUILTIN_INSTANCE_DEFS;
+  title: string;
+  activeIndicators: ActiveIndicators;
+  onChange: (i: ActiveIndicators) => void;
+  presets?: number[];
+  className?: string;
+}) {
+  const def = BUILTIN_INSTANCE_DEFS[indKey];
+  const instances = getInstances(activeIndicators, indKey);
+  const on = instances.length > 0;
+  const lastRef = useRef<IndicatorInstance[]>(
+    on ? instances : [{ iid: "i1", params: Object.fromEntries(def.params.map((p) => [p.key, p.default])) }],
+  );
+  if (on) lastRef.current = instances;
+  const write = (list: IndicatorInstance[]) => onChange(setInstances(activeIndicators, indKey, list));
+  return (
+    <div className={`space-y-2 ${className ?? ""}`}>
+      <div className="flex items-center justify-between">
+        <Label className="text-xs font-medium">{title}</Label>
+        <Switch
+          checked={on}
+          onCheckedChange={(v) => write(v ? lastRef.current : [])}
+          data-testid={`toggle-${indKey}`}
+        />
+      </div>
+      {on && (
+        <InstanceRows
+          indKey={indKey}
+          label={title}
+          params={def.params}
+          instances={instances}
+          onChange={write}
+          showPane={def.target === "pane"}
+          presets={presets}
+        />
+      )}
+    </div>
+  );
+}
+
 /** Heikin-Ashi with smoothing parameter controls (like TradingView) */
 function HeikinAshiControls({
   activeIndicators,
@@ -691,15 +985,11 @@ export function RegistryIndicatorControls({
   onCopyIndicator?: (defId: string, target: number | string | "all") => void;
 }) {
   const reg = activeIndicators.registry ?? {};
-  const { colors } = useIndicatorColors();
-  const update = (id: string, patch: Partial<RegistryIndicatorState>) => {
-    const cur = reg[id] ?? {};
-    onChange({ ...activeIndicators, registry: { ...reg, [id]: { ...cur, ...patch } } });
-  };
-  const setParam = (def: IndicatorDef, key: string, value: number) => {
-    const cur = reg[def.id] ?? {};
-    update(def.id, { params: { ...(cur.params ?? {}), [key]: value } });
-  };
+  // Remember each indicator's last instance list so the on/off switch restores
+  // it (params, frequencies AND pane layout) instead of resetting to defaults.
+  const lastInstRef = useRef<Record<string, IndicatorInstance[]>>({});
+  const writeInstances = (id: string, list: IndicatorInstance[]) =>
+    onChange(setInstances(activeIndicators, id, list));
 
   // Free-text filter across the (now large) registry — matches label / id /
   // category so the user can jump straight to "kurtosis", "vortex", "winsor", …
@@ -729,8 +1019,10 @@ export function RegistryIndicatorControls({
           <div className="text-[9px] text-muted-foreground/70 font-semibold uppercase tracking-wider">{cat}</div>
           {ALL_REGISTRY_INDICATORS.filter((d) => d.category === cat && matchDef(d)).map((def) => {
             const st = reg[def.id];
-            const enabled = !!st?.enabled;
-            const p = resolveParams(def, st, frequency);
+            const instances = getInstances(activeIndicators, def.id);
+            const enabled = instances.length > 0;
+            if (enabled) lastInstRef.current[def.id] = instances;
+            const p = resolveParams(def, enabled ? { params: instances[0].params } : st, frequency);
             return (
               <div key={def.id} className="space-y-1.5">
                 <div className="flex items-center justify-between">
@@ -781,108 +1073,33 @@ export function RegistryIndicatorControls({
                     )}
                     <Switch
                       checked={enabled}
-                      onCheckedChange={(on) => update(def.id, { enabled: on })}
+                      onCheckedChange={(on) =>
+                        writeInstances(
+                          def.id,
+                          on
+                            ? lastInstRef.current[def.id] ??
+                              [{ iid: "i1", params: { ...resolveParams(def, st, frequency) } }]
+                            : [],
+                        )
+                      }
                       data-testid={`toggle-${def.id}`}
                     />
                   </div>
                 </div>
-                {enabled && def.params.length > 0 && (
-                  <div className="flex flex-wrap gap-x-2 gap-y-1 items-center pl-0.5">
-                    {/* Per-indicator compute frequency (weekly/monthly resample) */}
-                    <div className="flex items-center gap-1">
-                      <span className="text-[9px] text-muted-foreground/70">Freq</span>
-                      <select
-                        className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-                        value={st?.freq ?? "chart"}
-                        onChange={(e) => update(def.id, { freq: e.target.value as RegistryIndicatorState["freq"] })}
-                        title="Compute this indicator on the chart's bars, or on weekly/monthly resampled bars (e.g. weekly RSI on a daily chart)"
-                        data-testid={`freq-${def.id}`}
-                      >
-                        <option value="chart">Chart</option>
-                        <option value="weekly">Weekly</option>
-                        <option value="monthly">Monthly</option>
-                      </select>
-                    </div>
-                    {def.params.map((pr) => (
-                      <div key={pr.key} className="flex items-center gap-1">
-                        <span className="text-[9px] text-muted-foreground/70">{pr.label}</span>
-                        {pr.key === def.multiInstanceParam ? (
-                          // Multi-instance param (e.g. autocorr lag): several
-                          // values → one indicator line per value.
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <PeriodMultiSelect
-                              presets={[]}
-                              active={(st?.params?.[pr.key] as number | number[] | undefined) ?? p[pr.key]}
-                              onChange={(list) => {
-                                const cur = reg[def.id] ?? {};
-                                const nextParams = { ...(cur.params ?? {}) };
-                                if (list?.length) nextParams[pr.key] = list.length === 1 ? list[0] : list;
-                                else delete nextParams[pr.key];
-                                update(def.id, { params: nextParams });
-                              }}
-                              testid={`param-${def.id}-${pr.key}`}
-                              min={pr.min}
-                            />
-                          </div>
-                        ) : pr.options ? (
-                          <select
-                            className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-                            value={p[pr.key]}
-                            onChange={(e) => setParam(def, pr.key, Number(e.target.value))}
-                            data-testid={`param-${def.id}-${pr.key}`}
-                          >
-                            {pr.options.map((o) => (
-                              <option key={o.value} value={o.value}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <Input
-                            type="number"
-                            className="h-6 w-14 text-[10px] px-1.5"
-                            value={p[pr.key]}
-                            min={pr.min}
-                            max={pr.max}
-                            step={pr.step ?? 1}
-                            onChange={(e) => {
-                              const v = Number(e.target.value);
-                              if (Number.isFinite(v)) setParam(def, pr.key, v);
-                            }}
-                            data-testid={`param-${def.id}-${pr.key}`}
-                          />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {enabled && def.components && def.components.length > 0 && (
-                  <div className="flex flex-wrap gap-1 items-center pl-0.5" data-testid={`components-${def.id}`}>
-                    <span className="text-[9px] text-muted-foreground/70">Lines</span>
-                    {def.components.map((c) => {
-                      const hidden = (st?.hiddenParts ?? []).includes(c.key);
-                      const tint = c.colorKey ? colors[c.colorKey as IndicatorColorKey] : undefined;
-                      return (
-                        <button
-                          key={c.key}
-                          type="button"
-                          onClick={() => {
-                            const cur = new Set(reg[def.id]?.hiddenParts ?? []);
-                            if (cur.has(c.key)) cur.delete(c.key);
-                            else cur.add(c.key);
-                            update(def.id, { hiddenParts: [...cur] });
-                          }}
-                          className={`flex items-center gap-1 h-6 px-1.5 rounded border border-input text-[10px] transition-opacity ${hidden ? "opacity-40" : ""}`}
-                          title={hidden ? `Show ${c.label}` : `Hide ${c.label}`}
-                          data-testid={`component-${def.id}-${c.key}`}
-                        >
-                          {tint && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: tint }} />}
-                          {hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                          {c.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                {enabled && (
+                  // One row per instance: params + freq + pane placement (see
+                  // InstanceRows). Multiple instances = same indicator at
+                  // several frequencies/params at once.
+                  <InstanceRows
+                    indKey={def.id}
+                    label={def.label}
+                    params={def.params}
+                    instances={instances}
+                    onChange={(list) => writeInstances(def.id, list)}
+                    showPane={def.renderTarget === "pane"}
+                    multiParamKey={def.multiInstanceParam}
+                    components={def.components}
+                  />
                 )}
                 {enabled && renderExtra?.(def, p)}
               </div>
@@ -1245,138 +1462,40 @@ export default function IndicatorsPanel({
           />
 
           {!isCollapsed("Oscillators") && (<>
-          {/* RSI — multi-period: several lines can share the RSI subplot */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">RSI</Label>
-              <Switch
-                checked={indicatorPeriods(activeIndicators.rsi).length > 0}
-                onCheckedChange={(on) =>
-                  setActiveIndicators({
-                    ...activeIndicators,
-                    rsi: on ? [rsiPeriod] : undefined,
-                  })
-                }
-                data-testid="toggle-rsi"
-              />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[7, 14, 21]}
-                active={activeIndicators.rsi}
-                onChange={(list) => {
-                  if (list?.length) setRsiPeriod(list[0]);
-                  setActiveIndicators({ ...activeIndicators, rsi: list });
-                }}
-                testid="custom-rsi"
-              />
-              <select
-                className="h-6 text-[10px] px-1 rounded-md border border-input bg-background"
-                value={activeIndicators.rsiFreq ?? "chart"}
-                onChange={(e) => setActiveIndicators({ ...activeIndicators, rsiFreq: e.target.value as any })}
-                title="Compute RSI on the chart's bars, or on weekly/monthly resampled closes (weekly RSI on a daily chart)"
-                data-testid="freq-rsi"
-              >
-                <option value="chart">Chart</option>
-                <option value="weekly">W</option>
-                <option value="monthly">M</option>
-              </select>
-            </div>
-          </div>
+          {/* RSI — instance rows: each row = period + freq + pane, so RSI 14
+              daily and RSI 14 weekly can run at once (see indicatorInstances) */}
+          <BuiltinInstanceSection
+            indKey="rsi"
+            title="RSI"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            presets={[7, 14, 21]}
+          />
 
-          {/* MACD */}
-          <div className="flex items-center justify-between mt-3">
-            <Label className="text-xs font-medium">MACD (12, 26, 9)</Label>
-            <Switch
-              checked={!!activeIndicators.macd}
-              onCheckedChange={(on) =>
-                setActiveIndicators({ ...activeIndicators, macd: on || undefined })
-              }
-              data-testid="toggle-macd"
-            />
-          </div>
+          <BuiltinInstanceSection
+            indKey="macd"
+            title="MACD"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            className="mt-3"
+          />
 
-          {/* Stochastic */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Stochastic</Label>
-              <Switch
-                checked={activeIndicators.stochastic !== undefined}
-                onCheckedChange={(on) =>
-                  setActiveIndicators({
-                    ...activeIndicators,
-                    stochastic: on ? { kPeriod: stochK, dPeriod: stochD } : undefined,
-                  })
-                }
-                data-testid="toggle-stochastic"
-              />
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-8">%K:</span>
-              {[9, 14, 21].map((p) => (
-                <Button
-                  key={p}
-                  variant={stochK === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setStochK(p);
-                    if (activeIndicators.stochastic)
-                      setActiveIndicators({ ...activeIndicators, stochastic: { kPeriod: p, dPeriod: stochD } });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-8">%D:</span>
-              {[3, 5, 7].map((p) => (
-                <Button
-                  key={p}
-                  variant={stochD === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setStochD(p);
-                    if (activeIndicators.stochastic)
-                      setActiveIndicators({ ...activeIndicators, stochastic: { kPeriod: stochK, dPeriod: p } });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-            </div>
-          </div>
+          <BuiltinInstanceSection
+            indKey="stochastic"
+            title="Stochastic"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            className="mt-3"
+          />
 
-          {/* ROC — multi-period: several lines share the ROC subplot */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">ROC (Rate of Change)</Label>
-              <Switch
-                checked={indicatorPeriods(activeIndicators.roc).length > 0}
-                onCheckedChange={(on) =>
-                  setActiveIndicators({
-                    ...activeIndicators,
-                    roc: on ? [rocPeriod] : undefined,
-                  })
-                }
-                data-testid="toggle-roc"
-              />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[9, 12, 20, 50]}
-                active={activeIndicators.roc}
-                onChange={(list) => {
-                  if (list?.length) setRocPeriod(list[0]);
-                  setActiveIndicators({ ...activeIndicators, roc: list });
-                }}
-                testid="custom-roc"
-                min={1}
-              />
-            </div>
-          </div>
+          <BuiltinInstanceSection
+            indKey="roc"
+            title="ROC (Rate of Change)"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            presets={[9, 12, 20, 50]}
+            className="mt-3"
+          />
           </>)}
         </div>
 
@@ -1390,86 +1509,24 @@ export default function IndicatorsPanel({
           />
 
           {!isCollapsed("Volatility") && (<>
-          {/* Bollinger Bands */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Bollinger Bands</Label>
-              <Switch
-                checked={activeIndicators.bollinger !== undefined}
-                onCheckedChange={(on) =>
-                  setActiveIndicators({
-                    ...activeIndicators,
-                    bollinger: on ? { period: bbPeriod, mult: bbMult } : undefined,
-                  })
-                }
-                data-testid="toggle-bollinger"
-              />
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-12">Period:</span>
-              {[10, 20, 50].map((p) => (
-                <Button
-                  key={p}
-                  variant={bbPeriod === p ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => {
-                    setBbPeriod(p);
-                    if (activeIndicators.bollinger)
-                      setActiveIndicators({ ...activeIndicators, bollinger: { period: p, mult: bbMult } });
-                  }}
-                >
-                  {p}
-                </Button>
-              ))}
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-12">Width:</span>
-              {[1, 1.5, 2, 2.5, 3].map((m) => (
-                <Button
-                  key={m}
-                  variant={bbMult === m ? "default" : "secondary"}
-                  size="sm"
-                  className="h-6 px-1.5 text-[10px] flex-1"
-                  onClick={() => {
-                    setBbMult(m);
-                    if (activeIndicators.bollinger)
-                      setActiveIndicators({ ...activeIndicators, bollinger: { period: bbPeriod, mult: m } });
-                  }}
-                >
-                  {m}σ
-                </Button>
-              ))}
-            </div>
-          </div>
+          {/* Bollinger Bands — instance rows (period/σ × freq); overlay, so no
+              pane dropdown. Two instances = two band sets (e.g. 20/2 + 50/2.5) */}
+          <BuiltinInstanceSection
+            indKey="bollinger"
+            title="Bollinger Bands"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            presets={[10, 20, 50]}
+          />
 
-          {/* ATR — multi-period: several lines share the ATR subplot */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">ATR</Label>
-              <Switch
-                checked={indicatorPeriods(activeIndicators.atr).length > 0}
-                onCheckedChange={(on) =>
-                  setActiveIndicators({
-                    ...activeIndicators,
-                    atr: on ? [atrPeriod] : undefined,
-                  })
-                }
-                data-testid="toggle-atr"
-              />
-            </div>
-            <div className="flex gap-1 items-center flex-wrap">
-              <PeriodMultiSelect
-                presets={[7, 14, 21]}
-                active={activeIndicators.atr}
-                onChange={(list) => {
-                  if (list?.length) setAtrPeriod(list[0]);
-                  setActiveIndicators({ ...activeIndicators, atr: list });
-                }}
-                testid="custom-atr"
-              />
-            </div>
-          </div>
+          <BuiltinInstanceSection
+            indKey="atr"
+            title="ATR"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+            presets={[7, 14, 21]}
+            className="mt-3"
+          />
           </>)}
         </div>
 
@@ -1510,20 +1567,13 @@ export default function IndicatorsPanel({
           />
 
           {!isCollapsed("Volume") && (<>
-          {/* OBV */}
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-xs font-medium">OBV</Label>
-              <p className="text-[10px] text-muted-foreground mt-0.5">On Balance Volume sub-pane</p>
-            </div>
-            <Switch
-              checked={!!activeIndicators.obv}
-              onCheckedChange={(on) =>
-                setActiveIndicators({ ...activeIndicators, obv: on || undefined })
-              }
-              data-testid="toggle-obv"
-            />
-          </div>
+          {/* OBV — parameterless; instances differ by freq/pane */}
+          <BuiltinInstanceSection
+            indKey="obv"
+            title="OBV"
+            activeIndicators={activeIndicators}
+            onChange={setActiveIndicators}
+          />
           </>)}
         </div>
 
@@ -1936,20 +1986,31 @@ export function IndicatorOverlays({
 }) {
   const overlays = activeIndicators.indicatorOverlays || [];
 
+  // Sources are sub-pane KEYS (one per instance pane group — "rsi",
+  // "rsi#i2", …) so an overlay can target a specific RSI instance's pane.
   const availableSources: string[] = [];
-  if (activeIndicators.rsi !== undefined) availableSources.push("rsi");
-  if (activeIndicators.macd) availableSources.push("macd");
-  if (activeIndicators.atr !== undefined) availableSources.push("atr");
-  if (activeIndicators.roc !== undefined) availableSources.push("roc");
-  if (activeIndicators.stochastic) availableSources.push("stochastic");
-  if (activeIndicators.obv) availableSources.push("obv");
+  for (const baseId of ["rsi", "macd", "atr", "roc", "stochastic", "obv"]) {
+    for (const g of instancePaneGroups(activeIndicators, baseId)) {
+      availableSources.push(subChartKeyFor(baseId, g.group));
+    }
+  }
   // Registry sub-pane indicators (ADX, CCI, Autocorrelation, …) are sources too.
   for (const def of PANE_INDICATORS) {
-    if (activeIndicators.registry?.[def.id]?.enabled) availableSources.push(def.id);
+    for (const g of instancePaneGroups(activeIndicators, def.id)) {
+      availableSources.push(subChartKeyFor(def.id, g.group));
+    }
   }
 
-  const sourceLabel = (s: string) =>
-    INDICATOR_OVERLAY_LABELS[s] ?? getIndicatorDef(s)?.label ?? s;
+  const sourceLabel = (s: string) => {
+    const hash = s.indexOf("#");
+    const baseId = hash < 0 ? s : s.slice(0, hash);
+    const base = INDICATOR_OVERLAY_LABELS[baseId] ?? getIndicatorDef(baseId)?.label ?? baseId;
+    if (hash < 0) return base;
+    // Disambiguate instance panes by their first instance ("RSI 14W").
+    const group = s.slice(hash + 1);
+    const inst = getInstances(activeIndicators, baseId).find((i) => effGroup(i) === group);
+    return inst ? instanceLabel(baseId, inst) : base;
+  };
 
   const [source, setSource] = useState(availableSources[0] || "");
   const [type, setType] = useState("sma");

@@ -37,6 +37,7 @@ import type { HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import {
   PANE_INDICATORS,
   OVERLAY_INDICATORS,
+  ALL_REGISTRY_INDICATORS,
   getIndicatorDef,
   resolveParams,
   resolveParamList,
@@ -44,6 +45,18 @@ import {
   type RegistryIndicatorState,
 } from "@/lib/indicatorRegistry";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
+import {
+  type IndicatorInstance,
+  getInstances,
+  paneGroups,
+  subChartKeyFor,
+  parseSubChartKey,
+  instanceLabel,
+  effectiveFreq,
+  freqSuffix,
+  makeFreqSourceCache,
+  type FreqSourceCache,
+} from "@/lib/indicatorInstances";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { downsampleSeries, downsampleOhlc } from "@/lib/chartFrequency";
@@ -197,11 +210,13 @@ export interface IndicatorOverlay {
  *  pane. Their sub-chart type id is "ovl:<overlay id>". */
 export const PANE_OVERLAY_TYPES = new Set(["rsi", "roc", "macd", "autocorr"]);
 
-/** Short display label for a sub-chart type (built-in or registry id). */
+/** Short display label for a sub-chart type (built-in or registry id).
+ *  Instance-group keys ("rsi#i2") label by their base indicator. */
 export function subChartSourceLabel(type: string): string {
-  return type === "rsi" ? "RSI" : type === "roc" ? "ROC" : type === "atr" ? "ATR"
-    : type === "stochastic" ? "Stoch" : type === "obv" ? "OBV" : type === "macd" ? "MACD"
-    : type === "ha" ? "HA" : (getIndicatorDef(type)?.label ?? type);
+  const base = parseSubChartKey(type).baseId;
+  return base === "rsi" ? "RSI" : base === "roc" ? "ROC" : base === "atr" ? "ATR"
+    : base === "stochastic" ? "Stoch" : base === "obv" ? "OBV" : base === "macd" ? "MACD"
+    : base === "ha" ? "HA" : (getIndicatorDef(base)?.label ?? base);
 }
 
 /** Header/badge label for a pane-overlay ("MACD(12,26,9) on RSI"). */
@@ -288,6 +303,13 @@ export interface ActiveIndicators {
    *  keyed by indicator id. Each new indicator is one entry here at runtime —
    *  no typed field per indicator. */
   registry?: Record<string, RegistryIndicatorState>;
+  /** Per-instance indicator state (period/params + own compute frequency +
+   *  pane group), keyed by indicator id ("rsi", "macd", registry ids…). When
+   *  present for a key this is the source of truth — the legacy single-slot
+   *  fields above are kept in sync (see lib/indicatorInstances.ts
+   *  getInstances/setInstances, the generalization of getMaLines/setMaLines).
+   *  This is what lets RSI 14 daily and RSI 14 weekly exist at once. */
+  instances?: Record<string, IndicatorInstance[]>;
 }
 
 /** Resolve the MA line instances (period + frequency) for one MA type.
@@ -517,8 +539,22 @@ function withOpacity(color: string, opacity?: number): string {
 // so the union is widened to string.
 type SubChartType = "rsi" | "macd" | "ha" | "atr" | "roc" | "stochastic" | "obv" | string;
 
+// Stable empty fallbacks — fresh literals per render would defeat the
+// SubIndicatorChart effect's dependency check and recreate charts constantly.
+const EMPTY_INSTANCES: IndicatorInstance[] = [];
+const EMPTY_OHLC: OhlcBar[] = [];
+
+/** Built-in sub-pane indicator ids (compute inlined in SubIndicatorChart, not
+ *  registry-driven). "ha" stays a singleton — no instance support. */
+const BUILTIN_SUB_KEYS = new Set(["rsi", "macd", "ha", "atr", "roc", "stochastic", "obv"]);
+/** Built-in sub-pane ids that support multi-instance (see indicatorInstances). */
+const BUILTIN_INSTANCE_SUB_IDS = ["rsi", "macd", "atr", "roc", "stochastic", "obv"] as const;
+
 function SubIndicatorChart({
   type,
+  indKey = "",
+  instances = EMPTY_INSTANCES,
+  freqSources,
   closeData,
   ohlcBars,
   fullDates,
@@ -542,6 +578,16 @@ function SubIndicatorChart({
   onPrimaryData,
 }: {
   type: SubChartType;
+  /** Base indicator id this pane renders ("rsi", "macd", registry id) — the
+   *  pane's `type` is the sub-chart KEY (base id, or "base#group" for a
+   *  non-legacy instance pane group). Empty for "ovl:" panes. */
+  indKey?: string;
+  /** The indicator instances rendered in THIS pane group (see
+   *  lib/indicatorInstances.ts) — one line-set per instance. */
+  instances?: IndicatorInstance[];
+  /** Shared per-frequency resample cache (one weekly/monthly resample per
+   *  pane, reused by every instance). */
+  freqSources?: FreqSourceCache;
   closeData: { time: string; value: number }[];
   /** Raw price OHLC bars for the active ticker — used by registry pane
    *  indicators (ADX, CCI, …) that need real high/low, not close-only. */
@@ -732,40 +778,34 @@ function SubIndicatorChart({
       }
     }
 
-    const rsiPeriods = indicatorPeriods(activeIndicators.rsi);
-    if (type === "rsi" && rsiPeriods.length > 0) {
-      // Optional weekly/monthly compute frequency: resample closes first so a
-      // daily chart can show a weekly RSI (points on period-end dates). A
-      // target at/below the chart's own bar frequency is a no-op — treat it
-      // as "chart" so the title doesn't carry a misleading W/M suffix.
-      const rsiFreqRaw = activeIndicators.rsiFreq;
-      const rsiFreq =
-        (rsiFreqRaw === "weekly" || rsiFreqRaw === "monthly") &&
-        chartBarsPerIndicatorBar(frequency, rsiFreqRaw) > 1
-          ? rsiFreqRaw
-          : undefined;
-      const rsiInput =
-        rsiFreq === "weekly" || rsiFreq === "monthly"
-          ? resampleIndicatorBars(
-              closeData.map((d: any) => ({ time: String(d.time), open: d.value, high: d.value, low: d.value, close: d.value })),
-              rsiFreq,
-            ).map((b) => ({ time: b.time as unknown as Time, value: b.close }))
-          : closeData;
-      // One RSI line per period (shaded variants of the RSI color).
+    if (indKey === "rsi" && instances.length > 0) {
+      // One RSI line per instance (period × own compute frequency — this is
+      // what lets RSI 14 daily and RSI 14 weekly coexist). Weekly/monthly
+      // instances compute on resampled closes (points on period-end dates); a
+      // frequency at/below the chart's own is a no-op — treated as "chart" so
+      // the title doesn't carry a misleading W/M suffix (see effectiveFreq).
       let rsiData: { time: Time; value: number }[] = [];
-      rsiPeriods.forEach((p, pi) => {
-        const data = computeRSI(rsiInput as typeof closeData, p);
-        if (!data.length) return;
-        const rsiLine = chart.addSeries(LineSeries, {
-          color: shadeHex(IC.rsi_line, pi),
-          lineWidth: 1,
-          title: `RSI ${p}${rsiFreq === "weekly" ? "W" : rsiFreq === "monthly" ? "M" : ""}${baseLabel}`,
-        });
-        rsiLine.setData(data);
-        subSeriesList.push(rsiLine);
-        if (!firstSubSeries) firstSubSeries = rsiLine;
-        if (!rsiData.length) rsiData = data as any;
-      });
+      let lineIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(frequency, inst);
+        const rsiInput = eff && freqSources
+          ? (freqSources.close(eff) as unknown as typeof closeData)
+          : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const data = computeRSI(rsiInput, p);
+          if (!data.length) continue;
+          const rsiLine = chart.addSeries(LineSeries, {
+            color: shadeHex(IC.rsi_line, lineIdx),
+            lineWidth: 1,
+            title: `RSI ${p}${freqSuffix(eff)}${baseLabel}`,
+          });
+          rsiLine.setData(data);
+          subSeriesList.push(rsiLine);
+          if (!firstSubSeries) firstSubSeries = rsiLine;
+          if (!rsiData.length) rsiData = data as any;
+          lineIdx++;
+        }
+      }
       if (rsiData.length > 0) {
         // Overbought/oversold reference lines
         const first = rsiData[0].time;
@@ -787,11 +827,21 @@ function SubIndicatorChart({
       }
     }
 
-    if (type === "macd" && activeIndicators.macd) {
-      const macd = computeMACD(closeData, 12, 26, 9);
-      if (macd.macdLine.length > 0) {
+    if (indKey === "macd" && instances.length > 0) {
+      // One MACD per instance (own fast/slow/signal + compute frequency). The
+      // histogram draws only for the FIRST instance of a merged pane —
+      // overlapped histograms are unreadable; extras get shaded line pairs.
+      let zeroSpan: { time: Time; value: number }[] = [];
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(frequency, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as unknown as typeof closeData) : closeData;
+        const fast = typeof inst.params.fast === "number" ? inst.params.fast : 12;
+        const slow = typeof inst.params.slow === "number" ? inst.params.slow : 26;
+        const signal = typeof inst.params.signal === "number" ? inst.params.signal : 9;
+        const macd = computeMACD(input, fast, slow, signal);
+        if (macd.macdLine.length === 0) return;
         // Histogram first so the MACD/signal lines draw on top of the bars.
-        if (macd.histogram.length > 0) {
+        if (ii === 0 && macd.histogram.length > 0) {
           const hist = chart.addSeries(HistogramSeries, {
             title: "",
             base: 0,
@@ -804,39 +854,40 @@ function SubIndicatorChart({
             color: d.value >= 0 ? (IC as any).macd_histogram_pos ?? "#22c55e" : (IC as any).macd_histogram_neg ?? "#ef4444",
           })));
         }
+        const sfx = freqSuffix(eff);
         const ml = chart.addSeries(LineSeries, {
-          color: IC.macd_line,
+          color: shadeHex(IC.macd_line, ii),
           lineWidth: 1,
-          title: `MACD${baseLabel}`,
+          title: `MACD${sfx ? ` ${sfx}` : ""}${baseLabel}`,
         });
         ml.setData(macd.macdLine);
         subSeriesList.push(ml);
         if (!firstSubSeries) firstSubSeries = ml;
 
         const sl = chart.addSeries(LineSeries, {
-          color: IC.macd_signal,
+          color: shadeHex(IC.macd_signal, ii),
           lineWidth: 1,
-          title: "Signal",
+          title: sfx ? `Signal ${sfx}` : "Signal",
           crosshairMarkerVisible: false,
         });
         sl.setData(macd.signalLine);
         subSeriesList.push(sl);
-
-        if (macd.macdLine.length >= 2) {
-          const zl = chart.addSeries(LineSeries, {
-            color: "rgba(255,255,255,0.15)",
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            title: "",
-            crosshairMarkerVisible: false,
-          });
-          zl.setData([
-            { time: macd.macdLine[0].time, value: 0 },
-            { time: macd.macdLine[macd.macdLine.length - 1].time, value: 0 },
-          ]);
-        }
-        chart.timeScale().fitContent();
+        if (!zeroSpan.length) zeroSpan = macd.macdLine as any;
+      });
+      if (zeroSpan.length >= 2) {
+        const zl = chart.addSeries(LineSeries, {
+          color: "rgba(255,255,255,0.15)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          title: "",
+          crosshairMarkerVisible: false,
+        });
+        zl.setData([
+          { time: zeroSpan[0].time, value: 0 },
+          { time: zeroSpan[zeroSpan.length - 1].time, value: 0 },
+        ]);
       }
+      if (zeroSpan.length > 0) chart.timeScale().fitContent();
     }
 
     if (type === "ha" && activeIndicators.heikinAshi) {
@@ -862,39 +913,51 @@ function SubIndicatorChart({
       }
     }
 
-    // ── ATR (one line per period) ──
-    if (type === "atr") {
-      indicatorPeriods(activeIndicators.atr).forEach((p, pi) => {
-        const atrData = computeATR(closeData, p);
-        if (!atrData.length) return;
-        const atrLine = chart.addSeries(LineSeries, {
-          color: shadeHex(IC.atr, pi),
-          lineWidth: 1,
-          title: `ATR ${p}${baseLabel}`,
-        });
-        atrLine.setData(atrData);
-        subSeriesList.push(atrLine);
-        if (!firstSubSeries) firstSubSeries = atrLine;
-        chart.timeScale().fitContent();
-      });
+    // ── ATR (one line per instance: period × compute frequency) ──
+    if (indKey === "atr" && instances.length > 0) {
+      let atrIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(frequency, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as unknown as typeof closeData) : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const atrData = computeATR(input, p);
+          if (!atrData.length) continue;
+          const atrLine = chart.addSeries(LineSeries, {
+            color: shadeHex(IC.atr, atrIdx),
+            lineWidth: 1,
+            title: `ATR ${p}${freqSuffix(eff)}${baseLabel}`,
+          });
+          atrLine.setData(atrData);
+          subSeriesList.push(atrLine);
+          if (!firstSubSeries) firstSubSeries = atrLine;
+          chart.timeScale().fitContent();
+          atrIdx++;
+        }
+      }
     }
 
-    // ── ROC (one line per period) ──
-    if (type === "roc" && indicatorPeriods(activeIndicators.roc).length > 0) {
+    // ── ROC (one line per instance: period × compute frequency) ──
+    if (indKey === "roc" && instances.length > 0) {
       let rocData: { time: Time; value: number }[] = [];
-      indicatorPeriods(activeIndicators.roc).forEach((p, pi) => {
-        const data = computeROC(closeData, p);
-        if (!data.length) return;
-        const rocLine = chart.addSeries(LineSeries, {
-          color: shadeHex(IC.roc, pi),
-          lineWidth: 1,
-          title: `ROC ${p}${baseLabel}`,
-        });
-        rocLine.setData(data);
-        subSeriesList.push(rocLine);
-        if (!firstSubSeries) firstSubSeries = rocLine;
-        if (!rocData.length) rocData = data as any;
-      });
+      let rocIdx = 0;
+      for (const inst of instances) {
+        const eff = effectiveFreq(frequency, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as unknown as typeof closeData) : closeData;
+        for (const p of indicatorPeriods(inst.params.period as number | number[] | undefined)) {
+          const data = computeROC(input, p);
+          if (!data.length) continue;
+          const rocLine = chart.addSeries(LineSeries, {
+            color: shadeHex(IC.roc, rocIdx),
+            lineWidth: 1,
+            title: `ROC ${p}${freqSuffix(eff)}${baseLabel}`,
+          });
+          rocLine.setData(data);
+          subSeriesList.push(rocLine);
+          if (!firstSubSeries) firstSubSeries = rocLine;
+          if (!rocData.length) rocData = data as any;
+          rocIdx++;
+        }
+      }
       if (rocData.length > 0) {
         // Zero line
         if (rocData.length >= 2) {
@@ -914,15 +977,21 @@ function SubIndicatorChart({
       }
     }
 
-    // ── Stochastic ──
-    if (type === "stochastic" && activeIndicators.stochastic) {
-      const { kPeriod, dPeriod } = activeIndicators.stochastic;
-      const stoch = computeStochastic(closeData, kPeriod, dPeriod);
-      if (stoch.k.length > 0) {
+    // ── Stochastic (one %K/%D pair per instance) ──
+    if (indKey === "stochastic" && instances.length > 0) {
+      let refSpan: { time: Time; value: number }[] = [];
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(frequency, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as unknown as typeof closeData) : closeData;
+        const kPeriod = typeof inst.params.kPeriod === "number" ? inst.params.kPeriod : 14;
+        const dPeriod = typeof inst.params.dPeriod === "number" ? inst.params.dPeriod : 3;
+        const stoch = computeStochastic(input, kPeriod, dPeriod);
+        if (stoch.k.length === 0) return;
+        const sfx = freqSuffix(eff);
         const kLine = chart.addSeries(LineSeries, {
-          color: IC.stoch_k,
+          color: shadeHex(IC.stoch_k, ii),
           lineWidth: 1,
-          title: `%K(${kPeriod})${baseLabel}`,
+          title: `%K(${kPeriod})${sfx}${baseLabel}`,
         });
         kLine.setData(stoch.k);
         subSeriesList.push(kLine);
@@ -930,18 +999,20 @@ function SubIndicatorChart({
 
         if (stoch.d.length > 0) {
           const dLine = chart.addSeries(LineSeries, {
-            color: IC.stoch_d,
+            color: shadeHex(IC.stoch_d, ii),
             lineWidth: 1,
-            title: `%D(${dPeriod})`,
+            title: `%D(${dPeriod})${sfx}`,
             crosshairMarkerVisible: false,
           });
           dLine.setData(stoch.d);
           subSeriesList.push(dLine);
         }
-
-        // Overbought/Oversold reference lines
-        const first = stoch.k[0].time;
-        const last = stoch.k[stoch.k.length - 1].time;
+        if (!refSpan.length) refSpan = stoch.k as any;
+      });
+      if (refSpan.length > 0) {
+        // Overbought/Oversold reference lines (once per pane)
+        const first = refSpan[0].time;
+        const last = refSpan[refSpan.length - 1].time;
         for (const [level, color] of [
           [80, IC.stoch_overbought],
           [20, IC.stoch_oversold],
@@ -959,42 +1030,33 @@ function SubIndicatorChart({
       }
     }
 
-    // ── OBV ──
-    if (type === "obv" && activeIndicators.obv) {
-      const obvData = computeOBV(closeData);
-      if (obvData.length > 0) {
+    // ── OBV (parameterless — instances differ only by compute frequency) ──
+    if (indKey === "obv" && instances.length > 0) {
+      instances.forEach((inst, ii) => {
+        const eff = effectiveFreq(frequency, inst);
+        const input = eff && freqSources ? (freqSources.close(eff) as unknown as typeof closeData) : closeData;
+        const obvData = computeOBV(input);
+        if (obvData.length === 0) return;
         const obvLine = chart.addSeries(LineSeries, {
-          color: IC.obv,
+          color: shadeHex(IC.obv, ii),
           lineWidth: 1,
-          title: `OBV${baseLabel}`,
+          title: `OBV${freqSuffix(eff) ? ` ${freqSuffix(eff)}` : ""}${baseLabel}`,
         });
         obvLine.setData(obvData);
         subSeriesList.push(obvLine);
         if (!firstSubSeries) firstSubSeries = obvLine;
         chart.timeScale().fitContent();
-      }
+      });
     }
 
     // ── Registry-driven pane indicators (ADX, CCI, Williams %R, Aroon, …) ──
-    // Any sub-chart whose `type` is a registry id renders here generically:
+    // Any sub-chart whose base id is a registry id renders here generically:
     // compute on real OHLC, draw its series, add reference lines. No per-
-    // indicator branch — the descriptor's renderPane does the work.
-    const regDef = getIndicatorDef(type);
-    // Close-only indicators still work on panes without real OHLC (ratios,
-    // derived series) via synthesized o=h=l=c bars from the primary series.
-    let regBars: OhlcBar[] =
-      ohlcBars.length > 0
-        ? ohlcBars
-        : regDef?.worksOnCloseOnly
-          ? closeData.map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }))
-          : [];
-    if (regDef?.renderPane && regBars.length > 0) {
-      // Per-indicator compute frequency: resample to weekly/monthly bars first.
-      const regFreq = activeIndicators.registry?.[type]?.freq;
-      if (regFreq === "weekly" || regFreq === "monthly") {
-        regBars = resampleIndicatorBars(regBars, regFreq);
-      }
-      const params = resolveParams(regDef, activeIndicators.registry?.[type], frequency);
+    // indicator branch — the descriptor's renderPane does the work. One
+    // render per INSTANCE in this pane group (each with its own params +
+    // compute frequency); extras get shaded colors and skip the ref lines.
+    const regDef = indKey && !BUILTIN_SUB_KEYS.has(indKey) ? getIndicatorDef(indKey) : undefined;
+    if (regDef?.renderPane && instances.length > 0) {
       const drawRefLine = (level: number, color: string, first: unknown, last: unknown) => {
         const ref = chart.addSeries(LineSeries, {
           color,
@@ -1008,34 +1070,56 @@ function SubIndicatorChart({
           { time: last as Time, value: level },
         ]);
       };
-      // Multi-instance param (e.g. autocorr lag list): render once per value —
-      // extra instances get shaded line colors and skip the reference lines.
-      const instValues: (number | null)[] = regDef.multiInstanceParam
-        ? resolveParamList(regDef, activeIndicators.registry?.[type], frequency, regDef.multiInstanceParam)
-        : [null];
-      instValues.forEach((iv, ii) => {
-        const p2 = iv === null ? params : { ...params, [regDef.multiInstanceParam!]: iv };
-        const lineKey = regDef.colorKeys[0];
-        const colors =
-          ii === 0
-            ? (IC as unknown as Record<string, string>)
-            : { ...(IC as unknown as Record<string, string>), [lineKey]: shadeHex((IC as Record<string, string>)[lineKey], ii) };
-        regDef.renderPane!(
-          {
-            chart,
-            colors,
-            baseLabel,
-            register: (s) => {
-              subSeriesList.push(s);
-              if (!firstSubSeries) firstSubSeries = s;
+      let drewAny = false;
+      let lineIdx = 0; // shading index across instances AND multi-param values
+      instances.forEach((inst, instIdx) => {
+        const eff = effectiveFreq(frequency, inst);
+        // Close-only indicators still work on panes without real OHLC (ratios,
+        // derived series) via synthesized o=h=l=c bars from the primary series.
+        const regBars: OhlcBar[] =
+          ohlcBars.length > 0
+            ? (freqSources && eff ? freqSources.ohlc(eff) : ohlcBars)
+            : regDef.worksOnCloseOnly
+              ? ((freqSources && eff ? freqSources.close(eff) : closeData) as { time: string; value: number }[])
+                  .map((d) => ({ time: d.time, open: d.value, high: d.value, low: d.value, close: d.value }))
+              : [];
+        if (!regBars.length) return;
+        const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+        const params = resolveParams(regDef, regSt, frequency);
+        // Multi-instance param (e.g. autocorr lag list) still renders once per
+        // value WITHIN this instance.
+        const instValues: (number | null)[] = regDef.multiInstanceParam
+          ? resolveParamList(regDef, regSt, frequency, regDef.multiInstanceParam)
+          : [null];
+        // W/M suffix rides on baseLabel so every series title this instance
+        // draws is distinguishable from its chart-frequency sibling.
+        const instLabel = eff ? `${freqSuffix(eff)}${baseLabel}` : baseLabel;
+        instValues.forEach((iv) => {
+          const p2 = iv === null ? params : { ...params, [regDef.multiInstanceParam!]: iv };
+          const lineKey = regDef.colorKeys[0];
+          const colors =
+            lineIdx === 0
+              ? (IC as unknown as Record<string, string>)
+              : { ...(IC as unknown as Record<string, string>), [lineKey]: shadeHex((IC as Record<string, string>)[lineKey], lineIdx) };
+          regDef.renderPane!(
+            {
+              chart,
+              colors,
+              baseLabel: instLabel,
+              register: (s) => {
+                subSeriesList.push(s);
+                if (!firstSubSeries) firstSubSeries = s;
+              },
+              refLine: instIdx === 0 && iv === instValues[0] ? drawRefLine : () => {},
             },
-            refLine: ii === 0 ? drawRefLine : () => {},
-          },
-          regBars,
-          p2,
-        );
+            regBars,
+            p2,
+          );
+          drewAny = true;
+          lineIdx++;
+        });
       });
-      chart.timeScale().fitContent();
+      if (drewAny) chart.timeScale().fitContent();
     }
 
     // ── Indicator-on-indicator overlays (EMA of RSI, Bollinger on RSI,
@@ -1376,7 +1460,7 @@ function SubIndicatorChart({
       chartRef.current = null;
       try { chart.remove(); } catch {}
     };
-  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency, overlayDef, sourceData, onPrimaryData]);
+  }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, indKey, instances, freqSources, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency, overlayDef, sourceData, onPrimaryData]);
 
   // Resize
   useEffect(() => {
@@ -1391,10 +1475,15 @@ function SubIndicatorChart({
     return () => ro.disconnect();
   });
 
+  // Header chip: instance panes label by their instance(s) ("RSI 14W") so two
+  // panes of the same indicator read apart at a glance; multi-instance merged
+  // panes fall back to the base name.
+  const baseId = parseSubChartKey(type).baseId;
   const label = type.startsWith("ovl:") && overlayDef ? overlayPaneLabel(overlayDef)
-    : type === "rsi" ? "RSI" : type === "macd" ? "MACD" : type === "ha" ? "Heikin-Ashi"
-    : type === "atr" ? "ATR" : type === "roc" ? "ROC" : type === "stochastic" ? "Stochastic"
-    : type === "obv" ? "OBV" : (getIndicatorDef(type)?.label ?? type);
+    : indKey && instances.length === 1 ? instanceLabel(indKey, instances[0])
+    : baseId === "rsi" ? "RSI" : baseId === "macd" ? "MACD" : baseId === "ha" ? "Heikin-Ashi"
+    : baseId === "atr" ? "ATR" : baseId === "roc" ? "ROC" : baseId === "stochastic" ? "Stochastic"
+    : baseId === "obv" ? "OBV" : (getIndicatorDef(baseId)?.label ?? baseId);
 
   return (
     <div
@@ -3434,39 +3523,42 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         });
       }
 
-      // ── Bollinger Bands ── (overlay on main chart)
-      if (activeIndicators.bollinger) {
-        const { period, mult } = activeIndicators.bollinger;
-        const bb = computeBollingerBands(closeData, period, mult);
+      // ── Bollinger Bands ── (overlay on main chart; one band set per
+      // instance — period/mult × own compute frequency, shaded per instance)
+      getInstances(activeIndicators, "bollinger").forEach((inst, bi) => {
+        const period = typeof inst.params.period === "number" ? inst.params.period : 20;
+        const mult = typeof inst.params.mult === "number" ? inst.params.mult : 2;
+        const { src, suffix } = maSourceFor(inst.freq ?? "chart");
+        const bb = computeBollingerBands(src, period, mult);
         if (bb.basis.length > 0) {
           const basisLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_basis,
+            color: shadeHex(IC.bollinger_basis, bi),
             lineWidth: 1,
-            title: `BB ${period},${mult}${baseLabel}`,
+            title: `BB ${period},${mult}${suffix}${baseLabel}`,
             lineStyle: LineStyle.LargeDashed,
           });
           basisLine.setData(bb.basis);
           indicatorSeriesRef.current.push(basisLine);
 
           const upperLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_band,
+            color: shadeHex(IC.bollinger_band, bi),
             lineWidth: 1,
-            title: `Upper`,
+            title: suffix ? `Upper ${suffix}` : `Upper`,
             lineStyle: LineStyle.Dotted,
           });
           upperLine.setData(bb.upper);
           indicatorSeriesRef.current.push(upperLine);
 
           const lowerLine = chart.addSeries(LineSeries, {
-            color: IC.bollinger_band,
+            color: shadeHex(IC.bollinger_band, bi),
             lineWidth: 1,
-            title: `Lower`,
+            title: suffix ? `Lower ${suffix}` : `Lower`,
             lineStyle: LineStyle.Dotted,
           });
           lowerLine.setData(bb.lower);
           indicatorSeriesRef.current.push(lowerLine);
         }
-      }
+      });
 
       // ── VWAP ── (overlay on main chart)
       if (activeIndicators.vwap) {
@@ -3501,24 +3593,47 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           baseLabel,
           register: (s: ISeriesApi<any>) => indicatorSeriesRef.current.push(s),
         };
+        // One render per INSTANCE (own params + freq + hiddenParts); extra
+        // instances get shaded line colors so BB-style doubles read apart.
+        const ovlResampleCache: Partial<Record<"weekly" | "monthly", { real: OhlcBar[]; close: OhlcBar[] }>> = {};
         for (const def of OVERLAY_INDICATORS) {
           if (!def.renderOverlay) continue;
-          const regSt = activeIndicators.registry?.[def.id];
-          if (!regSt?.enabled) continue;
-          let bars = def.worksOnCloseOnly ? closeBars : realBars;
-          if (!bars.length) continue;
-          // Per-indicator compute frequency (weekly/monthly resample).
-          if (regSt.freq === "weekly" || regSt.freq === "monthly") {
-            bars = resampleIndicatorBars(bars, regSt.freq);
-          }
-          try {
-            const octxP = def.components?.length
-              ? { ...octx, hiddenParts: new Set(regSt.hiddenParts ?? []) }
-              : octx;
-            def.renderOverlay(octxP, bars, resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily"));
-          } catch {
-            // Never let one indicator's failure blank the whole chart.
-          }
+          const insts = getInstances(activeIndicators, def.id);
+          insts.forEach((inst, ii) => {
+            let bars = def.worksOnCloseOnly ? closeBars : realBars;
+            if (!bars.length) return;
+            // Per-instance compute frequency (weekly/monthly resample), one
+            // resample per freq shared across overlay defs.
+            const f = inst.freq === "weekly" || inst.freq === "monthly" ? inst.freq : undefined;
+            if (f) {
+              const cached = (ovlResampleCache[f] ??= {
+                real: realBars.length ? resampleIndicatorBars(realBars, f) : [],
+                close: closeBars.length ? resampleIndicatorBars(closeBars, f) : [],
+              });
+              bars = def.worksOnCloseOnly ? cached.close : cached.real;
+              if (!bars.length) return;
+            }
+            try {
+              const colors =
+                ii === 0
+                  ? octx.colors
+                  : Object.fromEntries(
+                      Object.entries(octx.colors).map(([k, v]) =>
+                        def.colorKeys.includes(k) ? [k, shadeHex(v, ii)] : [k, v],
+                      ),
+                    );
+              const instOctx = {
+                ...octx,
+                colors,
+                baseLabel: f ? `${f === "weekly" ? "W" : "M"}${baseLabel}` : baseLabel,
+                ...(def.components?.length ? { hiddenParts: new Set(inst.hiddenParts ?? []) } : {}),
+              };
+              const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+              def.renderOverlay!(instOctx, bars, resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily"));
+            } catch {
+              // Never let one indicator's failure blank the whole chart.
+            }
+          });
         }
       }
 
@@ -3552,28 +3667,35 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             pushLb(p * maMult, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
           }
         }
-        const rsiMult = chartBarsPerIndicatorBar(lbBaseFreq, activeIndicators.rsiFreq);
-        for (const p of indicatorPeriods(activeIndicators.rsi)) {
-          pushLb(p * rsiMult, (IC as any).rsi ?? "#a855f7", "RSI");
-        }
-        pushLb(activeIndicators.bollinger?.period, (IC as any).bollinger_basis ?? "#f59e0b", "BB");
-        for (const p of indicatorPeriods(activeIndicators.atr)) pushLb(p, (IC as any).atr ?? "#f59e0b", "ATR");
-        for (const p of indicatorPeriods(activeIndicators.roc)) pushLb(p, (IC as any).roc ?? "#38bdf8", "ROC");
-        pushLb(activeIndicators.stochastic?.kPeriod, (IC as any).stoch_k ?? "#22c55e", "Stoch");
+        // Instance-aware built-ins: each instance's period counts bars at ITS
+        // OWN compute frequency — scale per instance, not per indicator.
+        const lbInstances = (key: string, color: string, label: string, paramKey = "period") => {
+          for (const inst of getInstances(activeIndicators, key)) {
+            const mult = chartBarsPerIndicatorBar(lbBaseFreq, inst.freq);
+            for (const p of indicatorPeriods(inst.params[paramKey] as number | number[] | undefined)) {
+              pushLb(p * mult, color, label);
+            }
+          }
+        };
+        lbInstances("rsi", (IC as any).rsi ?? "#a855f7", "RSI");
+        lbInstances("bollinger", (IC as any).bollinger_basis ?? "#f59e0b", "BB");
+        lbInstances("atr", (IC as any).atr ?? "#f59e0b", "ATR");
+        lbInstances("roc", (IC as any).roc ?? "#38bdf8", "ROC");
+        lbInstances("stochastic", (IC as any).stoch_k ?? "#22c55e", "Stoch", "kPeriod");
         if (activeIndicators.mean?.rolling) pushLb(activeIndicators.mean.period, (IC as any).mean ?? "#94a3b8", "Mean");
-        for (const [regId, st] of Object.entries(activeIndicators.registry ?? {})) {
-          if (!st?.enabled) continue;
-          const def = getIndicatorDef(regId);
-          if (!def) continue;
-          const p = resolveParams(def, st, (chartConfig as { frequency?: string }).frequency ?? "daily");
-          // Autocorr on an RSI source windows over RSI values, not price — its
-          // line is drawn on the RSI/autocorr sub-chart instead (subLookback).
-          if (regId === "autocorr" && (p.source ?? 0) !== 0) continue;
-          const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
-          // A weekly/monthly compute-freq override means period/window count
-          // RESAMPLED bars — scale to chart bars so the line marks the real span.
-          const mult = chartBarsPerIndicatorBar(lbBaseFreq, st.freq);
-          if (barsKey) pushLb(p[barsKey] * mult, (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
+        for (const def of ALL_REGISTRY_INDICATORS) {
+          for (const inst of getInstances(activeIndicators, def.id)) {
+            const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+            const p = resolveParams(def, regSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
+            // Autocorr on an RSI source windows over RSI values, not price — its
+            // line is drawn on the RSI/autocorr sub-chart instead (subLookback).
+            if (def.id === "autocorr" && (p.source ?? 0) !== 0) continue;
+            const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
+            // A weekly/monthly compute-freq override means period/window count
+            // RESAMPLED bars — scale to chart bars so the line marks the real span.
+            const mult = chartBarsPerIndicatorBar(lbBaseFreq, inst.freq);
+            if (barsKey) pushLb(p[barsKey] * mult, (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
+          }
         }
         const lbAnchor = seriesMapRef.current.values().next().value;
         if (lbEntries.length > 0 && lbAnchor) {
@@ -4634,37 +4756,50 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   });
 
-  // Determine which sub-indicator charts to show
-  const subCharts: SubChartType[] = [];
-  if (indicatorPeriods(activeIndicators.rsi).length > 0) subCharts.push("rsi");
-  if (activeIndicators.macd) subCharts.push("macd");
-  if (activeIndicators.heikinAshi) subCharts.push("ha");
-  if (indicatorPeriods(activeIndicators.atr).length > 0) subCharts.push("atr");
-  if (indicatorPeriods(activeIndicators.roc).length > 0) subCharts.push("roc");
-  if (activeIndicators.stochastic) subCharts.push("stochastic");
-  if (activeIndicators.obv) subCharts.push("obv");
-  // Registry-driven sub-pane indicators (see indicatorRegistry.ts).
-  for (const def of PANE_INDICATORS) {
-    if (activeIndicators.registry?.[def.id]?.enabled) subCharts.push(def.id);
-  }
-  // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
-  // in right after their source pane.
-  const paneOverlayDefs = (activeIndicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
-  if (paneOverlayDefs.length > 0) {
-    const interleaved: SubChartType[] = [];
-    for (const st of subCharts) {
-      interleaved.push(st);
-      for (const o of paneOverlayDefs) if (o.source === st) interleaved.push(`ovl:${o.id}`);
+  // Determine which sub-indicator charts to show — one pane per instance
+  // GROUP of each indicator (see lib/indicatorInstances.ts). Untouched legacy
+  // state derives a single LEGACY_GROUP per indicator whose subKey is the bare
+  // id ("rsi"), so saved heights/hidden/overlay-source keys keep matching.
+  // Memoized: the instance arrays flow into SubIndicatorChart's effect deps —
+  // fresh arrays every render would recreate every sub-chart.
+  const subPaneDescs = useMemo(() => {
+    type SubPaneDesc = { subKey: string; baseId: string; instances: IndicatorInstance[] };
+    const descs: SubPaneDesc[] = [];
+    const pushGroups = (baseId: string) => {
+      for (const g of paneGroups(activeIndicators, baseId)) {
+        descs.push({ subKey: subChartKeyFor(baseId, g.group), baseId, instances: g.instances });
+      }
+    };
+    pushGroups("rsi");
+    pushGroups("macd");
+    if (activeIndicators.heikinAshi) descs.push({ subKey: "ha", baseId: "ha", instances: EMPTY_INSTANCES });
+    pushGroups("atr");
+    pushGroups("roc");
+    pushGroups("stochastic");
+    pushGroups("obv");
+    // Registry-driven sub-pane indicators (see indicatorRegistry.ts).
+    for (const def of PANE_INDICATORS) pushGroups(def.id);
+    // Derived overlay panes (MACD/RSI/ROC/Autocorr ON another indicator) slot
+    // in right after their source pane (source = the pane's subKey).
+    const paneOverlayDefs = (activeIndicators.indicatorOverlays ?? []).filter((o) => PANE_OVERLAY_TYPES.has(o.type));
+    if (paneOverlayDefs.length > 0) {
+      const interleaved: SubPaneDesc[] = [];
+      for (const d of descs) {
+        interleaved.push(d);
+        for (const o of paneOverlayDefs) {
+          if (o.source === d.subKey) interleaved.push({ subKey: `ovl:${o.id}`, baseId: "", instances: EMPTY_INSTANCES });
+        }
+      }
+      return interleaved;
     }
-    subCharts.length = 0;
-    subCharts.push(...interleaved);
-  }
+    return descs;
+  }, [activeIndicators]);
   // Temporarily hidden subplots unmount entirely (state stays enabled).
   const hiddenSet = new Set(activeIndicators.hiddenSubCharts ?? []);
-  const visibleSubCharts = subCharts.filter((st) => !hiddenSet.has(st));
+  const visibleSubPanes = subPaneDescs.filter((d) => !hiddenSet.has(d.subKey));
 
   // Raw price OHLC bars for registry pane indicators (need real high/low).
-  const ohlcBars: OhlcBar[] = Array.isArray(ohlcData) ? (ohlcData as OhlcBar[]) : [];
+  const ohlcBars: OhlcBar[] = Array.isArray(ohlcData) ? (ohlcData as OhlcBar[]) : EMPTY_OHLC;
 
   // Lookback-window hover entries routed to a SUB-chart instead of the main
   // price chart: autocorr on an RSI source windows over RSI values, so its
@@ -4680,7 +4815,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       if (def) {
         const p = resolveParams(def, acSt, (chartConfig as { frequency?: string }).frequency ?? "daily");
         if ((p.source ?? 0) !== 0 && typeof p.window === "number" && p.window > 1) {
-          const target = indicatorPeriods(activeIndicators.rsi).length > 0 ? "rsi" : "autocorr";
+          // Route to the first RSI pane (any group), else autocorr's own pane.
+          const target =
+            subPaneDescs.find((d) => d.baseId === "rsi")?.subKey ??
+            subPaneDescs.find((d) => d.baseId === "autocorr")?.subKey ??
+            "autocorr";
           const mult = chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, acSt.freq);
           out[target] = [{
             bars: Math.round(p.window * mult),
@@ -4698,8 +4837,10 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const bars = o.type === "macd" ? (o.slow ?? 26) : o.period;
       if (!(bars > 1)) continue;
       // RSI sources may be resampled (weekly/monthly RSI on a daily chart) —
-      // scale the window into chart bars like the registry autocorr does.
-      const srcFreq = o.source === "rsi" ? activeIndicators.rsiFreq : undefined;
+      // scale the window into chart bars like the registry autocorr does. The
+      // source pane's frequency is its FIRST instance's (per-instance freq).
+      const srcDesc = subPaneDescs.find((d) => d.subKey === o.source);
+      const srcFreq = srcDesc?.baseId === "rsi" ? srcDesc.instances[0]?.freq : undefined;
       const mult = srcFreq === "weekly" || srcFreq === "monthly"
         ? chartBarsPerIndicatorBar((chartConfig as { frequency?: string }).frequency, srcFreq)
         : 1;
@@ -4714,7 +4855,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       });
     }
     return out;
-  }, [activeIndicators, chartConfig, IC]);
+  }, [activeIndicators, subPaneDescs, chartConfig, IC]);
 
   // Close data for sub-charts: use the first visible series data — from the
   // frequency view, so a weekly/monthly pane's RSI/MACD sub-charts compute on
@@ -4722,6 +4863,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   const primaryForSub = freqPaneSeries.find((s: any) => s.visible && s.data.length > 0);
   const subCloseData = primaryForSub ? primaryForSub.data : [];
   const subBaseLabel = primaryForSub && primaryForSub.metric !== "close" ? ` (${primaryForSub.metric})` : "";
+
+  // Shared per-frequency resample cache for every sub-pane instance: five
+  // weekly indicators cost ONE weekly resample, computed lazily on first use.
+  const freqSources = useMemo(
+    () => makeFreqSourceCache(subCloseData as { time: string; value: number }[], ohlcBars),
+    [subCloseData, ohlcBars],
+  );
 
   // Source sub-charts publish their primary displayed series here; derived
   // overlay panes ("ovl:<id>") read it. The version bump re-renders so the
@@ -5022,7 +5170,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       )}
       {/* Sub-indicator charts (RSI, MACD, HA) stacked below. Double-click one
           (or its expand button) to fill the pane; others hide while expanded. */}
-      {subCloseData.length > 0 && visibleSubCharts.map((st) => {
+      {subCloseData.length > 0 && visibleSubPanes.map((desc) => {
+        const st = desc.subKey;
         const isMax = maxSub === st;
         const hidden = maxSub !== null && !isMax;
         const ovlDef = st.startsWith("ovl:")
@@ -5032,6 +5181,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           <div key={st} className={hidden ? "hidden" : "contents"}>
             <SubIndicatorChart
               type={st}
+              indKey={desc.baseId}
+              instances={desc.instances}
+              freqSources={freqSources}
               overlayDef={ovlDef}
               sourceData={ovlDef ? subPrimaryRef.current.get(ovlDef.source) : undefined}
               onPrimaryData={st.startsWith("ovl:") ? undefined : handleSubPrimaryData}

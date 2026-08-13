@@ -4,7 +4,8 @@ import { apiRequest } from "@/lib/queryClient";
 import type { TickerMeta } from "@shared/schema";
 import type { PlottedSeries, ChartConfig, PaneInfo } from "@/pages/Dashboard";
 import { indicatorPeriods, PANE_OVERLAY_TYPES, overlayPaneLabel, type ActiveIndicators } from "@/components/ChartPane";
-import { getIndicatorDef } from "@/lib/indicatorRegistry";
+import { ALL_REGISTRY_INDICATORS } from "@/lib/indicatorRegistry";
+import { getInstances, paneGroups, subChartKeyFor, instanceLabel } from "@/lib/indicatorInstances";
 import { useTickerClassFilter, ClassFilterRow } from "@/components/ClassificationFilters";
 
 /** Compact badges for a pane's enabled indicators (Current Layout list).
@@ -25,32 +26,30 @@ function indicatorBadges(ind?: ActiveIndicators): IndicatorBadge[] {
     const ps = indicatorPeriods((ind as any)[k]);
     if (ps.length) out.push({ label: `${k.toUpperCase()} ${ps.join("/")}` });
   }
-  {
-    const ps = indicatorPeriods(ind.rsi);
-    if (ps.length) sub(`RSI ${ps.join("/")}`, "rsi");
-  }
-  if ((ind as any).macd) sub("MACD", "macd");
-  if (ind.bollinger) out.push({ label: `BB ${ind.bollinger.period}` });
-  {
-    const ps = indicatorPeriods((ind as any).atr);
-    if (ps.length) sub(`ATR ${ps.join("/")}`, "atr");
-  }
-  {
-    const ps = indicatorPeriods((ind as any).roc);
-    if (ps.length) sub(`ROC ${ps.join("/")}`, "roc");
-  }
-  if (ind.stochastic) sub(`Stoch ${ind.stochastic.kPeriod}`, "stochastic");
+  // Instance-aware sub-pane indicators: one chip per pane GROUP, labeled by
+  // its instance(s) ("RSI 14W", "ROC 12/ROC 20"), keyed by the group's
+  // sub-chart key so hide/show targets exactly that pane.
+  const subGroups = (baseId: string) => {
+    for (const g of paneGroups(ind, baseId)) {
+      const label = g.instances.map((i) => instanceLabel(baseId, i)).join(" · ");
+      sub(label, subChartKeyFor(baseId, g.group));
+    }
+  };
+  subGroups("rsi");
+  subGroups("macd");
+  // Bollinger draws on the price chart — plain badge per instance.
+  for (const inst of getInstances(ind, "bollinger")) out.push({ label: instanceLabel("bollinger", inst) });
+  subGroups("atr");
+  subGroups("roc");
+  subGroups("stochastic");
   if ((ind as any).heikinAshi) sub("HA", "ha");
-  if ((ind as any).obv) sub("OBV", "obv");
+  subGroups("obv");
   if (ind.mean) out.push({ label: ind.mean.rolling ? `Mean ${ind.mean.period}` : "Mean" });
   if ((ind as any).vwap) out.push({ label: "VWAP" });
   if (ind.fractalLines) out.push({ label: "Fractals" });
-  for (const [id, st] of Object.entries(ind.registry ?? {})) {
-    if (!st?.enabled) continue;
-    const def = getIndicatorDef(id);
-    const label = def?.label ?? id;
-    if (def?.renderTarget === "pane") sub(label, id);
-    else out.push({ label });
+  for (const def of ALL_REGISTRY_INDICATORS) {
+    if (def.renderTarget === "pane") subGroups(def.id);
+    else for (const inst of getInstances(ind, def.id)) out.push({ label: instanceLabel(def.id, inst) });
   }
   // Indicator-on-indicator overlays: MACD/RSI/ROC/Autocorr render as their
   // own sub-chart pane (hide/show like any subplot); same-domain overlays
@@ -1577,10 +1576,12 @@ export default function Sidebar({
                         const badges = indicatorBadges(indicatorsMap?.[pane.id]);
                         return badges.length > 0 ? (
                           <div className="flex flex-wrap gap-0.5 pl-4 pb-0.5" data-testid={`layout-indicators-${pane.id}`}>
-                            {badges.map((b) =>
+                            {badges.map((b, bi) =>
                               b.subChart && onToggleSubChart ? (
                                 <button
-                                  key={b.label}
+                                  // subChart keys are unique per pane group; labels can
+                                  // repeat (two "RSI 14" instances in separate panes).
+                                  key={b.subChart}
                                   type="button"
                                   onClick={() => onToggleSubChart(pane.id, b.subChart!)}
                                   title={b.hidden ? `Show the ${b.label} subplot` : `Hide the ${b.label} subplot (keeps its settings)`}
@@ -1595,7 +1596,7 @@ export default function Sidebar({
                                   {b.label}
                                 </button>
                               ) : (
-                                <span key={b.label} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
+                                <span key={`${b.label}-${bi}`} className="px-1 py-px rounded bg-primary/10 text-primary/80 text-[9px] leading-tight whitespace-nowrap">
                                   {b.label}
                                 </span>
                               )

@@ -34,6 +34,7 @@ import { indicatorPeriods, getMaLines } from "@/components/ChartPane";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
 import { computeMaByType, type MaType } from "@/lib/maEngine";
 import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
+import { getInstances, effGroup } from "@/lib/indicatorInstances";
 import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
@@ -663,64 +664,69 @@ function MacroPane({
       // Overlays draw on the primary scale; sub-pane types draw into their own
       // bottom scale band like RSI/MACD above (Macro has no true sub-panes).
       // Bars are synthesized flat (o=h=l=c) from the primary line series.
-      const regState = activeIndicators.registry ?? {};
-      if (ALL_REGISTRY_INDICATORS.some((d) => regState[d.id]?.enabled)) {
+      // One render per INSTANCE (own params + freq + hiddenParts — see
+      // lib/indicatorInstances); pane instances band per GROUP so merged
+      // instances share one bottom band.
+      if (ALL_REGISTRY_INDICATORS.some((d) => getInstances(activeIndicators, d.id).length > 0)) {
         const bars: OhlcBar[] = primaryData.map((d) => ({
           time: d.time, open: d.value, high: d.value, low: d.value, close: d.value,
         }));
-        for (const def of ALL_REGISTRY_INDICATORS) {
-          const st = regState[def.id];
-          if (!st?.enabled) continue;
-          // Per-indicator compute frequency (weekly/monthly resample).
-          const defBars = st.freq === "weekly" || st.freq === "monthly"
-            ? resampleIndicatorBars(bars, st.freq)
+        const freqBarsCache: Partial<Record<"weekly" | "monthly", OhlcBar[]>> = {};
+        const barsAt = (freq?: string): OhlcBar[] =>
+          freq === "weekly" || freq === "monthly"
+            ? (freqBarsCache[freq] ??= resampleIndicatorBars(bars, freq))
             : bars;
-          const p = resolveParams(def, st);
-          const register = (s: ISeriesApi<any>) => { indicatorSeriesRef.current.push(s); };
-          try {
-            if (def.renderTarget === "overlay" && def.renderOverlay) {
-              def.renderOverlay(
-                { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register,
-                  ...(def.components?.length ? { hiddenParts: new Set(st.hiddenParts ?? []) } : {}) },
-                defBars, p,
-              );
-            } else if (def.renderPane) {
-              const scaleId = `reg_${def.id}`;
-              let anchor: ISeriesApi<any> | null = null;
-              // Facade that forces every series the indicator adds onto its own
-              // bottom-band price scale.
-              const paneChart = {
-                addSeries: (kind: any, opts: any) => {
-                  const s = chart.addSeries(kind, {
-                    ...opts, priceScaleId: scaleId, priceLineVisible: false, lastValueVisible: false,
-                  });
-                  if (!anchor) anchor = s;
-                  return s;
-                },
-              } as unknown as IChartApi;
-              def.renderPane(
-                {
-                  chart: paneChart,
-                  colors: INDICATOR_COLORS as unknown as Record<string, string>,
-                  baseLabel: "",
-                  register,
-                  refLine: (level, color, first, last) => {
-                    const rl = chart.addSeries(LineSeries, {
-                      color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
-                      priceScaleId: scaleId, crosshairMarkerVisible: false,
-                      priceLineVisible: false, lastValueVisible: false,
+        for (const def of ALL_REGISTRY_INDICATORS) {
+          const insts = getInstances(activeIndicators, def.id);
+          for (const inst of insts) {
+            const defBars = barsAt(inst.freq);
+            const p = resolveParams(def, { enabled: true, params: inst.params });
+            const register = (s: ISeriesApi<any>) => { indicatorSeriesRef.current.push(s); };
+            try {
+              if (def.renderTarget === "overlay" && def.renderOverlay) {
+                def.renderOverlay(
+                  { chart, colors: INDICATOR_COLORS as unknown as Record<string, string>, baseLabel: "", register,
+                    ...(def.components?.length ? { hiddenParts: new Set(inst.hiddenParts ?? []) } : {}) },
+                  defBars, p,
+                );
+              } else if (def.renderPane) {
+                const scaleId = `reg_${def.id}_${effGroup(inst)}`;
+                let anchor: ISeriesApi<any> | null = null;
+                // Facade that forces every series the indicator adds onto its own
+                // bottom-band price scale.
+                const paneChart = {
+                  addSeries: (kind: any, opts: any) => {
+                    const s = chart.addSeries(kind, {
+                      ...opts, priceScaleId: scaleId, priceLineVisible: false, lastValueVisible: false,
                     });
-                    rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
-                    indicatorSeriesRef.current.push(rl);
+                    if (!anchor) anchor = s;
+                    return s;
                   },
-                },
-                defBars, p,
-              );
-              if (anchor) {
-                (anchor as ISeriesApi<any>).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+                } as unknown as IChartApi;
+                def.renderPane(
+                  {
+                    chart: paneChart,
+                    colors: INDICATOR_COLORS as unknown as Record<string, string>,
+                    baseLabel: "",
+                    register,
+                    refLine: (level, color, first, last) => {
+                      const rl = chart.addSeries(LineSeries, {
+                        color, lineWidth: 1, lineStyle: LineStyle.Dotted, title: "",
+                        priceScaleId: scaleId, crosshairMarkerVisible: false,
+                        priceLineVisible: false, lastValueVisible: false,
+                      });
+                      rl.setData([{ time: first as Time, value: level }, { time: last as Time, value: level }]);
+                      indicatorSeriesRef.current.push(rl);
+                    },
+                  },
+                  defBars, p,
+                );
+                if (anchor) {
+                  (anchor as ISeriesApi<any>).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+                }
               }
-            }
-          } catch { /* one bad indicator must not kill the pane */ }
+            } catch { /* one bad indicator must not kill the pane */ }
+          }
         }
       }
     }
