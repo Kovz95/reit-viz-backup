@@ -23,6 +23,7 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AddPairControl } from "@/components/AddPairControl";
 import ClassificationFilters, {
   emptyClassFilters,
   applyClassFilters,
@@ -195,9 +196,6 @@ async function fetchYahooPrices(ticker: string): Promise<{ dates: string[]; clos
     closes: data.adjCloses ?? data.closes,
   };
 }
-
-// Custom pair rows: "A/B" of Yahoo symbols (uppercased before validation).
-const PAIR_INPUT_RE = /^[A-Z0-9.\-]{1,12}\/[A-Z0-9.\-]{1,12}$/;
 
 // ---------------------------------------------------------------------------
 // Math helpers
@@ -817,23 +815,11 @@ export default function SigmaFamily({ onOpenStudy }: {
   // Leg histories cached separately from customHistoryCache so removing a
   // custom ticker never evicts a pair leg (and vice versa).
   const pairLegHistoryCache = React.useRef<Map<string, { dates: string[]; closes: number[] }>>(new Map());
-  const [customPairInput, setCustomPairInput] = React.useState("");
-  const addCustomPair = React.useCallback(() => {
-    const raw = customPairInput.trim().toUpperCase();
-    if (!raw) return;
-    if (!PAIR_INPUT_RE.test(raw)) {
-      setCustomTickerError(`Invalid pair "${raw}" — use A/B (e.g. XLE/SPY)`);
-      return;
-    }
-    const [legA, legB] = raw.split("/");
-    if (legA === legB) {
-      setCustomTickerError("Pair legs must differ");
-      return;
-    }
-    setCustomTickerError(null);
-    setCustomPairs((prev) => (prev.includes(raw) ? prev : [...prev, raw]));
-    setCustomPairInput("");
-  }, [customPairInput]);
+  // Legs arrive validated + uppercased from AddPairControl.
+  const addCustomPair = React.useCallback((a: string, b: string) => {
+    const key = `${a}/${b}`;
+    setCustomPairs((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  }, []);
   const removeCustomPair = React.useCallback((p: string) => {
     setCustomPairs((prev) => prev.filter((x) => x !== p));
   }, []);
@@ -2281,15 +2267,12 @@ export default function SigmaFamily({ onOpenStudy }: {
           {/* Add pair ratio (A/B — both legs Yahoo symbols, σ on the ratio series) */}
           {!isEarningsMode && (
             <div className="flex items-center gap-1">
-              <input
-                type="text"
-                value={customPairInput}
-                onChange={(e) => { setCustomPairInput(e.target.value); setCustomTickerError(null); }}
-                onKeyDown={(e) => { if (e.key === "Enter") addCustomPair(); }}
-                placeholder="Pair A/B"
-                title="Add an A/B close-ratio row (e.g. XLE/SPY) — both legs fetched from Yahoo, σ computed on the ratio series (Live & Period modes). Enter to add."
-                className="h-7 px-2 text-[11px] font-mono bg-background border border-border rounded w-[110px] focus:outline-none focus:border-amber-500/60"
-                data-testid="sigma-pair-input"
+              <AddPairControl
+                tickers={tickerList as any[]}
+                onAdd={addCustomPair}
+                existing={customPairs}
+                testIdPrefix="sigma-pair"
+                buttonClassName="h-7 px-2 text-[11px]"
               />
               {customPairs.map((p) => (
                 <span

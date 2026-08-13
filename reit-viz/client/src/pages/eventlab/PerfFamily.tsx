@@ -24,7 +24,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import DateInput from "@/components/DateInput";
-import { Download, Loader2 } from "lucide-react";
+import { Download, Loader2, Search, X } from "lucide-react";
+import { AddPairControl } from "@/components/AddPairControl";
+import { navigateToTicker } from "@/lib/navigateToTicker";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { TrendingDown } from "@/lib/trending-down";
 import { ArrowUpDown } from "@/lib/arrow-up-down";
@@ -339,10 +341,17 @@ function checkWindowRelevance(
 
 // ─── Upcoming Windows Panel ───────────────────────────────────────────────────
 
+type UpcomingSortKey = "starts" | "avg" | "median" | "win" | "n" | "t" | "ticker";
+
 function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
   const [lookaheadDays, setLookaheadDays] = useState(30);
-  const [expanded, setExpanded] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [tall, setTall] = useState(false);
   const [dirFilter, setDirFilter] = useState<"all" | "bullish" | "bearish">("all");
+  const [search, setSearch] = useState("");
+  // Default order: active first, then soonest start (the original behavior).
+  const [sortKey, setSortKey] = useState<UpcomingSortKey>("starts");
+  const [sortAsc, setSortAsc] = useState(true);
 
   const today = useMemo(() => {
     const d = new Date();
@@ -362,22 +371,61 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
         if (check) results.push({ ticker: row.ticker, name: row.name, window: w, direction: "bearish", ...check });
       }
     }
-    const sorted = results.sort((a, b) =>
-      a.isActive && !b.isActive ? -1 : !a.isActive && b.isActive ? 1 : a.daysUntilStart - b.daysUntilStart
-    );
-    return dirFilter !== "all" ? sorted.filter((r) => r.direction === dirFilter) : sorted;
-  }, [data, today, lookaheadDays, dirFilter]);
+    let filtered = dirFilter !== "all" ? results.filter((r) => r.direction === dirFilter) : results;
+    const q = search.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter(
+        (r) => r.ticker.toLowerCase().includes(q) || (r.name || "").toLowerCase().includes(q)
+      );
+    }
+    const val = (r: any): number | string => {
+      switch (sortKey) {
+        case "ticker": return r.ticker;
+        case "avg": return r.window.avgReturn;
+        case "median": return r.window.medianReturn ?? r.window.avgReturn;
+        case "win": return r.window.winRate;
+        case "n": return r.window.years;
+        case "t": return r.window.tStat;
+        default: return r.daysUntilStart;
+      }
+    };
+    return filtered.sort((a, b) => {
+      // Active windows always float to the top under the default sort.
+      if (sortKey === "starts") {
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      }
+      const av = val(a), bv = val(b);
+      const cmp = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+      return sortAsc ? cmp : -cmp;
+    });
+  }, [data, today, lookaheadDays, dirFilter, search, sortKey, sortAsc]);
 
   const activeCount = windows.filter((w) => w.isActive).length;
-  const upcomingCount = windows.filter((w) => !w.isActive).length;
+  const upcomingCount = windows.filter((w) => !w.isActive && w.daysUntilStart > 0).length;
+
+  const handleSort = (key: UpcomingSortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    // Numbers default to descending (biggest edge first), starts/ticker ascending.
+    else { setSortKey(key); setSortAsc(key === "starts" || key === "ticker"); }
+  };
+
+  const SortableTh = ({ k, label, className }: { k: UpcomingSortKey; label: string; className?: string }) => (
+    <th
+      className={`px-2 py-1 text-[10px] font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap ${className || ""}`}
+      onClick={() => handleSort(k)}
+      data-testid={`upcoming-sort-${k}`}
+    >
+      {label}{sortKey === k ? (sortAsc ? " ▲" : " ▼") : ""}
+    </th>
+  );
 
   return (
     <div className="border-b border-border bg-card/50">
       <div
         className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-accent/20 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setCollapsed(!collapsed)}
+        data-testid="upcoming-windows-header"
       >
-        {/* Calendar icon placeholder */}
         <span className="w-3.5 h-3.5 text-blue-400">📅</span>
         <span className="text-xs font-medium text-foreground">Upcoming Windows</span>
         {activeCount > 0 && (
@@ -394,17 +442,14 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
           <span className="text-[10px] text-muted-foreground">None in range</span>
         )}
         <div className="ml-auto flex items-center gap-1">
-          {expanded ? (
-            <span className="w-3.5 h-3.5 text-muted-foreground">▲</span>
-          ) : (
-            <span className="w-3.5 h-3.5 text-muted-foreground">▼</span>
-          )}
+          <span className="text-[10px] text-muted-foreground">{collapsed ? "Show" : "Hide"}</span>
+          <span className="w-3.5 h-3.5 text-muted-foreground">{collapsed ? "▼" : "▲"}</span>
         </div>
       </div>
 
-      {!expanded && (
+      {!collapsed && (
         <div className="px-3 pb-2">
-          <div className="flex items-center gap-2 mb-1.5">
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <div className="flex items-center bg-muted rounded p-0.5">
               {LOOKAHEAD_OPTIONS.map((opt) => (
                 <button
@@ -439,32 +484,70 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
                 </button>
               ))}
             </div>
+            <div className="relative flex items-center">
+              <Search className="absolute left-1.5 w-3 h-3 text-muted-foreground pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter ticker/name…"
+                className="h-6 pl-6 pr-6 text-[10px] bg-background border border-border rounded w-[150px] focus:outline-none focus:ring-1 focus:ring-primary"
+                data-testid="upcoming-windows-search"
+              />
+              {search && (
+                <button
+                  className="absolute right-1 p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear filter"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            <button
+              className={`px-2 py-0.5 text-[10px] font-medium rounded border transition-colors ${
+                tall ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => setTall((v) => !v)}
+              title="Toggle a taller list"
+              data-testid="upcoming-windows-tall"
+            >
+              {tall ? "Compact" : "Expand"}
+            </button>
             <span className="text-[10px] text-muted-foreground ml-auto">
-              {windows.length} window{windows.length !== 1 ? "s" : ""}
+              {windows.length} window{windows.length !== 1 ? "s" : ""} · click a row to open in Charts
             </span>
           </div>
 
           {windows.length > 0 ? (
-            <div className="max-h-[220px] overflow-y-auto rounded border border-border/50">
+            <div className={`${tall ? "max-h-[70vh]" : "max-h-[38vh]"} overflow-y-auto rounded border border-border/50`}>
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-card border-b border-border/50">
+                <thead className="sticky top-0 bg-card border-b border-border/50 z-10">
                   <tr>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Status</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-14">Ticker</th>
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-12">Status</th>
+                    <SortableTh k="ticker" label="Ticker" className="text-left w-16" />
+                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Name</th>
                     <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Dir</th>
                     <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Window</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-14">Starts</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Avg</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">Win%</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-8">N</th>
-                    <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground w-12">t-stat</th>
+                    <SortableTh k="starts" label="Starts" className="text-right w-20" />
+                    <SortableTh k="avg" label="Avg" className="text-right w-14" />
+                    <SortableTh k="median" label="Med" className="text-right w-14" />
+                    <SortableTh k="win" label="Win%" className="text-right w-12" />
+                    <SortableTh k="n" label="N" className="text-right w-8" />
+                    <SortableTh k="t" label="t-stat" className="text-right w-12" />
                   </tr>
                 </thead>
                 <tbody>
-                  {windows.map((row, idx) => (
+                  {windows.map((row, idx) => {
+                    const ended = !row.isActive && row.daysUntilEnd < 0;
+                    const plainTicker = !row.ticker.includes("/") && !(row as any).isBasket && !(row.name || "").startsWith("Basket");
+                    return (
                     <tr
                       key={`${row.ticker}-${row.direction}-${row.window.startMMDD}-${row.window.endMMDD}-${idx}`}
-                      className={`border-b border-border/20 hover:bg-accent/30 transition-colors ${row.isActive ? "bg-amber-500/5" : ""}`}
+                      className={`border-b border-border/20 hover:bg-accent/30 transition-colors ${row.isActive ? "bg-amber-500/5" : ""} ${plainTicker ? "cursor-pointer" : ""}`}
+                      onClick={() => { if (plainTicker) navigateToTicker(row.ticker); }}
+                      title={plainTicker ? `Open ${row.ticker} in Charts` : undefined}
+                      data-testid={`upcoming-row-${row.ticker}-${idx}`}
                     >
                       <td className="px-2 py-1">
                         {row.isActive ? (
@@ -472,11 +555,14 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
                             Live
                           </span>
+                        ) : ended ? (
+                          <span className="text-[10px] text-muted-foreground/70">Ended</span>
                         ) : (
-                          <span className="text-[10px] text-muted-foreground">Soon</span>
+                          <span className="text-[10px] text-blue-400">Soon</span>
                         )}
                       </td>
                       <td className="px-2 py-1 font-mono font-semibold">{row.ticker}</td>
+                      <td className="px-2 py-1 text-muted-foreground truncate max-w-[160px]" title={row.name}>{row.name}</td>
                       <td className="px-2 py-1">
                         {row.direction === "bullish" ? (
                           <span className="w-3 h-3 text-emerald-400">▲</span>
@@ -493,10 +579,10 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
                           {row.window.endLabel}
                         </span>
                       </td>
-                      <td className="px-2 py-1 text-right font-mono tabular-nums">
+                      <td className="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap">
                         {row.isActive ? (
                           <span className="text-amber-400">{row.daysUntilEnd}d left</span>
-                        ) : row.daysUntilEnd < 0 ? (
+                        ) : ended ? (
                           <span className="text-muted-foreground">Ended {Math.abs(row.daysUntilEnd)}d ago</span>
                         ) : (
                           <span className="text-blue-400">In {row.daysUntilStart}d</span>
@@ -506,6 +592,15 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
                         <span className={`font-mono tabular-nums ${row.window.avgReturn > 0 ? "text-emerald-400" : "text-red-400"}`}>
                           {row.window.avgReturn > 0 ? "+" : ""}{row.window.avgReturn.toFixed(2)}%
                         </span>
+                      </td>
+                      <td className="px-2 py-1 text-right">
+                        {row.window.medianReturn != null ? (
+                          <span className={`font-mono tabular-nums ${row.window.medianReturn > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                            {row.window.medianReturn > 0 ? "+" : ""}{row.window.medianReturn.toFixed(2)}%
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </td>
                       <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground">
                         {row.window.winRate.toFixed(0)}%
@@ -517,13 +612,16 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
                         {row.window.tStat.toFixed(2)}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           ) : (
             <div className="text-center py-3 text-[11px] text-muted-foreground">
-              No seasonal windows starting within {lookaheadDays} days
+              {search.trim()
+                ? `No windows match "${search.trim()}" within ${lookaheadDays} days`
+                : `No seasonal windows starting within ${lookaheadDays} days`}
             </div>
           )}
         </div>
@@ -603,10 +701,8 @@ export default function PerfFamily() {
   // User-defined pair rows ("A/B") — computed like basket composites but on
   // the A/B close ratio, so every view shows the SPREAD's behavior.
   const [pairDefs, setPairDefs] = useState<string[]>([]);
-  const addPairDef = useCallback((raw: string) => {
-    const m = raw.trim().toUpperCase().match(/^([A-Z0-9.\-]{1,12})\s*\/\s*([A-Z0-9.\-]{1,12})$/);
-    if (!m || m[1] === m[2]) return;
-    const key = `${m[1]}/${m[2]}`;
+  const addPair = useCallback((a: string, b: string) => {
+    const key = `${a}/${b}`;
     setPairDefs((prev) => (prev.includes(key) ? prev : [...prev, key]));
   }, []);
   // Group rows by one of the six classification levels (main-table views).
@@ -1284,19 +1380,13 @@ export default function PerfFamily() {
               {basketsComputing && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
               Baskets{showBaskets && baskets.length > 0 ? ` (${basketRowData ? baskets.length : "…"})` : ""}
             </Button>
-            {/* Pair ratio rows: type A/B, Enter to add; chips remove */}
+            {/* Pair ratio rows: robust A/B picker; chips remove */}
             <div className="flex items-center gap-1">
-              <Input
-                placeholder="Pair A/B"
-                className="h-6 w-[110px] text-[11px]"
-                data-testid="perf-pair-input"
-                title="Add a pair ratio row (e.g. WELL/VTR) — every view then shows the spread's stats. External Yahoo symbols work as legs."
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    addPairDef((e.target as HTMLInputElement).value);
-                    (e.target as HTMLInputElement).value = "";
-                  }
-                }}
+              <AddPairControl
+                tickers={perfData ?? []}
+                onAdd={addPair}
+                existing={pairDefs}
+                testIdPrefix="perf-pair"
               />
               {pairsComputing && <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />}
               {pairDefs.map((p) => (

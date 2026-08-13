@@ -20,6 +20,7 @@ import { getTickerRaw } from "@/lib/dataService";
 import { emitChartSignals } from "@/lib/chartBridge";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
+import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { getBasketOhlc } from "@/lib/basketOhlc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -82,6 +83,12 @@ interface RunConfig {
   combinator: "AND" | "OR";
   barMode: StudyBarMode;
   nonce: number;
+  /** Builder-state fingerprint at run time — drives the "settings changed" hint. */
+  sig: string;
+}
+
+function studySignature(mode: string, symbol: string, symbolB: string, conditions: StudyCondition[], combinator: string, barMode: string): string {
+  return JSON.stringify([mode, symbol, symbolB, conditions, combinator, barMode]);
 }
 
 /** Prose unit for horizon labels ("5 days" / "3 months"). */
@@ -525,13 +532,16 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   // Symbols the user typed in manually (any Yahoo/FMP symbol) — exempt from
   // the not-in-universe reset below, like BASKET: tickers.
   const customSymbolsRef = useRef<Set<string>>(new Set());
-  const applyCustomSymbol = useCallback((raw: string, target: "a" | "b") => {
+  const workbookSet = useMemo(() => new Set(allTickers.map((t: any) => t.ticker)), [allTickers]);
+  // Unified picker hand-off: workbook symbols select directly; anything else
+  // registers as an external Yahoo/FMP symbol (exempt from the universe reset).
+  const pickSymbol = useCallback((raw: string, target: "a" | "b") => {
     const sym = raw.trim().toUpperCase();
     if (!sym || !/^[A-Z0-9.\-^=]{1,12}$/.test(sym)) return;
-    customSymbolsRef.current.add(sym);
+    if (!workbookSet.has(sym) && !isBasketTicker(sym)) customSymbolsRef.current.add(sym);
     if (target === "a") setTicker(sym);
     else setTickerB(sym);
-  }, []);
+  }, [workbookSet]);
 
   useEffect(() => {
     if (!ticker && filteredTickers.length) setTicker(filteredTickers[0].ticker);
@@ -707,6 +717,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       tickers: filteredTickers.map((t: any) => ({ ticker: t.ticker, name: t.name })),
       conditions: [{ ...cond }],
       combinator: "AND", barMode: "daily", nonce: preset.nonce,
+      sig: studySignature("single", preset.ticker, "", [cond], "AND", "daily"),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
@@ -720,6 +731,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       tickers: filteredTickers.map((t: any) => ({ ticker: t.ticker, name: t.name })),
       conditions: conditions.map(c => ({ ...c })),
       combinator, barMode, nonce: Date.now(),
+      sig: studySignature(mode, ticker, mode === "pairs" ? tickerB : "", conditions, combinator, barMode),
     };
     setRunConfig(cfg);
     if (mode === "cross") {
@@ -848,6 +860,9 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   const noDataPairs = !!runConfig && runConfig.mode === "pairs" && !loadingPairs && pairsData != null && !pairsResult;
   const canRun = !(mode === "single" && !ticker) && !(mode === "pairs" && (!ticker || !tickerB || ticker === tickerB))
     && !(mode === "cross" && filteredTickers.length === 0);
+  // Results on screen no longer match the builder — nudge to re-run.
+  const isStale = runConfig != null
+    && runConfig.sig !== studySignature(mode, ticker, mode === "pairs" ? tickerB : "", conditions, combinator, barMode);
 
   return (
     <div className="flex flex-col gap-3 p-3 h-full overflow-auto">
@@ -898,30 +913,16 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
 
             {mode === "single" && (
               <>
-                <div className={`flex flex-col gap-1 min-w-[280px] ${isBasketTicker(ticker) ? "opacity-40 pointer-events-none" : ""}`}>
-                  <Label className="text-xs text-muted-foreground">Ticker</Label>
-                  <Select value={isBasketTicker(ticker) || customSymbolsRef.current.has(ticker) ? "" : ticker} onValueChange={setTicker}>
-                    <SelectTrigger data-testid="select-ticker" className="h-8">
-                      <SelectValue placeholder={customSymbolsRef.current.has(ticker) ? `${ticker} (external)` : "Pick ticker"} />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-80">
-                      {filteredTickers.map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex flex-col gap-1 w-[130px]">
-                  <Label className="text-xs text-muted-foreground">Any symbol</Label>
-                  <Input
-                    placeholder="e.g. AAPL"
-                    className="h-8"
-                    data-testid="input-custom-symbol"
-                    title="Study any Yahoo/FMP symbol (press Enter). Technical + macro/month/window conditions work; earnings/ex-div dates exist only for workbook tickers."
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        applyCustomSymbol((e.target as HTMLInputElement).value, "a");
-                        (e.target as HTMLInputElement).value = "";
-                      }
-                    }}
+                <div
+                  className={isBasketTicker(ticker) ? "opacity-40 pointer-events-none" : ""}
+                  data-testid="study-picker-single"
+                  title="Search the workbook by ticker/name, or type any Yahoo/FMP symbol and press Enter. Earnings/ex-div conditions exist only for workbook tickers."
+                >
+                  <UnifiedTickerPicker
+                    tickers={filteredTickers}
+                    value={isBasketTicker(ticker) ? "" : ticker}
+                    onChange={(t) => pickSymbol(t, "a")}
+                    label="Ticker — search or any Yahoo symbol"
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -933,52 +934,27 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
 
             {mode === "pairs" && (
               <>
-                <div className="flex flex-col gap-1 min-w-[240px]">
-                  <Label className="text-xs text-muted-foreground">Ticker A (long)</Label>
-                  <Select value={customSymbolsRef.current.has(ticker) ? "" : ticker} onValueChange={setTicker}>
-                    <SelectTrigger data-testid="select-ticker-a" className="h-8">
-                      <SelectValue placeholder={customSymbolsRef.current.has(ticker) ? `${ticker} (external)` : "Pick A"} />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-80">
-                      {filteredTickers.map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    placeholder="Any symbol (Enter)"
-                    className="h-7 text-xs"
-                    data-testid="input-custom-symbol-a"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        applyCustomSymbol((e.target as HTMLInputElement).value, "a");
-                        (e.target as HTMLInputElement).value = "";
-                      }
-                    }}
+                <div className="flex flex-col gap-1 min-w-[240px]" data-testid="study-picker-a">
+                  <UnifiedTickerPicker
+                    tickers={filteredTickers}
+                    value={ticker}
+                    onChange={(t) => pickSymbol(t, "a")}
+                    label="Ticker A (long) — search or any symbol"
                   />
                   <BasketTickerPill activeTicker={ticker} onSelectTicker={setTicker} fallbackTicker={filteredTickers[0]?.ticker ?? null} />
                 </div>
-                <div className="flex flex-col gap-1 min-w-[240px]">
-                  <Label className="text-xs text-muted-foreground">Ticker B (short)</Label>
-                  <Select value={customSymbolsRef.current.has(tickerB) ? "" : tickerB} onValueChange={setTickerB}>
-                    <SelectTrigger data-testid="select-ticker-b" className="h-8">
-                      <SelectValue placeholder={customSymbolsRef.current.has(tickerB) ? `${tickerB} (external)` : "Pick B"} />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-80">
-                      {filteredTickers.filter((t: any) => t.ticker !== ticker).map((t: any) => <SelectItem key={t.ticker} value={t.ticker}>{t.ticker} — {t.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input
-                    placeholder="Any symbol (Enter)"
-                    className="h-7 text-xs"
-                    data-testid="input-custom-symbol-b"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        applyCustomSymbol((e.target as HTMLInputElement).value, "b");
-                        (e.target as HTMLInputElement).value = "";
-                      }
-                    }}
+                <div className="flex flex-col gap-1 min-w-[240px]" data-testid="study-picker-b">
+                  <UnifiedTickerPicker
+                    tickers={filteredTickers}
+                    value={tickerB}
+                    onChange={(t) => pickSymbol(t, "b")}
+                    label="Ticker B (short) — search or any symbol"
                   />
                   <BasketTickerPill activeTicker={tickerB} onSelectTicker={setTickerB} fallbackTicker={filteredTickers[1]?.ticker ?? null} />
                 </div>
+                {ticker && tickerB && ticker === tickerB && (
+                  <span className="text-[10px] text-red-400 pb-2">Legs must differ.</span>
+                )}
               </>
             )}
 
@@ -1009,9 +985,14 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
               </div>
             </div>
 
-            <div className="flex gap-2 ml-auto">
+            <div className="flex gap-2 ml-auto items-center">
+              {isStale && !isCrossRunning && (
+                <span className="text-[10px] text-amber-400" data-testid="study-stale-hint">
+                  Settings changed — re-run to refresh
+                </span>
+              )}
               <Button onClick={handleRun} disabled={!canRun || isCrossRunning}
-                data-testid="button-run-study" className="h-8">
+                data-testid="button-run-study" className={`h-8 ${isStale ? "ring-1 ring-amber-400/60" : ""}`}>
                 <Play className="w-3.5 h-3.5 mr-1.5" />
                 {mode === "cross" ? `Run on ${filteredTickers.length}` : mode === "pairs" ? "Run pair study" : "Run study"}
               </Button>
