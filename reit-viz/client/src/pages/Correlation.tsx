@@ -18,6 +18,7 @@ import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlat
 import type { CorrFrequency, LegTransform } from "@/lib/correlationEngine";
 import ChartPane from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
+import { deleteIndicatorBadge } from "@/lib/indicatorInstances";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
 import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
@@ -1648,6 +1649,7 @@ function CorrLwcPane({
   onMaximizeToggle,
   onChartReady,
   onChartDestroyed,
+  onChangeIndicators,
 }: {
   paneId: number;
   label: string;
@@ -1659,6 +1661,9 @@ function CorrLwcPane({
   onMaximizeToggle: () => void;
   onChartReady?: (paneId: number, chart: IChartApi) => void;
   onChartDestroyed?: (paneId: number) => void;
+  /** Enables the sub-pane header actions (✕ close / eye hide / reorder
+   *  arrows — Charts-tab parity) by giving the pane a state writer. */
+  onChangeIndicators?: (paneId: number, ind: ActiveIndicators) => void;
 }) {
   const chartRef = useRef<IChartApi | null>(null);
   const [gridProminence] = useGridProminence();
@@ -1702,6 +1707,19 @@ function CorrLwcPane({
         drawColor="#f59e0b"
         onChartReady={handleChartReady}
         onChartDestroyed={handleChartDestroyed}
+        onCloseSubIndicator={onChangeIndicators ? (type) =>
+          // Same route as ChartArea's ✕ handler: drop just that pane group's
+          // instances ("ovl:"/"ha" handled inside), purge its hidden key.
+          onChangeIndicators(paneId, deleteIndicatorBadge(indicators, { kind: "sub", key: type }))
+          : undefined}
+        onToggleHideSubIndicator={onChangeIndicators ? (type) => {
+          const hidden = indicators.hiddenSubCharts ?? [];
+          const next = hidden.includes(type) ? hidden.filter((t) => t !== type) : [...hidden, type];
+          onChangeIndicators(paneId, { ...indicators, hiddenSubCharts: next.length ? next : undefined });
+        } : undefined}
+        onReorderSubChart={onChangeIndicators ? (order) =>
+          onChangeIndicators(paneId, { ...indicators, subPaneOrder: order })
+          : undefined}
       />
       <div className="absolute top-1 right-2 z-10">
         <ExportMenu getChart={() => chartRef.current} label={`Correlation_${label}`} />
@@ -4617,6 +4635,7 @@ function PairwiseView({
             onMaximizeToggle={() => toggleMax("levels")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
+            onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
           />
         );
       case "rolling":
@@ -4632,6 +4651,7 @@ function PairwiseView({
             onMaximizeToggle={() => toggleMax("rolling")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
+            onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
           />
         );
       case "rollingBeta":
@@ -4647,6 +4667,7 @@ function PairwiseView({
             onMaximizeToggle={() => toggleMax("rollingBeta")}
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
+            onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
           />
         );
       case "tfDivergence":

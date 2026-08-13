@@ -44,9 +44,12 @@ import {
   effGroup,
   instanceLabel,
   chartFreqLabel,
+  deleteIndicatorBadge,
+  setBadgeChrome,
   type IndicatorInstance,
   type InstanceParamSpec,
 } from "@/lib/indicatorInstances";
+import { IndicatorChipsRow } from "@/components/IndicatorChips";
 import { useIndicatorColors, type IndicatorColorKey } from "@/lib/indicatorColorsContext";
 import { loadServerPref, saveServerPref } from "@/lib/serverPrefs";
 import PatternsPanel from "./PatternsPanel";
@@ -1360,6 +1363,25 @@ export default function IndicatorsPanel({
               </Select>
             )}
           </div>
+          {/* Active-indicator chips for the selected pane — same component as
+              the Charts sidebar / Pairs panel (show/hide, hover ✕ delete,
+              ⋮ menu w/ solo + labels/px-line, clear-all). Self-contained via
+              setActiveIndicators, so every host of this panel (Charts,
+              Correlation, Macro) gets them for free. */}
+          <IndicatorChipsRow
+            ind={activeIndicators}
+            idKey={`panel-${selectedPaneId ?? "none"}`}
+            className="flex flex-wrap gap-0.5 pt-1"
+            onToggleSubChart={(t) => {
+              const hidden = activeIndicators.hiddenSubCharts ?? [];
+              const next = hidden.includes(t) ? hidden.filter((x) => x !== t) : [...hidden, t];
+              setActiveIndicators({ ...activeIndicators, hiddenSubCharts: next.length ? next : undefined });
+            }}
+            onDelete={(del) => setActiveIndicators(deleteIndicatorBadge(activeIndicators, del))}
+            onBadgeChrome={(del, patch) => setActiveIndicators(setBadgeChrome(activeIndicators, del, patch))}
+            onSetHiddenSubCharts={(h) => setActiveIndicators({ ...activeIndicators, hiddenSubCharts: h?.length ? h : undefined })}
+            onClearIndicators={() => setActiveIndicators({})}
+          />
           {panes.length > 1 && (
             <label
               className="flex items-center gap-2 pt-0.5 cursor-pointer select-none"
