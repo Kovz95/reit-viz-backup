@@ -75,6 +75,7 @@ import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrim
 import { LookbackWindowPrimitive, type LookbackEntry } from "@/lib/lookbackWindowPrimitive";
 import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
 import { d as detectSRLevels, D as DEFAULT_SR_CFG } from "@/components/SupportResistance";
+import { FIB_RETRACEMENTS, FIB_EXTENSIONS, computeFibSwing } from "@/lib/fibAnalysis";
 import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
 import { getPatternSettings } from "@/lib/patternSettings";
 import ExportMenu from "@/components/ExportMenu";
@@ -1935,25 +1936,27 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
     } catch { return []; }
   }, [activeIndicators.srLevels, detectorOhlc]);
 
-  // Fibonacci retracement of the most recent swing (same swing logic as the
-  // standalone S/R tool, but showing every ratio rather than only touched ones).
+  // Fibonacci levels of the most recent swing (same swing logic as the
+  // standalone S/R tool, but showing every ratio rather than only touched
+  // ones), plus 1.272/1.618/2.618 extensions projected in the trend direction.
   const fibLevelResults = useMemo(() => {
     if (!activeIndicators.fibLevels || !detectorOhlc) return [];
-    const { highs, lows, closes } = detectorOhlc;
-    const lookback = Math.min(252, closes.length);
-    const start = closes.length - lookback;
-    let hi = start, lo = start;
-    for (let i = start; i < closes.length; i++) {
-      if (highs[i] > highs[hi]) hi = i;
-      if (lows[i] < lows[lo]) lo = i;
-    }
-    const H = highs[hi], L = lows[lo], range = H - L;
-    if (!(range > 0)) return [];
-    const highFirst = hi >= lo;
-    return [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].map((r) => ({
-      ratio: r,
-      price: highFirst ? H - range * r : L + range * r,
-    }));
+    const swing = computeFibSwing(detectorOhlc.highs, detectorOhlc.lows, detectorOhlc.dates, 252);
+    if (!swing) return [];
+    const range = swing.swingHigh - swing.swingLow;
+    const up = swing.direction === "up";
+    return [
+      ...FIB_RETRACEMENTS.map((r) => ({
+        ratio: r,
+        kind: "retracement" as const,
+        price: up ? swing.swingHigh - range * r : swing.swingLow + range * r,
+      })),
+      ...FIB_EXTENSIONS.map((r) => ({
+        ratio: r,
+        kind: "extension" as const,
+        price: up ? swing.swingLow + range * r : swing.swingHigh - range * r,
+      })),
+    ].filter((l) => l.price > 0);
   }, [activeIndicators.fibLevels, detectorOhlc]);
 
   // ── Pattern Recognition ──
@@ -4034,6 +4037,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       const FIB_COLORS: Record<string, string> = {
         "0": "#94a3b8", "0.236": "#22c55e", "0.382": "#84cc16",
         "0.5": "#eab308", "0.618": "#f59e0b", "0.786": "#f97316", "1": "#94a3b8",
+        "1.272": "#c084fc", "1.618": "#a855f7", "2.618": "#7c3aed",
       };
       for (const f of fibLevelResults) {
         const s = chart.addSeries(LineSeries, {

@@ -1833,7 +1833,7 @@ export default function IndicatorsPanel({
             <div>
               <Label className="text-xs font-medium">Fibonacci Levels</Label>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                Retracement of the recent swing (23.6–78.6%)
+                Swing retracements (0–100%) + 127.2/161.8/261.8% extensions
               </p>
             </div>
             <Switch
