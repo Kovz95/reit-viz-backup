@@ -280,5 +280,5 @@ function detectSRLevels(ohlc: { closes: number[]; highs: number[]; lows: number[
   return all;
 }
 
-export { detectSRLevels, DEFAULT_SR_CONFIG };
+export { detectSRLevels, DEFAULT_SR_CONFIG, evaluateTouches };
 export type { SRLevel, TouchEvent, TouchResult };

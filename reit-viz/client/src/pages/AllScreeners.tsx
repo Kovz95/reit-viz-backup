@@ -26,6 +26,7 @@ const REGISTRY: ScreenerDef[] = [
   { key: "setups", label: "Setups Screener", Component: lazy(() => import("@/pages/SetupsScreener")) },
   { key: "pattern", label: "Pattern Screener", Component: lazy(() => import("@/pages/PatternScreener")) },
   { key: "gapfill", label: "Gap Fill", Component: lazy(() => import("@/pages/GapFillScreener")) },
+  { key: "fib", label: "Fibonacci", Component: lazy(() => import("@/pages/FibScreener")) },
   { key: "maslope", label: "MA Slope", Component: lazy(() => import("@/pages/MaSlope")) },
 ];
 

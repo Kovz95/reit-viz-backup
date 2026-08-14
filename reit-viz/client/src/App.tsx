@@ -82,6 +82,7 @@ const Screener = lazy(() => import("@/pages/Screener"));
 const AllOptimizers = lazy(() => import("@/pages/AllOptimizers"));
 const AllScreeners = lazy(() => import("@/pages/AllScreeners"));
 const GapFillScreener = lazy(() => import("@/pages/GapFillScreener"));
+const FibScreener = lazy(() => import("@/pages/FibScreener"));
 const ZScoreOptimizer = lazy(() => import("@/pages/ZScoreOptimizer"));
 const PairOptimizer = lazy(() => import("@/pages/PairOptimizer"));
 const MomentumOptimizer = lazy(() => import("@/pages/MomentumOptimizer"));
@@ -605,6 +606,7 @@ const PAGES = [
   { path: "/universal-screener", label: "Universal Hit-Rate Screener" },
   { path: "/scanner", label: "Scanner" },
   { path: "/gap-fill", label: "Gap Fill Screener" },
+  { path: "/fib-analysis", label: "Fibonacci Analysis" },
   { path: "/screener", label: "Screener" },
   { path: "/ratings", label: "Ratings" },
   { path: "/optimizers", label: "All Optimizers" },
@@ -744,6 +746,7 @@ function AppShell() {
               <Route path="/universal-screener" component={UniversalScreener} />
               <Route path="/ma-slope" component={MaSlope} />
               <Route path="/gap-fill" component={GapFillScreener} />
+              <Route path="/fib-analysis" component={FibScreener} />
               <Route path="/screener" component={Screener} />
               <Route path="/ratings">{() => <Sentiment initialFamily="ratings" />}</Route>
               <Route path="/setups-screener" component={SetupsScreener} />
