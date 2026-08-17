@@ -8,13 +8,18 @@
 
 import { fetchMetricSeries, type MetricSeriesPoint } from "./fetchMetricSeries";
 import { computeBasketWeights } from "./basketWeights";
+import { resolveFundActualsKey, forwardFillOnDates } from "./fundMetrics";
 
 export type BasisFamily = "FFO" | "AFFO" | "EPS" | "EPRA" | "Default";
-export type BasisPeriod = "FY0" | "FY1" | "FY2" | "LTM";
+// "ACT" = uploaded historical actuals (TTM, report-date stamped) instead of a
+// consensus estimate vintage — decomposes price into re-rate vs REALIZED
+// growth. The estimate series is resolved per ticker from the "Fund: " metrics
+// (lib/fundMetrics), so the period is only available where actuals exist.
+export type BasisPeriod = "FY0" | "FY1" | "FY2" | "LTM" | "ACT";
 export type BasisMode = "auto" | BasisFamily;
 
 export const BASIS_FAMILIES: BasisFamily[] = ["FFO", "AFFO", "EPS", "EPRA", "Default"];
-export const BASIS_PERIODS: BasisPeriod[] = ["FY0", "FY1", "FY2", "LTM"];
+export const BASIS_PERIODS: BasisPeriod[] = ["FY0", "FY1", "FY2", "LTM", "ACT"];
 
 export interface BasisDef {
   // Stored multiple series to try, in order. FY1 multiples are stored under
@@ -51,28 +56,30 @@ export interface AttributionRow {
 // loadBasisAligned skips it. Missing stored multiples are derived close ÷
 // estimate, which keeps the identity exact.
 const MULTIPLE_NAMES: Record<BasisFamily, Record<BasisPeriod, string[]>> = {
-  FFO:  { FY0: ["P/FFO (FY0)"],  FY1: ["P/FFO (FY1)", "P/FFO FY1"],   FY2: ["P/FFO FY2"],  LTM: ["P/FFO LTM"] },
-  AFFO: { FY0: ["P/AFFO (FY0)"], FY1: ["P/AFFO (FY1)", "P/AFFO FY1"], FY2: ["P/AFFO FY2"], LTM: ["P/AFFO LTM"] },
-  EPS:  { FY0: ["P/E (FY0)"],    FY1: ["P/E (FY1)", "P/E FY1"],       FY2: ["P/E FY2"],    LTM: ["P/E LTM"] },
-  EPRA: { FY0: [], FY1: [], FY2: [], LTM: [] },
-  Default: { FY0: [], FY1: [], FY2: [], LTM: [] },
+  FFO:  { FY0: ["P/FFO (FY0)"],  FY1: ["P/FFO (FY1)", "P/FFO FY1"],   FY2: ["P/FFO FY2"],  LTM: ["P/FFO LTM"],  ACT: [] },
+  AFFO: { FY0: ["P/AFFO (FY0)"], FY1: ["P/AFFO (FY1)", "P/AFFO FY1"], FY2: ["P/AFFO FY2"], LTM: ["P/AFFO LTM"], ACT: [] },
+  EPS:  { FY0: ["P/E (FY0)"],    FY1: ["P/E (FY1)", "P/E FY1"],       FY2: ["P/E FY2"],    LTM: ["P/E LTM"],    ACT: [] },
+  EPRA: { FY0: [], FY1: [], FY2: [], LTM: [], ACT: [] },
+  Default: { FY0: [], FY1: [], FY2: [], LTM: [], ACT: [] },
 };
 
 const ESTIMATE_NAMES: Record<BasisFamily, Record<BasisPeriod, string>> = {
-  FFO:  { FY0: "FFO FY0",  FY1: "FFO FY1",  FY2: "FFO FY2",  LTM: "FFO LTM" },
-  AFFO: { FY0: "AFFO FY0", FY1: "AFFO FY1", FY2: "AFFO FY2", LTM: "AFFO LTM" },
-  EPS:  { FY0: "EPS FY0",  FY1: "EPS FY1",  FY2: "EPS FY2",  LTM: "EPS LTM" },
+  FFO:  { FY0: "FFO FY0",  FY1: "FFO FY1",  FY2: "FFO FY2",  LTM: "FFO LTM",  ACT: "" },
+  AFFO: { FY0: "AFFO FY0", FY1: "AFFO FY1", FY2: "AFFO FY2", LTM: "AFFO LTM", ACT: "" },
+  EPS:  { FY0: "EPS FY0",  FY1: "EPS FY1",  FY2: "EPS FY2",  LTM: "EPS LTM",  ACT: "" },
   EPRA: {
     FY0: "EPRA Earnings per share (FY0)",
     FY1: "EPRA Earnings per share (consensus FY1)",
     FY2: "EPRA Earnings per share (consensus FY2)",
     LTM: "", // no LTM EPRA series in the workbook
+    ACT: "",
   },
   Default: {
     FY0: "", // no FY0/LTM slots in the default-metric config
     FY1: "EPS FY1 (Default)",
     FY2: "EPS (Default)",
     LTM: "",
+    ACT: "",
   },
 };
 
@@ -81,6 +88,11 @@ const FAMILY_PREFIX: Record<BasisFamily, string> = {
 };
 
 export function getBasisDef(family: BasisFamily, period: BasisPeriod): BasisDef {
+  // ACT resolves per ticker (user-named uploaded metrics) — the loaders below
+  // special-case it before consulting the static tables.
+  if (period === "ACT") {
+    return { multiples: [], estimate: "", label: `${FAMILY_PREFIX[family]} × TTM actuals (uploaded)` };
+  }
   const estimate = ESTIMATE_NAMES[family][period];
   return {
     multiples: MULTIPLE_NAMES[family][period],
@@ -116,6 +128,36 @@ export function alignData(
   return { dates, close: closes, multiple: mults, estimate: ests };
 }
 
+// ACT basis: forward-fill the sparse report-date-stamped actuals onto the
+// close series' dates (the value the market knew each day), then derive the
+// multiple as close ÷ actuals. Without the fill, alignData's inner join would
+// collapse the axis to ~4 points per year. Returns null when the ticker has
+// no uploaded actuals matching the family.
+async function loadActualsAligned(
+  ticker: string,
+  family: BasisFamily,
+  closeSeries: MetricSeriesPoint[],
+  opts?: { end?: string },
+): Promise<AlignedData | null> {
+  const key = await resolveFundActualsKey(ticker, family);
+  if (!key) return null;
+  const sparse = await fetchMetricSeries(ticker, key, opts);
+  if (!sparse.length) return null;
+  const filled = forwardFillOnDates(sparse, closeSeries.map((p) => p.time));
+  const estSeries: MetricSeriesPoint[] = [];
+  const multSeries: MetricSeriesPoint[] = [];
+  closeSeries.forEach((p, i) => {
+    const e = filled[i];
+    if (e != null && e > 0 && Number.isFinite(p.value) && p.value > 0) {
+      estSeries.push({ time: p.time, value: e });
+      multSeries.push({ time: p.time, value: p.value / e });
+    }
+  });
+  if (!estSeries.length) return null;
+  const aligned = alignData(closeSeries, multSeries, estSeries);
+  return aligned.dates.length >= 2 ? aligned : null;
+}
+
 // Fetch + align close/multiple/estimate for one ticker under a basis family and
 // estimate period. "auto" tries FFO first (REITs), then EPS (generic fallback).
 // If no stored multiple series exists for the combination, the multiple is
@@ -131,6 +173,11 @@ export async function loadBasisAligned(
   // "auto": REIT FFO first, then EPRA (European names), then generic EPS.
   const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPRA", "EPS"] : [mode];
   for (const family of families) {
+    if (period === "ACT") {
+      const aligned = await loadActualsAligned(ticker, family, closeSeries, opts);
+      if (aligned) return { basis: family, aligned };
+      continue;
+    }
     const def = getBasisDef(family, period);
     if (!def.estimate) continue; // combination has no source data
     const estSeries = await fetchMetricSeries(ticker, def.estimate, opts);
@@ -240,6 +287,49 @@ export async function loadBasketBasisAligned(
   if (!closeSeries.length) return null;
   const families: BasisFamily[] = mode === "auto" ? ["FFO", "EPRA", "EPS"] : [mode];
   for (const family of families) {
+    if (period === "ACT") {
+      // Each member's actuals key is its own — resolve per member, forward-fill
+      // each onto the basket close dates, then weighted-average per date (same
+      // ≥-half-the-members rule as weightedBasketSeries).
+      const closeDates = closeSeries.map((p) => p.time);
+      const memberFills = await Promise.all(
+        basket.tickers.map(async (t) => {
+          try {
+            const key = await resolveFundActualsKey(t, family);
+            if (!key) return null;
+            const sparse = await fetchMetricSeries(t, key);
+            return sparse.length ? forwardFillOnDates(sparse, closeDates) : null;
+          } catch { return null; }
+        }),
+      );
+      const withData = memberFills.filter(Boolean).length;
+      if (withData === 0) continue;
+      const minCount = Math.max(1, Math.ceil(withData / 2));
+      const wOf = (t: string) => {
+        const w = weights[t];
+        return Number.isFinite(w) && w > 0 ? w : 1 / basket.tickers.length;
+      };
+      const estSeries: MetricSeriesPoint[] = [];
+      const multSeries: MetricSeriesPoint[] = [];
+      closeSeries.forEach((p, i) => {
+        let v = 0, w = 0, n = 0;
+        basket.tickers.forEach((t, k) => {
+          const e = memberFills[k]?.[i];
+          if (e != null && Number.isFinite(e)) { const tw = wOf(t); v += tw * e; w += tw; n += 1; }
+        });
+        if (n >= minCount && w > 0) {
+          const est = v / w;
+          if (est > 0 && Number.isFinite(p.value) && p.value > 0) {
+            estSeries.push({ time: p.time, value: est });
+            multSeries.push({ time: p.time, value: p.value / est });
+          }
+        }
+      });
+      if (!estSeries.length) continue;
+      const aligned = alignData(closeSeries, multSeries, estSeries);
+      if (aligned.dates.length >= 2) return { basis: family, aligned };
+      continue;
+    }
     const def = getBasisDef(family, period);
     if (!def.estimate) continue;
     const estSeries = await weightedBasketSeries(basket, def.estimate, weights);

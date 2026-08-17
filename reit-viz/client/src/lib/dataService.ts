@@ -141,6 +141,9 @@ export function injectTickerData(symbol: string, data: RawTickerData) {
 export function clearTickerDataCache() {
   tickerDataCache.clear();
   void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
+  // The parallel tickerData loader keeps its own in-memory records (dynamic
+  // import — tickerData imports this module, so a static import would cycle).
+  void import("@/lib/tickerData").then(({ clearRawTickerCache }) => clearRawTickerCache()).catch(() => {});
 }
 /** Clear ALL caches so next getTickers/getDates/getEvents re-fetches from API */
 export function clearAllCaches() {
@@ -149,6 +152,7 @@ export function clearAllCaches() {
   eventsCache = null;
   tickerDataCache.clear();
   void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
+  void import("@/lib/tickerData").then(({ clearRawTickerCache }) => clearRawTickerCache()).catch(() => {});
 }
 /** Returns the current in-memory ticker list (for immediate reads after injection) */
 export function getTickersCacheSync(): TickerMeta[] | null {

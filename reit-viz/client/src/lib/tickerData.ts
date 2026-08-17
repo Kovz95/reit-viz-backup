@@ -27,6 +27,15 @@ export type SparsePair = [number, number];
 const _cache = new Map<string, RawTicker | null>();
 const _inFlight = new Map<string, Promise<RawTicker | null>>();
 
+/** Drop the in-memory per-ticker records so the next fetch re-reads IDB/API.
+ *  Called by dataService's cache clears (data uploads/wipes) — without this,
+ *  pages on this loader path (Attribution, optimizers) keep serving records
+ *  from before the upload for any ticker already visited this session. */
+export function clearRawTickerCache() {
+  _cache.clear();
+  _inFlight.clear();
+}
+
 function looksLikeHtml(text: string): boolean {
   return !text || text.trimStart().startsWith("<");
 }

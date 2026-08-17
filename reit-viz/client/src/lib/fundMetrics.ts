@@ -71,6 +71,60 @@ export async function resolveFundPattern(ticker: string, pattern: string): Promi
   return resolveFundMetric(meta.metrics, kind);
 }
 
+// ── Attribution "ACT" basis support ──────────────────────────────────────────
+// The attribution page's basis families are explicit (FFO/AFFO/EPS/EPRA), so
+// the actuals series must match the REQUESTED family — unlike the global
+// "best flow metric" preference above.
+const FAMILY_TOKEN: Record<string, (s: string) => boolean> = {
+  FFO: (s) => /ffo/.test(s) && !/affo/.test(s),
+  AFFO: (s) => /affo/.test(s),
+  EPS: (s) => /\beps\b|earnings per/.test(s),
+  EPRA: (s) => /epra/.test(s),
+};
+
+/**
+ * Resolve a ticker's uploaded-actuals series for an attribution basis family:
+ * TTM first (Q preferred over H — a trailing flow comparable to LTM
+ * estimates), falling back to raw FY actuals for annual-only uploads.
+ * Families outside the token table ("Default") take any family, using the
+ * global FFO-first preference. Returns the concrete metric key or null.
+ */
+export function resolveFundActualsMetric(tickerMetrics: string[], family: string): string | null {
+  // Unknown families ("Default") have no token filter → any family matches.
+  const explicitFamily = Object.prototype.hasOwnProperty.call(FAMILY_TOKEN, family);
+  const tokenTest = explicitFamily ? FAMILY_TOKEN[family] : null;
+  const isDerived = (m: string) => / (YoY%|Accel|TTM|P\/TTM|Surprise%) \((Q|H|FY)\)$/.test(m);
+  const pick = (re: RegExp, cadRank: Record<string, number>, allowDerived: boolean): string | null => {
+    let best: { name: string; rank: number } | null = null;
+    for (const m of tickerMetrics) {
+      const match = re.exec(m);
+      if (!match) continue;
+      if (!allowDerived && isDerived(m)) continue;
+      const base = match[1].toLowerCase();
+      if (tokenTest && !tokenTest(base)) continue;
+      const rank = (cadRank[match[2]] ?? 9) * 10 + (explicitFamily ? 0 : familyRank(match[1]));
+      if (!best || rank < best.rank) best = { name: m, rank };
+    }
+    return best?.name ?? null;
+  };
+  return (
+    pick(/^Fund: (.+) TTM \((Q|H)\)$/, { Q: 0, H: 1 }, true) ??
+    // Raw FY actuals (annual-only uploads) — never a derived key.
+    pick(/^Fund: (.+) \((FY)\)$/, { FY: 0 }, false)
+  );
+}
+
+/** Per-ticker wrapper over resolveFundActualsMetric (loads ticker meta once). */
+export async function resolveFundActualsKey(ticker: string, family: string): Promise<string | null> {
+  let metas = getTickersCacheSync();
+  if (!metas || metas.length === 0) {
+    try { metas = await getTickers(); } catch { return null; }
+  }
+  const meta = (metas || []).find((t: any) => t.ticker === ticker.toUpperCase());
+  if (!meta || !Array.isArray(meta.metrics)) return null;
+  return resolveFundActualsMetric(meta.metrics, family);
+}
+
 /** Forward-fill a sparse {time,value}[] series onto a bar-date axis. */
 export function forwardFillOnDates(
   pts: { time: string; value: number }[],
