@@ -561,7 +561,12 @@ export default function Sidebar({
   const metricCategories = useMemo(() => groupMetricsRecord(availableMetrics), [availableMetrics]);
 
   const filteredMetrics = useMemo(() => {
-    if (!metricSearch) return metricCategories;
+    if (!metricSearch) {
+      // Special-purpose period-end fundamentals twins stay out of the browse
+      // list (they'd double the fundamentals rows) — searchable only.
+      const { "Fundamentals (Period-End)": _pe, ...rest } = metricCategories;
+      return rest;
+    }
     const q = metricSearch.toLowerCase();
     const result: Record<string, string[]> = {};
     for (const [cat, metrics] of Object.entries(metricCategories)) {
@@ -570,6 +575,29 @@ export default function Sidebar({
     }
     return result;
   }, [metricSearch, metricCategories]);
+
+  // Collapsible category headers for the Pick Series list (persisted). While
+  // a search is active every match shows regardless of collapse state.
+  const METRIC_CATS_LS_KEY = "reit-viz.sidebarMetricCats.collapsed.v1";
+  const [collapsedMetricCats, setCollapsedMetricCats] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(METRIC_CATS_LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return new Set(parsed.filter((s) => typeof s === "string"));
+      }
+    } catch {}
+    return new Set();
+  });
+  const toggleMetricCat = useCallback((cat: string) => {
+    setCollapsedMetricCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      try { localStorage.setItem(METRIC_CATS_LS_KEY, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }, []);
 
   // Flat list of all metrics for formula pickers
   const allMetrics = useMemo(() => [...availableMetrics].sort((a, b) => a.localeCompare(b)), [availableMetrics]);
@@ -1201,12 +1229,20 @@ export default function Sidebar({
                     Click to add/remove series for <span className="font-mono font-semibold text-primary">{tickerDisplayName(seriesTicker)}</span>
                   </div>
                   <div className="space-y-1 max-h-[400px] overflow-y-auto">
-                    {Object.entries(filteredMetrics).map(([cat, metrics]) => (
+                    {Object.entries(filteredMetrics).map(([cat, metrics]) => {
+                      const catCollapsed = collapsedMetricCats.has(cat) && !metricSearch;
+                      return (
                       <div key={cat}>
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 py-0.5">
-                          {cat}
-                        </div>
-                        {metrics.map((m) => {
+                        <button
+                          className="flex items-center gap-1 w-full text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground px-1 py-0.5 rounded hover:bg-accent hover:text-foreground"
+                          onClick={() => toggleMetricCat(cat)}
+                          data-testid={`metric-cat-${cat}`}
+                        >
+                          <ChevronDown className={`w-3 h-3 flex-shrink-0 transition-transform ${catCollapsed ? "-rotate-90" : ""}`} />
+                          <span className="truncate">{cat}</span>
+                          <span className="ml-auto font-mono text-[9px] opacity-60">{metrics.length}</span>
+                        </button>
+                        {!catCollapsed && metrics.map((m) => {
                           const plottedCount = plottedSeries.filter(
                             (s) =>
                               s.ticker === seriesTicker && s.metric === m
@@ -1250,7 +1286,8 @@ export default function Sidebar({
                           );
                         })}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
               ) : (

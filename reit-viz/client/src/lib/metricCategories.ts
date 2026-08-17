@@ -22,6 +22,8 @@ export const CATEGORY_ORDER = [
   "Estimates (Next Qtr)",
   "Guidance",
   "Fundamentals (Reported)",
+  "Fundamentals (Growth)",
+  "Fundamentals (TTM & Multiples)",
   "Fundamentals (Period-End)",
   "Reported (LTM / FY0)",
   "REIT / EPRA",
@@ -52,9 +54,13 @@ const RULES: Array<[string, (m: string) => boolean]> = [
   // rules — surfaced in their own section at the very top of every picker.
   ["Default", (m) => /\(Default\)$/.test(m)],
   // Uploaded historical actuals ("Fund: <name> (Q)" report-date stamped,
-  // "Fund: <name> (Q PE)" period-end stamped) — must precede the generic
-  // growth/valuation/yield rules so e.g. "Fund: FFO Growth (Q)" stays here.
+  // "Fund: <name> (Q PE)" period-end stamped) and their at-ingest derived
+  // series — must precede the generic growth/valuation/yield rules so e.g.
+  // "Fund: FFO Growth (Q)" stays here. Order within the block: PE twins
+  // first (any suffix), then derived families, then raw prints as catch-all.
   ["Fundamentals (Period-End)", (m) => /^fund: .*\bPE\)$/i.test(m)],
+  ["Fundamentals (Growth)", (m) => /^fund: /i.test(m) && / (YoY%|Accel|Surprise%) \(/.test(m)],
+  ["Fundamentals (TTM & Multiples)", (m) => /^fund: /i.test(m) && / (TTM|P\/TTM) \(/.test(m)],
   ["Fundamentals (Reported)", (m) => /^fund: /i.test(m)],
   ["Price", (m) => ["close", "open", "high", "low"].includes(m)],
   ["Volume & Liquidity", (m) => /\bvolume\b|avg daily/i.test(m)],
