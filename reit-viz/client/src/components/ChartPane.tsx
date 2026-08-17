@@ -3388,16 +3388,20 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           seriesMapRef.current.set(ps.id, as as any);
           continue;
         }
+        // Sparse report-date-stamped fundamentals render as a staircase
+        // (lineType 1 = WithSteps) with persistent dots on the actual prints.
+        const isStep = ps.seriesType === "step" || ps.metric.startsWith("Fund: ");
         const ls = chart.addSeries(LineSeries, {
           color: ps.color,
           lineWidth: (ps.lineWidth ?? 2) as any,
           lineStyle: ps.lineStyle ?? 0,
+          lineType: isStep ? 1 : 0,
           title: ps.label,
           crosshairMarkerVisible: true,
           crosshairMarkerRadius: isLineScatter ? 3.5 : 4,
-          // For line+scatter, show persistent point markers
-          pointMarkersVisible: isLineScatter,
-          pointMarkersRadius: isLineScatter ? 2.5 : undefined,
+          // For line+scatter (and step prints), show persistent point markers
+          pointMarkersVisible: isLineScatter || isStep,
+          pointMarkersRadius: isLineScatter ? 2.5 : isStep ? 3 : undefined,
           ...(isOverlay ? { priceScaleId: "left" } : {}),
         });
         ls.setData(applyColorByToData(ps.data));
@@ -3423,14 +3427,16 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         // chart-type change actually toggles the dots (otherwise the markers
         // keep whatever state they had when the series was first created).
         const existing = seriesMapRef.current.get(ps.id)!;
+        const isStepUpd = ps.seriesType === "step" || ps.metric.startsWith("Fund: ");
         try {
           existing.applyOptions({
             color: ps.color,
             lineWidth: (ps.lineWidth ?? 2) as any,
             lineStyle: ps.lineStyle ?? 0,
+            lineType: isStepUpd ? 1 : 0,
             crosshairMarkerRadius: isLineScatter ? 3.5 : 4,
-            pointMarkersVisible: isLineScatter,
-            pointMarkersRadius: isLineScatter ? 2.5 : undefined,
+            pointMarkersVisible: isLineScatter || isStepUpd,
+            pointMarkersRadius: isLineScatter ? 2.5 : isStepUpd ? 3 : undefined,
           });
           existing.setData(applyColorByToData(ps.data));
         } catch {}

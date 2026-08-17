@@ -405,6 +405,16 @@ export default function PremiumDiscount() {
     return () => { alive = false; };
   }, []);
 
+  // Uploaded historical fundamentals ("Fund: <name> (Q)" keys) — offered in
+  // both metric dropdowns; the premium/growth engines are metric-agnostic.
+  const fundMetricOptions = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of tickers) for (const m of ((t as any).metrics || []) as string[]) {
+      if (m.startsWith("Fund: ")) s.add(m);
+    }
+    return [...s].sort();
+  }, [tickers]);
+
   // Auto-set peer label from ticker's own dimension value
   useEffect(() => {
     if (peerValueOverride) {
@@ -2214,6 +2224,11 @@ export default function PremiumDiscount() {
             <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">Valuation</label>
             <select className="text-xs font-mono bg-background border border-border rounded px-2 py-1 w-[170px]" value={valMetric} onChange={(e) => { valMetricOverrideRef.current = true; setValMetric(e.target.value); }} data-testid="select-val-metric">
               {VALUATION_METRICS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              {fundMetricOptions.length > 0 && (
+                <optgroup label="Fundamentals">
+                  {fundMetricOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -2227,6 +2242,11 @@ export default function PremiumDiscount() {
               <optgroup label="Growth">
                 {GROWTH_METRICS.filter((m) => !/\(Default\)$/.test(m.id)).map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
               </optgroup>
+              {fundMetricOptions.length > 0 && (
+                <optgroup label="Fundamentals">
+                  {fundMetricOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
 

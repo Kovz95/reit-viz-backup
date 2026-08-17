@@ -39,8 +39,11 @@ export interface PlottedSeries {
   color: string;
   lineWidth?: number;    // 1-5, default 2
   lineStyle?: number;    // 0=Solid, 1=Dotted, 2=Dashed, 3=LargeDashed, 4=SparseDotted
-  /** "area" renders a zero-anchored shaded baseline area instead of a line. */
-  seriesType?: "line" | "area";
+  /** "area" renders a zero-anchored shaded baseline area instead of a line.
+   *  "step" renders a staircase (LWC lineType WithSteps) — the natural shape
+   *  for sparse report-date-stamped series. "Fund: " metrics step by default
+   *  even without this flag (see ChartPane). */
+  seriesType?: "line" | "area" | "step";
   /** Keep on the pane's main (right) price scale even when 2+ series would
    *  normally move overlays to the left axis — for series whose magnitudes
    *  must stay directly comparable (e.g. attribution components). */
