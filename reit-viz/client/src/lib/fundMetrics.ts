@@ -10,7 +10,7 @@
  * (the canonical REIT flow metric) so multi-metric uploads pick the series
  * a REIT analyst would expect.
  */
-import { getTickers, getTickersCacheSync } from "./dataService";
+import { getTickers, getTickersCacheSync, getMetricSeries, GUIDANCE_ISSUE_METRIC_NAMES } from "./dataService";
 
 export const FUND_PATTERN_PREFIX = "Fund:* ";
 
@@ -123,6 +123,26 @@ export async function resolveFundActualsKey(ticker: string, family: string): Pro
   const meta = (metas || []).find((t: any) => t.ticker === ticker.toUpperCase());
   if (!meta || !Array.isArray(meta.metrics)) return null;
   return resolveFundActualsMetric(meta.metrics, family);
+}
+
+// ── Guidance-at-issuance slot ────────────────────────────────────────────────
+// The 5 computed "<fam> Guidance @Issue vs Cons%" metrics are fixed names, but
+// which family a ticker actually guides on varies — signals/conditions use one
+// SLOT resolved per ticker to the first family with data (dataService's
+// GUIDANCE_ISSUE_METRIC_NAMES order: FFO → AFFO → EBITDA → EPS → Sales).
+export const GUIDANCE_SLOT = "Guidance:* @Issue vs Cons%";
+
+/** First guidance-at-issuance series with data for a ticker (sparse prints). */
+export async function fetchGuidanceIssuePts(
+  ticker: string,
+): Promise<{ time: string; value: number }[] | null> {
+  for (const name of GUIDANCE_ISSUE_METRIC_NAMES) {
+    try {
+      const pts = await getMetricSeries(ticker, name);
+      if (pts && pts.length > 0) return pts;
+    } catch { /* try the next family */ }
+  }
+  return null;
 }
 
 /** Forward-fill a sparse {time,value}[] series onto a bar-date axis. */

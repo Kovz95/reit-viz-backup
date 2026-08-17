@@ -24,13 +24,15 @@ export type CalendarEventType = "earnings" | "ex_dividend" | "CPI" | "NFP" | "FO
 export type CalendarConditionType = CalendarEventType | "month" | "window";
 export type StudyConditionType = TechnicalConditionType | CalendarConditionType | "fundamental";
 
-/** Derived uploaded-fundamentals series a "fundamental" condition can gate on. */
-export type FundConditionKind = "Surprise%" | "YoY%" | "Accel";
-export const FUND_CONDITION_KINDS: FundConditionKind[] = ["Surprise%", "YoY%", "Accel"];
+/** Derived series a "fundamental" condition can gate on: uploaded-fundamentals
+ *  prints, or the workbook's guidance-at-issuance gap (no upload needed). */
+export type FundConditionKind = "Surprise%" | "YoY%" | "Accel" | "Guidance";
+export const FUND_CONDITION_KINDS: FundConditionKind[] = ["Surprise%", "YoY%", "Accel", "Guidance"];
 export const FUND_KIND_LABELS: Record<FundConditionKind, string> = {
   "Surprise%": "FY surprise vs consensus",
   "YoY%": "YoY growth print",
   "Accel": "Growth acceleration print",
+  "Guidance": "Guidance vs consensus @ issuance",
 };
 
 export type SigmaDirection = "either" | "up" | "down";

@@ -27,7 +27,7 @@ import {
   type OhlcBar,
 } from "@/lib/indicators";
 import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence, computePctileDispersion, computeTDSequential, computeDeMarker, computeTDREI } from "@/lib/quantIndicators";
-import { fundPattern, printIndices } from "@/lib/fundMetrics";
+import { fundPattern, printIndices, GUIDANCE_SLOT } from "@/lib/fundMetrics";
 
 export type SignalFamily = "technical" | "event" | "valuation" | "fundamental" | "pair";
 export type SignalDirection = "long" | "short";
@@ -1262,6 +1262,28 @@ const fundamentalSignals: CatalogSignal[] = [
       const s = Number(p.s);
       return printIndices(series).filter((i) =>
         dir === "long" ? series[i]! >= s : series[i]! <= -s,
+      );
+    },
+  },
+  {
+    id: "fund.guidance_gap",
+    family: "fundamental",
+    label: "Guidance issued above/below consensus",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: [GUIDANCE_SLOT] },
+    paramPresets: [
+      { id: "g0", label: "above / below consensus", params: { g: 0 } },
+      { id: "g05", label: "gap ≥ ±0.5%", params: { g: 0.5 } },
+    ],
+    // Fires on guidance ISSUANCE/REVISION days (workbook guidance series, not
+    // uploads): long = the company guided above the Street, short = below.
+    detect: (b, p, dir) => {
+      const s = b.valuation?.[GUIDANCE_SLOT];
+      if (!s) return [];
+      const g = Number(p.g);
+      return printIndices(s).filter((i) =>
+        dir === "long" ? s[i]! > g : s[i]! < -g,
       );
     },
   },

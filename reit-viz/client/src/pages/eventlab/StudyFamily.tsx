@@ -49,7 +49,7 @@ import {
   type StudyCondition, type StudyConditionType, type CalendarDates,
   type FundConditionKind,
 } from "@/lib/eventSources";
-import { resolveFundPattern, fundPattern, forwardFillOnDates } from "@/lib/fundMetrics";
+import { resolveFundPattern, fundPattern, forwardFillOnDates, fetchGuidanceIssuePts, type FundKind } from "@/lib/fundMetrics";
 import { getMetricSeries } from "@/lib/dataService";
 
 // Inline icon creation (from bundle)
@@ -147,7 +147,14 @@ async function fetchFundPts(symbol: string, conditions: StudyCondition[]): Promi
   const out: FundPts = {};
   await Promise.all(kinds.map(async (kind) => {
     try {
-      const metric = await resolveFundPattern(symbol, fundPattern(kind));
+      if (kind === "Guidance") {
+        // Workbook guidance-at-issuance gap — resolved to the first guidance
+        // family with data, no upload required.
+        const pts = await fetchGuidanceIssuePts(symbol);
+        if (pts && pts.length > 0) out[kind] = pts;
+        return;
+      }
+      const metric = await resolveFundPattern(symbol, fundPattern(kind as FundKind));
       if (!metric) return;
       const pts = await getMetricSeries(symbol, metric);
       if (pts && pts.length > 0) out[kind] = pts;

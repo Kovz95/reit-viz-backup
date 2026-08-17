@@ -18,7 +18,7 @@ import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { getMetricSeries } from "@/lib/dataService";
-import { isFundPattern, resolveFundPattern } from "@/lib/fundMetrics";
+import { isFundPattern, resolveFundPattern, GUIDANCE_SLOT, fetchGuidanceIssuePts } from "@/lib/fundMetrics";
 import {
   signalsForBundle,
   requiredValuationMetrics,
@@ -225,12 +225,18 @@ async function buildSingleBundle(
       valuationMetrics.map(async (m) => {
         try {
           // "Fund:* <kind>" patterns resolve per ticker to the best concrete
-          // uploaded-fundamentals key; the series is stored under the PATTERN
-          // key so pattern-based signals can look it up uniformly.
-          const actual = isFundPattern(m) ? await resolveFundPattern(ticker, m) : m;
-          if (!actual) return [m, null] as const;
-          const pts = await getMetricSeries(ticker, actual);
-          return [m, alignMetricToDates(pts ?? [], dates)] as const;
+          // uploaded-fundamentals key; the guidance SLOT resolves to the first
+          // guidance family with data. Either way the series is stored under
+          // the SLOT/PATTERN key so signals can look it up uniformly.
+          let pts: { time: string; value: number }[] | null;
+          if (m === GUIDANCE_SLOT) {
+            pts = await fetchGuidanceIssuePts(ticker);
+          } else {
+            const actual = isFundPattern(m) ? await resolveFundPattern(ticker, m) : m;
+            pts = actual ? await getMetricSeries(ticker, actual) : null;
+          }
+          if (!pts) return [m, null] as const;
+          return [m, alignMetricToDates(pts, dates)] as const;
         } catch {
           return [m, null] as const;
         }
