@@ -44,20 +44,24 @@ if (candidates.length < 2) {
 const [T1, T2] = candidates;
 console.log(`Using tickers: ${T1}, ${T2}`);
 
-// Synthesize price files (a close series so the ticker file exists)
+// Synthesize price files (a close series so the ticker file exists) + a flat
+// FFO FY1 consensus series on T1 so the FY Surprise% derived metric computes.
 for (const t of [T1, T2]) {
   const dense = dates.map((_, i) => (i % 3 === 0 ? 100 + (i % 50) : null));
-  fs.writeFileSync(path.join(TMP_DATA, "tickers", `${t}.json`), JSON.stringify({ close: rleEncode(dense) }));
+  const file: Record<string, unknown> = { close: rleEncode(dense) };
+  if (t === T1) file["FFO FY1"] = rleEncode(dates.map(() => 4.0));
+  fs.writeFileSync(path.join(TMP_DATA, "tickers", `${t}.json`), JSON.stringify(file));
 }
 
 // ── Build synthetic workbook ──
 // Sheet 1 (T1, "-US" suffix): text period labels in mixed formats, incl. H and FY,
-// a value with commas, a parenthesized negative, and a blank.
+// a value with commas, a parenthesized negative, and a blank. Six consecutive
+// quarters so YoY/TTM/Accel derived series compute.
 const wsData1 = [
-  ["Metric", "2023Q4", "Q1 2024", "2Q24", "1H24", "FY2023", "2035Q1"],
-  ["FFO/sh", 1.01, "1.11", 1.21, 2.32, 4.04, 9.99],
-  ["Revenue", "1,234", 1300, "(150)", 2534, "5,000", ""],
-  ["Period", "x", "x", "x", "x", "x", "x"], // meta row — must be skipped
+  ["Metric", "2023Q1", "2023Q2", "2023Q3", "2023Q4", "Q1 2024", "2Q24", "1H24", "FY2023", "2035Q1"],
+  ["FFO/sh", 1.0, 1.1, 1.2, 1.3, "1.4", 1.5, 2.32, 4.04, 9.99],
+  ["Revenue", 1000, 1100, 1200, "1,234", 1300, "(150)", 2534, "5,000", ""],
+  ["Period", "x", "x", "x", "x", "x", "x", "x", "x", "x"], // meta row — must be skipped
 ];
 // Sheet 2 (T2): literal date headers (quarter-end dates) → cadence inferred as Q
 const wsData2 = [
@@ -111,18 +115,18 @@ function valueAt(rle: any[], idx: number): number | null {
   return rleDecode(rle, dates.length)[idx];
 }
 
-// Q1 2024 (period end 2024-03-31, value 1.11) should sit on the first earnings date after 3/31
+// Q1 2024 (period end 2024-03-31, value 1.4) should sit on the first earnings date after 3/31
 const q1Idx = expectedReportIdx(T1, "2024-03-31");
 check(
   `Q1'24 FFO stamped at report date (${dates[q1Idx]})`,
-  valueAt(t1Data["Fund: FFO/sh (Q)"], q1Idx) === 1.11,
+  valueAt(t1Data["Fund: FFO/sh (Q)"], q1Idx) === 1.4,
   `value at idx ${q1Idx} = ${valueAt(t1Data["Fund: FFO/sh (Q)"], q1Idx)}`,
 );
 // PE twin sits at the first trading day on/after 2024-03-31
 const q1PeIdx = firstIdxOnOrAfter("2024-03-31");
 check(
   `Q1'24 FFO PE-stamped at quarter end (${dates[q1PeIdx]})`,
-  valueAt(t1Data["Fund: FFO/sh (Q PE)"], q1PeIdx) === 1.11,
+  valueAt(t1Data["Fund: FFO/sh (Q PE)"], q1PeIdx) === 1.4,
   `value at idx ${q1PeIdx} = ${valueAt(t1Data["Fund: FFO/sh (Q PE)"], q1PeIdx)}`,
 );
 // Report stamp must be strictly AFTER the PE stamp (no lookahead)
@@ -135,6 +139,37 @@ check("paren negative parsed ((150))", valueAt(t1Data["Fund: Revenue (Q)"], revQ
 // H1 2024 → period end 2024-06-30, cadence H
 const h1Idx = expectedReportIdx(T1, "2024-06-30");
 check("1H24 stamped on H key", valueAt(t1Data["Fund: FFO/sh (H)"], h1Idx) === 2.32);
+
+// ── Derived series ──
+const near = (a: number | null, b: number, tol = 0.001) => a !== null && Math.abs(a - b) < tol;
+const q2Idx = expectedReportIdx(T1, "2024-06-30");
+// YoY% at Q1'24: (1.4 − 1.0) / 1.0 = +40%
+check("YoY% at Q1'24 = 40", near(valueAt(t1Data["Fund: FFO/sh YoY% (Q)"], q1Idx), 40),
+  `got ${valueAt(t1Data["Fund: FFO/sh YoY% (Q)"], q1Idx)}`);
+// TTM at Q1'24 = 1.1+1.2+1.3+1.4 = 5.0; at Q2'24 = 1.2+1.3+1.4+1.5 = 5.4
+check("TTM at Q1'24 = 5.0", near(valueAt(t1Data["Fund: FFO/sh TTM (Q)"], q1Idx), 5.0),
+  `got ${valueAt(t1Data["Fund: FFO/sh TTM (Q)"], q1Idx)}`);
+check("TTM at Q2'24 = 5.4", near(valueAt(t1Data["Fund: FFO/sh TTM (Q)"], q2Idx), 5.4),
+  `got ${valueAt(t1Data["Fund: FFO/sh TTM (Q)"], q2Idx)}`);
+// Accel at Q2'24: YoY(Q2)=36.3636 minus YoY(Q1)=40 → −3.6364 pp
+check("Accel at Q2'24 ≈ −3.64 pp", near(valueAt(t1Data["Fund: FFO/sh Accel (Q)"], q2Idx), -3.6364),
+  `got ${valueAt(t1Data["Fund: FFO/sh Accel (Q)"], q2Idx)}`);
+// P/TTM: daily close ÷ TTM; between the Q1'24 and Q2'24 prints TTM = 5.0
+{
+  const pttm = rleDecode(t1Data["Fund: FFO/sh P/TTM (Q)"], dates.length);
+  let j = q1Idx;
+  while (j < q2Idx && (j % 3 !== 0)) j++; // synthetic close prints every 3rd day
+  const expected = (100 + (j % 50)) / 5.0;
+  check(`P/TTM daily value at ${dates[j]} = close/5.0`, near(pttm[j], expected),
+    `got ${pttm[j]}, expected ${expected}`);
+}
+// FY Surprise%: FY2023 actual 4.04 vs flat FFO FY1 consensus 4.0 → +1%
+const fyIdx = expectedReportIdx(T1, "2023-12-31");
+check("FY'23 Surprise% = +1", near(valueAt(t1Data["Fund: FFO/sh Surprise% (FY)"], fyIdx), 1.0),
+  `got ${valueAt(t1Data["Fund: FFO/sh Surprise% (FY)"], fyIdx)}`);
+// Revenue has no estimate-family series ("Sales FY1" absent) → no surprise key
+check("no Revenue surprise (Sales FY1 absent)", !keys.includes("Fund: Revenue Surprise% (FY)"));
+check("derived keys counted in stats", stats.derivedKeys > 0, `got ${stats.derivedKeys}`);
 
 // ── T2: date headers inferred as quarterly ──
 const t2Data = JSON.parse(fs.readFileSync(path.join(TMP_DATA, "tickers", `${T2}.json`), "utf-8"));

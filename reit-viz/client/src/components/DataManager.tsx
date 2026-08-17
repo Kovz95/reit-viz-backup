@@ -1964,6 +1964,8 @@ function ServerFundamentalsSection() {
         Upload reported actuals (one sheet per ticker, metrics in column A, quarterly / half-year / annual
         periods across the top row). Values are stamped on each period's <strong>earnings report date</strong> —
         point-in-time, no lookahead — and persist server-side across sessions and deploys.
+        Derived series are computed automatically: YoY%, growth acceleration, TTM, a daily P/TTM
+        multiple, and FY Surprise% vs FY1 consensus (per-share metrics named FFO/AFFO/EPS/EBITDA/Sales).
       </p>
       {workbookNames.length > 0 && (
         <div className="space-y-1">

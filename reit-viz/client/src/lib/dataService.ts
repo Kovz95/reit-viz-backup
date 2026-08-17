@@ -311,6 +311,10 @@ const DECIMAL_TO_PERCENT_METRICS = new Set([
 // Percentages already stored in PERCENT units (e.g. 7.2 = 7.2%): only get a "%"
 // suffix, never re-scaled.
 function isPercentStoredMetric(metric: string): boolean {
+  // Uploaded fundamentals (and their derived YoY%/Accel/Surprise% series) are
+  // stored exactly as entered/computed — percent-point units when the name
+  // carries a "%". They get the suffix but must NEVER be ×100-rescaled.
+  if (metric.startsWith("Fund: ")) return metric.includes("%");
   return metric.includes("Chg%") || metric.includes("Interest%") || SI_DELTA_METRICS.has(metric);
 }
 
@@ -321,6 +325,9 @@ function isPercentStoredMetric(metric: string): boolean {
 // new/uncovered member silently rendering as a bare decimal (0.20 vs 20%).
 function isDecimalPercentMetric(metric: string): boolean {
   if (isPercentStoredMetric(metric)) return false; // already in percent units
+  // Uploaded fundamentals keep their as-entered scale — a user metric named
+  // "Fund: NOI Growth (Q)" must not be caught by the /growth/ heuristic below.
+  if (metric.startsWith("Fund: ")) return false;
   if (DECIMAL_TO_PERCENT_METRICS.has(metric)) return true;
   return /growth\b/i.test(metric)
     || /\byield\b/i.test(metric)

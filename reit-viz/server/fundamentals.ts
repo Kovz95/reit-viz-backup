@@ -20,11 +20,22 @@
  *   "Fund: <metric> (Q PE)" / "(H PE)" / "(FY PE)" ← period-end stamped
  * and appended to each ticker's metrics list in tickers.json, so every picker
  * in the client discovers them automatically.
+ *
+ * Derived series (report-date stamped only, computed at ingest):
+ *   "… YoY% (Q)"      vs same period one year earlier
+ *   "… Accel (Q)"     pp change in YoY vs the previous period
+ *   "… TTM (Q)"       rolling sum of 4 consecutive quarters (2 halves for H)
+ *   "… P/TTM (Q)"     DAILY close ÷ last-known TTM (an actuals-based multiple)
+ *   "… Surprise% (FY)" FY actual vs the inferred family's FY1 consensus as of
+ *                      the day before the print (no quarterly consensus exists
+ *                      in the workbook, so surprise is FY-cadence only; only
+ *                      meaningful when actuals share the estimate's per-share
+ *                      units)
  */
 import fs from "fs";
 import path from "path";
 import * as XLSX from "xlsx";
-import { rleEncode } from "./realign";
+import { rleDecode, rleEncode } from "./realign";
 
 export type Cadence = "Q" | "H" | "FY";
 
@@ -141,6 +152,18 @@ function parsePeriodCell(raw: unknown): { cadence: Cadence | "DATE"; periodEnd: 
   return null;
 }
 
+/** Map an uploaded metric name to the workbook's consensus-estimate family
+ *  (for Surprise% vs "<fam> FY1"). AFFO must be tested before FFO. */
+function inferEstimateFamily(name: string): "AFFO" | "FFO" | "EPS" | "EBITDA" | "Sales" | null {
+  const s = name.toLowerCase();
+  if (/affo/.test(s)) return "AFFO";
+  if (/ffo/.test(s)) return "FFO";
+  if (/\beps\b|earnings per/.test(s)) return "EPS";
+  if (/ebitda/.test(s)) return "EBITDA";
+  if (/revenue|sales/.test(s)) return "Sales";
+  return null;
+}
+
 function cleanNumeric(raw: unknown): number | null {
   if (raw == null || raw === "" || raw === false || raw === true) return null;
   if (typeof raw === "number") return isFinite(raw) ? raw : null;
@@ -249,6 +272,10 @@ export interface IngestStats {
   tickersUpdated: number;
   metricKeys: number;
   totalPoints: number;
+  /** Derived series keys (YoY%/Accel/TTM/P TTM/Surprise%) across tickers. */
+  derivedKeys: number;
+  /** Points in derived series (P/TTM is daily, so this can be large). */
+  derivedPoints: number;
   reportStamped: number;
   fallbackStamped: number;
   clamped: number;
@@ -297,6 +324,8 @@ export function ingestFundamentalsWorkbook(
     tickersUpdated: 0,
     metricKeys: 0,
     totalPoints: 0,
+    derivedKeys: 0,
+    derivedPoints: 0,
     reportStamped: 0,
     fallbackStamped: 0,
     clamped: 0,
@@ -354,15 +383,28 @@ export function ingestFundamentalsWorkbook(
       peIdx.push(p.periodEnd < firstDate ? -1 : firstIdxOnOrAfter(dates, p.periodEnd));
     }
 
+    // Read the ticker file up front — the derived series below need its close
+    // prices and FY1 estimate series.
+    let tickerData: Record<string, any>;
+    try {
+      tickerData = readJSON(tickerPath);
+    } catch {
+      stats.unknownTickers.push(sheet.ticker);
+      continue;
+    }
+
     // Build dense arrays per metric key (report-date + period-end twins)
     const denseByKey = new Map<string, (number | null)[]>();
-    const place = (key: string, idx: number, v: number) => {
+    const placeAs = (key: string, idx: number, v: number, derived: boolean) => {
       if (idx < 0) return;
       let dense = denseByKey.get(key);
       if (!dense) { dense = new Array(dates.length).fill(null); denseByKey.set(key, dense); }
       dense[idx] = Math.round(v * 10000) / 10000;
-      stats.totalPoints++;
+      if (derived) stats.derivedPoints++;
+      else stats.totalPoints++;
     };
+    const place = (key: string, idx: number, v: number) => placeAs(key, idx, v, false);
+    const placeDerived = (key: string, idx: number, v: number) => placeAs(key, idx, v, true);
     for (const metric of sheet.metrics) {
       for (let i = 0; i < sheet.periods.length; i++) {
         const v = metric.values[i];
@@ -372,16 +414,103 @@ export function ingestFundamentalsWorkbook(
         place(`Fund: ${metric.name} (${cad} PE)`, peIdx[i], v);
       }
     }
+    const baseKeyCount = denseByKey.size;
+
+    // ── Derived series (report-date stamped only — these exist for signals) ──
+    // YoY% (vs same period prior year), Accel (pp change in YoY vs previous
+    // period), TTM (rolling 4Q/2H sum over consecutive periods), daily P/TTM
+    // (close ÷ last-known TTM), and FY Surprise% (actual vs the <family> FY1
+    // consensus as of the day BEFORE the print — point-in-time correct).
+    const monthIdx = (iso: string) => +iso.slice(0, 4) * 12 + (+iso.slice(5, 7) - 1);
+    const STEP_MONTHS: Record<Cadence, number> = { Q: 3, H: 6, FY: 12 };
+    for (const metric of sheet.metrics) {
+      for (const cad of ["Q", "H", "FY"] as Cadence[]) {
+        const entries: { pe: string; v: number; rep: number }[] = [];
+        for (let i = 0; i < sheet.periods.length; i++) {
+          if (sheet.periods[i].cadence !== cad) continue;
+          const v = metric.values[i];
+          if (v === null || repIdx[i] < 0) continue;
+          entries.push({ pe: sheet.periods[i].periodEnd, v, rep: repIdx[i] });
+        }
+        if (entries.length === 0) continue;
+        const step = STEP_MONTHS[cad];
+        const byMonth = new Map(entries.map((e) => [monthIdx(e.pe), e]));
+
+        // YoY% + Accel
+        const yoyByMonth = new Map<number, number>();
+        for (const e of entries) {
+          const prior = byMonth.get(monthIdx(e.pe) - 12);
+          if (prior && Math.abs(prior.v) > 1e-12) {
+            const yoy = ((e.v - prior.v) / Math.abs(prior.v)) * 100;
+            yoyByMonth.set(monthIdx(e.pe), yoy);
+            placeDerived(`Fund: ${metric.name} YoY% (${cad})`, e.rep, yoy);
+          }
+        }
+        for (const e of entries) {
+          const m = monthIdx(e.pe);
+          const y = yoyByMonth.get(m);
+          const py = yoyByMonth.get(m - step);
+          if (y !== undefined && py !== undefined) {
+            placeDerived(`Fund: ${metric.name} Accel (${cad})`, e.rep, y - py);
+          }
+        }
+
+        // TTM (consecutive-period rolling sum) + daily P/TTM multiple
+        if (cad !== "FY") {
+          const need = cad === "Q" ? 4 : 2;
+          const ttmPrints: { rep: number; v: number }[] = [];
+          for (const e of entries) {
+            const m = monthIdx(e.pe);
+            let sum = 0;
+            let ok = true;
+            for (let k = 0; k < need; k++) {
+              const p = byMonth.get(m - k * step);
+              if (!p) { ok = false; break; }
+              sum += p.v;
+            }
+            if (ok) {
+              ttmPrints.push({ rep: e.rep, v: sum });
+              placeDerived(`Fund: ${metric.name} TTM (${cad})`, e.rep, sum);
+            }
+          }
+          if (ttmPrints.length > 0 && tickerData["close"]) {
+            const closeDense = rleDecode(tickerData["close"], dates.length);
+            ttmPrints.sort((a, b) => a.rep - b.rep);
+            const key = `Fund: ${metric.name} P/TTM (${cad})`;
+            let pi = 0;
+            let cur: number | null = null;
+            for (let i = ttmPrints[0].rep; i < dates.length; i++) {
+              while (pi < ttmPrints.length && ttmPrints[pi].rep <= i) { cur = ttmPrints[pi].v; pi++; }
+              const c = closeDense[i];
+              if (cur !== null && Math.abs(cur) > 1e-9 && c != null) {
+                placeDerived(key, i, c / cur);
+              }
+            }
+          }
+        }
+
+        // FY Surprise% vs the inferred family's FY1 consensus, as of print−1
+        if (cad === "FY") {
+          const fam = inferEstimateFamily(metric.name);
+          const estRle = fam ? tickerData[`${fam} FY1`] : undefined;
+          if (estRle) {
+            const est = rleDecode(estRle, dates.length);
+            for (let i = 1; i < est.length; i++) if (est[i] == null) est[i] = est[i - 1];
+            for (const e of entries) {
+              if (e.rep <= 0) continue;
+              const ev = est[e.rep - 1];
+              if (ev != null && Math.abs(ev) > 1e-12) {
+                placeDerived(`Fund: ${metric.name} Surprise% (FY)`, e.rep, ((e.v - ev) / Math.abs(ev)) * 100);
+              }
+            }
+          }
+        }
+      }
+    }
+    stats.derivedKeys += denseByKey.size - baseKeyCount;
     if (denseByKey.size === 0) continue;
 
     // Merge into the ticker's RLE file (replace same-named keys on re-upload)
-    let tickerData: Record<string, any>;
-    try {
-      tickerData = readJSON(tickerPath);
-    } catch {
-      stats.unknownTickers.push(sheet.ticker);
-      continue;
-    }
     for (const [key, dense] of denseByKey) {
       tickerData[key] = rleEncode(dense);
     }
