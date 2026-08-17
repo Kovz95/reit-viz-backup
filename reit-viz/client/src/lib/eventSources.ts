@@ -17,11 +17,21 @@
 
 import { mean, stdDev, type EventBundle } from "./eventStudy";
 import { getTickerEvents, getMacroEventDates } from "./dataService";
+import { printIndices } from "./fundMetrics";
 
 export type TechnicalConditionType = "sigma" | "high52" | "low52" | "gap";
 export type CalendarEventType = "earnings" | "ex_dividend" | "CPI" | "NFP" | "FOMC" | "GDP";
 export type CalendarConditionType = CalendarEventType | "month" | "window";
-export type StudyConditionType = TechnicalConditionType | CalendarConditionType;
+export type StudyConditionType = TechnicalConditionType | CalendarConditionType | "fundamental";
+
+/** Derived uploaded-fundamentals series a "fundamental" condition can gate on. */
+export type FundConditionKind = "Surprise%" | "YoY%" | "Accel";
+export const FUND_CONDITION_KINDS: FundConditionKind[] = ["Surprise%", "YoY%", "Accel"];
+export const FUND_KIND_LABELS: Record<FundConditionKind, string> = {
+  "Surprise%": "FY surprise vs consensus",
+  "YoY%": "YoY growth print",
+  "Accel": "Growth acceleration print",
+};
 
 export type SigmaDirection = "either" | "up" | "down";
 export type SigmaBasis = "rolling" | "full";
@@ -42,6 +52,12 @@ export interface StudyCondition {
   month: number;
   /** "MM-DD" anchors for type "window": fires on the first bar at/after startMMDD each year. */
   startMMDD: string;
+  // fundamental-print params (type "fundamental"): fires on report-date bars
+  // where the resolved uploaded-fundamentals derived series prints a value
+  // passing the comparator. The series arrives via opts.fundSeries.
+  fundKind: FundConditionKind;
+  fundOp: "gte" | "lte";
+  fundThreshold: number;
   /** Backward smear: condition counts as firing at bar i if its raw mask
    *  fired in [i-withinBars, i] (i.e. up to N bars EARLIER — one-sided). */
   withinBars: number;
@@ -60,6 +76,7 @@ export function newStudyCondition(type: StudyConditionType = "sigma"): StudyCond
     sigma: 2, sigmaWindow: 60, sigmaDirection: "either", sigmaBasis: "rolling",
     gapPct: 2, gapDirection: "either",
     month: new Date().getMonth() + 1, startMMDD: "01-01",
+    fundKind: "Surprise%", fundOp: "gte", fundThreshold: 2,
     withinBars: 0,
   };
 }
@@ -84,6 +101,10 @@ export function studyConditionLabel(c: StudyCondition): string {
   }
   if (c.type === "month") return `Start of ${MONTH_NAMES[(c.month - 1 + 12) % 12]}${within}`;
   if (c.type === "window") return `Yearly window ${c.startMMDD}${within}`;
+  if (c.type === "fundamental") {
+    const op = c.fundOp === "gte" ? "≥" : "≤";
+    return `${FUND_KIND_LABELS[c.fundKind] ?? c.fundKind} ${op} ${c.fundThreshold}${within}`;
+  }
   return `${CAL_LABELS[c.type as CalendarEventType] ?? c.type}${within}`;
 }
 
@@ -169,11 +190,18 @@ function dailyReturns(closes: (number | null)[]): (number | null)[] {
  *  verbatim port of PriceAction's computeConditionMask; calendar branches mark
  *  the mapped bars with that day's % move as the trigger value (0 when the
  *  move is unavailable). */
+export interface StudyMaskOpts {
+  extremeWindow?: number;
+  /** Uploaded-fundamentals derived series (forward-filled onto the bundle's
+   *  bars), keyed by kind — required for type "fundamental" conditions. */
+  fundSeries?: Partial<Record<FundConditionKind, (number | null)[]>>;
+}
+
 export function computeStudyMask(
   cond: StudyCondition,
   bundle: EventBundle,
   calendar?: CalendarDates | null,
-  opts?: { extremeWindow?: number },
+  opts?: StudyMaskOpts,
 ): ConditionMask {
   // "52-week" extreme lookback in BARS — 252 on daily bars; coarse-bar
   // studies pass 52 (weekly) / 12 (monthly) so the condition keeps meaning
@@ -253,6 +281,18 @@ export function computeStudyMask(
       else fire = gap <= -cond.gapPct;
       if (fire) { mask[i] = true; value[i] = gap; }
     }
+  } else if (cond.type === "fundamental") {
+    // Fires on report-date bars (prints of the forward-filled derived series)
+    // that pass the comparator; the trigger value is the print itself, so the
+    // study's trigger-value column reads as surprise/growth magnitude.
+    const series = opts?.fundSeries?.[cond.fundKind];
+    if (series && series.length === n) {
+      for (const i of printIndices(series)) {
+        const v = series[i]!;
+        const fire = cond.fundOp === "gte" ? v >= cond.fundThreshold : v <= cond.fundThreshold;
+        if (fire) { mask[i] = true; value[i] = v; }
+      }
+    }
   } else {
     // Calendar branches — resolve trigger bar indices, mark with day's % move.
     const rets = dailyReturns(closes);
@@ -292,7 +332,7 @@ export function warmupFor(cond: StudyCondition, extremeWindow = 252): number {
   if (cond.type === "sigma") return cond.sigmaBasis === "full" ? 30 : cond.sigmaWindow + 2;
   if (cond.type === "high52" || cond.type === "low52") return extremeWindow + 1;
   if (cond.type === "gap") return 2;
-  return 1;
+  return 1; // calendar + fundamental prints need only the prior bar's close
 }
 
 /** Smear a mask forward: out[i] fires if mask fired anywhere in [i-within, i]. */
@@ -317,7 +357,7 @@ export function combineConditions(
   bundle: EventBundle,
   combinator: "AND" | "OR",
   calendar?: CalendarDates | null,
-  opts?: { extremeWindow?: number },
+  opts?: StudyMaskOpts,
 ): Array<{ idx: number; val: number }> {
   const n = bundle.closes.length;
   const valid = conditions.filter(Boolean);

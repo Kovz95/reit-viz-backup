@@ -18,6 +18,7 @@ import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { fetchOhlcSeries } from "@/lib/fetchOhlcSeries";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { getMetricSeries } from "@/lib/dataService";
+import { isFundPattern, resolveFundPattern } from "@/lib/fundMetrics";
 import {
   signalsForBundle,
   requiredValuationMetrics,
@@ -86,6 +87,10 @@ export const BAR_MODE_DEFAULTS: Record<
   monthly: { cooldown: 1, firingLookbackBars: 2, freqFloorPerYear: 0.25, valuationFreqFloorPerYear: 0.25, minOccurrences: 5 },
 };
 
+/** Fundamental print-grain signals fire ≤ ~4/yr (FY surprise: 1/yr) — their
+ *  frequency floor caps well below the valuation family's. */
+const FUND_FREQ_FLOOR = 0.3;
+
 export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   mode: "single",
   barMode: "daily",
@@ -97,7 +102,7 @@ export const DEFAULT_SWEEP_SETTINGS: SweepSettings = {
   targetPct: 5,
   cooldown: 10,
   firingLookbackBars: 5,
-  families: ["technical", "event", "valuation", "pair"],
+  families: ["technical", "event", "valuation", "fundamental", "pair"],
   enabledSignalIds: [],
   pairCohortDim: "subindustry",
   pairSource: "cohort",
@@ -219,7 +224,12 @@ async function buildSingleBundle(
     const fetched = await Promise.all(
       valuationMetrics.map(async (m) => {
         try {
-          const pts = await getMetricSeries(ticker, m);
+          // "Fund:* <kind>" patterns resolve per ticker to the best concrete
+          // uploaded-fundamentals key; the series is stored under the PATTERN
+          // key so pattern-based signals can look it up uniformly.
+          const actual = isFundPattern(m) ? await resolveFundPattern(ticker, m) : m;
+          if (!actual) return [m, null] as const;
+          const pts = await getMetricSeries(ticker, actual);
           return [m, alignMetricToDates(pts ?? [], dates)] as const;
         } catch {
           return [m, null] as const;
@@ -414,7 +424,11 @@ function evaluateBundle(bundle: SeriesBundle, settings: SweepSettings): Qualifie
         const freqFloor =
           sig.family === "valuation"
             ? settings.valuationFreqFloorPerYear
-            : settings.freqFloorPerYear;
+            : sig.family === "fundamental"
+              // Print-grain signals fire at most ~4/yr (quarterly reports; FY
+              // surprise once a year) — the valuation floor would kill them.
+              ? Math.min(settings.valuationFreqFloorPerYear, FUND_FREQ_FLOOR)
+              : settings.freqFloorPerYear;
         if (freqPerYear < freqFloor) continue;
 
         // Firing fields all come from the raw detector indices (pre-cooldown):
@@ -472,7 +486,7 @@ export async function runUniversalSweep(opts: {
 }): Promise<QualifiedSetup[]> {
   const { settings, onProgress, onRows, cancelRef } = opts;
   const minBars = Math.round(settings.minYearsData * 252);
-  const valMetrics = settings.families.includes("valuation")
+  const valMetrics = settings.families.some((f) => f === "valuation" || f === "fundamental")
     ? requiredValuationMetrics(new Set(settings.enabledSignalIds))
     : [];
 

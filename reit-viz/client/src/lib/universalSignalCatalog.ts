@@ -27,8 +27,9 @@ import {
   type OhlcBar,
 } from "@/lib/indicators";
 import { computeFracDiff, computeRobustZScore, computeMinMaxNorm, computeRegResidual, computeRollingPercentile, computePctBandPosition, computeWinsorizedZScore, computeIqrPosition, computeRankRoc, computePersistence, computePctileDispersion, computeTDSequential, computeDeMarker, computeTDREI } from "@/lib/quantIndicators";
+import { fundPattern, printIndices } from "@/lib/fundMetrics";
 
-export type SignalFamily = "technical" | "event" | "valuation" | "pair";
+export type SignalFamily = "technical" | "event" | "valuation" | "fundamental" | "pair";
 export type SignalDirection = "long" | "short";
 
 export interface SeriesBundle {
@@ -1185,6 +1186,108 @@ const valuationSignals: CatalogSignal[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Fundamentals family — uploaded historical actuals (server-ingested "Fund: "
+// metrics + their at-ingest derived series). Metric names are user-defined, so
+// signals reference "Fund:* <kind>" PATTERNS; the sweep's bundle builder
+// resolves each pattern per ticker (lib/fundMetrics) and stores the fetched
+// series under the PATTERN key, which is what detect() looks up here.
+// Print-based detectors fire on report-date bars (where the forward-filled
+// series changes value) — the natural event grain of quarterly data.
+// ---------------------------------------------------------------------------
+
+const FUND_ACCEL = fundPattern("Accel");
+const FUND_YOY = fundPattern("YoY%");
+const FUND_SURPRISE = fundPattern("Surprise%");
+const FUND_PTTM = fundPattern("P/TTM");
+
+const fundamentalSignals: CatalogSignal[] = [
+  {
+    id: "fund.accel_flip",
+    family: "fundamental",
+    label: "Growth acceleration flips sign",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: [FUND_ACCEL] },
+    paramPresets: [{ id: "flip", label: "YoY accel flips ±", params: {} }],
+    // Long: this print's YoY acceleration turns positive after a non-positive
+    // print (fundamental momentum inflecting up). Short: the mirror.
+    detect: (b, _p, dir) => {
+      const s = b.valuation?.[FUND_ACCEL];
+      if (!s) return [];
+      const prints = printIndices(s);
+      const out: number[] = [];
+      for (let k = 1; k < prints.length; k++) {
+        const cur = s[prints[k]]!;
+        const prev = s[prints[k - 1]]!;
+        if (dir === "long" ? cur > 0 && prev <= 0 : cur < 0 && prev >= 0) out.push(prints[k]);
+      }
+      return out;
+    },
+  },
+  {
+    id: "fund.yoy_print",
+    family: "fundamental",
+    label: "YoY growth print beyond threshold",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: [FUND_YOY] },
+    paramPresets: [
+      { id: "g0", label: "print > 0 / < 0", params: { g: 0 } },
+      { id: "g5", label: "print ≥ +5% / ≤ −5%", params: { g: 5 } },
+    ],
+    detect: (b, p, dir) => {
+      const s = b.valuation?.[FUND_YOY];
+      if (!s) return [];
+      const g = Number(p.g);
+      return printIndices(s).filter((i) =>
+        dir === "long" ? s[i]! > g : s[i]! < -g,
+      );
+    },
+  },
+  {
+    id: "fund.surprise_print",
+    family: "fundamental",
+    label: "FY surprise beat/miss vs consensus",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: [FUND_SURPRISE] },
+    paramPresets: [
+      { id: "s2", label: "beat/miss ≥ 2%", params: { s: 2 } },
+      { id: "s5", label: "beat/miss ≥ 5%", params: { s: 5 } },
+    ],
+    detect: (b, p, dir) => {
+      const series = b.valuation?.[FUND_SURPRISE];
+      if (!series) return [];
+      const s = Number(p.s);
+      return printIndices(series).filter((i) =>
+        dir === "long" ? series[i]! >= s : series[i]! <= -s,
+      );
+    },
+  },
+  {
+    id: "fund.pttm_z",
+    family: "fundamental",
+    label: "P/TTM (actuals multiple) z extreme",
+    mode: "single",
+    directions: ["long", "short"],
+    requires: { valuation: [FUND_PTTM] },
+    paramPresets: [
+      { id: "z15", label: "252d ±1.5σ", params: { z: 1.5 } },
+      { id: "z2", label: "252d ±2σ", params: { z: 2 } },
+    ],
+    // The P/TTM derived series is DAILY (close ÷ last-known TTM), so this
+    // behaves like the other valuation z signals — cheap vs own history longs.
+    detect: (b, p, dir) => {
+      const series = b.valuation?.[FUND_PTTM];
+      if (!series) return [];
+      const z = rollingZScoreN(series, 252);
+      const lim = Number(p.z);
+      return detectCrossings(z, dir === "long" ? (v) => v <= -lim : (v) => v >= lim);
+    },
+  },
+];
+
 /** Union of valuation metric keys needed by a set of enabled signal ids. */
 export function requiredValuationMetrics(enabledIds: Set<string>): string[] {
   const metrics = new Set<string>();
@@ -1319,6 +1422,7 @@ export const UNIVERSAL_SIGNAL_CATALOG: CatalogSignal[] = [
   ...technicalSignals,
   ...eventSignals,
   ...valuationSignals,
+  ...fundamentalSignals,
   ...pairSignals,
 ];
 

@@ -105,6 +105,7 @@ const FAMILY_LABELS: Record<SignalFamily, string> = {
   technical: "Technical",
   event: "Events",
   valuation: "Valuation",
+  fundamental: "Fundamentals",
   pair: "Pairs",
 };
 

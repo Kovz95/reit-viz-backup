@@ -45,9 +45,12 @@ import {
 } from "@/lib/eventStudy";
 import {
   newStudyCondition, studyConditionLabel, combineConditions, isCalendarType,
-  fetchCalendarDates,
+  fetchCalendarDates, FUND_CONDITION_KINDS, FUND_KIND_LABELS,
   type StudyCondition, type StudyConditionType, type CalendarDates,
+  type FundConditionKind,
 } from "@/lib/eventSources";
+import { resolveFundPattern, fundPattern, forwardFillOnDates } from "@/lib/fundMetrics";
+import { getMetricSeries } from "@/lib/dataService";
 
 // Inline icon creation (from bundle)
 const UserIcon = createLucideIcon("User", [
@@ -98,12 +101,17 @@ function barWord(mode: StudyBarMode, n: number): string {
 }
 
 // ── Study wrapper over the shared libs ─────────────────────────────────────────
+/** Sparse fundamentals prints per kind — forward-filled onto the (possibly
+ *  resampled) bar axis inside computeStudy, so coarse bar modes stay correct. */
+type FundPts = Partial<Record<FundConditionKind, { time: string; value: number }[]>>;
+
 function computeStudy(
   bundle: EventBundle,
   conditions: StudyCondition[],
   combinator: "AND" | "OR",
   calendar: CalendarDates | null,
   barMode: StudyBarMode = "daily",
+  fundPts: FundPts | null = null,
 ): StudyResult {
   const validConds = conditions.filter(Boolean);
   const horizons = HORIZONS_BY_BAR_MODE[barMode];
@@ -112,14 +120,40 @@ function computeStudy(
   // so conditions AND horizons are bar-denominated (a 2σ weekly move, +3
   // months forward). Calendar dates map onto the containing coarse bar.
   const b = resampleEventBundle(bundle, barMode);
+  const fundSeries = fundPts
+    ? Object.fromEntries(
+        Object.entries(fundPts).map(([k, pts]) => [k, forwardFillOnDates(pts ?? [], b.dates)]),
+      )
+    : undefined;
   const hits = combineConditions(validConds, b, combinator, calendar, {
     extremeWindow: EXTREME_WINDOW_BY_BAR_MODE[barMode],
+    fundSeries,
   });
   return runEventStudy(b, hits, { horizons });
 }
 
 function needsCalendar(conditions: StudyCondition[]): boolean {
   return conditions.some(c => isCalendarType(c.type));
+}
+
+/** Fetch the sparse prints of every fundamentals kind the conditions gate on
+ *  (resolved per symbol from the uploaded "Fund: " metrics; null when the
+ *  study has no fundamental condition or the symbol has no matching upload). */
+async function fetchFundPts(symbol: string, conditions: StudyCondition[]): Promise<FundPts | null> {
+  const kinds = [...new Set(
+    conditions.filter(c => c?.type === "fundamental").map(c => c.fundKind),
+  )] as FundConditionKind[];
+  if (kinds.length === 0) return null;
+  const out: FundPts = {};
+  await Promise.all(kinds.map(async (kind) => {
+    try {
+      const metric = await resolveFundPattern(symbol, fundPattern(kind));
+      if (!metric) return;
+      const pts = await getMetricSeries(symbol, metric);
+      if (pts && pts.length > 0) out[kind] = pts;
+    } catch { /* symbol has no matching fundamentals — condition yields no events */ }
+  }));
+  return out;
 }
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -180,6 +214,7 @@ function ConditionEditor({ cond, onChange, onRemove, canRemove }: {
             <SelectItem value="GDP">GDP</SelectItem>
             <SelectItem value="month">Start of month</SelectItem>
             <SelectItem value="window">Yearly window</SelectItem>
+            <SelectItem value="fundamental">Fundamental print</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -258,6 +293,38 @@ function ConditionEditor({ cond, onChange, onRemove, canRemove }: {
             onChange={e => set("startMMDD", e.target.value)} className="h-8"
             data-testid="input-window-start" />
         </div>
+      )}
+      {cond.type === "fundamental" && (
+        <>
+          <div className="flex flex-col gap-1 w-[190px]">
+            <Label className="text-xs text-muted-foreground">Series</Label>
+            <Select value={cond.fundKind ?? "Surprise%"} onValueChange={v => set("fundKind", v as FundConditionKind)}>
+              <SelectTrigger className="h-8" data-testid="select-fund-kind"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {FUND_CONDITION_KINDS.map(k => (
+                  <SelectItem key={k} value={k}>{FUND_KIND_LABELS[k]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1 w-[80px]">
+            <Label className="text-xs text-muted-foreground">Op</Label>
+            <Select value={cond.fundOp ?? "gte"} onValueChange={v => set("fundOp", v)}>
+              <SelectTrigger className="h-8" data-testid="select-fund-op"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gte">≥</SelectItem>
+                <SelectItem value="lte">≤</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1 w-[100px]">
+            <Label className="text-xs text-muted-foreground">Threshold</Label>
+            <Input type="number" step="0.5" value={cond.fundThreshold ?? 2}
+              onChange={e => set("fundThreshold", parseFloat(e.target.value) || 0)} className="h-8"
+              data-testid="input-fund-threshold"
+              title="Percent for Surprise%/YoY%, percentage points for Accel. Fires on report-date prints of the uploaded fundamentals (Data Manager → Historical Fundamentals)." />
+          </div>
+        </>
       )}
       <div className="flex flex-col gap-1 w-[80px]">
         <Label className="text-xs text-muted-foreground">≤bars prior</Label>
@@ -592,11 +659,12 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     queryKey: ["ticker-raw-sf", runConfig?.symbol, runConfig?.nonce],
     queryFn: async () => {
       if (!runConfig || runConfig.mode !== "single") return null;
-      const [series, calendar] = await Promise.all([
+      const [series, calendar, fundPts] = await Promise.all([
         loadAnySeries(runConfig.symbol),
         needsCalendar(runConfig.conditions) ? fetchCalendarDates(runConfig.symbol) : Promise.resolve(null),
+        fetchFundPts(runConfig.symbol, runConfig.conditions),
       ]);
-      return { series, calendar };
+      return { series, calendar, fundPts };
     },
     enabled: !!runConfig && runConfig.mode === "single" && dates.length > 0,
   });
@@ -605,7 +673,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     if (!runConfig || runConfig.mode !== "single" || !singleData?.series) return null;
     const s = singleData.series;
     const bundle: EventBundle = { dates: s.dates, closes: s.closes, opens: s.opens };
-    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, singleData.calendar, runConfig.barMode);
+    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, singleData.calendar, runConfig.barMode, singleData.fundPts);
   }, [runConfig, singleData]);
 
   // Pairs query (calendar dates come from symbol A when a calendar condition exists)
@@ -613,12 +681,14 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
     queryKey: ["ticker-raw-sf-pairs", runConfig?.symbol, runConfig?.symbolB, runConfig?.nonce],
     queryFn: async () => {
       if (!runConfig || runConfig.mode !== "pairs" || !runConfig.symbolB) return null;
-      const [a, b, calendar] = await Promise.all([
+      const [a, b, calendar, fundPts] = await Promise.all([
         loadAnySeries(runConfig.symbol),
         loadAnySeries(runConfig.symbolB),
         needsCalendar(runConfig.conditions) ? fetchCalendarDates(runConfig.symbol) : Promise.resolve(null),
+        // Like the calendar, fundamentals come from leg A.
+        fetchFundPts(runConfig.symbol, runConfig.conditions),
       ]);
-      return { a, b, calendar };
+      return { a, b, calendar, fundPts };
     },
     enabled: !!runConfig && runConfig.mode === "pairs" && !!runConfig.symbolB && dates.length > 0,
   });
@@ -654,7 +724,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
       }
       bundle = { dates: dts, closes: ratioClose, opens: ratioOpen };
     }
-    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, pairsData.calendar, runConfig.barMode);
+    return computeStudy(bundle, runConfig.conditions, runConfig.combinator, pairsData.calendar, runConfig.barMode, pairsData.fundPts);
   }, [runConfig, pairsData, dates]);
 
   const runCrossStudy = useCallback(async (cfg: { tickers: Array<{ ticker: string; name: string }>; conditions: StudyCondition[]; combinator: "AND" | "OR"; barMode: StudyBarMode }) => {
@@ -671,9 +741,10 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
         const t = cfg.tickers[idx];
         try {
           // Per-ticker calendar fetch is cheap: macro dates are shared/cached by dataService.
-          const [raw, calendar] = await Promise.all([
+          const [raw, calendar, fundPts] = await Promise.all([
             getTickerRaw(t.ticker),
             needsCal ? fetchCalendarDates(t.ticker) : Promise.resolve(null),
+            fetchFundPts(t.ticker, cfg.conditions),
           ]);
           const close = extractColumn(raw, "close", dates.length);
           const open = extractColumn(raw, "open", dates.length);
@@ -681,7 +752,7 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
           // per ticker (the old page double-counted no-data tickers).
           if (!close.length) continue;
           const bundle: EventBundle = { dates, closes: close, opens: open };
-          const res = computeStudy(bundle, cfg.conditions, cfg.combinator, calendar, cfg.barMode);
+          const res = computeStudy(bundle, cfg.conditions, cfg.combinator, calendar, cfg.barMode, fundPts);
           results.push({ ticker: t.ticker, name: t.name, events: res.events.length, stats: res.stats, baseline: res.baseline, eventRows: res.events });
         } catch {} finally {
           setCrossProgress(p => p ? { ...p, done: p.done + 1 } : null);
