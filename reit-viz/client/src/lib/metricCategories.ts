@@ -21,6 +21,8 @@ export const CATEGORY_ORDER = [
   "Estimates (FY1/FY2)",
   "Estimates (Next Qtr)",
   "Guidance",
+  "Fundamentals (Reported)",
+  "Fundamentals (Period-End)",
   "Reported (LTM / FY0)",
   "REIT / EPRA",
   "Banks",
@@ -49,6 +51,11 @@ const RULES: Array<[string, (m: string) => boolean]> = [
   // Pseudo-metrics resolved per ticker from the Universe-tab default-metric
   // rules — surfaced in their own section at the very top of every picker.
   ["Default", (m) => /\(Default\)$/.test(m)],
+  // Uploaded historical actuals ("Fund: <name> (Q)" report-date stamped,
+  // "Fund: <name> (Q PE)" period-end stamped) — must precede the generic
+  // growth/valuation/yield rules so e.g. "Fund: FFO Growth (Q)" stays here.
+  ["Fundamentals (Period-End)", (m) => /^fund: .*\bPE\)$/i.test(m)],
+  ["Fundamentals (Reported)", (m) => /^fund: /i.test(m)],
   ["Price", (m) => ["close", "open", "high", "low"].includes(m)],
   ["Volume & Liquidity", (m) => /\bvolume\b|avg daily/i.test(m)],
   ["Ratings & Sentiment", (m) => /ratings|\bbull\b|\bbear\b|short interest|^si /i.test(m)],

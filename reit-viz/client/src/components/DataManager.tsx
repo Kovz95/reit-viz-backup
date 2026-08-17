@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Database, Upload, CheckCircle2, AlertCircle, Loader2, GitMerge, Replace, ArrowRight, Check, X, ChevronDown, ChevronRight, FileSpreadsheet, Search, Clock, Trash2 } from "lucide-react";
@@ -1681,6 +1681,11 @@ export default function DataManager() {
             <span className="text-xs font-semibold text-foreground">Supplementary Data</span>
           </div>
 
+          {/* Historical fundamentals (server-persistent, report-date stamped) */}
+          <ServerFundamentalsSection />
+
+          <div className="border-t border-border" />
+
           {/* Fundamental Data Upload */}
           <FundamentalUploadSection />
 
@@ -1851,6 +1856,200 @@ export default function DataManager() {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── Historical Fundamentals (server-persistent, inside Supplementary Data) ──
+// Uploads a tab-per-company actuals workbook to the server, which stamps each
+// period's value on its earnings report date (point-in-time) and merges the
+// series into the per-ticker data files as "Fund: <metric> (Q/H/FY)" keys.
+function ServerFundamentalsSection() {
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [meta, setMeta] = useState<{
+    loaded: boolean;
+    workbookCount?: number;
+    tickersUpdated?: number;
+    totalPoints?: number;
+    updatedAt?: string;
+    workbooks?: Record<string, { tickersUpdated?: number; totalPoints?: number; uploadedAt?: string }>;
+  } | null>(null);
+
+  const fetchMeta = useCallback(async () => {
+    try {
+      const resp = await apiRequest("GET", "/api/data/fundamentals-meta");
+      setMeta(await resp.json());
+    } catch {
+      // Static-only deployment — leave the card upload-only
+    }
+  }, []);
+
+  useEffect(() => { fetchMeta(); }, [fetchMeta]);
+
+  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setUploading(true);
+    setResult(null);
+    setError(null);
+    const okMsgs: string[] = [];
+    const errs: string[] = [];
+    for (const file of files) {
+      try {
+        const formData = new FormData();
+        formData.append("workbook", file);
+        const resp = await fetch(`${API_BASE || ""}/api/data/fundamentals-upload`, {
+          method: "POST",
+          body: formData,
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        let msg = `${file.name}: ${data.tickersUpdated} tickers, ${data.metricKeys} metric series, ` +
+          `${(data.totalPoints || 0).toLocaleString()} pts (${data.reportStamped} on report dates, ${data.fallbackStamped} lag-stamped)`;
+        if (data.unknownTickers?.length) msg += `. Unmatched tickers: ${data.unknownTickers.join(", ")}`;
+        if (data.skippedSheets?.length) msg += `. Skipped sheets: ${data.skippedSheets.join(", ")}`;
+        okMsgs.push(msg);
+      } catch (err: any) {
+        errs.push(`${file.name}: ${err.message || "Upload failed"}`);
+      }
+    }
+    if (okMsgs.length > 0) {
+      setResult(okMsgs.join(" | "));
+      clearAllCaches();
+      queryClient.invalidateQueries();
+      fetchMeta();
+      toast({ title: "Fundamentals updated", description: `${okMsgs.length} workbook(s) ingested` });
+    }
+    if (errs.length > 0) setError(errs.join(" | "));
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }, [fetchMeta, toast]);
+
+  const handleRemove = useCallback(async () => {
+    setRemoving(true);
+    try {
+      const resp = await apiRequest("POST", "/api/data/wipe-fundamentals");
+      const data = await resp.json();
+      if (!resp.ok) {
+        toast({ title: "Remove failed", description: data.error || "Unknown error", variant: "destructive" });
+      } else {
+        toast({ title: "Fundamentals removed", description: `Stripped fundamentals from ${data.strippedFiles} ticker file(s).` });
+        setResult(null);
+        clearAllCaches();
+        queryClient.invalidateQueries();
+        fetchMeta();
+        setConfirmRemove(false);
+      }
+    } catch (err: any) {
+      toast({ title: "Remove failed", description: err.message || "Network error", variant: "destructive" });
+    } finally {
+      setRemoving(false);
+    }
+  }, [fetchMeta, toast]);
+
+  const workbookNames = meta?.loaded && meta.workbooks ? Object.keys(meta.workbooks) : [];
+
+  return (
+    <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-2.5 space-y-2">
+      <div className="flex items-center gap-2">
+        <FileSpreadsheet className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+        <span className="text-xs font-medium text-foreground">Historical Fundamentals (Server)</span>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Upload reported actuals (one sheet per ticker, metrics in column A, quarterly / half-year / annual
+        periods across the top row). Values are stamped on each period's <strong>earnings report date</strong> —
+        point-in-time, no lookahead — and persist server-side across sessions and deploys.
+      </p>
+      {workbookNames.length > 0 && (
+        <div className="space-y-1">
+          {workbookNames.map((name) => {
+            const wb = meta!.workbooks![name];
+            return (
+              <div key={name} className="flex items-center gap-1.5 px-2 py-1 rounded bg-sky-500/10 border border-sky-500/20 text-[11px]">
+                <FileSpreadsheet className="w-3 h-3 text-sky-400 flex-shrink-0" />
+                <span className="truncate flex-1 text-foreground" title={name}>{name}</span>
+                <span className="text-[9px] text-muted-foreground/60 flex-shrink-0">
+                  {wb.tickersUpdated ?? 0}t / {(wb.totalPoints ?? 0).toLocaleString()}pts
+                  {wb.uploadedAt && <> · {new Date(wb.uploadedAt).toLocaleDateString()}</>}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx,.xlsm,.xlsb,.xls"
+          multiple
+          className="hidden"
+          onChange={handleUpload}
+          data-testid="fundamentals-file-input"
+        />
+        <Button
+          variant="outline" size="sm" className="h-8 text-xs gap-1.5 w-full"
+          onClick={() => fileRef.current?.click()} disabled={uploading}
+          data-testid="fundamentals-upload-btn"
+        >
+          {uploading ? (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Ingesting fundamentals...</>
+          ) : (
+            <><Upload className="w-3.5 h-3.5" /> Upload Fundamentals Workbook(s)</>
+          )}
+        </Button>
+      </div>
+      {workbookNames.length > 0 && (
+        <div className="flex items-center gap-2">
+          {!confirmRemove ? (
+            <Button
+              variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive"
+              onClick={() => setConfirmRemove(true)}
+              title="Remove all server-side fundamental data from all tickers"
+              data-testid="fundamentals-remove-btn"
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Remove
+            </Button>
+          ) : (
+            <>
+              <span className="text-[11px] text-muted-foreground">Remove all fundamentals from all tickers?</span>
+              <Button variant="ghost" size="sm" className="h-7 text-xs ml-auto" onClick={() => setConfirmRemove(false)} disabled={removing}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive" size="sm" className="h-7 text-xs"
+                onClick={handleRemove} disabled={removing}
+                data-testid="fundamentals-remove-confirm-btn"
+              >
+                {removing ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> Removing...</>
+                ) : (
+                  "Remove"
+                )}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {result && (
+        <div className="flex items-start gap-2 text-xs text-green-400 bg-green-500/10 rounded-md p-2">
+          <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+          <div>{result}</div>
+        </div>
+      )}
+      {error && (
+        <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded-md p-2">
+          <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+          <div>{error}</div>
+        </div>
+      )}
+    </div>
   );
 }
 

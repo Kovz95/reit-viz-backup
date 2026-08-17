@@ -12,6 +12,7 @@ import { registerChatRoute } from "./chatRoute";
 // dist/, so macro dates must ride inside the bundle, not as a loose file.
 import macroEventsJson from "./macro-events.json";
 import { realignTickerFiles, rleDecode, rleEncode, type RleArray } from "./realign";
+import { ingestFundamentalsWorkbook, wipeFundamentals } from "./fundamentals";
 import { computeRvVerdictBatch } from "./rvVerdict";
 import { fetchYahooPrices, clearCache } from "./yahooPrices";
 import { fetchYahooIntraday } from "./intradayPrices";
@@ -4994,6 +4995,54 @@ export async function registerRoutes(server: Server, app: Express) {
 
       datesCache = null;
       res.json({ ok: true, strippedFiles, totalChecked, metaUpdated });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Historical fundamentals metadata ──
+  app.get("/api/data/fundamentals-meta", (_req, res) => {
+    const metaFile = path.join(DATA_DIR, "fundamentals-meta.json");
+    if (!fs.existsSync(metaFile)) {
+      return res.json({ loaded: false });
+    }
+    try {
+      const meta = readJSON(metaFile);
+      return res.json({ loaded: true, ...meta });
+    } catch {
+      return res.json({ loaded: false });
+    }
+  });
+
+  // ── Upload a historical-fundamentals workbook (one sheet per ticker,
+  //    metrics in column A, Q/H/FY periods across the header row) ──
+  app.post("/api/data/fundamentals-upload", safeUploadSingle("workbook"), (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    const uploadedPath = req.file.path;
+    const workbookName = req.file.originalname;
+    try {
+      console.log(`[fundamentals-upload] Parsing ${workbookName} (${(req.file.size / 1024 / 1024).toFixed(1)} MB)...`);
+      const stats = ingestFundamentalsWorkbook(uploadedPath, DATA_DIR, workbookName, req.file.size);
+      console.log(
+        `[fundamentals-upload] ${stats.tickersUpdated} tickers, ${stats.metricKeys} metric keys, ` +
+        `${stats.totalPoints} points (${stats.reportStamped} report-dated, ${stats.fallbackStamped} fallback-lagged)`,
+      );
+      res.json({ success: true, ...stats });
+    } catch (e: any) {
+      console.error("[fundamentals-upload] Error:", e);
+      res.status(500).json({ error: e.message });
+    } finally {
+      try { fs.unlinkSync(uploadedPath); } catch (_) {}
+    }
+  });
+
+  // ── Wipe the historical-fundamentals data layer (all "Fund: " keys) ──
+  app.post("/api/data/wipe-fundamentals", (_req, res) => {
+    try {
+      const result = wipeFundamentals(DATA_DIR);
+      res.json({ ok: true, ...result });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
