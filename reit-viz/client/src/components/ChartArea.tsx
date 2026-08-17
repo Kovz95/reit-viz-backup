@@ -10,6 +10,7 @@ import {
   fillDailyOntoHourlyAxis,
   alignIntradayToAxis,
   snapDatesToAxisDates,
+  snapSeriesToAxisDates,
   datesToAxisTimestamps,
   type ChartFrequency,
 } from "@/lib/chartFrequency";
@@ -1082,15 +1083,18 @@ export default function ChartArea({
     if (frequency === "daily") return null;
 
     if (frequency === "weekly" || frequency === "monthly") {
+      const baseOhlc: any[] = (activeTicker ? ohlcCache[activeTicker] : ohlcData) || [];
+      const axisDates = downsampleOhlc(baseOhlc, frequency).map((b: any) => b.time);
       const sbp: Record<number, PlottedSeries[]> = {};
       for (const [pid, list] of Object.entries(seriesByPane)) {
         sbp[Number(pid)] = (list as PlottedSeries[]).map((s) => ({
           ...s,
-          data: downsampleSeries(s.data as any, frequency) as any,
+          // Downsample to period bars, then snap onto the shared axis — sparse
+          // report-date series (fundamentals prints) keep mid-week dates that
+          // would otherwise add off-axis time slots and skew pane sync.
+          data: snapSeriesToAxisDates(downsampleSeries(s.data as any, frequency), axisDates) as any,
         }));
       }
-      const baseOhlc: any[] = (activeTicker ? ohlcCache[activeTicker] : ohlcData) || [];
-      const axisDates = downsampleOhlc(baseOhlc, frequency).map((b: any) => b.time);
       return {
         intraday: false as const,
         spacerTimes: axisDates as (string | number)[],

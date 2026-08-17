@@ -143,6 +143,38 @@ export function alignIntradayToAxis(bars: IntradayBar[], axis: IntradayBar[]): a
 
 // ── Vertical-line date helpers ───────────────────────────────────────────────
 
+/**
+ * Re-stamp a series' points onto the shared weekly/monthly axis: each point
+ * moves to the first axis date ≥ its time (its containing period bar). Dense
+ * series already sit on period-end axis dates and pass through unchanged;
+ * SPARSE series (report-date-stamped fundamentals prints) would otherwise
+ * keep mid-week dates that don't exist on the axis — LWC then inserts extra
+ * time slots on that pane and the logical-range pane sync drifts. Points past
+ * the last axis date clamp to it; collisions keep the later point.
+ */
+export function snapSeriesToAxisDates(data: TimeValue[], axisDates: string[]): TimeValue[] {
+  if (!Array.isArray(data) || data.length === 0 || !axisDates?.length) return data ?? [];
+  const out: TimeValue[] = [];
+  const lastAxis = axisDates[axisDates.length - 1];
+  let dirty = false;
+  for (const pt of data) {
+    if (!pt || typeof pt.time !== "string") continue;
+    let lo = 0;
+    let hi = axisDates.length - 1;
+    let ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (axisDates[mid] >= pt.time) { ans = mid; hi = mid - 1; }
+      else lo = mid + 1;
+    }
+    const snapped = ans >= 0 ? axisDates[ans] : lastAxis;
+    if (snapped !== pt.time) dirty = true;
+    if (out.length && out[out.length - 1].time === snapped) out[out.length - 1] = { ...pt, time: snapped };
+    else out.push(snapped === pt.time ? pt : { ...pt, time: snapped });
+  }
+  return dirty || out.length !== data.length ? out : data;
+}
+
 /** Snap "YYYY-MM-DD" dates to the first axis date ≥ each (weekly/monthly). */
 export function snapDatesToAxisDates(dates: string[], axisDates: string[]): string[] {
   if (!dates?.length || !axisDates?.length) return [];

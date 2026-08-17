@@ -3390,7 +3390,13 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         }
         // Sparse report-date-stamped fundamentals render as a staircase
         // (lineType 1 = WithSteps) with persistent dots on the actual prints.
-        const isStep = ps.seriesType === "step" || ps.metric.startsWith("Fund: ");
+        // The daily P/TTM derived multiple is a continuous series → plain line.
+        // Print dots only when the series is actually sparse — the same metric
+        // forward-filled onto the hourly axis becomes dense and would dot
+        // every bar (150 ≈ 30+ years of quarterly prints).
+        const isStep = ps.seriesType === "step" ||
+          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric));
+        const stepDots = isStep && (ps.data?.length ?? 0) <= 150;
         const ls = chart.addSeries(LineSeries, {
           color: ps.color,
           lineWidth: (ps.lineWidth ?? 2) as any,
@@ -3399,9 +3405,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
           title: ps.label,
           crosshairMarkerVisible: true,
           crosshairMarkerRadius: isLineScatter ? 3.5 : 4,
-          // For line+scatter (and step prints), show persistent point markers
-          pointMarkersVisible: isLineScatter || isStep,
-          pointMarkersRadius: isLineScatter ? 2.5 : isStep ? 3 : undefined,
+          // For line+scatter (and sparse step prints), show persistent markers
+          pointMarkersVisible: isLineScatter || stepDots,
+          pointMarkersRadius: isLineScatter ? 2.5 : stepDots ? 3 : undefined,
           ...(isOverlay ? { priceScaleId: "left" } : {}),
         });
         ls.setData(applyColorByToData(ps.data));
@@ -3427,7 +3433,9 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         // chart-type change actually toggles the dots (otherwise the markers
         // keep whatever state they had when the series was first created).
         const existing = seriesMapRef.current.get(ps.id)!;
-        const isStepUpd = ps.seriesType === "step" || ps.metric.startsWith("Fund: ");
+        const isStepUpd = ps.seriesType === "step" ||
+          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric));
+        const stepDotsUpd = isStepUpd && (ps.data?.length ?? 0) <= 150;
         try {
           existing.applyOptions({
             color: ps.color,
@@ -3435,8 +3443,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
             lineStyle: ps.lineStyle ?? 0,
             lineType: isStepUpd ? 1 : 0,
             crosshairMarkerRadius: isLineScatter ? 3.5 : 4,
-            pointMarkersVisible: isLineScatter || isStepUpd,
-            pointMarkersRadius: isLineScatter ? 2.5 : isStepUpd ? 3 : undefined,
+            pointMarkersVisible: isLineScatter || stepDotsUpd,
+            pointMarkersRadius: isLineScatter ? 2.5 : stepDotsUpd ? 3 : undefined,
           });
           existing.setData(applyColorByToData(ps.data));
         } catch {}
