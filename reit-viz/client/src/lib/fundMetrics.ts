@@ -51,7 +51,7 @@ export function resolveFundMetric(tickerMetrics: string[], kind: FundKind): stri
     const match = re.exec(m);
     if (!match) continue;
     // The raw-series pattern ("" kind) must not swallow derived keys.
-    if (kind === "" && / (YoY%|Accel|TTM|P\/TTM|Surprise%) \((Q|H|FY)\)$/.test(m)) continue;
+    if (kind === "" && / (YoY%|Accel|TTM|P\/TTM|Surprise%|2Y Stack%|3Y Stack%) \((Q|H|FY)\)$/.test(m)) continue;
     const rank = CADENCE_RANK[match[2]] * 10 + familyRank(match[1]);
     if (!best || rank < best.rank) best = { name: m, rank };
   }
@@ -93,7 +93,7 @@ export function resolveFundActualsMetric(tickerMetrics: string[], family: string
   // Unknown families ("Default") have no token filter → any family matches.
   const explicitFamily = Object.prototype.hasOwnProperty.call(FAMILY_TOKEN, family);
   const tokenTest = explicitFamily ? FAMILY_TOKEN[family] : null;
-  const isDerived = (m: string) => / (YoY%|Accel|TTM|P\/TTM|Surprise%) \((Q|H|FY)\)$/.test(m);
+  const isDerived = (m: string) => / (YoY%|Accel|TTM|P\/TTM|Surprise%|2Y Stack%|3Y Stack%) \((Q|H|FY)\)$/.test(m);
   const pick = (re: RegExp, cadRank: Record<string, number>, allowDerived: boolean): string | null => {
     let best: { name: string; rank: number } | null = null;
     for (const m of tickerMetrics) {

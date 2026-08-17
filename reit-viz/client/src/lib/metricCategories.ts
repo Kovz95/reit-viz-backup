@@ -59,7 +59,7 @@ const RULES: Array<[string, (m: string) => boolean]> = [
   // "Fund: FFO Growth (Q)" stays here. Order within the block: PE twins
   // first (any suffix), then derived families, then raw prints as catch-all.
   ["Fundamentals (Period-End)", (m) => /^fund: .*\bPE\)$/i.test(m)],
-  ["Fundamentals (Growth)", (m) => /^fund: /i.test(m) && / (YoY%|Accel|Surprise%) \(/.test(m)],
+  ["Fundamentals (Growth)", (m) => /^fund: /i.test(m) && / (YoY%|Accel|Surprise%|2Y Stack%|3Y Stack%) \(/.test(m)],
   ["Fundamentals (TTM & Multiples)", (m) => /^fund: /i.test(m) && / (TTM|P\/TTM) \(/.test(m)],
   ["Fundamentals (Reported)", (m) => /^fund: /i.test(m)],
   ["Price", (m) => ["close", "open", "high", "low"].includes(m)],

@@ -55,13 +55,18 @@ for (const t of [T1, T2]) {
 
 // ── Build synthetic workbook ──
 // Sheet 1 (T1, "-US" suffix): text period labels in mixed formats, incl. H and FY,
-// a value with commas, a parenthesized negative, and a blank. Six consecutive
-// quarters so YoY/TTM/Accel derived series compute.
+// a value with commas, a parenthesized negative, and a blank. Fourteen
+// consecutive quarters (2021Q1..2024Q2) so YoY/TTM/Accel AND the 2Y/3Y
+// growth stacks all compute.
 const wsData1 = [
-  ["Metric", "2023Q1", "2023Q2", "2023Q3", "2023Q4", "Q1 2024", "2Q24", "1H24", "FY2023", "2035Q1"],
-  ["FFO/sh", 1.0, 1.1, 1.2, 1.3, "1.4", 1.5, 2.32, 4.04, 9.99],
-  ["Revenue", 1000, 1100, 1200, "1,234", 1300, "(150)", 2534, "5,000", ""],
-  ["Period", "x", "x", "x", "x", "x", "x", "x", "x", "x"], // meta row — must be skipped
+  ["Metric",
+    "2021Q1", "2021Q2", "2021Q3", "2021Q4",
+    "2022Q1", "2022Q2", "2022Q3", "2022Q4",
+    "2023Q1", "2023Q2", "2023Q3", "2023Q4",
+    "Q1 2024", "2Q24", "1H24", "FY2023", "2035Q1"],
+  ["FFO/sh", 0.7, 0.72, 0.74, 0.76, 0.8, 0.85, 0.9, 0.95, 1.0, 1.1, 1.2, 1.3, "1.4", 1.5, 2.32, 4.04, 9.99],
+  ["Revenue", 700, 720, 740, 760, 800, 850, 900, 950, 1000, 1100, 1200, "1,234", 1300, "(150)", 2534, "5,000", ""],
+  ["Period", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x", "x"], // meta row — must be skipped
 ];
 // Sheet 2 (T2): literal date headers (quarter-end dates) → cadence inferred as Q
 const wsData2 = [
@@ -154,6 +159,11 @@ check("TTM at Q2'24 = 5.4", near(valueAt(t1Data["Fund: FFO/sh TTM (Q)"], q2Idx),
 // Accel at Q2'24: YoY(Q2)=36.3636 minus YoY(Q1)=40 → −3.6364 pp
 check("Accel at Q2'24 ≈ −3.64 pp", near(valueAt(t1Data["Fund: FFO/sh Accel (Q)"], q2Idx), -3.6364),
   `got ${valueAt(t1Data["Fund: FFO/sh Accel (Q)"], q2Idx)}`);
+// 2Y stack at Q1'24 = YoY'24 (40) + YoY'23 (25) = 65; 3Y adds YoY'22 (14.2857)
+check("2Y Stack% at Q1'24 = 65", near(valueAt(t1Data["Fund: FFO/sh 2Y Stack% (Q)"], q1Idx), 65),
+  `got ${valueAt(t1Data["Fund: FFO/sh 2Y Stack% (Q)"], q1Idx)}`);
+check("3Y Stack% at Q1'24 ≈ 79.29", near(valueAt(t1Data["Fund: FFO/sh 3Y Stack% (Q)"], q1Idx), 79.2857),
+  `got ${valueAt(t1Data["Fund: FFO/sh 3Y Stack% (Q)"], q1Idx)}`);
 // P/TTM: daily close ÷ TTM; between the Q1'24 and Q2'24 prints TTM = 5.0
 {
   const pttm = rleDecode(t1Data["Fund: FFO/sh P/TTM (Q)"], dates.length);

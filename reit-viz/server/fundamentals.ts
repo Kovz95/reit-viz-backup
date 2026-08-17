@@ -24,6 +24,8 @@
  * Derived series (report-date stamped only, computed at ingest):
  *   "… YoY% (Q)"      vs same period one year earlier
  *   "… Accel (Q)"     pp change in YoY vs the previous period
+ *   "… 2Y Stack% (Q)" this YoY + the prior year's YoY (base-effect look-through)
+ *   "… 3Y Stack% (Q)" sum of three consecutive YoY rates
  *   "… TTM (Q)"       rolling sum of 4 consecutive quarters (2 halves for H)
  *   "… P/TTM (Q)"     DAILY close ÷ last-known TTM (an actuals-based multiple)
  *   "… Surprise% (FY)" FY actual vs the inferred family's FY1 consensus as of
@@ -436,7 +438,8 @@ export function ingestFundamentalsWorkbook(
         const step = STEP_MONTHS[cad];
         const byMonth = new Map(entries.map((e) => [monthIdx(e.pe), e]));
 
-        // YoY% + Accel
+        // YoY% + Accel + 2Y/3Y stacks (sum of consecutive YoY rates — the
+        // equity-research "stack" convention for looking through base effects)
         const yoyByMonth = new Map<number, number>();
         for (const e of entries) {
           const prior = byMonth.get(monthIdx(e.pe) - 12);
@@ -452,6 +455,14 @@ export function ingestFundamentalsWorkbook(
           const py = yoyByMonth.get(m - step);
           if (y !== undefined && py !== undefined) {
             placeDerived(`Fund: ${metric.name} Accel (${cad})`, e.rep, y - py);
+          }
+          const y1 = yoyByMonth.get(m - 12);
+          if (y !== undefined && y1 !== undefined) {
+            placeDerived(`Fund: ${metric.name} 2Y Stack% (${cad})`, e.rep, y + y1);
+            const y2 = yoyByMonth.get(m - 24);
+            if (y2 !== undefined) {
+              placeDerived(`Fund: ${metric.name} 3Y Stack% (${cad})`, e.rep, y + y1 + y2);
+            }
           }
         }
 
