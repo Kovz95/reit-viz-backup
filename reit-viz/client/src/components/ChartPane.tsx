@@ -3395,7 +3395,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         // forward-filled onto the hourly axis becomes dense and would dot
         // every bar (150 ≈ 30+ years of quarterly prints).
         const isStep = ps.seriesType === "step" ||
-          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric));
+          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric)) ||
+          ps.metric.includes("@Issue vs Cons%");
         const stepDots = isStep && (ps.data?.length ?? 0) <= 150;
         const ls = chart.addSeries(LineSeries, {
           color: ps.color,
@@ -3434,7 +3435,8 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
         // keep whatever state they had when the series was first created).
         const existing = seriesMapRef.current.get(ps.id)!;
         const isStepUpd = ps.seriesType === "step" ||
-          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric));
+          (ps.metric.startsWith("Fund: ") && !/ P\/TTM \(/.test(ps.metric)) ||
+          ps.metric.includes("@Issue vs Cons%");
         const stepDotsUpd = isStepUpd && (ps.data?.length ?? 0) <= 150;
         try {
           existing.applyOptions({

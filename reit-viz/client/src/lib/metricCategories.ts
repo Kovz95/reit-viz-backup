@@ -45,6 +45,10 @@ export const DERIVED_METRICS = [
   "SI Δ 1W", "SI Δ 1M", "SI Δ 3M", "SI Δ 6M",
   "HV 30D", "HV 60D", "HV 90D", "HV 180D",
   "HVOL 30D", "HVOL 60D", "HVOL 90D", "HVOL 180D",
+  // Guidance vs consensus frozen at each issuance/revision print
+  "FFO Guidance @Issue vs Cons%", "AFFO Guidance @Issue vs Cons%",
+  "EBITDA Guidance @Issue vs Cons%", "EPS Guidance @Issue vs Cons%",
+  "Sales Guidance @Issue vs Cons%",
 ];
 
 // Ordered match rules — FIRST match wins, so order encodes precedence

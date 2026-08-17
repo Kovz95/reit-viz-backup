@@ -319,7 +319,8 @@ function isPercentStoredMetric(metric: string): boolean {
   // stored exactly as entered/computed — percent-point units when the name
   // carries a "%". They get the suffix but must NEVER be ×100-rescaled.
   if (metric.startsWith("Fund: ")) return metric.includes("%");
-  return metric.includes("Chg%") || metric.includes("Interest%") || SI_DELTA_METRICS.has(metric);
+  return metric.includes("Chg%") || metric.includes("Interest%") || SI_DELTA_METRICS.has(metric)
+    || metric.includes("@Issue vs Cons%"); // guidance-at-issuance gap, already in pp
 }
 
 // Percentages stored as a DECIMAL/fraction (e.g. 0.072 = 7.2%): scaled ×100 for
@@ -394,6 +395,45 @@ function computeSIDeltaSeries(siPairs: RawMetricData, lookback: number): RawMetr
     }
   }
   return result;
+}
+
+// ---- Computed Guidance-at-Issuance Metrics ----
+// The workbook carries "<fam> (guidance FY1)" (sparse, changes only when the
+// company issues/revises guidance) and a DAILY "Guidance vs consensus - <fam>"
+// gap that drifts as consensus moves. These derived metrics freeze that gap at
+// each guidance PRINT (issuance or revision) — "where was guidance vs
+// consensus the day they gave it" — as a sparse event series in percent.
+const GUIDANCE_ISSUE_DEFS: Record<string, { guidance: string; vsCons: string }> = {
+  "FFO Guidance @Issue vs Cons%":    { guidance: "FFO (guidance FY1)",    vsCons: "Guidance vs consensus - FFO" },
+  "AFFO Guidance @Issue vs Cons%":   { guidance: "AFFO (guidance FY1)",   vsCons: "Guidance vs consensus - AFFO" },
+  "EBITDA Guidance @Issue vs Cons%": { guidance: "EBITDA (guidance FY1)", vsCons: "Guidance vs consensus - EBITDA" },
+  "EPS Guidance @Issue vs Cons%":    { guidance: "EPS (guidance FY1)",    vsCons: "Guidance vs consensus - EPS" },
+  "Sales Guidance @Issue vs Cons%":  { guidance: "Sales (guidance FY1)",  vsCons: "Guidance vs consensus - Sales" },
+};
+export const GUIDANCE_ISSUE_METRIC_NAMES = Object.keys(GUIDANCE_ISSUE_DEFS);
+
+/** Sparse [dateIdx, gap%] at each guidance print (first value or a change). */
+function computeGuidanceIssueSeries(
+  rawData: RawTickerData,
+  def: { guidance: string; vsCons: string },
+): RawMetricData {
+  const g = rawData[def.guidance];
+  const v = rawData[def.vsCons];
+  if (!g || !v) return [];
+  const vMap = new Map<number, number>();
+  for (const [idx, val] of v) vMap.set(idx, val);
+  const sorted = [...g].sort((a, b) => a[0] - b[0]);
+  const out: RawMetricData = [];
+  let prev: number | undefined;
+  for (const [idx, val] of sorted) {
+    if (prev === undefined || Math.abs(val - prev) > 1e-12) {
+      const gap = vMap.get(idx);
+      // Stored as a decimal (−0.0016 = −0.16%) — surface percent points.
+      if (gap !== undefined && Number.isFinite(gap)) out.push([idx, gap * 100]);
+    }
+    prev = val;
+  }
+  return out;
 }
 
 /** Get the SI delta value at a specific date index */
@@ -765,6 +805,13 @@ export async function getMetricSeries(symbol: string, metric: string): Promise<T
       if (idx < dates.length) data.push({ time: dates[idx], value: val });
     }
     return data;
+  }
+
+  // Handle computed guidance-at-issuance metrics
+  if (GUIDANCE_ISSUE_DEFS[metric]) {
+    return computeGuidanceIssueSeries(rawData, GUIDANCE_ISSUE_DEFS[metric])
+      .filter(([idx]) => idx < dates.length)
+      .map(([idx, val]) => ({ time: dates[idx], value: val }));
   }
 
   if (!rawData[metric]) return [];
@@ -1643,6 +1690,14 @@ export async function getMetricTrailing(
       .sort((a, b) => a[0] - b[0]);
     const lastN = sorted.slice(-trailingDays);
     return lastN.map(([, val]) => val);
+  }
+
+  // Handle computed guidance-at-issuance metrics
+  if (GUIDANCE_ISSUE_DEFS[metric]) {
+    return computeGuidanceIssueSeries(rawData, GUIDANCE_ISSUE_DEFS[metric])
+      .filter(([idx]) => idx < dates.length)
+      .slice(-trailingDays)
+      .map(([, val]) => val);
   }
 
   if (!rawData[metric]) return [];
