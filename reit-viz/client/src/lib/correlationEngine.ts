@@ -29,6 +29,11 @@ export interface PairwiseOpts {
   lagBars?: number;
   transformA?: LegTransform | null;
   transformB?: LegTransform | null;
+  /** Pre-resolved series for synthetic legs (e.g. BASKET: specs) — replaces the
+   *  spec lookup for that leg. Daily-dated {time,value} points; hourly frequency
+   *  forward-fills them onto the other leg's intraday axis like macro series. */
+  overrideA?: DataPoint[] | null;
+  overrideB?: DataPoint[] | null;
 }
 
 export const LEG_TRANSFORM_LABELS: Record<LegTransform["kind"], string> = {
@@ -629,10 +634,10 @@ function modeTransformPair(al: AlignedPair, mode: string): { a: number[]; b: num
 async function computePairwiseStatic(
   specA: string, specB: string, window: number, mode: string, opts: PairwiseOpts = {}
 ): Promise<PairwiseResult> {
-  const { extraWindows = [], freq = "daily", lagBars = 0, transformA: legTA = null, transformB: legTB = null } = opts;
+  const { extraWindows = [], freq = "daily", lagBars = 0, transformA: legTA = null, transformB: legTB = null, overrideA = null, overrideB = null } = opts;
   let [dataA, dataB] = await Promise.all([
-    resolveSeriesDataStatic(specA),
-    resolveSeriesDataStatic(specB),
+    overrideA ? Promise.resolve(overrideA) : resolveSeriesDataStatic(specA),
+    overrideB ? Promise.resolve(overrideB) : resolveSeriesDataStatic(specB),
   ]);
   const fx = await applyFrequency(specA, specB, dataA, dataB, freq);
   if ("error" in fx) return emptyPairwiseResult(mode, fx.error);

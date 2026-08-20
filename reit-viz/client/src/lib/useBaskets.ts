@@ -67,6 +67,14 @@ function combined(): Basket[] {
   return [...cache, ...getAutoBaskets()];
 }
 
+/** Non-hook lookup against the module cache (id first, then name — matches
+ *  useBaskets().getBasket). For module-level helpers (e.g. label formatters)
+ *  that can't call hooks; empty until the first useBaskets() mount loads. */
+export function findBasketSync(idOrName: string): Basket | undefined {
+  const all = combined();
+  return all.find((b) => b.id === idOrName) ?? all.find((b) => b.name === idOrName);
+}
+
 function normalizeBasket(b: any): Basket | null {
   if (!b || typeof b.id !== "string" || typeof b.name !== "string" || !Array.isArray(b.tickers)) {
     return null;

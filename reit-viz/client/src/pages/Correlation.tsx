@@ -18,7 +18,7 @@ import { fetchPairwiseCorrelation, fetchMatrixCorrelation } from "@/lib/correlat
 import type { CorrFrequency, LegTransform } from "@/lib/correlationEngine";
 import ChartPane from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
-import { deleteIndicatorBadge } from "@/lib/indicatorInstances";
+import { deleteIndicatorBadge, getInstances, setInstances } from "@/lib/indicatorInstances";
 import IndicatorsPanel from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
 import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
@@ -32,9 +32,10 @@ import type { DislocationScanResult, DislocationRow, IdioRow, ScanTF, ScanMode }
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import GridLayoutPicker, { parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
-import { useBaskets } from "@/lib/useBaskets";
+import { useBaskets, findBasketSync } from "@/lib/useBaskets";
 import type { Basket } from "@/lib/useBaskets";
 import { isAutoBasketId, groupAutoBaskets, AUTO_BASKET_GROUP_LABELS } from "@/lib/autoBaskets";
+import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import type { IChartApi } from "lightweight-charts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,6 +82,7 @@ import {
   Pin,
   Radar,
   SlidersHorizontal,
+  Star,
   X,
   Zap,
 } from "lucide-react";
@@ -175,8 +177,16 @@ const STOCK_METRICS_BASE = [
 ];
 const STOCK_METRICS_SET = new Set(STOCK_METRICS_BASE);
 
+const BASKET_SPEC_PREFIX = "BASKET:";
+const isBasketSpec = (spec: string) => spec.startsWith(BASKET_SPEC_PREFIX);
+const basketSpecId = (spec: string) => spec.slice(BASKET_SPEC_PREFIX.length);
+
 function formatSpec(spec: string): string {
   if (spec.startsWith("MACRO:")) return spec.replace("MACRO:", "");
+  if (isBasketSpec(spec)) {
+    const b = findBasketSync(basketSpecId(spec));
+    return b ? `${b.name} (basket)` : spec;
+  }
   return spec;
 }
 
@@ -1650,6 +1660,7 @@ function CorrLwcPane({
   onChartReady,
   onChartDestroyed,
   onChangeIndicators,
+  frequency,
 }: {
   paneId: number;
   label: string;
@@ -1664,6 +1675,9 @@ function CorrLwcPane({
   /** Enables the sub-pane header actions (✕ close / eye hide / reorder
    *  arrows — Charts-tab parity) by giving the pane a state writer. */
   onChangeIndicators?: (paneId: number, ind: ActiveIndicators) => void;
+  /** Bar frequency of the plotted series — per-instance indicator frequency
+   *  (chart/weekly/monthly) scales relative to this (defaults to daily). */
+  frequency?: CorrFrequency;
 }) {
   const chartRef = useRef<IChartApi | null>(null);
   const [gridProminence] = useGridProminence();
@@ -1675,8 +1689,9 @@ function CorrLwcPane({
       gridProminence,
       axisLabels: chrome.axisLabels,
       priceLines: chrome.priceLines,
+      frequency,
     }),
-    [gridProminence, chrome]
+    [gridProminence, chrome, frequency]
   );
   const handleChartReady = useCallback((id: number, chart: IChartApi) => {
     chartRef.current = chart;
@@ -2748,6 +2763,7 @@ function SeriesPicker({
   onChange,
   tickers,
   macroCatalog,
+  baskets,
   testId,
   transform,
   onTransformChange,
@@ -2757,24 +2773,29 @@ function SeriesPicker({
   onChange: (v: string) => void;
   tickers: TickerMeta[];
   macroCatalog: MacroSeriesMeta[];
+  /** When provided, a "Basket" source appears (leg = weighted aggregate close).
+   *  Omit on surfaces whose downstream can't resolve BASKET: specs (matrix). */
+  baskets?: Basket[];
   testId: string;
   /** Optional per-leg technical transform (RSI/SMA/… applied to the series). */
   transform?: LegTransform | null;
   onTransformChange?: (t: LegTransform | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [sourceType, setSourceType] = useState<"stock" | "macro">(
-    value.startsWith("MACRO:") ? "macro" : "stock"
+  const [sourceType, setSourceType] = useState<"stock" | "macro" | "basket">(
+    value.startsWith("MACRO:") ? "macro" : isBasketSpec(value) ? "basket" : "stock"
   );
   const [ticker, setTicker] = useState(() => {
-    if (!value.startsWith("MACRO:")) {
+    if (!value.startsWith("MACRO:") && !isBasketSpec(value)) {
       const parts = value.split(":");
       return parts[0] || "";
     }
     return "";
   });
+  const [basketId, setBasketId] = useState(() => (isBasketSpec(value) ? basketSpecId(value) : ""));
   const [metric, setMetric] = useState(() => {
     if (value.startsWith("MACRO:")) return value.replace("MACRO:", "");
+    if (isBasketSpec(value)) return "close";
     const parts = value.split(":");
     return parts.slice(1).join(":") || "close";
   });
@@ -2800,6 +2821,8 @@ function SeriesPicker({
   const handleApply = useCallback(() => {
     if (sourceType === "macro") {
       if (metric) onChange(`MACRO:${metric}`);
+    } else if (sourceType === "basket") {
+      if (basketId) onChange(`${BASKET_SPEC_PREFIX}${basketId}`);
     } else {
       const resolvedMetric = (STOCK_METRICS_SET.has(metric) || tickers.some(t => ((t as any).metrics || []).includes(metric)) || getCustomFundamentalMetrics().includes(metric)) ? metric : "close";
       if (ticker) onChange(`${ticker}:${resolvedMetric}`);
@@ -2809,7 +2832,7 @@ function SeriesPicker({
       onTransformChange(tKind === "none" ? null : { kind: tKind, period: p });
     }
     setOpen(false);
-  }, [sourceType, ticker, metric, onChange, tickers, onTransformChange, tKind, tPeriod]);
+  }, [sourceType, ticker, basketId, metric, onChange, tickers, onTransformChange, tKind, tPeriod]);
 
   return (
     <div className="space-y-1">
@@ -2845,6 +2868,17 @@ function SeriesPicker({
             >
               <Activity className="w-3 h-3 mr-1" /> Macro
             </Button>
+            {baskets && (
+              <Button
+                variant={sourceType === "basket" ? "default" : "secondary"}
+                size="sm"
+                className="flex-1 h-6 text-[10px]"
+                onClick={() => setSourceType("basket")}
+                data-testid={`${testId}-source-basket`}
+              >
+                <Star className="w-3 h-3 mr-1" /> Basket
+              </Button>
+            )}
           </div>
 
           {sourceType === "stock" ? (
@@ -2863,6 +2897,19 @@ function SeriesPicker({
                 metricGroups={metricGroups}
                 testId={`${testId}-metric`}
               />
+            </>
+          ) : sourceType === "basket" ? (
+            <>
+              {/* Basket picker — weighted aggregate close of the basket's members */}
+              <BasketSelect
+                baskets={baskets ?? []}
+                value={basketId}
+                onChange={setBasketId}
+                testId={`${testId}-basket`}
+              />
+              <div className="text-[9px] text-muted-foreground leading-snug">
+                Correlates the basket's weighted aggregate price (close-only — no metric picker).
+              </div>
             </>
           ) : (
             /* Macro series — searchable, grouped by category */
@@ -3130,7 +3177,11 @@ export default function Correlation() {
     const legInfo = (spec: string) =>
       spec.startsWith("MACRO:")
         ? { metric: null as string | null, macro: spec }
-        : { metric: spec.split(":").slice(1).join(":") || "close", macro: null as string | null };
+        : isBasketSpec(spec)
+          // Basket legs are close-only — no metric to carry; applying the
+          // template keeps the current basket leg as-is.
+          ? { metric: null as string | null, macro: null as string | null }
+          : { metric: spec.split(":").slice(1).join(":") || "close", macro: null as string | null };
     const a = legInfo(specA);
     const b = legInfo(specB);
     const tpl: PairTemplate = {
@@ -3157,7 +3208,7 @@ export default function Correlation() {
     // are restored verbatim (there is no ticker to preserve).
     const applyLeg = (spec: string, metric: string | null, macro: string | null): string => {
       if (macro) return macro;
-      if (metric && !spec.startsWith("MACRO:")) return `${spec.split(":")[0]}:${metric}`;
+      if (metric && !spec.startsWith("MACRO:") && !isBasketSpec(spec)) return `${spec.split(":")[0]}:${metric}`;
       return spec;
     };
     setSpecA(applyLeg(specA, tpl.metricA, tpl.macroA));
@@ -3398,10 +3449,37 @@ export default function Correlation() {
     return uniFilteredList.map((t) => `${t.ticker}:${uniMetric}`);
   }, [uniScope, uniScopeBasket, uniFilteredList, uniMetric, matrixSpecs]);
 
+  // BASKET:<id> legs: cache-key signature (so editing a basket's members
+  // refetches) + resolver producing the weighted aggregate close as the
+  // pre-resolved series the correlation engine uses in place of the spec.
+  const basketLegSig = useCallback((spec: string): string => {
+    if (!isBasketSpec(spec)) return spec;
+    const b = baskets.find((x) => x.id === basketSpecId(spec)) ?? baskets.find((x) => x.name === basketSpecId(spec));
+    return b ? `${spec}:${b.tickers.join("|")}:${b.weighting ?? ""}:${b.rebalance ?? ""}` : spec;
+  }, [baskets]);
+  const resolveBasketLeg = useCallback(async (spec: string): Promise<{ time: string; value: number }[] | null> => {
+    if (!isBasketSpec(spec)) return null;
+    const id = basketSpecId(spec);
+    const b = baskets.find((x) => x.id === id) ?? baskets.find((x) => x.name === id);
+    if (!b) throw new Error(`Basket not found for ${spec} — it may have been deleted.`);
+    if (b.tickers.length === 0) throw new Error(`Basket "${b.name}" is empty.`);
+    const ohlc = await getBasketOhlc(buildBasketOhlc(b.tickers, b, { weighting: b.weighting, rebalance: b.rebalance }));
+    if (!ohlc || !ohlc.dates || ohlc.dates.length === 0) throw new Error(`No data for basket "${b.name}".`);
+    return ohlc.dates
+      .map((d, i) => ({ time: d, value: ohlc.closes[i] }))
+      .filter((p) => Number.isFinite(p.value));
+  }, [baskets]);
+  const fetchPairwiseWithBaskets = useCallback(async (
+    a: string, b: string, window: number, mode: string, opts: Parameters<typeof fetchPairwiseCorrelation>[4]
+  ) => {
+    const [ovA, ovB] = await Promise.all([resolveBasketLeg(a), resolveBasketLeg(b)]);
+    return fetchPairwiseCorrelation(a, b, window, mode, { ...opts, overrideA: ovA, overrideB: ovB });
+  }, [resolveBasketLeg]);
+
   // Pairwise query (frequency-aware, custom window, lag + per-leg transforms)
   const { data: pairwise, isLoading: pairLoading } = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, customValid ? customWindowNum : 0, corrFreq, legKey],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, parseInt(corrWindow) || 60, corrMode, {
+    queryKey: ["correlation-pairwise", basketLegSig(specA), basketLegSig(specB), corrWindow, corrMode, customValid ? customWindowNum : 0, corrFreq, legKey],
+    queryFn: () => fetchPairwiseWithBaskets(specA, specB, parseInt(corrWindow) || 60, corrMode, {
       extraWindows: customValid ? [customWindowNum] : [],
       freq: corrFreq,
       lagBars: corrLagNum,
@@ -3417,18 +3495,18 @@ export default function Correlation() {
   const tfWindow = parseInt(corrWindow) || 60;
   const tfOpts = { lagBars: corrLagNum, transformA: corrTransformA, transformB: corrTransformB };
   const tfHourly = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "hourly", legKey],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "hourly" }),
+    queryKey: ["correlation-pairwise", basketLegSig(specA), basketLegSig(specB), corrWindow, corrMode, 0, "hourly", legKey],
+    queryFn: () => fetchPairwiseWithBaskets(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "hourly" }),
     enabled: tfEnabled,
   });
   const tfDaily = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "daily", legKey],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "daily" }),
+    queryKey: ["correlation-pairwise", basketLegSig(specA), basketLegSig(specB), corrWindow, corrMode, 0, "daily", legKey],
+    queryFn: () => fetchPairwiseWithBaskets(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "daily" }),
     enabled: tfEnabled,
   });
   const tfWeekly = useQuery<PairwiseResult>({
-    queryKey: ["correlation-pairwise", specA, specB, corrWindow, corrMode, 0, "weekly", legKey],
-    queryFn: () => fetchPairwiseCorrelation(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "weekly" }),
+    queryKey: ["correlation-pairwise", basketLegSig(specA), basketLegSig(specB), corrWindow, corrMode, 0, "weekly", legKey],
+    queryFn: () => fetchPairwiseWithBaskets(specA, specB, tfWindow, corrMode, { ...tfOpts, freq: "weekly" }),
     enabled: tfEnabled,
   });
   const tfEntries: TFEntry[] = [
@@ -3647,6 +3725,7 @@ export default function Correlation() {
               onChange={setSpecA}
               tickers={tickers}
               macroCatalog={macroCatalog}
+              baskets={baskets}
               testId="corr-series-a"
               transform={corrTransformA}
               onTransformChange={setCorrTransformA}
@@ -3657,6 +3736,7 @@ export default function Correlation() {
               onChange={setSpecB}
               tickers={tickers}
               macroCatalog={macroCatalog}
+              baskets={baskets}
               testId="corr-series-b"
               transform={corrTransformB}
               onTransformChange={setCorrTransformB}
@@ -4548,12 +4628,19 @@ function PairwiseView({
   }, [rowFracs, colFracs]);
 
   // LWC panes currently active — drive the indicators panel pane selector.
+  // Carrying Series A's ticker (when it is a plain stock leg) lets the panel's
+  // ticker-aware helpers (Find Best MA, autocorr best-lag) work like on Charts.
+  const lwcPaneTicker = useMemo(() => {
+    if (!specA || specA.startsWith("MACRO:") || isBasketSpec(specA)) return undefined;
+    const t = specA.split(":")[0];
+    return /^[A-Za-z0-9.\-]{1,12}$/.test(t) ? t.toUpperCase() : undefined;
+  }, [specA]);
   const lwcPaneInfos: PaneInfo[] = useMemo(
     () =>
       paneKeysActive
         .filter((k) => LWC_PANE_IDS[k] !== undefined)
-        .map((k) => ({ id: LWC_PANE_IDS[k], label: CHART_LABELS[k] })),
-    [paneKeysActive]
+        .map((k) => ({ id: LWC_PANE_IDS[k], label: CHART_LABELS[k], ticker: lwcPaneTicker })),
+    [paneKeysActive, lwcPaneTicker]
   );
 
   if (loading) {
@@ -4636,6 +4723,7 @@ function PairwiseView({
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
             onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
+            frequency={freq}
           />
         );
       case "rolling":
@@ -4652,6 +4740,7 @@ function PairwiseView({
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
             onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
+            frequency={freq}
           />
         );
       case "rollingBeta":
@@ -4668,6 +4757,7 @@ function PairwiseView({
             onChartReady={handleLwcChartReady}
             onChartDestroyed={handleLwcChartDestroyed}
             onChangeIndicators={(id, ind) => onIndicatorsMapChange((prev) => ({ ...prev, [id]: ind }))}
+            frequency={freq}
           />
         );
       case "tfDivergence":
@@ -4975,7 +5065,7 @@ function PairwiseView({
             Only for plain ticker legs (MACRO series have no price ratio). */}
         {(() => {
           const legTicker = (spec: string): string | null => {
-            if (!spec || spec.startsWith("MACRO:")) return null;
+            if (!spec || spec.startsWith("MACRO:") || isBasketSpec(spec)) return null;
             const t = spec.split(":")[0];
             return /^[A-Za-z0-9.\-]{1,12}$/.test(t) ? t.toUpperCase() : null;
           };
@@ -5074,6 +5164,20 @@ function PairwiseView({
           onIndicatorsMapChange(prev => {
             const next = { ...prev };
             for (const p of lwcPaneInfos) next[p.id] = { ...indicators };
+            return next;
+          })
+        }
+        onCopyIndicatorToPane={(defId, srcPaneId, target) =>
+          // Same semantics as ChartArea: merge ONE indicator's full instance
+          // list into the target pane(s) atomically.
+          onIndicatorsMapChange(prev => {
+            const src = getInstances(prev[srcPaneId] || {}, defId);
+            if (!src.length) return prev;
+            const ids = target === "all" ? lwcPaneInfos.filter(p => p.id !== srcPaneId).map(p => p.id) : [target];
+            const next = { ...prev };
+            for (const id of ids) {
+              next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+            }
             return next;
           })
         }

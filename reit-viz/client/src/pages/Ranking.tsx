@@ -1117,6 +1117,29 @@ export default function Ranking() {
         const rb = revisionMap.get(b.ticker);
         av = (ra?.[sortCol as keyof RevisionData] as number) ?? inf;
         bv = (rb?.[sortCol as keyof RevisionData] as number) ?? inf;
+      } else if (sortCol === "revEst") {
+        av = revisionMap.get(a.ticker)?.currentEstimate ?? inf;
+        bv = revisionMap.get(b.ticker)?.currentEstimate ?? inf;
+      } else if (sortCol.startsWith("sub:")) {
+        // Sub-column sort key: "sub:<kind>:<levelKey>:<metric>" (levelKey empty
+        // for non-group kinds; metric last so metric names may contain colons).
+        const parts = sortCol.split(":");
+        const kind = parts[1];
+        const lvKey = parts[2] as ClassLevelKey;
+        const metric = parts.slice(3).join(":");
+        const pick = (r: CompositeRow): number | null => {
+          switch (kind) {
+            case "val": return r.values[metric] ?? null;
+            case "z": return r.zScores[metric] ?? null;
+            case "gp": return r.groupPctile[metric]?.[lvKey] ?? null;
+            case "gz": return r.groupZScore[metric]?.[lvKey] ?? null;
+            case "hp": return r.histPctile[metric] ?? null;
+            case "hz": return r.histZScore[metric] ?? null;
+            default: return null;
+          }
+        };
+        av = pick(a) ?? inf;
+        bv = pick(b) ?? inf;
       } else if (sortCol.startsWith("attr")) {
         const pick = (row: AttributionRow | undefined) =>
           sortCol === "attrTotal" ? row?.totalPct
@@ -1169,7 +1192,9 @@ export default function Ranking() {
 
   const removeMetric = (m: string) => {
     setMetrics((prev) => prev.filter((x) => x !== m));
-    if (sortCol === m) setSortCol("compositeZ");
+    if (sortCol === m || (sortCol.startsWith("sub:") && sortCol.split(":").slice(3).join(":") === m)) {
+      setSortCol("compositeZ");
+    }
   };
 
   const runBacktest = async () => {
@@ -1985,16 +2010,40 @@ export default function Ranking() {
                 <th /><th /><th /><th />
                 {activeMetrics.map((m) => (
                   <React.Fragment key={m + "-sub"}>
-                    {colVis.value && <th className="px-1 py-0.5 text-right border-l border-border/20">Value</th>}
-                    {colVis.zScore && <th className="px-1 py-0.5 text-right">AllZ</th>}
+                    {colVis.value && (
+                      <th className="px-1 py-0.5 text-right border-l border-border/20">
+                        <button className="hover:text-foreground" onClick={() => handleSort(`sub:val::${m}`)}>Value <ArrowUpDown className="w-2 h-2 inline" /></button>
+                      </th>
+                    )}
+                    {colVis.zScore && (
+                      <th className="px-1 py-0.5 text-right">
+                        <button className="hover:text-foreground" onClick={() => handleSort(`sub:z::${m}`)}>AllZ <ArrowUpDown className="w-2 h-2 inline" /></button>
+                      </th>
+                    )}
                     {CLASS_LEVELS.map((lv) => (
                       <React.Fragment key={lv.key}>
-                        {colVis.groupPctile[lv.key] && <th className="px-1 py-0.5 text-right">{lv.label}%</th>}
-                        {colVis.groupZScore[lv.key] && <th className="px-1 py-0.5 text-right">{lv.label}Z</th>}
+                        {colVis.groupPctile[lv.key] && (
+                          <th className="px-1 py-0.5 text-right">
+                            <button className="hover:text-foreground" onClick={() => handleSort(`sub:gp:${lv.key}:${m}`)}>{lv.label}% <ArrowUpDown className="w-2 h-2 inline" /></button>
+                          </th>
+                        )}
+                        {colVis.groupZScore[lv.key] && (
+                          <th className="px-1 py-0.5 text-right">
+                            <button className="hover:text-foreground" onClick={() => handleSort(`sub:gz:${lv.key}:${m}`)}>{lv.label}Z <ArrowUpDown className="w-2 h-2 inline" /></button>
+                          </th>
+                        )}
                       </React.Fragment>
                     ))}
-                    {colVis.histPctile && <th className="px-1 py-0.5 text-right">Hist%</th>}
-                    {colVis.histZScore && <th className="px-1 py-0.5 text-right">HistZ</th>}
+                    {colVis.histPctile && (
+                      <th className="px-1 py-0.5 text-right">
+                        <button className="hover:text-foreground" onClick={() => handleSort(`sub:hp::${m}`)}>Hist% <ArrowUpDown className="w-2 h-2 inline" /></button>
+                      </th>
+                    )}
+                    {colVis.histZScore && (
+                      <th className="px-1 py-0.5 text-right">
+                        <button className="hover:text-foreground" onClick={() => handleSort(`sub:hz::${m}`)}>HistZ <ArrowUpDown className="w-2 h-2 inline" /></button>
+                      </th>
+                    )}
                     {colVis.sparkline && <th className="px-1 py-0.5 text-center">Trail</th>}
                   </React.Fragment>
                 ))}
@@ -2010,7 +2059,9 @@ export default function Ranking() {
                     <th className="px-1 py-0.5 text-right">
                       <button className="hover:text-foreground" onClick={() => handleSort("rev90d")}>90d <ArrowUpDown className="w-2 h-2 inline" /></button>
                     </th>
-                    <th className="px-1 py-0.5 text-right">Est</th>
+                    <th className="px-1 py-0.5 text-right">
+                      <button className="hover:text-foreground" onClick={() => handleSort("revEst")}>Est <ArrowUpDown className="w-2 h-2 inline" /></button>
+                    </th>
                     <th className="px-1 py-0.5 text-center">Trail</th>
                   </React.Fragment>
                 )}
