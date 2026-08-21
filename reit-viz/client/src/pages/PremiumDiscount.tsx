@@ -38,6 +38,9 @@ import { TrendingDown } from "lucide-react";
 import { X, Calendar, Maximize2, Minimize2, CandlestickChart, ChevronLeft, LineChart } from "lucide-react";
 import { PairDetailCharts } from "@/pages/PairRatios";
 import type { ActiveIndicators } from "@/components/ChartPane";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import { getInstances, setInstances } from "@/lib/indicatorInstances";
 import { useLocation } from "wouter";
 const XIcon = X;
 import { useUniverseDefaults } from "@/lib/universeDefaults";
@@ -246,6 +249,12 @@ export default function PremiumDiscount() {
   // selections (persisted in the workspace; chart keys pr-ratio / pr-z).
   const [pdDetail, setPdDetail] = useState<string | null>(null);
   const [pdDetailIndicators, setPdDetailIndicators] = useState<Record<string, ActiveIndicators>>({});
+  // Canonical indicators panel for the INLINE chart grid (keyed by CHART_IDS;
+  // rvVerdictTs excluded — a discrete score histogram, indicators are
+  // meaningless there). Distinct from pdDetailIndicators (the modal overlay).
+  const [inlineIndicators, setInlineIndicators] = useState<Record<string, ActiveIndicators>>({});
+  const [showIndicators, setShowIndicators] = useState(false);
+  const [indicatorPaneId, setIndicatorPaneId] = useState("premium");
 
   const captureState = useCallback(() => ({
     target,
@@ -277,12 +286,14 @@ export default function PremiumDiscount() {
     scatterView,
     rvBand,
     pdDetailIndicators,
+    inlineIndicators,
+    showIndicators,
   }), [
     target, dimension, valMetric, growthMetric, pinDate, periodFilter, rollWindow, rollLag,
     showEarnings, compareMode, peerTicker, peerValueOverride, groupADim, groupAValue, groupBDim,
     groupBValue, groupAKind, groupBKind, groupABasketId, groupBBasketId, basketId,
     basketAggregation, visibleCharts, similarN, similarExclusion, similarMinGap, scatterView, rvBand,
-    pdDetailIndicators,
+    pdDetailIndicators, inlineIndicators, showIndicators,
   ]);
 
   const applyState = useCallback((data: any) => {
@@ -325,6 +336,8 @@ export default function PremiumDiscount() {
     if (typeof data.similarMinGap === "number" && data.similarMinGap >= 0 && data.similarMinGap <= 504) setSimilarMinGap(data.similarMinGap);
     if (typeof data.rvBand === "number" && data.rvBand >= 0.05 && data.rvBand <= 2) setRvBand(data.rvBand);
     if (data.pdDetailIndicators !== undefined) setPdDetailIndicators(data.pdDetailIndicators);
+    if (data.inlineIndicators && typeof data.inlineIndicators === "object") setInlineIndicators(data.inlineIndicators);
+    if (typeof data.showIndicators === "boolean") setShowIndicators(data.showIndicators);
     stateRestoredRef.current = true;
   }, []);
 
@@ -1513,6 +1526,33 @@ export default function PremiumDiscount() {
     return () => cancelAnimationFrame(raf);
   }, [premiumSeries, growthSeries, ratioSeries, rollCorrSeries, relReturnSeries, relRatioSeries, rawRatioSeries, rvVerdictSeries]);
 
+  // ── Canonical-panel indicators on the inline grid ─────────────────────────
+  // One pass over the seven line charts: remove this effect's own series per
+  // chart, then re-render via the shared band renderer. Charts persist, so
+  // per-chart bookkeeping (not chart teardown) is required.
+  const inlineIndSeriesRefs = useRef<Record<string, any[]>>({});
+  useEffect(() => {
+    const targets: Array<[string, any, { time: string; value: number }[]]> = [
+      ["premium", premiumChartRef.current, premiumSeries as any],
+      ["growth", growthChartRef.current, growthSeries as any],
+      ["ratio", ratioChartRef.current, ratioSeries as any],
+      ["rollCorr", rollCorrChartRef.current, rollCorrSeries as any],
+      ["relReturn", relReturnChartRef.current, relReturnSeries as any],
+      ["relRatio", relRatioChartRef.current, relRatioSeries as any],
+      ["rawRatio", rawRatioChartRef.current, rawRatioSeries as any],
+    ];
+    for (const [id, chart, series] of targets) {
+      if (!chart) continue;
+      for (const s of inlineIndSeriesRefs.current[id] ?? []) { try { chart.removeSeries(s); } catch {} }
+      inlineIndSeriesRefs.current[id] = [];
+      const ind = inlineIndicators[id];
+      if (!ind || Object.keys(ind).length === 0 || !series || series.length < 2) continue;
+      try {
+        renderBandIndicators(chart, series, ind, (s) => inlineIndSeriesRefs.current[id].push(s));
+      } catch { /* indicators must never blank a P/D chart */ }
+    }
+  }, [inlineIndicators, premiumSeries, growthSeries, ratioSeries, rollCorrSeries, relReturnSeries, relRatioSeries, rawRatioSeries, visibleCharts]);
+
   // ── Earnings primitives ────────────────────────────────────────────────────
   useEffect(() => {
     const attached: Array<{ series: any; primitive: any }> = [];
@@ -2288,6 +2328,14 @@ export default function PremiumDiscount() {
 
           <div className="ml-auto flex items-center gap-2">
             <button
+              onClick={() => setShowIndicators((v) => !v)}
+              className={`flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border rounded ${showIndicators ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-accent text-muted-foreground hover:text-foreground"}`}
+              data-testid="pd-indicators-toggle"
+              title="Indicators panel for the inline chart grid"
+            >
+              <TrendingUp className="w-3.5 h-3.5" /> Indicators
+            </button>
+            <button
               onClick={openInCharts}
               disabled={!target}
               className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground disabled:opacity-40"
@@ -2583,8 +2631,9 @@ export default function PremiumDiscount() {
         </div>
       )}
 
-      {/* ── Main chart area ── */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-5 gap-px bg-border min-h-0 overflow-hidden">
+      {/* ── Main chart area (flex row so the indicators panel docks right) ── */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className="flex-1 min-w-0 grid grid-cols-1 lg:grid-cols-5 gap-px bg-border overflow-hidden">
         {/* Left column: time-series charts */}
         <div className={`${maxActive ? "lg:col-span-5" : "lg:col-span-3"} flex flex-col gap-px bg-border min-h-0`}>
           {/* Premium chart */}
@@ -2919,6 +2968,44 @@ export default function PremiumDiscount() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Canonical indicators panel — inline grid charts. Pane ticker = the
+          real target symbol so Find-Best-MA / best-lag work. */}
+      {showIndicators && (() => {
+        const panelPanes = CHART_IDS
+          .filter((id) => !["rvVerdictTs", "similar"].includes(id) && visibleCharts.has(id))
+          .map((id) => ({ id, label: CHART_LABELS[id] ?? id, ticker: target || undefined }));
+        const activeId = panelPanes.some((p) => p.id === indicatorPaneId) ? indicatorPaneId : (panelPanes[0]?.id ?? null);
+        return (
+          <IndicatorsPanel
+            panes={panelPanes}
+            indicatorsMap={inlineIndicators}
+            activePaneId={activeId}
+            onSelectPane={setIndicatorPaneId}
+            onChangeIndicators={(id, ind) => setInlineIndicators((prev) => ({ ...prev, [id]: ind }))}
+            onApplyToAllPanes={(ind) =>
+              setInlineIndicators((prev) => {
+                const next = { ...prev };
+                for (const p of panelPanes) next[p.id] = cloneIndicators(ind);
+                return next;
+              })
+            }
+            onCopyIndicatorToPane={(defId, srcId, target2) =>
+              setInlineIndicators((prev) => {
+                const src = getInstances(prev[srcId] || {}, defId);
+                if (!src.length) return prev;
+                const ids = target2 === "all" ? panelPanes.filter((p) => p.id !== srcId).map((p) => p.id) : [target2];
+                const next = { ...prev };
+                for (const id of ids) next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+                return next;
+              })
+            }
+            onClose={() => setShowIndicators(false)}
+            supportsPatterns={false}
+          />
+        );
+      })()}
       </div>
 
       {/* Basket editor modal */}

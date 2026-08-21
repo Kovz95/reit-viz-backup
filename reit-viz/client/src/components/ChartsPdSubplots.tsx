@@ -15,7 +15,10 @@ import {
   AreaSeries,
   LineSeries,
 } from "lightweight-charts";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, Minimize2, TrendingUp } from "lucide-react";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import { useBaskets } from "@/lib/useBaskets";
 import {
   getMetricSeries,
@@ -127,6 +130,11 @@ export interface PdSubplotsState {
   rollWindow: number;
   rollLag: number;
   basketAggregation?: "capWeighted" | "median";
+  /** Canonical indicators-panel configs for the two subplot charts, keyed
+   *  "pd:ratio" / "pd:corr" — persisted with the rest of this state via the
+   *  host's onStateChange (Charts workspace). */
+  indicators?: Record<string, ActiveIndicators>;
+  showIndicators?: boolean;
 }
 
 interface TickerRow {
@@ -815,6 +823,31 @@ export default function ChartsPdSubplots({
     [],
   );
 
+  // ── Canonical-panel indicators on the two subplot charts ──────────────────
+  // Charts persist, so remove this effect's own series per chart, then
+  // re-render via the shared band renderer.
+  const indSeriesRefs = useRef<Record<string, any[]>>({});
+  const [indPaneId, setIndPaneId] = useState<string | null>(null);
+  const subplotIndicators = state.indicators ?? {};
+  const indicatorsKey = JSON.stringify(subplotIndicators);
+  useEffect(() => {
+    const targets: Array<[string, any, TimePoint[]]> = [
+      ["pd:ratio", pdRatioChartRef.current, ratioSeries],
+      ["pd:corr", corrChartRef.current, rollCorrSeries],
+    ];
+    for (const [id, chart, series] of targets) {
+      if (!chart) continue;
+      for (const s of indSeriesRefs.current[id] ?? []) { try { chart.removeSeries(s); } catch {} }
+      indSeriesRefs.current[id] = [];
+      const ind = subplotIndicators[id];
+      if (!ind || Object.keys(ind).length === 0 || series.length < 2) continue;
+      try {
+        renderBandIndicators(chart, series, ind, (s) => indSeriesRefs.current[id].push(s));
+      } catch { /* indicators must never blank a subplot */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicatorsKey, ratioSeries, rollCorrSeries, state.showPDRatio, state.showCorrChart]);
+
   // ── Resize handling ────────────────────────────────────────────────────────
   const handleResize = useCallback(() => {
     if (pdRatioContainerRef.current && pdRatioChartRef.current) {
@@ -909,10 +942,11 @@ export default function ChartsPdSubplots({
     <div
       className={
         fillContainer
-          ? "flex-1 min-h-0 flex flex-col border-t border-border bg-background"
-          : "flex flex-col border-t border-border bg-background"
+          ? "flex-1 min-h-0 flex border-t border-border bg-background"
+          : "flex border-t border-border bg-background"
       }
     >
+    <div className="flex-1 min-w-0 flex flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b border-border/50 bg-muted/20">
         <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide mr-1">PD</span>
         <label className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
@@ -1184,6 +1218,14 @@ export default function ChartsPdSubplots({
         {computing && (
           <span className="text-[10px] font-mono text-muted-foreground italic">computing…</span>
         )}
+        <button
+          className={`ml-auto flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 border rounded ${state.showIndicators ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"}`}
+          onClick={() => patchState({ showIndicators: !state.showIndicators })}
+          title="Indicators panel for the P/D subplots"
+          data-testid="pd-subplots-indicators-toggle"
+        >
+          <TrendingUp className="w-3 h-3" /> Indicators
+        </button>
       </div>
 
       {showPDRatio && expandedId !== "corr" && (
@@ -1242,6 +1284,37 @@ export default function ChartsPdSubplots({
           <div ref={corrContainerRef} className="w-full h-full" />
         </div>
       )}
+    </div>
+
+    {/* Canonical indicators panel — self-owned two-pane list (the subplots
+        live OUTSIDE the Charts pane model, so they get their own panel;
+        state persists through the host's PdSubplotsState channel). */}
+    {state.showIndicators && (() => {
+      const plainTicker = symbol && !symbol.includes("/") && !symbol.includes(":") ? symbol : undefined;
+      const panelPanes = [
+        ...(showPDRatio ? [{ id: "pd:ratio", label: "PD Ratio", ticker: plainTicker }] : []),
+        ...(showCorrChart ? [{ id: "pd:corr", label: "Prem↔Growth Corr", ticker: plainTicker }] : []),
+      ];
+      const activeId = indPaneId && panelPanes.some((p) => p.id === indPaneId) ? indPaneId : (panelPanes[0]?.id ?? null);
+      return (
+        <IndicatorsPanel
+          panes={panelPanes}
+          indicatorsMap={subplotIndicators}
+          activePaneId={activeId}
+          onSelectPane={setIndPaneId}
+          onChangeIndicators={(id, ind) =>
+            patchState({ indicators: { ...subplotIndicators, [id]: ind } })
+          }
+          onApplyToAllPanes={(ind) => {
+            const next = { ...subplotIndicators };
+            for (const p of panelPanes) next[p.id] = cloneIndicators(ind);
+            patchState({ indicators: next });
+          }}
+          onClose={() => patchState({ showIndicators: false })}
+          supportsPatterns={false}
+        />
+      );
+    })()}
     </div>
   );
 }

@@ -14,7 +14,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { RefreshCw, Info, SortAsc, SortDesc, Minus } from "lucide-react";
+import { RefreshCw, Info, SortAsc, SortDesc, Minus, TrendingUp } from "lucide-react";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import type { ActiveIndicators } from "@/components/ChartPane";
 import { ArrowUpDown } from "@/components/ui/icons";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
@@ -725,9 +728,12 @@ interface RegimeTimelineProps {
   episodes: RegimeEpisode[];
   granularEpisodes: RegimeEpisode[];
   shading: "coarse" | "granular";
+  /** Canonical indicators-panel config — rendered on the GDP-YoY line via the
+   *  shared band renderer (lib/bandIndicators). */
+  activeIndicators?: ActiveIndicators;
 }
 
-function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }: RegimeTimelineProps) {
+function RegimeTimeline({ classifications, episodes, granularEpisodes, shading, activeIndicators }: RegimeTimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<{ bands: ISeriesApi<"Area">[]; growth?: ISeriesApi<"Line">; inflation?: ISeriesApi<"Line"> }>({ bands: [] });
@@ -857,6 +863,26 @@ function RegimeTimeline({ classifications, episodes, granularEpisodes, shading }
     } // else: same chart + same data (shading toggle) → leave view untouched
   }, [classifications, episodes, granularEpisodes, shading, gridColor]);
 
+  // Indicators (canonical panel) on the GDP-YoY line — the chart persists, so
+  // remove this effect's own series before re-rendering. Declared after the
+  // draw effect so a gridColor recreate re-adds indicators on the new chart.
+  const indicatorSeriesRefs = useRef<ISeriesApi<any>[]>([]);
+  const indicatorsKey = JSON.stringify(activeIndicators ?? {});
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const s of indicatorSeriesRefs.current) { try { chart.removeSeries(s); } catch {} }
+    indicatorSeriesRefs.current = [];
+    if (!activeIndicators || Object.keys(activeIndicators).length === 0) return;
+    const data = classifications
+      .filter((c) => Number.isFinite(c.growthYoY))
+      .map((c) => ({ time: c.month, value: c.growthYoY }));
+    try {
+      renderBandIndicators(chart, data, activeIndicators, (s) => indicatorSeriesRefs.current.push(s));
+    } catch { /* indicators must never blank the regime chart */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classifications, indicatorsKey, gridColor]);
+
   return (
     <div className="rounded-md border border-border bg-card p-2">
       <div className="flex items-center gap-3 px-1 mb-1">
@@ -981,6 +1007,9 @@ export default function MacroRegime() {
   const [loadingTickers, setLoadingTickers] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [classifications, setClassifications] = useState<RegimeClassification[]>([]);
+  // Canonical indicators panel for the regime timeline (single pane).
+  const [timelineIndicators, setTimelineIndicators] = useState<ActiveIndicators>({});
+  const [showIndicators, setShowIndicators] = useState(false);
   const [tickerStats, setTickerStats] = useState<TickerRegimeStat[]>([]);
   const [episodes, setEpisodes] = useState<RegimeEpisode[]>([]);
   const [granularEpisodes, setGranularEpisodes] = useState<RegimeEpisode[]>([]);
@@ -1120,6 +1149,16 @@ export default function MacroRegime() {
             </button>
           ))}
         </div>
+        <Button
+          variant={showIndicators ? "default" : "ghost"}
+          size="sm"
+          className="h-7 gap-1 text-xs"
+          onClick={() => setShowIndicators((v) => !v)}
+          title="Indicators panel for the regime timeline"
+          data-testid="regime-indicators-toggle"
+        >
+          <TrendingUp className="w-3 h-3" /> Indicators
+        </Button>
         <GridProminenceToggle />
         <Button variant="ghost" size="sm" onClick={() => setRefreshKey(k => k + 1)} data-testid="btn-refresh-regimes">
           <RefreshCw className="w-3.5 h-3.5" />
@@ -1127,7 +1166,8 @@ export default function MacroRegime() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className="flex-1 min-w-0 overflow-y-auto">
         {isLoading ? (
           <div className="flex items-center justify-center h-64 text-muted-foreground">
             <RefreshCw className="w-5 h-5 animate-spin mr-2" /> Loading macro series…
@@ -1199,7 +1239,7 @@ export default function MacroRegime() {
             {/* Timeline + Trajectory */}
             <div className="grid grid-cols-12 gap-3 px-3 pb-3">
               <div className="col-span-12 xl:col-span-8">
-                <RegimeTimeline classifications={classifications} episodes={episodes} granularEpisodes={granularEpisodes} shading={shading} />
+                <RegimeTimeline classifications={classifications} episodes={episodes} granularEpisodes={granularEpisodes} shading={shading} activeIndicators={timelineIndicators} />
                 <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] text-muted-foreground">
                   {shading === "coarse"
                     ? COARSE_ORDER.map(r => (
@@ -1308,6 +1348,23 @@ export default function MacroRegime() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Canonical indicators panel — monthly FRED-derived series, no pane
+          ticker (no OHLC endpoint for Find-Best-MA / best-lag). */}
+      {showIndicators && (
+        <IndicatorsPanel
+          panes={[{ id: "timeline", label: "Regime Timeline (GDP YoY)" }]}
+          indicatorsMap={{ timeline: timelineIndicators }}
+          activePaneId="timeline"
+          onSelectPane={() => {}}
+          onChangeIndicators={(_id, ind) => setTimelineIndicators(ind)}
+          onApplyToAllPanes={(ind) => setTimelineIndicators(cloneIndicators(ind))}
+          onClose={() => setShowIndicators(false)}
+          frequency="monthly"
+          supportsPatterns={false}
+        />
+      )}
       </div>
     </div>
   );

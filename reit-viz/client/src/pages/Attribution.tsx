@@ -15,6 +15,11 @@ import { makeSplitViewPreserver } from "@/lib/chartView";
 import { Download, RefreshCw, Info, SortAsc, SortDesc, Megaphone, FlaskConical, Tag, EyeOff, Maximize2, Minimize2 } from "lucide-react";
 import { VerticalLinePrimitive } from "@/lib/verticalLinePrimitive";
 import { setSeriesAxisLabels } from "@/components/ChartPane";
+import type { ActiveIndicators } from "@/components/ChartPane";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import { getInstances, setInstances } from "@/lib/indicatorInstances";
+import { TrendingUp } from "lucide-react";
 import AttributionBacktestModal from "@/components/AttributionBacktestModal";
 import { getTickerEvents } from "@/lib/dataService";
 import { ArrowUpDown } from "@/components/ui/icons";
@@ -225,11 +230,41 @@ function useEarningsLines(
   }, [earningsDates, ...deps]);
 }
 
+// ── Canonical-panel indicators on a persistent attribution chart ─────────────
+// Removes its own series then renders via the shared band renderer. `pick`
+// maps a deduped point to the primary value the indicators compute on. The
+// `data`/`gridColor` deps re-apply after the [gridColor] chart recreate, same
+// convention as the axis-label effects.
+function useBandIndicatorsOn<P extends { date: string }>(
+  chartRef: React.RefObject<IChartApi | null>,
+  data: P[],
+  pick: (p: P) => number,
+  activeIndicators: ActiveIndicators | undefined,
+  gridColor: string,
+) {
+  const seriesRefs = useRef<ISeriesApi<any>[]>([]);
+  const indicatorsKey = JSON.stringify(activeIndicators ?? {});
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const s of seriesRefs.current) { try { chart.removeSeries(s); } catch {} }
+    seriesRefs.current = [];
+    if (!activeIndicators || Object.keys(activeIndicators).length === 0 || data.length < 2) return;
+    const seen = new Set<string>();
+    const vals = data
+      .filter((p) => { const k = p.date.slice(0, 10); return seen.has(k) ? false : (seen.add(k), true); })
+      .map((p) => ({ time: p.date.slice(0, 10), value: pick(p) }))
+      .filter((p) => Number.isFinite(p.value));
+    try { renderBandIndicators(chart, vals, activeIndicators, (s) => seriesRefs.current.push(s)); } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indicatorsKey, data, gridColor]);
+}
+
 // ── Cumulative Chart Component ────────────────────────────────────────────────
 
-interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
+interface CumulativeChartProps { data: CumPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean; activeIndicators?: ActiveIndicators }
 
-function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, height = 280, fill = false, showAxisLabels = true }: CumulativeChartProps) {
+function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, height = 280, fill = false, showAxisLabels = true, activeIndicators }: CumulativeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const viewRef = useRef(makeSplitViewPreserver());
@@ -312,6 +347,8 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
     }
   }, [showAxisLabels, data, gridColor]);
 
+  useBandIndicatorsOn(chartRef, data, (p) => p.total, activeIndicators, gridColor);
+
   // NOTE: the container must always mount — the chart is created in a
   // [gridColor]-keyed effect, so an early return while data is still loading
   // would leave the chart uncreated forever once data arrives.
@@ -338,9 +375,9 @@ function CumulativeChart({ data, earningsDates = [], spacerTimes = [], sync, hei
 
 // ── Rolling Chart Component ───────────────────────────────────────────────────
 
-interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
+interface RollingChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean; activeIndicators?: ActiveIndicators }
 
-function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height = 260, fill = false, showAxisLabels = true }: RollingChartProps) {
+function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height = 260, fill = false, showAxisLabels = true, activeIndicators }: RollingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const viewRef = useRef(makeSplitViewPreserver());
@@ -421,6 +458,8 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
     }
   }, [showAxisLabels, data, gridColor]);
 
+  useBandIndicatorsOn(chartRef, data, (p) => p.total, activeIndicators, gridColor);
+
   // Container must always mount — see CumulativeChart note.
   return (
     <div className={`relative w-full ${fill ? "flex-1 min-h-0" : ""}`} style={fill ? undefined : { height }}>
@@ -449,9 +488,9 @@ function RollingChart({ data, earningsDates = [], spacerTimes = [], sync, height
 // The two lines sum to 100 by construction (same formula as the Charts-tab
 // Attribution panel's "Share of move %" display).
 
-interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean }
+interface ShareChartProps { data: RollingPoint[]; earningsDates?: string[]; spacerTimes?: string[]; sync?: ChartSyncGroup; height?: number; fill?: boolean; showAxisLabels?: boolean; activeIndicators?: ActiveIndicators }
 
-function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height = 200, fill = false, showAxisLabels = true }: ShareChartProps) {
+function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height = 200, fill = false, showAxisLabels = true, activeIndicators }: ShareChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const viewRef = useRef(makeSplitViewPreserver());
@@ -538,6 +577,17 @@ function ShareChart({ data, earningsDates = [], spacerTimes = [], sync, height =
       if (s) setSeriesAxisLabels(s, showAxisLabels);
     }
   }, [showAxisLabels, data, gridColor]);
+
+  useBandIndicatorsOn(
+    chartRef,
+    data,
+    (p) => {
+      const denom = Math.abs(p.mult) + Math.abs(p.est);
+      return denom > 1e-12 ? (Math.abs(p.mult) / denom) * 100 : 50;
+    },
+    activeIndicators,
+    gridColor,
+  );
 
   // Container must always mount — see CumulativeChart note.
   return (
@@ -693,13 +743,14 @@ interface SinglePanelProps {
   loadingSingle: boolean;
   earningsDates: string[];
   showAxisLabels: boolean;
+  indicatorsMap?: Record<string, ActiveIndicators>;
 }
 
 const CHART_HEIGHTS_KEY = "reit-viz:attr-chart-heights";
 const DEFAULT_CHART_HEIGHTS = [280, 260, 200];
 const MIN_CHART_HEIGHT = 120;
 
-function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates, showAxisLabels }: SinglePanelProps) {
+function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit, setActiveTicker, aligned, cumPath, rollingPath, summary, resolvedBasis, basisPeriod, windowDays, rollingDays, loadingSingle, earningsDates, showAxisLabels, indicatorsMap }: SinglePanelProps) {
   // One sync group per mounted panel: the cumulative + rolling charts share a
   // spacer axis (union of both date lists) and mirror pan/zoom + crosshair.
   const syncRef = useRef<ChartSyncGroup | null>(null);
@@ -838,7 +889,7 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
                 {expandBtn("cum", "Cumulative")}
               </div>
             </div>
-            <CumulativeChart data={cumPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[0]} fill={expanded === "cum"} showAxisLabels={showAxisLabels} />
+            <CumulativeChart data={cumPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[0]} fill={expanded === "cum"} showAxisLabels={showAxisLabels} activeIndicators={indicatorsMap?.["cum"]} />
           </div>
         )}
         {expanded === null && divider(0)}
@@ -854,7 +905,7 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
                 {expandBtn("roll", "Rolling")}
               </div>
             </div>
-            <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[1]} fill={expanded === "roll"} showAxisLabels={showAxisLabels} />
+            <RollingChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[1]} fill={expanded === "roll"} showAxisLabels={showAxisLabels} activeIndicators={indicatorsMap?.["roll"]} />
           </div>
         )}
         {expanded === null && divider(1)}
@@ -871,7 +922,7 @@ function SinglePanel({ tickerOptions, activeTicker, activeTickerLabel, freqUnit,
                 {expandBtn("share", "Share of move")}
               </div>
             </div>
-            <ShareChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[2]} fill={expanded === "share"} showAxisLabels={showAxisLabels} />
+            <ShareChart data={rollingPath} earningsDates={earningsDates} spacerTimes={spacerTimes} sync={syncRef.current!} height={heights[2]} fill={expanded === "share"} showAxisLabels={showAxisLabels} activeIndicators={indicatorsMap?.["share"]} />
           </div>
         )}
       </div>
@@ -991,6 +1042,11 @@ export default function Attribution() {
   const [showEarnings, setShowEarnings] = useState(false);
   const [earningsDates, setEarningsDates] = useState<string[]>([]);
   const [showBacktest, setShowBacktest] = useState(false);
+  // Canonical indicators panel: per-chart configs for the three Single-mode
+  // charts ("cum" | "roll" | "share"), rendered via the shared band renderer.
+  const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  const [showIndicators, setShowIndicators] = useState(false);
+  const [indicatorPaneId, setIndicatorPaneId] = useState("cum");
   // Axis "Labels" toggle (same behavior as the Charts-tab toolbar button).
   const [showAxisLabels, setShowAxisLabels] = useState(() => {
     try { return localStorage.getItem("reit-viz:attr-axis-labels") !== "0"; } catch { return true; }
@@ -1010,8 +1066,9 @@ export default function Attribution() {
     clfSearch,
     manualTickers: [...manualTickers],
     geo: { nations: [...geo.state.nations], exchanges: [...geo.state.exchanges] },
+    indicatorsMap, showIndicators,
   }), [mode, basisMode, basisPeriod, windowDays, rollingDays, attrFreq, activeTicker, basketId,
-    sortKey, sortDir, showEarnings, classFilters, clfSearch, manualTickers, geo.state]);
+    sortKey, sortDir, showEarnings, classFilters, clfSearch, manualTickers, geo.state, indicatorsMap, showIndicators]);
 
   const applyState = useCallback((c: any) => {
     if (c?.mode === "single" || c?.mode === "compare" || c?.mode === "basket" || c?.mode === "table") setMode(c.mode);
@@ -1032,6 +1089,8 @@ export default function Attribution() {
       geo.setNations(new Set(Array.isArray(c.geo.nations) ? c.geo.nations : []));
       geo.setExchanges(new Set(Array.isArray(c.geo.exchanges) ? c.geo.exchanges : []));
     }
+    if (c?.indicatorsMap && typeof c.indicatorsMap === "object") setIndicatorsMap(c.indicatorsMap);
+    if (typeof c?.showIndicators === "boolean") setShowIndicators(c.showIndicators);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geo.setNations, geo.setExchanges]);
 
@@ -1395,6 +1454,18 @@ export default function Attribution() {
           )}
           {mode === "single" && (
             <Button
+              variant={showIndicators ? "default" : "outline"}
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setShowIndicators((v) => !v)}
+              data-testid="attr-indicators-toggle"
+              title="Indicators panel for the three attribution charts"
+            >
+              <TrendingUp className="w-3 h-3 mr-1" /> Indicators
+            </Button>
+          )}
+          {mode === "single" && (
+            <Button
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-[10px]"
@@ -1431,10 +1502,12 @@ export default function Attribution() {
         </div>
       </div>
 
-      {/* Body */}
-      <div className="flex-1 overflow-auto">
+      {/* Body — flex row so the indicators panel docks as a right sibling */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className="flex-1 min-w-0 overflow-auto">
         {mode === "single" ? (
           <SinglePanel
+            indicatorsMap={indicatorsMap}
             tickerOptions={tickerOptions}
             activeTicker={activeTicker}
             activeTickerLabel={activeTickerLabel}
@@ -1543,6 +1616,49 @@ export default function Attribution() {
             />
           </div>
         )}
+      </div>
+
+      {/* Canonical indicators panel — Single mode's three charts. Real
+          tickers thread through so Find-Best-MA / best-lag work; pair and
+          basket symbols get no pane ticker (no single OHLC series). */}
+      {showIndicators && mode === "single" && (() => {
+        const plainTicker = activeTicker && !activeTicker.includes("/") && !activeTicker.startsWith("BASKET:") ? activeTicker : undefined;
+        const panelPanes = [
+          { id: "cum", label: "Cumulative Total Δln(P)", ticker: plainTicker },
+          { id: "roll", label: "Rolling Total Δln(P)", ticker: plainTicker },
+          { id: "share", label: "Multiple share of move %", ticker: plainTicker },
+        ];
+        const activeId = panelPanes.some((p) => p.id === indicatorPaneId) ? indicatorPaneId : "cum";
+        return (
+          <IndicatorsPanel
+            panes={panelPanes}
+            indicatorsMap={indicatorsMap}
+            activePaneId={activeId}
+            onSelectPane={setIndicatorPaneId}
+            onChangeIndicators={(id, ind) => setIndicatorsMap((prev) => ({ ...prev, [id]: ind }))}
+            onApplyToAllPanes={(ind) =>
+              setIndicatorsMap((prev) => {
+                const next = { ...prev };
+                for (const p of panelPanes) next[p.id] = cloneIndicators(ind);
+                return next;
+              })
+            }
+            onCopyIndicatorToPane={(defId, srcId, target) =>
+              setIndicatorsMap((prev) => {
+                const src = getInstances(prev[srcId] || {}, defId);
+                if (!src.length) return prev;
+                const ids = target === "all" ? panelPanes.filter((p) => p.id !== srcId).map((p) => p.id) : [target];
+                const next = { ...prev };
+                for (const id of ids) next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+                return next;
+              })
+            }
+            onClose={() => setShowIndicators(false)}
+            frequency={attrFreq}
+            supportsPatterns={false}
+          />
+        );
+      })()}
       </div>
       {showBacktest && alignedView && (
         <AttributionBacktestModal

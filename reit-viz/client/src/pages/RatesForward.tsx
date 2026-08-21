@@ -14,6 +14,10 @@ import { fetchFredSeries } from "@/lib/macroStatic";
 import { TrendingDown, TrendingUp, Activity } from "lucide-react";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import { getInstances, setInstances } from "@/lib/indicatorInstances";
+import type { ActiveIndicators } from "@/components/ChartPane";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -267,6 +271,11 @@ export default function RatesForward() {
   };
   const [error, setError] = useState<string | null>(null);
   const gridColor = useGridColor("rgba(82, 82, 91, 0.15)");
+  // Canonical indicators panel: per-chart configs, rendered via the shared
+  // band renderer inside each chart's rebuild effect.
+  const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  const [showIndicators, setShowIndicators] = useState(false);
+  const [indicatorPaneId, setIndicatorPaneId] = useState("score");
 
   // Chart refs
   const scoreHistoryRef = useRef<HTMLDivElement>(null);
@@ -487,12 +496,13 @@ export default function RatesForward() {
     scoreSeries.createPriceLine({ price: 0, color: "rgba(161, 161, 170, 0.4)", lineStyle: 0, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -20, color: "rgba(244, 63, 94, 0.35)", lineStyle: 3, lineWidth: 1, axisLabelVisible: false, title: "" });
     scoreSeries.createPriceLine({ price: -50, color: "rgba(244, 63, 94, 0.6)", lineStyle: 2, lineWidth: 1, axisLabelVisible: true, title: "−50 Suppressed" });
+    try { renderBandIndicators(chart, scoreHistory, indicatorsMap["score"] ?? {}, () => {}); } catch {}
     scoreView.current.applyView(chart, seriesFingerprint(scoreHistory, vnqSeries));
     scoreChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (scoreHistoryRef.current) chart.applyOptions({ width: scoreHistoryRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); scoreView.current.capture(chart); chart.remove(); scoreChartRef.current = null; };
-  }, [scoreHistory, vnqSeries, gridColor]);
+  }, [scoreHistory, vnqSeries, gridColor, indicatorsMap]);
 
   // Chart: 2Y Treasury
   useEffect(() => {
@@ -501,12 +511,13 @@ export default function RatesForward() {
     const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(LineSeries, { color: "#3b82f6", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(allSeries["DGS2"].map(p => ({ time: p.time, value: p.value })));
+    try { renderBandIndicators(chart, allSeries["DGS2"], indicatorsMap["dgs2"] ?? {}, () => {}); } catch {}
     twoYearView.current.applyView(chart, seriesFingerprint(allSeries["DGS2"]));
     twoYearChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (twoYearRef.current) chart.applyOptions({ width: twoYearRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); twoYearView.current.capture(chart); chart.remove(); twoYearChartRef.current = null; };
-  }, [allSeries, gridColor]);
+  }, [allSeries, gridColor, indicatorsMap]);
 
   // Chart: 10Y Decomp
   useEffect(() => {
@@ -519,12 +530,13 @@ export default function RatesForward() {
       .setData(combined.map(p => ({ time: p.time, value: p.exp })));
     chart.addSeries(LineSeries, { color: "#f59e0b", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(combined.map(p => ({ time: p.time, value: p.total })));
+    try { renderBandIndicators(chart, combined.map(p => ({ time: p.time, value: p.total })), indicatorsMap["ten-decomp"] ?? {}, () => {}); } catch {}
     tenDecompView.current.applyView(chart, seriesFingerprint(expSeries, tpSeries));
     tenDecompChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (tenDecompRef.current) chart.applyOptions({ width: tenDecompRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); tenDecompView.current.capture(chart); chart.remove(); tenDecompChartRef.current = null; };
-  }, [expSeries, tpSeries, gridColor]);
+  }, [expSeries, tpSeries, gridColor, indicatorsMap]);
 
   // Chart: 2s10s
   useEffect(() => {
@@ -533,12 +545,13 @@ export default function RatesForward() {
     const chart = createChart(el, { ...makeChartOptions(gridColor), width: el.clientWidth, height: 280 });
     chart.addSeries(AreaSeries, { lineColor: "#10b981", topColor: "rgba(16, 185, 129, 0.35)", bottomColor: "rgba(239, 68, 68, 0.20)", lineWidth: 2, priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 } })
       .setData(twoTenSpread.map(p => ({ time: p.time, value: p.value })));
+    try { renderBandIndicators(chart, twoTenSpread, indicatorsMap["two-ten"] ?? {}, () => {}); } catch {}
     twoTenView.current.applyView(chart, seriesFingerprint(twoTenSpread));
     twoTenChartRef.current = chart;
     const ro = new ResizeObserver(() => { if (twoTenRef.current) chart.applyOptions({ width: twoTenRef.current.clientWidth }); });
     ro.observe(el);
     return () => { ro.disconnect(); twoTenView.current.capture(chart); chart.remove(); twoTenChartRef.current = null; };
-  }, [twoTenSpread, gridColor]);
+  }, [twoTenSpread, gridColor, indicatorsMap]);
 
   // Canvas: Forward curve
   useEffect(() => {
@@ -642,7 +655,8 @@ export default function RatesForward() {
     : "text-rose-400";
 
   return (
-    <div className="h-full overflow-auto bg-background" data-testid="rates-forward-page">
+    <div className="h-full flex overflow-hidden bg-background" data-testid="rates-forward-page">
+    <div className="flex-1 min-w-0 overflow-auto">
       <div className="max-w-[1600px] mx-auto px-6 py-5 space-y-5">
         {/* Title */}
         <div className="flex items-center justify-between">
@@ -652,6 +666,15 @@ export default function RatesForward() {
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Activity className="w-3.5 h-3.5" />FRED daily series + NY Fed ACM term-premium decomposition
+            <button
+              type="button"
+              onClick={() => setShowIndicators((v) => !v)}
+              className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded border ${showIndicators ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:text-foreground"}`}
+              title="Indicators panel for the rate charts"
+              data-testid="rates-indicators-toggle"
+            >
+              <TrendingUp className="w-3 h-3" /> Indicators
+            </button>
             <GridProminenceToggle />
           </div>
         </div>
@@ -834,6 +857,48 @@ export default function RatesForward() {
           </div>
         </div>
       </div>
+    </div>
+
+    {/* Canonical indicators panel — FRED series, so no pane ticker (no OHLC
+        endpoint for Find-Best-MA / best-lag). */}
+    {showIndicators && (() => {
+      const panelPanes = [
+        { id: "score", label: "Convexity Score" },
+        { id: "dgs2", label: "2Y Treasury" },
+        { id: "ten-decomp", label: "10Y Fitted (ACM)" },
+        { id: "two-ten", label: "2s10s Slope" },
+      ];
+      const activeId = panelPanes.some((p) => p.id === indicatorPaneId) ? indicatorPaneId : "score";
+      return (
+        <IndicatorsPanel
+          panes={panelPanes}
+          indicatorsMap={indicatorsMap}
+          activePaneId={activeId}
+          onSelectPane={setIndicatorPaneId}
+          onChangeIndicators={(id, ind) => setIndicatorsMap((prev) => ({ ...prev, [id]: ind }))}
+          onApplyToAllPanes={(ind) =>
+            setIndicatorsMap((prev) => {
+              const next = { ...prev };
+              for (const p of panelPanes) next[p.id] = cloneIndicators(ind);
+              return next;
+            })
+          }
+          onCopyIndicatorToPane={(defId, srcId, target) =>
+            setIndicatorsMap((prev) => {
+              const src = getInstances(prev[srcId] || {}, defId);
+              if (!src.length) return prev;
+              const ids = target === "all" ? panelPanes.filter((p) => p.id !== srcId).map((p) => p.id) : [target];
+              const next = { ...prev };
+              for (const id of ids) next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+              return next;
+            })
+          }
+          onClose={() => setShowIndicators(false)}
+          frequency={activeId === "score" ? scoreFreq : "daily"}
+          supportsPatterns={false}
+        />
+      );
+    })()}
     </div>
   );
 }
