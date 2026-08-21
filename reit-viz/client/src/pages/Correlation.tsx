@@ -395,7 +395,7 @@ function ScanProgress({ done, total, phase }: { done: number; total: number; pha
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
-        <span>{phase === "load" ? "Loading factor data" : "Scanning factors"}: {done} / {total}</span>
+        <span>{phase === "load" ? "Loading factor data" : phase === "baskets" ? "Loading basket aggregates" : "Scanning factors"}: {done} / {total}</span>
         <span>{pct}%</span>
       </div>
       <div className="h-1.5 bg-border/40 rounded-full overflow-hidden">
@@ -520,6 +520,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
   const [targetMode, setTargetMode] = useState("1d");
   const [includeMacro, setIncludeMacro] = useState(true);
   const [includeFund, setIncludeFund] = useState(true);
+  const [includeBaskets, setIncludeBaskets] = useState(false);
   const [minObs, setMinObs] = useState(60);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; phase: string } | null>(null);
@@ -549,14 +550,36 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
     try {
       // Basket target: aggregate close as the target series. Fund factors key
       // off a single ticker's workbook metrics, so they're skipped for baskets.
+      const loadBasketSeries = async (b: Basket) => {
+        const ohlc = await getBasketOhlc(buildBasketOhlc(b.tickers, b, { weighting: b.weighting, rebalance: b.rebalance }));
+        if (!ohlc || !ohlc.dates || ohlc.dates.length === 0) return null;
+        return ohlc.dates
+          .map((d, i) => ({ time: d, value: ohlc.closes[i] }))
+          .filter((p) => Number.isFinite(p.value));
+      };
       let priceOverride: { time: string; value: number }[] | undefined;
       if (isBasketTarget) {
         if (targetBasket!.tickers.length === 0) throw new Error(`Basket "${targetBasket!.name}" is empty.`);
-        const ohlc = await getBasketOhlc(buildBasketOhlc(targetBasket!.tickers, targetBasket!, { weighting: targetBasket!.weighting, rebalance: targetBasket!.rebalance }));
-        if (!ohlc || !ohlc.dates || ohlc.dates.length === 0) throw new Error(`No data for basket "${targetBasket!.name}".`);
-        priceOverride = ohlc.dates
-          .map((d, i) => ({ time: d, value: ohlc.closes[i] }))
-          .filter((p) => Number.isFinite(p.value));
+        priceOverride = (await loadBasketSeries(targetBasket!)) ?? undefined;
+        if (!priceOverride) throw new Error(`No data for basket "${targetBasket!.name}".`);
+      }
+      // Basket factors: every saved + auto basket's aggregate close as a
+      // candidate driver (the target basket itself is excluded).
+      const extraFactors: { spec: string; label: string; category: string; data: { time: string; value: number }[] }[] = [];
+      if (includeBaskets) {
+        const candidates = baskets.filter((b) => b.tickers.length > 0 && !(isBasketTarget && b.id === targetBasket!.id));
+        let loaded = 0;
+        const chunk = 6;
+        for (let i = 0; i < candidates.length; i += chunk) {
+          if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+          const batch = candidates.slice(i, i + chunk);
+          const series = await Promise.all(batch.map((b) => loadBasketSeries(b).catch(() => null)));
+          batch.forEach((b, j) => {
+            if (series[j]) extraFactors.push({ spec: `${BASKET_SPEC_PREFIX}${b.id}`, label: b.name, category: "Basket", data: series[j]! });
+          });
+          loaded = Math.min(i + chunk, candidates.length);
+          setProgress({ done: loaded, total: candidates.length, phase: "baskets" });
+        }
       }
       const res = await runDriverScan({
         ticker: isBasketTarget ? `${BASKET_SPEC_PREFIX}${targetBasket!.id}` : ticker,
@@ -566,6 +589,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
         minObs,
         signal: controller.signal,
         priceOverride,
+        extraFactors,
         onProgress: (done: number, total: number, phase: string) => {
           setProgress({ done, total, phase });
         },
@@ -578,7 +602,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
       setProgress(null);
       abortRef.current = null;
     }
-  }, [ticker, targetMode, includeMacro, includeFund, hasFund, minObs, scanning, isBasketTarget, targetBasket]);
+  }, [ticker, targetMode, includeMacro, includeFund, hasFund, minObs, scanning, isBasketTarget, targetBasket, includeBaskets, baskets]);
 
   const exportCSV = useCallback(() => {
     if (!result) return;
@@ -691,6 +715,14 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
               className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${isBasketTarget ? "border-border/40 text-muted-foreground/30 cursor-not-allowed" : includeFund ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
             >
               Fundamentals
+            </button>
+            <button
+              onClick={() => setIncludeBaskets(v => !v)}
+              title="Scan every saved + auto basket's weighted aggregate close as a candidate driver"
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${includeBaskets ? "bg-amber-500/20 border-amber-500/50 text-amber-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+              data-testid="driver-include-baskets"
+            >
+              Baskets
             </button>
           </div>
         </div>

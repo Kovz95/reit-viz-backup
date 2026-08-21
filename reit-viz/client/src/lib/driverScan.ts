@@ -245,6 +245,9 @@ export interface RunDriverScanOptions {
    *  used instead of fetching `ticker`'s close. Fund factors still key off
    *  `ticker`, so callers passing a synthetic target should disable them. */
   priceOverride?: Point[];
+  /** Extra pre-resolved factors appended to the catalog (e.g. basket
+   *  aggregates as candidate drivers). Empty-data entries are dropped. */
+  extraFactors?: { spec: string; label: string; category: string; data: Point[] }[];
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -451,6 +454,7 @@ export async function runDriverScan(
     onProgress,
     signal,
     priceOverride,
+    extraFactors = [],
   } = opts;
 
   const price = priceOverride ?? (await getMetricSeries(ticker, "close"));
@@ -463,12 +467,15 @@ export async function runDriverScan(
     throw new Error(`Insufficient data for ${ticker} with minObs=${minObs}`);
   }
 
-  const factors = await loadFactors(
-    ticker,
-    includeMacro,
-    includeFund,
-    (done, total) => onProgress?.(done, total, "load")
-  );
+  const factors = [
+    ...(await loadFactors(
+      ticker,
+      includeMacro,
+      includeFund,
+      (done, total) => onProgress?.(done, total, "load")
+    )),
+    ...extraFactors.filter((f) => f.data.length > 0),
+  ];
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
