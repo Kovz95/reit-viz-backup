@@ -16,6 +16,7 @@ import { PairSeriesDetailOverlay } from "@/pages/PairRatios";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { driverScan } from "@/lib/driverScan";
 import { Play as PlayIcon } from "@/lib/icons";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -937,6 +938,7 @@ export default function RelativeStrength() {
   const [rebalanceBars, setRebalanceBars] = useLocalStorage<number>("rse:reb", 21);
   const [nBuckets, setNBuckets] = useLocalStorage<number>("rse:buckets", 10);
   const [result, setResult] = useLocalStorage<RunResult | null>("rse:result", null);
+  const basketScope = useBasketScope("reit-viz:basket-scope:relative-strength");
   const [isRunning, setIsRunning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [progressMsg, setProgressMsg] = useState("");
@@ -966,8 +968,12 @@ export default function RelativeStrength() {
       // yet (startup race) — fall back to the full workbook rather than erroring.
       const tickerList = (appCtx.filteredTickersList?.length ? appCtx.filteredTickersList : allTickers.map((t: { ticker: string }) => t.ticker));
       const visibleSet = new Set(tickerList.map((t: { ticker: string } | string) => typeof t === "string" ? t : t.ticker));
-      const filtered = allTickers.filter((t: { ticker: string }) => visibleSet.has(t.ticker));
-      if (filtered.length < 5) throw new Error("Need at least 5 tickers in universe");
+      const filtered = allTickers
+        .filter((t: { ticker: string }) => visibleSet.has(t.ticker))
+        .filter((t: { ticker: string }) => basketScope.inScope(t.ticker));
+      if (filtered.length < 5) {
+        throw new Error(basketScope.members ? "Need at least 5 tickers in the basket scope — pick a larger basket or clear the scope" : "Need at least 5 tickers in universe");
+      }
       const tickers = filtered.map((t: { ticker: string }) => t.ticker);
 
       setProgressMsg(`Loading metrics for ${tickers.length} tickers…`);
@@ -1042,7 +1048,7 @@ export default function RelativeStrength() {
     } finally {
       setIsRunning(false);
     }
-  }, [appCtx, config, doBacktest, hitThreshold, rebalanceBars, nBuckets, setResult]);
+  }, [appCtx, config, doBacktest, hitThreshold, rebalanceBars, nBuckets, setResult, basketScope.members, basketScope.inScope]);
 
   return (
     <div className="p-6 space-y-4 max-w-[1400px] mx-auto">
@@ -1075,6 +1081,12 @@ export default function RelativeStrength() {
             <Input className="w-24 h-8" value={singleTicker} onChange={e => setSingleTicker(e.target.value.toUpperCase())} />
           </>
         )}
+        {/* Basket scope — restricts the scored universe to the basket's members
+            (applies to all three modes; ranks/percentiles are relative to it). */}
+        <label className="flex items-center gap-1.5 ml-auto text-xs text-muted-foreground">
+          Basket scope
+          <BasketScopeSelect scope={basketScope} className="h-8 w-[160px] text-xs" />
+        </label>
       </div>
 
       {/* Config panel */}
