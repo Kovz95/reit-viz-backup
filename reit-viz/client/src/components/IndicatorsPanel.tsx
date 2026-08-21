@@ -234,6 +234,14 @@ interface IndicatorsPanelProps<Id extends number | string> {
   /** Host-specific extra content rendered after the canonical sections,
    *  before Colors (e.g. the Pairs hidden-sub-panes restore chips). */
   extraSections?: ReactNode;
+  /** Pass false when the host's chart renderer cannot draw chart patterns —
+   *  hides the Pattern Recognition section instead of showing inert toggles
+   *  (e.g. Macro's band renderer has no pattern support). Default true. */
+  supportsPatterns?: boolean;
+  /** Namespace for pattern-settings keys — must match the ChartPane
+   *  patternsScope the host renders with (e.g. Correlation passes "corr" so
+   *  its numeric pane ids don't clobber the Charts tab's saved settings). */
+  patternsScope?: string;
 }
 
 /** Ordered list of collapsible section titles in the indicators sidebar. */
@@ -1211,6 +1219,8 @@ export default function IndicatorsPanel<Id extends number | string>({
   frequency,
   chipsOpts,
   extraSections,
+  supportsPatterns = true,
+  patternsScope,
 }: IndicatorsPanelProps<Id>) {
   // Per-section collapse state — empty set means every section is expanded (default).
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
@@ -1471,7 +1481,9 @@ export default function IndicatorsPanel<Id extends number | string>({
         )}
 
         {/* ───── Pattern Recognition ───── */}
-        {selectedPaneId !== null && <PatternsPanel paneId={selectedPaneId} />}
+        {supportsPatterns && selectedPaneId !== null && (
+          <PatternsPanel paneId={patternsScope ? `${patternsScope}:${selectedPaneId}` : selectedPaneId} />
+        )}
 
         {/* ───── Moving Averages ───── */}
         <SectionHeader

@@ -1794,6 +1794,7 @@ function CorrLwcPane({
       <ChartPane
         paneId={paneId}
         paneLabel={label}
+        patternsScope="corr"
         series={series}
         ohlcData={null}
         activeTicker={null}
@@ -5278,6 +5279,7 @@ function PairwiseView({
         }
         onClose={() => setShowIndicators(false)}
         frequency={freq}
+        patternsScope="corr"
       />
     )}
     </div>

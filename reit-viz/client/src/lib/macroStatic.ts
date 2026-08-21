@@ -45,17 +45,26 @@ let _computedSpecCache: Record<string, ComputedSpec> | null = null;
 /** Fetch the macro catalog (list of all available series) */
 export async function fetchMacroCatalog(): Promise<MacroSeriesMeta[]> {
   if (_catalogCache) return _catalogCache;
-  
+
   if (isStaticMode()) {
-    const resp = await fetch("data/macro/catalog.json");
-    if (!resp.ok) throw new Error("Failed to load macro catalog");
-    _catalogCache = await resp.json();
-    return _catalogCache!;
-  } else {
-    const resp = await apiRequest("GET", "/api/macro/catalog");
-    _catalogCache = await resp.json();
-    return _catalogCache!;
+    // Same guard as fetchStaticSeries: a MISSING static path answers with the
+    // SPA's index.html (200 text/html), so resp.ok alone is not enough —
+    // unguarded, that json() throw killed the whole Macro page (0 panes).
+    // Fall back to /api/macro/catalog, which builds the catalog server-side.
+    try {
+      const resp = await fetch("data/macro/catalog.json");
+      if (resp.ok && (resp.headers.get("content-type") ?? "").includes("json")) {
+        const j = await resp.json();
+        if (Array.isArray(j) && j.length > 0) {
+          _catalogCache = j;
+          return _catalogCache!;
+        }
+      }
+    } catch { /* fall through to the API */ }
   }
+  const resp = await apiRequest("GET", "/api/macro/catalog");
+  _catalogCache = await resp.json();
+  return _catalogCache!;
 }
 
 /** Fetch computed series specs (for computing spreads client-side) */

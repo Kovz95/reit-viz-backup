@@ -427,6 +427,13 @@ export interface ChartPaneHandle {
 interface ChartPaneProps {
   paneId: number;
   paneLabel: string;
+  /** Namespace for pattern-recognition settings. The settings store is global
+   *  and keyed by paneId, so hosts whose pane ids overlap the Charts tab's
+   *  (e.g. Correlation's 1/2/3) must scope their keys ("corr" → "corr:1") or
+   *  they clobber the Charts panes' saved pattern settings. Charts passes
+   *  nothing (bare keys preserved). Must match the IndicatorsPanel's
+   *  patternsScope so the panel edits the same key this pane reads. */
+  patternsScope?: string;
   /** Persisted per-pane display frequency (from PaneInfo.freq); when provided
    *  with onPaneFreqChange the C/W/M chip is controlled and survives reloads.
    *  Absent (e.g. Correlation's reuse) -> local uncontrolled state. */
@@ -1621,6 +1628,7 @@ function SubIndicatorChart({
 const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   paneId,
   paneLabel,
+  patternsScope,
   paneFreqProp,
   onPaneFreqChange,
   series: paneSeries,
@@ -1963,9 +1971,11 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   // Settings live in localStorage (per pane) and change via window events, so a
   // nonce forces recomputation on settings-changed / rescan for this pane.
   const [patternNonce, setPatternNonce] = useState(0);
+  // Settings-store key: scoped when the host namespaces (see patternsScope).
+  const patternsKey = patternsScope ? `${patternsScope}:${paneId}` : paneId;
   useEffect(() => {
     const onChange = (e: Event) => {
-      if ((e as CustomEvent).detail?.paneId === paneId) setPatternNonce((x) => x + 1);
+      if ((e as CustomEvent).detail?.paneId === patternsKey) setPatternNonce((x) => x + 1);
     };
     window.addEventListener("reit-viz:patterns-settings-changed", onChange);
     window.addEventListener("reit-viz:patterns-rescan", onChange);
@@ -1973,7 +1983,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       window.removeEventListener("reit-viz:patterns-settings-changed", onChange);
       window.removeEventListener("reit-viz:patterns-rescan", onChange);
     };
-  }, [paneId]);
+  }, [patternsKey]);
 
   const patternBars = useMemo(() => {
     if (!Array.isArray(ohlcData)) return [];
@@ -1983,7 +1993,7 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
   }, [ohlcData]);
 
   const patternResults = useMemo(() => {
-    const s = getPatternSettings(paneId);
+    const s = getPatternSettings(patternsKey);
     const empty = { patterns: [] as ReturnType<typeof detectChartPatterns>, relevant: [] as any[], bars: patternBars };
     if (!s.enabled) return empty;
     // Resample to the selected timeframe before detection. The downsampled bars
@@ -2027,13 +2037,14 @@ const ChartPane = forwardRef<ChartPaneHandle, ChartPaneProps>(({
       : [];
     return { patterns, relevant, bars: detectionBars };
     // patternNonce forces re-read of localStorage settings.
-  }, [patternBars, paneId, patternNonce]);
+  }, [patternBars, patternsKey, patternNonce]);
 
   // Publish results to the PatternsPanel (badge count + most-relevant list).
+  // Keyed by the SCOPED key so the panel (which uses the same scope) matches.
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent("reit-viz:patterns-detected", { detail: { paneId, patterns: patternResults.patterns } }));
-    window.dispatchEvent(new CustomEvent("reit-viz:patterns-most-relevant", { detail: { paneId, relevant: patternResults.relevant } }));
-  }, [patternResults, paneId]);
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-detected", { detail: { paneId: patternsKey, patterns: patternResults.patterns } }));
+    window.dispatchEvent(new CustomEvent("reit-viz:patterns-most-relevant", { detail: { paneId: patternsKey, relevant: patternResults.relevant } }));
+  }, [patternResults, patternsKey]);
 
   // Remove all of this pane's measurements (keeps the primitive attached so new
   // measurements can be drawn again) and hide the floating readout box.

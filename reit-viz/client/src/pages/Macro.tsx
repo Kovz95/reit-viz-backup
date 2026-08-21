@@ -30,11 +30,12 @@ import {
   X as XIcon,
 } from "lucide-react";
 import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
-import { indicatorPeriods, getMaLines } from "@/components/ChartPane";
+import { indicatorPeriods, getMaLines, PANE_OVERLAY_TYPES, subChartSourceLabel } from "@/components/ChartPane";
+import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
 import { computeMaByType, type MaType } from "@/lib/maEngine";
 import { ALL_REGISTRY_INDICATORS, resolveParams, resampleIndicatorBars } from "@/lib/indicatorRegistry";
-import { getInstances, effGroup, subChartKeyFor, type IndicatorInstance } from "@/lib/indicatorInstances";
+import { getInstances, setInstances, effGroup, subChartKeyFor, type IndicatorInstance } from "@/lib/indicatorInstances";
 import type { OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import ExportMenu from "@/components/ExportMenu";
@@ -53,6 +54,9 @@ import {
   computeBollingerBands,
   computeROC,
   computeStochastic,
+  computeATR,
+  computeOBV,
+  rollingAutocorrOfSeries,
 } from "@/lib/indicators";
 import * as IndicatorMath from "@/lib/indicators";
 
@@ -311,6 +315,15 @@ function MacroPane({
       const hiddenSet = new Set(activeIndicators.hiddenSubCharts ?? []);
       const groupHidden = (baseId: string, inst: IndicatorInstance) =>
         hiddenSet.has(subChartKeyFor(baseId, effGroup(inst)));
+      // Sub-band value registry for indicator-on-indicator overlays: each
+      // sub-band records its primary line (first instance of a group wins,
+      // Charts parity) plus the price-scale band it draws on, keyed by the
+      // same sub-chart key the panel's Indicator Overlays section uses.
+      const subValues = new Map<string, { data: { time: Time; value: number }[]; scaleId: string }>();
+      const captureSub = (baseId: string, inst: IndicatorInstance, scaleId: string, data: { time: Time; value: number }[]) => {
+        const sk = subChartKeyFor(baseId, effGroup(inst));
+        if (!subValues.has(sk)) subValues.set(sk, { data, scaleId });
+      };
       const instNum = (inst: IndicatorInstance, key: string, dflt: number): number => {
         const v = inst.params[key];
         const nv = Array.isArray(v) ? v[0] : v;
@@ -387,6 +400,7 @@ function MacroPane({
           });
           rsiLine.setData(rsiData.map(d => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(rsiLine);
+          captureSub("rsi", inst, "rsi", rsiData.map(d => ({ time: d.time as Time, value: d.value })));
 
           const first = rsiData[0].time as Time;
           const last = rsiData[rsiData.length - 1].time as Time;
@@ -433,6 +447,7 @@ function MacroPane({
           });
           ml.setData(macd.macdLine.map(d => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(ml);
+          captureSub("macd", inst, "macd", macd.macdLine.map(d => ({ time: d.time as Time, value: d.value })));
 
           const sl = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.macd_signal,
@@ -470,9 +485,21 @@ function MacroPane({
         }
       }
 
-      // Mean ± Std Bands
+      // Mean ± Std Bands — band-line colors derive from the mean color at the
+      // panel's chosen opacity, with optional envelope shading (Charts parity;
+      // the opacity/shade controls were previously inert on Macro).
       if (activeIndicators.mean) {
         const { rolling, period } = activeIndicators.mean;
+        const bandOp = activeIndicators.mean.bandOpacity ?? 0.8;
+        const meanShade = activeIndicators.mean.shade !== false;
+        const meanRgb = (() => {
+          const m = /^#([0-9a-f]{6})$/i.exec(INDICATOR_COLORS.mean ?? "");
+          if (!m) return "99, 102, 241";
+          const v = parseInt(m[1], 16);
+          return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
+        })();
+        const bandColor = (mult: number) =>
+          `rgba(${meanRgb}, ${(Math.abs(mult) === 1 ? bandOp : bandOp * 0.65).toFixed(2)})`;
         if (rolling) {
           const rb = computeRollingMeanBands(primaryData, period);
           if (rb.mean.length > 0) {
@@ -489,10 +516,8 @@ function MacroPane({
 
             for (const b of rb.bands) {
               const bs = chart.addSeries(LineSeries, {
-                color: Math.abs(b.mult) === 1
-                  ? "rgba(99, 102, 241, 0.4)"
-                  : "rgba(99, 102, 241, 0.25)",
-                lineWidth: 1,
+                color: bandColor(b.mult),
+                lineWidth: (Math.abs(b.mult) === 1 ? 2 : 1) as LineWidth,
                 title: `${b.mult > 0 ? "+" : ""}${b.mult}σ`,
                 lineStyle: LineStyle.Dotted,
                 priceLineVisible: false,
@@ -500,6 +525,24 @@ function MacroPane({
               });
               bs.setData(b.data.map(d => ({ time: d.time as Time, value: d.value })));
               indicatorSeriesRef.current.push(bs);
+            }
+            if (meanShade) {
+              const band = (mult: number) => rb.bands.find((b) => b.mult === mult)?.data as unknown as CloudPoint[] | undefined;
+              const fills = (alpha: number) => {
+                const c = `rgba(${meanRgb}, ${alpha.toFixed(3)})`;
+                return { up: c, down: c };
+              };
+              const outerA = band(2), outerB = band(-2), innerA = band(1), innerB = band(-1);
+              try {
+                if (outerA?.length && outerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(outerA, outerB, fills(0.07 * bandOp)));
+                }
+                if (innerA?.length && innerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(innerA, innerB, fills(0.1 * bandOp)));
+                }
+              } catch {}
             }
           }
         } else {
@@ -525,10 +568,8 @@ function MacroPane({
 
             for (const mult of [1, -1, 2, -2]) {
               const band = chart.addSeries(LineSeries, {
-                color: Math.abs(mult) === 1
-                  ? "rgba(99, 102, 241, 0.4)"
-                  : "rgba(99, 102, 241, 0.25)",
-                lineWidth: 1,
+                color: bandColor(mult),
+                lineWidth: (Math.abs(mult) === 1 ? 2 : 1) as LineWidth,
                 title: `${mult > 0 ? "+" : ""}${mult}σ`,
                 lineStyle: LineStyle.Dotted,
                 priceLineVisible: false,
@@ -603,6 +644,7 @@ function MacroPane({
           });
           rocLine.setData(rocData.map(d => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(rocLine);
+          captureSub("roc", inst, "roc", rocData.map(d => ({ time: d.time as Time, value: d.value })));
 
           if (rocData.length >= 2) {
             const zl = chart.addSeries(LineSeries, {
@@ -645,6 +687,7 @@ function MacroPane({
           });
           kLine.setData(stoch.k.map(d => ({ time: d.time as Time, value: d.value })));
           indicatorSeriesRef.current.push(kLine);
+          captureSub("stochastic", inst, "stoch", stoch.k.map(d => ({ time: d.time as Time, value: d.value })));
 
           const dLine = chart.addSeries(LineSeries, {
             color: INDICATOR_COLORS.stoch_d,
@@ -683,6 +726,55 @@ function MacroPane({
           }
           kLine.priceScale().applyOptions({
             scaleMargins: { top: 0.75, bottom: 0 },
+          });
+        }
+      }
+
+      // ATR band — close-only true-range approximation (|Δvalue|), one line
+      // per instance; previously the panel's ATR toggle was inert on Macro.
+      for (const inst of getInstances(activeIndicators, "atr")) {
+        if (groupHidden("atr", inst)) continue;
+        const p = instNum(inst, "period", 14);
+        const { src: atrSrc, suffix: atrSfx } = maSourceFor(inst.freq);
+        const atrData = computeATR(atrSrc as { time: string; value: number }[], p);
+        if (atrData.length > 0) {
+          const atrLine = chart.addSeries(LineSeries, {
+            color: INDICATOR_COLORS.atr,
+            lineWidth: 1,
+            title: `ATR ${p}${atrSfx}`,
+            priceScaleId: "atr",
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          atrLine.setData(atrData.map(d => ({ time: d.time as Time, value: d.value })));
+          indicatorSeriesRef.current.push(atrLine);
+          captureSub("atr", inst, "atr", atrData.map(d => ({ time: d.time as Time, value: d.value })));
+          atrLine.priceScale().applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+          });
+        }
+      }
+
+      // OBV band — unit-volume direction accumulation (no volume on FRED
+      // series, same convention as the Pairs charts).
+      for (const inst of getInstances(activeIndicators, "obv")) {
+        if (groupHidden("obv", inst)) continue;
+        const { src: obvSrc, suffix: obvSfx } = maSourceFor(inst.freq);
+        const obvData = computeOBV(obvSrc as { time: string; value: number }[]);
+        if (obvData.length > 0) {
+          const obvLine = chart.addSeries(LineSeries, {
+            color: INDICATOR_COLORS.obv,
+            lineWidth: 1,
+            title: obvSfx ? `OBV ${obvSfx}` : "OBV",
+            priceScaleId: "obv",
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          obvLine.setData(obvData.map(d => ({ time: d.time as Time, value: d.value })));
+          indicatorSeriesRef.current.push(obvLine);
+          captureSub("obv", inst, "obv", obvData.map(d => ({ time: d.time as Time, value: d.value })));
+          obvLine.priceScale().applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
           });
         }
       }
@@ -752,11 +844,125 @@ function MacroPane({
                 );
                 if (anchor) {
                   (anchor as ISeriesApi<any>).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+                  // Register the band's primary line for indicator-on-indicator overlays.
+                  try {
+                    const aData = ((anchor as ISeriesApi<any>).data() as { time: Time; value?: number; close?: number }[])
+                      .map((d) => ({ time: d.time, value: (typeof d.value === "number" ? d.value : d.close) as number }))
+                      .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+                    captureSub(def.id, inst, scaleId, aData);
+                  } catch {}
                 }
               }
             } catch { /* one bad indicator must not kill the pane */ }
           }
         }
+      }
+
+      // ── Indicator-on-indicator overlays (panel "Indicator Overlays") ──
+      // Same-domain types (MA/Bollinger/Mean-band/Stochastic of a sub-band)
+      // draw INTO the source band; MACD/RSI/ROC/Autocorr of a source get
+      // their own bottom band — Charts parity adapted to Macro's scale-band
+      // model. Previously this section was a total no-op on Macro.
+      const paneOverlays = activeIndicators.indicatorOverlays ?? [];
+      if (paneOverlays.length > 0 && subValues.size > 0) {
+        const OVERLAY_PALETTE = ["#38bdf8", "#f472b6", "#facc15", "#4ade80", "#c084fc", "#fb923c"];
+        paneOverlays.forEach((o, oi) => {
+          const srcEntry = subValues.get(o.source);
+          if (!srcEntry) return;
+          const srcData = srcEntry.data.filter((d) => Number.isFinite(d.value));
+          if (srcData.length <= 5) return;
+          const color = OVERLAY_PALETTE[oi % OVERLAY_PALETTE.length];
+          const srcLabel = subChartSourceLabel(o.source);
+          const addL = (
+            lineData: { time: Time; value: number }[] | undefined,
+            lineTitle: string,
+            opts: Record<string, unknown> = {},
+          ): ISeriesApi<"Line"> | null => {
+            if (!lineData?.length) return null;
+            const s = chart.addSeries(LineSeries, {
+              color, lineWidth: 1, title: lineTitle,
+              priceLineVisible: false, lastValueVisible: false,
+              ...opts,
+            });
+            s.setData(lineData.map((d) => ({ time: d.time as Time, value: d.value })));
+            indicatorSeriesRef.current.push(s);
+            return s;
+          };
+          try {
+            if (PANE_OVERLAY_TYPES.has(o.type)) {
+              // Own bottom band, like the built-in sub-bands.
+              const scaleId = `ovl_${o.id}`;
+              let anchor: ISeriesApi<"Line"> | null = null;
+              const addB = (lineData: { time: Time; value: number }[] | undefined, lineTitle: string, extra: Record<string, unknown> = {}) => {
+                const s = addL(lineData, lineTitle, { priceScaleId: scaleId, ...extra });
+                if (s && !anchor) anchor = s;
+                return s;
+              };
+              const refSpan = (lineData: { time: Time; value: number }[], lvl: number, c = "rgba(255,255,255,0.15)") => {
+                if (lineData.length >= 2) {
+                  addB(
+                    [{ time: lineData[0].time, value: lvl }, { time: lineData[lineData.length - 1].time, value: lvl }],
+                    "",
+                    { color: c, lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false },
+                  );
+                }
+              };
+              if (o.type === "macd") {
+                const mc = computeMACD(srcData as { time: string; value: number }[], o.period, o.slow ?? 26, o.signal ?? 9);
+                addB(mc.macdLine as { time: Time; value: number }[], `MACD on ${srcLabel}`);
+                addB(mc.signalLine as { time: Time; value: number }[], "", { color: INDICATOR_COLORS.macd_signal, crosshairMarkerVisible: false });
+                refSpan(mc.macdLine as { time: Time; value: number }[], 0);
+              } else if (o.type === "rsi") {
+                const rs = computeRSI(srcData as { time: string; value: number }[], o.period) as { time: Time; value: number }[];
+                addB(rs, `RSI${o.period} on ${srcLabel}`);
+                refSpan(rs, 70, INDICATOR_COLORS.rsi_overbought);
+                refSpan(rs, 30, INDICATOR_COLORS.rsi_oversold);
+              } else if (o.type === "roc") {
+                const rc = computeROC(srcData as { time: string; value: number }[], o.period) as { time: Time; value: number }[];
+                addB(rc, `ROC${o.period} on ${srcLabel}`);
+                refSpan(rc, 0);
+              } else if (o.type === "autocorr") {
+                const lag = Math.max(1, o.lag ?? 1);
+                const ac = rollingAutocorrOfSeries(srcData as { time: string; value: number }[], lag, o.period) as { time: Time; value: number }[];
+                addB(ac, `AC(lag ${lag}, w${o.period}) on ${srcLabel}`);
+                const th = 1.96 / Math.sqrt(Math.max(1, o.period - lag));
+                refSpan(ac, 0);
+                refSpan(ac, th);
+                refSpan(ac, -th);
+              }
+              if (anchor) {
+                (anchor as ISeriesApi<"Line">).priceScale().applyOptions({ scaleMargins: { top: 0.75, bottom: 0 } });
+              }
+            } else {
+              // Same-domain overlay — draw into the source's band.
+              const opts = { priceScaleId: srcEntry.scaleId };
+              if (o.type === "bollinger") {
+                const bb = computeBollingerBands(srcData as { time: string; value: number }[], o.period, o.mult ?? 2);
+                addL(bb.basis as { time: Time; value: number }[], `BB${o.period} on ${srcLabel}`, opts);
+                addL(bb.upper as { time: Time; value: number }[], "", { ...opts, lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false });
+                addL(bb.lower as { time: Time; value: number }[], "", { ...opts, lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false });
+              } else if (o.type === "meanband") {
+                const rb = computeRollingMeanBands(srcData as { time: string; value: number }[], o.period);
+                addL(rb.mean as { time: Time; value: number }[], `Mean${o.period} on ${srcLabel}`, { ...opts, lineStyle: LineStyle.LargeDashed });
+                const maxMult = o.mult ?? 2;
+                for (const b of rb.bands) {
+                  if (Math.abs(b.mult) <= maxMult) addL(b.data as { time: Time; value: number }[], "", { ...opts, lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false });
+                }
+              } else if (o.type === "stochastic") {
+                const so = computeStochastic(srcData as { time: string; value: number }[], o.period, o.d ?? 3);
+                addL(so.k as { time: Time; value: number }[], `Stoch${o.period} on ${srcLabel}`, opts);
+                addL(so.d as { time: Time; value: number }[], "", { ...opts, lineStyle: LineStyle.Dotted, crosshairMarkerVisible: false });
+              } else {
+                const vals = srcData.map((d) => d.value);
+                const ma = computeMaByType(vals, o.period, o.type.toUpperCase() as MaType);
+                const maData = srcData
+                  .map((d, i) => ({ time: d.time, value: ma[i] as number }))
+                  .filter((d) => typeof d.value === "number" && Number.isFinite(d.value));
+                addL(maData, `${o.type.toUpperCase()}${o.period} on ${srcLabel}`, opts);
+              }
+            }
+          } catch { /* one bad overlay must not kill the pane */ }
+        });
       }
     }
 
@@ -1607,43 +1813,50 @@ export default function Macro() {
             );
           })()}
 
-          {/* Indicators panel (right side) */}
+          {/* Indicators panel (right side) — panel is generic over pane-id
+              type since the parity work, so Macro's real string pane ids go in
+              directly (the old numeric-shim maps are gone). Lists only the
+              VISIBLE panes so a maximized layout can't target an off-screen
+              pane. */}
           {showIndicators && (() => {
-            const chartIdToNum = new Map(panes.map((p, i) => [p.id, i]));
-            const numToChartId = new Map(panes.map((p, i) => [i, p.id]));
-            const panelPanes = panes.map((p, i) => ({ id: i, label: p.label }));
-            const activeNumId = indicatorPaneId ? (chartIdToNum.get(indicatorPaneId) ?? 0) : 0;
-            const numIndicatorsMap: Record<number, ActiveIndicators> = {};
-            for (const [cid, ind] of Object.entries(indicatorsMap)) {
-              const num = chartIdToNum.get(cid);
-              if (num !== undefined) numIndicatorsMap[num] = ind;
-            }
+            const panelPanes = visiblePanes.map((p) => ({ id: p.id, label: p.label }));
+            const activeId = indicatorPaneId && panelPanes.some((p) => p.id === indicatorPaneId)
+              ? indicatorPaneId
+              : (panelPanes[0]?.id ?? null);
             return (
               <IndicatorsPanel
                 panes={panelPanes}
-                indicatorsMap={numIndicatorsMap}
-                activePaneId={activeNumId}
-                onSelectPane={(numId) => {
-                  const cid = numToChartId.get(numId);
-                  if (cid) setIndicatorPaneId(cid);
-                }}
-                onChangeIndicators={(numId, indicators) => {
-                  const cid = numToChartId.get(numId);
-                  if (cid) setIndicatorsMap(prev => ({ ...prev, [cid]: indicators }));
-                }}
+                indicatorsMap={indicatorsMap}
+                activePaneId={activeId}
+                onSelectPane={setIndicatorPaneId}
+                onChangeIndicators={(cid, indicators) =>
+                  setIndicatorsMap(prev => ({ ...prev, [cid]: indicators }))
+                }
                 onApplyToAllPanes={(indicators) => {
-                  // One atomic write across every pane (looping would clobber).
+                  // One atomic write across every pane (looping would clobber);
+                  // deep-clone per pane so panes never alias nested config objects.
                   setIndicatorsMap(prev => {
                     const next = { ...prev };
-                    for (const p of panelPanes) {
-                      const cid = numToChartId.get(p.id);
-                      // Deep-clone per pane so panes never alias nested config objects.
-                      if (cid) next[cid] = cloneIndicators(indicators);
-                    }
+                    for (const p of panelPanes) next[p.id] = cloneIndicators(indicators);
                     return next;
                   });
                 }}
+                onCopyIndicatorToPane={(defId, srcId, target) =>
+                  // Same semantics as ChartArea: merge ONE indicator's full
+                  // instance list into the target pane(s) atomically.
+                  setIndicatorsMap(prev => {
+                    const src = getInstances(prev[srcId] || {}, defId);
+                    if (!src.length) return prev;
+                    const ids = target === "all" ? panelPanes.filter((p) => p.id !== srcId).map((p) => p.id) : [target];
+                    const next = { ...prev };
+                    for (const id of ids) {
+                      next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+                    }
+                    return next;
+                  })
+                }
                 onClose={() => setShowIndicators(false)}
+                supportsPatterns={false}
               />
             );
           })()}
