@@ -90,6 +90,23 @@ await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle2', timeout: 90000 });
 await waitUntil(chartReady, 120000, 'charts data');
 log('charts ready');
+
+// The chart frequency restores from the SERVER workspace (localStorage.clear
+// doesn't reset it), and the weekly-RSI checks below assume DAILY bars —
+// weekly resample is a defined no-op on an hourly axis (barsPerIndicatorBar
+// returns 1, so "RSI 14W" never exists there). Force daily via the sidebar
+// frequency chips before running the suite.
+if (!(await has('btn-freq-daily'))) {
+  try { await click('section-charttype', 8000); await settle(500); } catch {}
+}
+if (await has('btn-freq-daily')) {
+  await click('btn-freq-daily');
+  await settle(1500);
+  await waitUntil(chartReady, 120000, 'daily bars');
+  log('frequency forced to daily');
+} else {
+  log('WARN: could not reach btn-freq-daily — running at restored frequency');
+}
 await click('toggle-indicators');
 await settle(1500);
 
