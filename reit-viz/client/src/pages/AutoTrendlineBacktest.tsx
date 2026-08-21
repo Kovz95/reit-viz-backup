@@ -23,6 +23,9 @@ import { DEFAULT_INPUT_SELECTION } from "@/lib/defaultInputSelection";
 import { g as getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { u as usePairComboPicker } from "@/lib/usePairComboPicker";
 import { B as BasketPicker } from "@/components/BasketPicker";
+import { useBaskets } from "@/lib/useBaskets";
+import { isBasketTicker, extractBasketId, basketDisplayName } from "@/lib/basketUtils";
+import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { U as UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { S as SquareIcon } from "@/lib/square";
 import { P as PlayIcon } from "@/lib/play";
@@ -160,6 +163,7 @@ export default function AutoTrendlineBacktest() {
   const [nList, setNList] = useState("5,8,10,15,20");
   const [scopeMode, setScopeMode] = useState<"single" | "pair" | "pairCombo" | "basket" | "universe">("universe");
   const [singleTicker, setSingleTicker] = useState("ABR");
+  const { baskets } = useBaskets();
   const [inputSelection, setInputSelection] = usePersistedState(
     "auto-trendline-bt:input-selection",
     DEFAULT_INPUT_SELECTION
@@ -258,7 +262,12 @@ export default function AutoTrendlineBacktest() {
   // ── Derived ticker list ──
   const tickerList = useMemo<TickerMeta[]>(() => {
     if (scopeMode === "single") {
-      const ticker = (singleTicker || "").toUpperCase().trim();
+      const raw = (singleTicker || "").trim();
+      // BASKET:<id> composite leg — keep the id's original case.
+      if (isBasketTicker(raw)) {
+        return [{ ticker: raw, name: basketDisplayName(raw, baskets as any[]) }];
+      }
+      const ticker = raw.toUpperCase();
       return ticker
         ? [allTickers.find((t) => t.ticker === ticker) || { ticker, name: ticker }]
         : [];
@@ -288,7 +297,7 @@ export default function AutoTrendlineBacktest() {
       return allTickers.filter((t) => universeTickers.has(t.ticker));
     }
     return allTickers;
-  }, [scopeMode, singleTicker, pairTickerA, pairTickerB, pairCombo.pairs, basketTickers, universeTickers, allTickers]);
+  }, [scopeMode, singleTicker, pairTickerA, pairTickerB, pairCombo.pairs, basketTickers, universeTickers, allTickers, baskets]);
 
   const nValues = useMemo(
     () => (sweepMode ? parseNList(nList) : [n]),
@@ -340,7 +349,27 @@ export default function AutoTrendlineBacktest() {
             let highs: number[];
             let lows: number[];
 
-            if (row.pairA && row.pairB) {
+            if (isBasketTicker(row.ticker)) {
+              // Basket composite leg: weighted aggregate series. Aggregate
+              // highs/lows are used when the endpoint provides them, else the
+              // detection runs close-only (highs = lows = closes).
+              const id = extractBasketId(row.ticker) ?? "";
+              const b = (baskets as any[]).find((x) => x.id === id) ?? (baskets as any[]).find((x) => x.name === id);
+              const ohlc = b && b.tickers?.length
+                ? await getBasketOhlc(buildBasketOhlc(b.tickers, b, { weighting: b.weighting, rebalance: b.rebalance })).catch(() => null)
+                : null;
+              if (!ohlc || !ohlc.dates?.length || ohlc.closes.length < minBars) {
+                resultSkipped.push({
+                  ticker: row.ticker,
+                  reason: !b ? "basket not found" : ohlc ? `only ${ohlc.closes.length} bars` : "no basket data",
+                });
+                return;
+              }
+              dates = ohlc.dates;
+              closes = ohlc.closes.slice();
+              highs = Array.isArray(ohlc.highs) && ohlc.highs.length === closes.length ? ohlc.highs.slice() : closes.slice();
+              lows = Array.isArray(ohlc.lows) && ohlc.lows.length === closes.length ? ohlc.lows.slice() : closes.slice();
+            } else if (row.pairA && row.pairB) {
               const pairData = await getYahooPairsRatio(row.pairA, row.pairB, globalDates);
               if (!pairData || !pairData.prices || pairData.prices.length < minBars) {
                 resultSkipped.push({
@@ -497,7 +526,7 @@ export default function AutoTrendlineBacktest() {
     setSkipped(resultSkipped);
     setRunning(false);
     setLastRunAt(Date.now());
-  }, [running, tickerList, nValues, minSignals, minBars, enabledKinds, timeframe, scopeMode, inputSelection]);
+  }, [running, tickerList, nValues, minSignals, minBars, enabledKinds, timeframe, scopeMode, inputSelection, baskets]);
   useOptimizerRunAll(handleRunScan); // unified /optimizers "Run selected" fan-out
 
   const handleStop = useCallback(() => {
@@ -937,6 +966,23 @@ export default function AutoTrendlineBacktest() {
                   onChange={setSingleTicker}
                 />
               </div>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">
+                or Basket composite
+              </label>
+              <select
+                value={isBasketTicker(singleTicker) ? extractBasketId(singleTicker) ?? "" : ""}
+                onChange={(e) => { if (e.target.value) setSingleTicker(`BASKET:${e.target.value}`); }}
+                className="text-[11px] bg-background border border-border rounded px-1.5 py-1 max-w-[200px]"
+                title="Backtest trendlines on the basket's weighted aggregate price (close-only when the endpoint has no aggregate highs/lows)"
+                data-testid="atb-single-basket"
+              >
+                <option value="">— pick basket —</option>
+                {(baskets as any[]).map((b: any) => (
+                  <option key={b.id} value={b.id}>🧺 {b.name}</option>
+                ))}
+              </select>
             </div>
             <div className="flex flex-col gap-0.5">
               <label className="text-[9px] font-mono text-muted-foreground uppercase tracking-wider">

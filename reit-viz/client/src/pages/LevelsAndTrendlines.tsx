@@ -18,6 +18,8 @@ import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { sliceDateRange } from "@/lib/sliceDateRange";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
+import { isBasketTicker, extractBasketId, basketDisplayName } from "@/lib/basketUtils";
+import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { navigateToPairs } from "@/lib/navigateToPairs";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import { DATE_PRESETS } from "@/lib/datePresets";
@@ -668,7 +670,12 @@ export default function LevelsAndTrendlines() {
 
   const tickerList = useMemo<TickerMeta[]>(() => {
     if (source === "single") {
-      const t = (singleTicker || "").toUpperCase().trim();
+      const raw = (singleTicker || "").trim();
+      // BASKET:<id> composite leg — keep the id's original case.
+      if (isBasketTicker(raw)) {
+        return [{ ticker: raw, name: basketDisplayName(raw, baskets as any[]) }];
+      }
+      const t = raw.toUpperCase();
       return t ? [allTickers.find((x) => x.ticker.toUpperCase() === t) || { ticker: t, name: t }] : [];
     }
     if (source === "pair") {
@@ -706,7 +713,7 @@ export default function LevelsAndTrendlines() {
       return [...matched, ...extras];
     }
     return universeTickers ? allTickers.filter((t) => universeTickers.has(t.ticker)) : allTickers;
-  }, [source, basketId, singleTicker, pairTickerA, pairTickerB, pcLegs, getBasket, universeTickers, allTickers]);
+  }, [source, basketId, singleTicker, pairTickerA, pairTickerB, pcLegs, getBasket, universeTickers, allTickers, baskets]);
 
   // ── Workspace state (one consolidated key) ──
   const serializeState = useCallback(
@@ -870,7 +877,29 @@ export default function LevelsAndTrendlines() {
           barCount = closes.length;
           metric = "ratio";
         } else {
-          const ohlcv = await fetchTickerOHLCV(item.ticker);
+          let ohlcv: any;
+          if (isBasketTicker(item.ticker)) {
+            // Basket composite leg: weighted aggregate series shaped like an
+            // OHLCV result so the existing slice/adjust path applies. Falls
+            // back to close-only when the endpoint has no aggregate highs/lows.
+            const id = extractBasketId(item.ticker) ?? "";
+            const b = (baskets as any[]).find((x) => x.id === id) ?? (baskets as any[]).find((x) => x.name === id);
+            const agg = b && b.tickers?.length
+              ? await getBasketOhlc(buildBasketOhlc(b.tickers, b, { weighting: b.weighting, rebalance: b.rebalance })).catch(() => null)
+              : null;
+            if (!agg || !agg.dates?.length) { resultSkipped.push({ ticker: item.ticker, reason: b ? "no basket data" : "basket not found" }); setProgress({ current: i + 1, total: tickerList.length }); continue; }
+            const n = agg.closes.length;
+            ohlcv = {
+              dates: agg.dates,
+              closes: agg.closes,
+              adjCloses: agg.closes,
+              highs: Array.isArray(agg.highs) && agg.highs.length === n ? agg.highs : agg.closes,
+              lows: Array.isArray(agg.lows) && agg.lows.length === n ? agg.lows : agg.closes,
+              volumes: undefined,
+            };
+          } else {
+            ohlcv = await fetchTickerOHLCV(item.ticker);
+          }
           if (!ohlcv) { resultSkipped.push({ ticker: item.ticker, reason: "no data" }); setProgress({ current: i + 1, total: tickerList.length }); continue; }
           const sliced = sliceDateRange(ohlcv, dateRange);
           barCount = sliced.adjCloses.length;
@@ -1038,7 +1067,7 @@ export default function LevelsAndTrendlines() {
     setSelectedLevelIdxs(Object.fromEntries(detRows.map((r) => [r.ticker, new Set([0])])));
     setSelectedLineIdxs(Object.fromEntries(detRows.map((r) => [r.ticker, new Set([0])])));
     setRunning(false);
-  }, [anyDetector, anyLevelScan, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, tickerList, lookback, dateRange, timeframe, srConfig, trendlineConfig, topN, minScore, source]);
+  }, [anyDetector, anyLevelScan, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, tickerList, lookback, dateRange, timeframe, srConfig, trendlineConfig, topN, minScore, source, baskets]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   const handleStop = useCallback(() => { cancelRef.current = true; }, []);
@@ -1175,7 +1204,19 @@ export default function LevelsAndTrendlines() {
           ))}
 
           {source === "single" && (
-            <input type="text" value={singleTicker} onChange={(e) => setSingleTicker(e.target.value.toUpperCase())} placeholder="Ticker (e.g. O)" className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 font-mono w-32" data-testid="cs-single-ticker" />
+            <>
+              <input type="text" value={singleTicker} onChange={(e) => setSingleTicker(isBasketTicker(e.target.value) ? e.target.value : e.target.value.toUpperCase())} placeholder="Ticker (e.g. O)" className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 font-mono w-32" data-testid="cs-single-ticker" />
+              <select
+                value={isBasketTicker(singleTicker) ? extractBasketId(singleTicker) ?? "" : ""}
+                onChange={(e) => { if (e.target.value) setSingleTicker(`BASKET:${e.target.value}`); }}
+                className="text-[11px] bg-background border border-border rounded px-1.5 py-0.5 max-w-[180px]"
+                title="Detect levels/trendlines on the basket's weighted aggregate price (close-only when the endpoint has no aggregate highs/lows)"
+                data-testid="cs-single-basket"
+              >
+                <option value="">or basket composite…</option>
+                {baskets.map((b: any) => (<option key={b.id} value={b.id}>🧺 {b.name}</option>))}
+              </select>
+            </>
           )}
           {source === "pair" && (
             <>
