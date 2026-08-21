@@ -36,6 +36,10 @@ import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { futureWeekdays } from "@/lib/futureWeekdays";
 import { useGridColor } from "@/lib/gridPref";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { renderBandIndicators } from "@/lib/bandIndicators";
+import type { ActiveIndicators } from "@/components/ChartPane";
+import { TrendingUp } from "lucide-react";
 import {
   createChart,
   CandlestickSeries,
@@ -243,15 +247,21 @@ interface CombinedChartProps {
   ticker: string;
   height?: number;
   futureBars?: number;
+  /** Canonical indicators-panel config for this chart — rendered via the
+   *  shared band renderer (lib/bandIndicators, same as Macro). */
+  activeIndicators?: ActiveIndicators;
 }
 
-function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars = 60 }: CombinedChartProps) {
+function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars = 60, activeIndicators }: CombinedChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
   const candleSeriesRef = useRef<any>(null);
   const priceLineRefs = useRef<any[]>([]);
   const lineSeriesRefs = useRef<any[]>([]);
+  const indicatorSeriesRefs = useRef<any[]>([]);
   const gridColor = useGridColor("rgba(75,85,99,0.15)");
+  // Stable key so the effect fires only when indicator VALUES change.
+  const indicatorsKey = useMemo(() => JSON.stringify(activeIndicators ?? {}), [activeIndicators]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -270,8 +280,27 @@ function CombinedChart({ bars, levels, lines, ticker, height = 480, futureBars =
     candleSeriesRef.current = cs;
     const ro = new ResizeObserver(() => { if (containerRef.current && chartRef.current) chartRef.current.applyOptions({ width: containerRef.current.clientWidth }); });
     ro.observe(el);
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; candleSeriesRef.current = null; priceLineRefs.current = []; lineSeriesRefs.current = []; };
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; candleSeriesRef.current = null; priceLineRefs.current = []; lineSeriesRefs.current = []; indicatorSeriesRefs.current = []; };
   }, [height]);
+
+  // Indicators (canonical panel config) — the chart persists across effect
+  // runs, so remove this effect's own series before re-rendering.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const s of indicatorSeriesRefs.current) { try { chart.removeSeries(s); } catch {} }
+    indicatorSeriesRefs.current = [];
+    if (!activeIndicators || Object.keys(activeIndicators).length === 0) return;
+    const data: { time: string; value: number }[] = [];
+    for (let i = 0; i < bars.dates.length; i++) {
+      const v = bars.closes[i];
+      if (Number.isFinite(v)) data.push({ time: bars.dates[i], value: v });
+    }
+    try {
+      renderBandIndicators(chart, data, activeIndicators, (s) => indicatorSeriesRefs.current.push(s));
+    } catch { /* indicators must never blank the levels chart */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bars, indicatorsKey, height]);
 
   // Grid prominence restyle (rebuilding the chart here would orphan the
   // candle/overlay effects keyed on bars/levels, so restyle in place).
@@ -571,6 +600,10 @@ export default function LevelsAndTrendlines() {
 
   // ── Detector view state ──
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+  // Canonical indicators panel: per-ticker indicator configs for the merged
+  // chart (rendered via the shared band renderer inside CombinedChart).
+  const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  const [showIndicators, setShowIndicators] = useState(false);
   const [detectorCollapsed, setDetectorCollapsed] = useState(false);
   const [screenerCollapsed, setScreenerCollapsed] = useState(false);
 
@@ -736,9 +769,10 @@ export default function LevelsAndTrendlines() {
         detectorCollapsed, screenerCollapsed,
         selLevels: serSel(selectedLevelIdxs), selLines: serSel(selectedLineIdxs),
         levelSort, lineSort, outerSort,
+        indicatorsMap, showIndicators,
       };
     },
-    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, detectorCollapsed, screenerCollapsed, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort]
+    [source, basketId, singleTicker, pairTickerA, pairTickerB, pcFilters, pcClassSearch, pcManualTickers, pcSource, datePreset, dateRange, timeframe, scanHorizontal, scanMA, scanFib, scanTrendlines, scanDonchian, donchianNs, scanSqueeze, squeezePctile, minVolX, lookback, minScore, topN, futureBars, srTolerancePct, srBounceThresholdPct, srBounceLookahead, srHoldBars, srMinTouches, srPivotLeft, srPivotRight, maTypesList, maPeriodsList, tlMethod, tlTolerancePct, tlBreakTolerancePct, tlMinTouchCount, tlMinSpanBars, tlMaxAnchorGapBars, tlPivotLR, tlUseAtr, tlAtrMultiplier, tlRansacIters, tlRansacMinInliers, tlFilterBroken, results, detResults, skipped, expandedTicker, detectorCollapsed, screenerCollapsed, selectedLevelIdxs, selectedLineIdxs, levelSort, lineSort, outerSort, indicatorsMap, showIndicators]
   );
 
   const hydrateState = useCallback((state: any) => {
@@ -804,6 +838,8 @@ export default function LevelsAndTrendlines() {
     if (Array.isArray(state.detRows)) setDetResults(state.detRows);
     if (Array.isArray(state.skipped)) setSkipped(state.skipped);
     if (typeof state.expandedTicker === "string" || state.expandedTicker === null) setExpandedTicker(state.expandedTicker);
+    if (state.indicatorsMap && typeof state.indicatorsMap === "object") setIndicatorsMap(state.indicatorsMap);
+    if (typeof state.showIndicators === "boolean") setShowIndicators(state.showIndicators);
     if (typeof state.detectorCollapsed === "boolean") setDetectorCollapsed(state.detectorCollapsed);
     if (typeof state.screenerCollapsed === "boolean") setScreenerCollapsed(state.screenerCollapsed);
     if (state.selLevels) setSelectedLevelIdxs(hydrateSel(state.selLevels));
@@ -1175,9 +1211,11 @@ export default function LevelsAndTrendlines() {
   const inputCls = "text-[11px] font-mono bg-background border border-border rounded px-2 py-1 text-foreground";
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full flex overflow-hidden">
+    <div className="flex-1 min-w-0 overflow-y-auto">
       <div className="p-3 text-xs font-mono space-y-3">
         {/* Title */}
+        <div className="flex items-start justify-between gap-2">
         <div>
           <h1 className="text-base font-bold">Levels &amp; Trendlines</h1>
           <p className="text-[10px] text-muted-foreground">
@@ -1186,6 +1224,16 @@ export default function LevelsAndTrendlines() {
             for recent crossings and breakouts (fresh N-bar high/low breaks, squeeze → expansion moves), each with
             volume-surge confirmation. Configure the source, methods, and detection knobs, then click Run.
           </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowIndicators((v) => !v)}
+          className={`shrink-0 flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded border ${showIndicators ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:text-foreground"}`}
+          title="Indicators panel for the merged chart (expand a result row to apply)"
+          data-testid="levels-indicators-toggle"
+        >
+          <TrendingUp className="w-3 h-3" /> Indicators
+        </button>
         </div>
 
         {/* Source picker */}
@@ -1657,7 +1705,7 @@ export default function LevelsAndTrendlines() {
                         )}
 
                         {/* Merged chart */}
-                        <CombinedChart ticker={item.ticker} bars={item.bars} levels={selectedLevels} lines={selectedLines} height={480} futureBars={futureBars} />
+                        <CombinedChart ticker={item.ticker} bars={item.bars} levels={selectedLevels} lines={selectedLines} height={480} futureBars={futureBars} activeIndicators={indicatorsMap[item.ticker]} />
                       </div>
                     )}
                   </div>
@@ -1773,6 +1821,30 @@ export default function LevelsAndTrendlines() {
           </details>
         )}
       </div>
+    </div>
+
+    {/* Canonical indicators panel — targets the expanded row's merged chart.
+        Pane ticker is passed only for plain symbols (pair ratios / basket
+        composites have no OHLC endpoint for Find-Best-MA / best-lag). */}
+    {showIndicators && (() => {
+      const plainTicker = expandedTicker && !expandedTicker.includes("/") && !expandedTicker.includes(":") ? expandedTicker : undefined;
+      const panelPanes = expandedTicker ? [{ id: expandedTicker, label: expandedTicker, ticker: plainTicker }] : [];
+      return (
+        <IndicatorsPanel
+          panes={panelPanes}
+          indicatorsMap={indicatorsMap}
+          activePaneId={expandedTicker}
+          onSelectPane={(id) => setExpandedTicker(id)}
+          onChangeIndicators={(id, ind) => setIndicatorsMap((prev) => ({ ...prev, [id]: ind }))}
+          onApplyToAllPanes={(ind) =>
+            setIndicatorsMap((prev) => (expandedTicker ? { ...prev, [expandedTicker]: cloneIndicators(ind) } : prev))
+          }
+          onClose={() => setShowIndicators(false)}
+          frequency={timeframe}
+          supportsPatterns={false}
+        />
+      );
+    })()}
     </div>
   );
 }
