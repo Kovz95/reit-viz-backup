@@ -24,6 +24,7 @@ import { fetchWorkbookData } from "@/lib/fetchWorkbookData";
 import { fetchGlobalDates } from "@/lib/fetchGlobalDates";
 import { useUniverseSignature } from "@/lib/universeSignature";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
 import { MiniChart, PairsIndicatorsPanel, usePairChartSync } from "@/pages/Pairs";
 import type { ActiveIndicators } from "@/components/ChartPane";
@@ -639,13 +640,15 @@ export default function PairRatios() {
     [navigate]
   );
 
+  const basketScope = useBasketScope("reit-viz:basket-scope:pair-ratios");
   const tickerList = useMemo(
     () =>
       ((isFiltered ? filteredTickersList : allTickers) as { ticker: string }[])
         .filter((t) => t.ticker !== "TEST" && t.ticker !== "TST2")
+        .filter((t) => basketScope.inScope(t.ticker))
         .map((t) => t.ticker)
         .sort(),
-    [isFiltered, filteredTickersList, allTickers]
+    [isFiltered, filteredTickersList, allTickers, basketScope.members, basketScope.inScope]
   );
 
   const { data: globalDates } = useQuery<string[]>({
@@ -1207,6 +1210,10 @@ export default function PairRatios() {
                   {searchFilteredPairs.length !== 1 ? "es" : ""}
                 </span>
               )}
+              {/* Basket scope — restricts the pair universe to a basket's members */}
+              <div className="ml-auto flex-shrink-0">
+                <BasketScopeSelect scope={basketScope} className="h-6 w-[150px] text-[10px] font-mono" />
+              </div>
             </div>
             {/* Table */}
             <div className="flex-1 overflow-auto">

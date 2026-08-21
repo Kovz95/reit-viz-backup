@@ -4,6 +4,7 @@ import { createChart, ColorType, CrosshairMode, AreaSeries, LineSeries } from "l
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
 import { PANE_HANDLERS, PANE_TIME_SCALE } from "@/lib/chartView";
 import { useAppContext } from "@/lib/appContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { fetchMacroSeriesBatch } from "@/lib/macroStatic";
 import { fetchMetricSeries } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -1026,10 +1027,11 @@ export default function MacroRegime() {
   }, [confirmMonths, refreshKey]);
 
   // Determine ticker universe
+  const basketScope = useBasketScope("reit-viz:basket-scope:regime");
   const tickers = useMemo(() => {
-    if (universeTickers && universeTickers.size > 0) return [...universeTickers];
-    return filteredTickersList.map(t => t.ticker);
-  }, [universeTickers, filteredTickersList]);
+    const base = universeTickers && universeTickers.size > 0 ? [...universeTickers] : filteredTickersList.map(t => t.ticker);
+    return base.filter((t) => basketScope.inScope(t));
+  }, [universeTickers, filteredTickersList, basketScope.members, basketScope.inScope]);
 
   // Load per-ticker stats
   useEffect(() => {
@@ -1296,6 +1298,10 @@ export default function MacroRegime() {
                   </span>
                 )}
                 <div className="flex-1" />
+                <label className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                  Basket
+                  <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
+                </label>
                 <div className="text-[11px] text-muted-foreground">Click any column header to sort</div>
               </div>
               <PerTickerTable rows={sortedRows} sortColumn={sortColumn} sortDir={sortDir} onSort={handleSort} />

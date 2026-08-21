@@ -32,6 +32,7 @@ import ClassificationFilters, {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -761,6 +762,7 @@ export default function SigmaFamily({ onOpenStudy }: {
   }, [classFilters]);
   const [manualTickers, setManualTickers] = React.useState<Set<string>>(new Set());
   const geo = useGeoFilter(tickerList as any[], "sigma-geo");
+  const basketScope = useBasketScope("reit-viz:basket-scope:sigma-move");
 
   // Custom tickers — any Yahoo symbol, not just workbook names. Persisted;
   // history via /api/yahoo-prices (same pipe as the index/ETF rows), quotes
@@ -1668,6 +1670,7 @@ export default function SigmaFamily({ onOpenStudy }: {
   const allowedTickers = React.useMemo(() => {
     let r = applyClassFilters(tickerList as any[], classFilters, "", manualTickers);
     r = geo.filterByGeo(r as any[]);
+    r = (r as any[]).filter((t) => basketScope.inScope(t.ticker));
     const set = new Set((r as any[]).map((t) => t.ticker));
     // User-added custom tickers always show — they were pinned explicitly and
     // have no workbook classification for the filters to act on.
@@ -1675,7 +1678,7 @@ export default function SigmaFamily({ onOpenStudy }: {
     // Same for user-added pair-ratio rows ("A/B", stored uppercased).
     for (const p of customPairs) set.add(p);
     return set;
-  }, [tickerList, classFilters, manualTickers, geo.filterByGeo, customTickers, customPairs]);
+  }, [tickerList, classFilters, manualTickers, geo.filterByGeo, customTickers, customPairs, basketScope.members, basketScope.inScope]);
 
   // Period-mode rows: most-recent trailing-window return in σ units, from the
   // historical closes already loaded for the live rows (no live quotes needed).
@@ -2503,6 +2506,10 @@ export default function SigmaFamily({ onOpenStudy }: {
           testIdPrefix="sigma"
           extraFilters={geo.geoFilterUI}
         />
+        <label className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground uppercase tracking-wider ml-auto">
+          Basket
+          <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
+        </label>
       </div>
 
       {/* Distribution plots (cross-sectional + per-ticker) */}

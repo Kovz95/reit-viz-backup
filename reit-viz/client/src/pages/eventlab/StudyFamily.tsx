@@ -15,6 +15,7 @@ import { getTickers } from "@/lib/dataService";
 import { getDates } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useBaskets } from "@/lib/basketContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { isBasketTicker } from "@/lib/basketUtils";
 import { getTickerRaw } from "@/lib/dataService";
 import { emitChartSignals } from "@/lib/chartBridge";
@@ -578,7 +579,11 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
   const { universeTickers, isFiltered, filteredCount, totalCount } = useUniverse();
   const { baskets } = useBaskets();
 
-  const filteredTickers = useMemo(() => universeTickers ? allTickers.filter((t: any) => universeTickers.has(t.ticker)) : allTickers, [allTickers, universeTickers]);
+  const basketScope = useBasketScope("reit-viz:basket-scope:price-action");
+  const filteredTickers = useMemo(() => {
+    const base = universeTickers ? allTickers.filter((t: any) => universeTickers.has(t.ticker)) : allTickers;
+    return base.filter((t: any) => basketScope.inScope(t.ticker));
+  }, [allTickers, universeTickers, basketScope.members, basketScope.inScope]);
 
   const getBasketName = useCallback((ticker: string) => {
     if (!isBasketTicker(ticker)) return ticker;
@@ -1064,6 +1069,11 @@ export default function StudyFamily({ preset }: { preset?: StudyPreset | null })
             </div>
 
             <div className="flex gap-2 ml-auto items-center">
+              {/* Basket scope — restricts the cross-section universe + picker lists */}
+              <label className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+                Basket
+                <BasketScopeSelect scope={basketScope} className="h-8 w-[150px] text-xs" />
+              </label>
               {isStale && !isCrossRunning && (
                 <span className="text-[10px] text-amber-400" data-testid="study-stale-hint">
                   Settings changed — re-run to refresh

@@ -7,6 +7,7 @@ import { Sigma, Play, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useUniverse } from "@/lib/universeContext";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { getMetricSeries } from "@/lib/dataService";
 import { percentileRank } from "@/lib/valuationRerate";
 import { runWalkForward, RANKER_FEATURES, type RankerFeatureRow, type RankerResult } from "@/lib/ridgeRanker";
@@ -27,6 +28,7 @@ function monthEnds(series: TV[]): Map<string, number> {
 
 export default function RidgeRanker() {
   const { allTickers } = useUniverse() as any;
+  const basketScope = useBasketScope("reit-viz:basket-scope:ranker");
   const [trainMonths, setTrainMonths] = useState(36);
   const [lambda, setLambda] = useState(1);
   const [running, setRunning] = useState(false);
@@ -37,8 +39,11 @@ export default function RidgeRanker() {
   const panelRef = useRef<Map<string, RankerFeatureRow[]> | null>(null);
 
   const tickers: string[] = useMemo(
-    () => (allTickers ?? []).map((t: any) => String(t.ticker)).filter(Boolean),
-    [allTickers],
+    () => (allTickers ?? [])
+      .map((t: any) => String(t.ticker))
+      .filter(Boolean)
+      .filter((tk: string) => basketScope.inScope(tk)),
+    [allTickers, basketScope.members, basketScope.inScope],
   );
 
   const run = async () => {
@@ -164,6 +169,8 @@ export default function RidgeRanker() {
           <span className="text-[10px] text-muted-foreground">λ</span>
           <Input type="number" className="h-6 w-16 text-[10px] px-1.5" value={lambda} min={0} step={0.5}
             onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v >= 0) setLambda(v); }} data-testid="ranker-lambda" />
+          <span className="text-[10px] text-muted-foreground">Basket</span>
+          <BasketScopeSelect scope={basketScope} className="h-6 w-[150px] text-[10px] font-mono" />
         </div>
         <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={() => void run()} disabled={tickers.length < 20} data-testid="ranker-run">
           {running ? (<><X className="w-3 h-3" /> Cancel</>) : (<><Play className="w-3 h-3" /> Run ({tickers.length} names)</>)}

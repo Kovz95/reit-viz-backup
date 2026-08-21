@@ -27,6 +27,10 @@ import { ClassificationFiltersWithSource } from "@/components/ClassificationFilt
 import { PresetBar } from "@/components/PresetBar";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
+import { useBaskets } from "@/lib/useBaskets";
+import { isBasketTicker, extractBasketId, basketDisplayName } from "@/lib/basketUtils";
+import { getCapWeightedBasketSeries, getCapWeightedPriceSeries } from "@/lib/basketAggregation";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -195,10 +199,15 @@ export default function PairOptimizer() {
   const [clfSearch, setClfSearch] = useState("");
   const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
   const geo = useGeoFilter(filteredTickers as any[], "pair-opt-clf-geo");
+  const { baskets } = useBaskets();
+  const basketScope = useBasketScope("reit-viz:basket-scope:pair-optimizer");
   const scanFilteredTickers = useMemo(
-    () => geo.filterByGeo(applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers)),
-    [filteredTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo]
+    () => geo.filterByGeo(applyClassFilters(filteredTickers as any[], clfFilters, clfSearch, clfManualTickers))
+      .filter((t: any) => basketScope.inScope(t.ticker)),
+    [filteredTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo, basketScope.members, basketScope.inScope]
   );
+  // Display label for pair legs: basket legs show the basket's name.
+  const dispTicker = useCallback((tk: string) => basketDisplayName(tk, baskets as any[]), [baskets]);
 
   const effectiveTickers = mode === "scan" ? scanFilteredTickers : filteredTickers;
   const [availableMetrics, setAvailableMetrics] = useState<string[]>(DEFAULT_METRICS);
@@ -287,31 +296,61 @@ export default function PairOptimizer() {
     spread: string, sig: string, freq: string
   ): Promise<PairResult | null> => {
     try {
-      const [dataA, dataB] = await Promise.all([fetchWorkbookData(tA), fetchWorkbookData(tB)]);
-      if (!dataA || !dataB) return null;
       const scalar = getMetricScalar(metric);
       const inverse = getMetricInverseFlag(metric) ? -1 : 1;
-      const seriesA = dataA[metric] || [];
-      const seriesB = dataB[metric] || [];
-      const closesA = dataA.close || [];
-      const closesB = dataB.close || [];
-      if (!seriesA.length || !seriesB.length || !closesA.length || !closesB.length) return null;
-
-      const mapA = new Map<number, number>();
-      for (const [idx, val] of seriesA) mapA.set(idx, val * scalar * inverse);
-      const mapB = new Map<number, number>();
-      for (const [idx, val] of seriesB) mapB.set(idx, val * scalar * inverse);
-      const mapCA = new Map<number, number>();
-      for (const [idx, val] of closesA) mapCA.set(idx, val);
-      const mapCB = new Map<number, number>();
-      for (const [idx, val] of closesB) mapCB.set(idx, val);
+      // Leg resolver: workbook tuples for plain tickers; BASKET:<id> legs use
+      // the size-weighted aggregate of the metric + a rebased price index,
+      // re-keyed from dates onto the global index axis.
+      const resolveLeg = async (tk: string): Promise<{ metricMap: Map<number, number>; closeMap: Map<number, number> } | null> => {
+        if (isBasketTicker(tk)) {
+          const id = extractBasketId(tk);
+          const b = (baskets as any[]).find((x) => x.id === id) ?? (baskets as any[]).find((x) => x.name === id);
+          if (!b || !b.tickers?.length) return null;
+          const [metricAgg, priceAgg] = await Promise.all([
+            getCapWeightedBasketSeries(b, metric),
+            getCapWeightedPriceSeries(b),
+          ]);
+          if (!metricAgg.series.length || !Array.isArray(priceAgg) || !priceAgg.length) return null;
+          const dateIdx = new Map<string, number>(dates.map((d, i) => [d, i]));
+          const metricMap = new Map<number, number>();
+          for (const p of metricAgg.series as { time: string; value: number }[]) {
+            const i = dateIdx.get(p.time);
+            if (i !== undefined && Number.isFinite(p.value)) metricMap.set(i, p.value * scalar * inverse);
+          }
+          const closeMap = new Map<number, number>();
+          for (const p of priceAgg as { time: string; value: number }[]) {
+            const i = dateIdx.get(p.time);
+            if (i !== undefined && Number.isFinite(p.value)) closeMap.set(i, p.value);
+          }
+          return metricMap.size && closeMap.size ? { metricMap, closeMap } : null;
+        }
+        const data = await fetchWorkbookData(tk);
+        if (!data) return null;
+        const series = data[metric] || [];
+        const closes = data.close || [];
+        if (!series.length || !closes.length) return null;
+        const metricMap = new Map<number, number>();
+        for (const [idx, val] of series) metricMap.set(idx, val * scalar * inverse);
+        const closeMap = new Map<number, number>();
+        for (const [idx, val] of closes) closeMap.set(idx, val);
+        return { metricMap, closeMap };
+      };
+      const [legA, legB] = await Promise.all([resolveLeg(tA), resolveLeg(tB)]);
+      if (!legA || !legB) return null;
+      const mapA = legA.metricMap;
+      const mapB = legB.metricMap;
+      const mapCA = legA.closeMap;
+      const mapCB = legB.closeMap;
 
       const overlapIndices: number[] = [];
       for (let i = 0; i < dates.length; i++) {
         if (mapA.has(i) && mapB.has(i) && mapCA.has(i) && mapCB.has(i)) {
           if (spread === "ratio") {
+            // Inverse-direction metrics are stored sign-flipped (val*inverse),
+            // so require the RAW value to be positive — bVal <= 0 rejected
+            // every point for P/FFO-style metrics and silently killed the run.
             const bVal = mapB.get(i)!;
-            if (!Number.isFinite(bVal) || bVal <= 0) continue;
+            if (!Number.isFinite(bVal) || bVal * inverse <= 0) continue;
           }
           overlapIndices.push(i);
         }
@@ -448,7 +487,7 @@ export default function PairOptimizer() {
     } catch {
       return null;
     }
-  }, []);
+  }, [baskets]);
 
   const handleRun = useCallback(async () => {
     setShowLoading(true);
@@ -458,7 +497,7 @@ export default function PairOptimizer() {
     const dates = await fetchGlobalDates();
 
     if (mode === "manual") {
-      setProgress({ current: 0, total: 1, label: `${tickerA}/${tickerB}` });
+      setProgress({ current: 0, total: 1, label: `${dispTicker(tickerA)}/${dispTicker(tickerB)}` });
       const result = await runAnalysis(
         tickerA, tickerB, selectedMetric, dates,
         targetReturn, buyThreshold, sellThreshold,
@@ -500,7 +539,7 @@ export default function PairOptimizer() {
       setResults(accumulated);
     }
     setShowLoading(false);
-  }, [effectiveTickers, mode, tickerA, tickerB, selectedMetric, targetReturn, buyThreshold, sellThreshold, returnMode, bandMin, bandMax, spreadMethod, signalType, frequency, groupBy, runAnalysis, setResults]);
+  }, [effectiveTickers, mode, tickerA, tickerB, selectedMetric, targetReturn, buyThreshold, sellThreshold, returnMode, bandMin, bandMax, spreadMethod, signalType, frequency, groupBy, runAnalysis, setResults, dispTicker]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out
 
   // ── Sorted results ──
@@ -647,7 +686,12 @@ export default function PairOptimizer() {
                 filteredCount={scanFilteredTickers.length}
                 totalCount={filteredTickers.length}
                 testIdPrefix="pair-opt-clf"
-                extraFilters={geo.geoFilterUI}
+                extraFilters={
+                  <>
+                    {geo.geoFilterUI}
+                    <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
+                  </>
+                }
               />
             </div>
           )}
@@ -666,6 +710,13 @@ export default function PairOptimizer() {
                   {(effectiveTickers as any[]).map((t: any) => (
                     <option key={t.ticker} value={t.ticker}>{t.ticker}</option>
                   ))}
+                  {(baskets as any[]).length > 0 && (
+                    <optgroup label="Baskets (weighted aggregate)">
+                      {(baskets as any[]).map((b: any) => (
+                        <option key={b.id} value={`BASKET:${b.id}`}>🧺 {b.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <div className="flex flex-col gap-0.5">
@@ -679,6 +730,13 @@ export default function PairOptimizer() {
                   {(effectiveTickers as any[]).map((t: any) => (
                     <option key={t.ticker} value={t.ticker}>{t.ticker}</option>
                   ))}
+                  {(baskets as any[]).length > 0 && (
+                    <optgroup label="Baskets (weighted aggregate)">
+                      {(baskets as any[]).map((b: any) => (
+                        <option key={b.id} value={`BASKET:${b.id}`}>🧺 {b.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
             </>
@@ -939,7 +997,7 @@ export default function PairOptimizer() {
                         onClick={() => setExpandedPair(isExpanded ? null : pairKey)}
                       >
                         <td className="px-2 py-1 font-bold text-foreground sticky left-0 bg-card z-10 border-r border-border whitespace-nowrap">
-                          {row.tickerA} / {row.tickerB}
+                          {dispTicker(row.tickerA)} / {dispTicker(row.tickerB)}
                         </td>
                         <td className={`text-center px-2 py-1 ${row.halfLife < 30 ? "text-emerald-400 font-bold" : row.halfLife < 63 ? "text-green-400" : row.halfLife < 126 ? "text-yellow-300" : "text-muted-foreground"}`}>
                           {row.halfLife === Infinity ? "∞" : `${row.halfLife}d`}

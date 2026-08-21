@@ -12,6 +12,7 @@ import ClassificationFilters, {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { API_BASE } from "@/lib/queryClient";
 
@@ -84,9 +85,11 @@ export default function EarningsCalendar() {
   const [search, setSearch] = useState("");
   const [manualTickers, setManualTickers] = useState<Set<string>>(new Set());
   const geo = useGeoFilter(records as { ticker: string }[], "earncal-geo");
+  const basketScope = useBasketScope("reit-viz:basket-scope:earnings-calendar");
 
   const filteredTickerSet = useMemo(() => {
-    const pool = geo.filterByGeo(applyClassFilters(records as any[], classFilters, search, manualTickers));
+    const pool = geo.filterByGeo(applyClassFilters(records as any[], classFilters, search, manualTickers))
+      .filter((r: any) => basketScope.inScope(String(r.ticker)));
     const s = new Set<string>();
     for (const r of pool) {
       const tk = String(r.ticker).toUpperCase();
@@ -99,7 +102,7 @@ export default function EarningsCalendar() {
       s.add(highlight.split("-")[0]);
     }
     return s;
-  }, [records, classFilters, search, manualTickers, geo.filterByGeo, highlight]);
+  }, [records, classFilters, search, manualTickers, geo.filterByGeo, highlight, basketScope.members, basketScope.inScope]);
 
   const metaByBase = useMemo(() => {
     const m = new Map<string, any>();
@@ -228,7 +231,12 @@ export default function EarningsCalendar() {
           filteredCount={visibleCount}
           totalCount={rows.length}
           testIdPrefix="earncal"
-          extraFilters={geo.geoFilterUI}
+          extraFilters={
+            <>
+              {geo.geoFilterUI}
+              <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
+            </>
+          }
         />
       </div>
 

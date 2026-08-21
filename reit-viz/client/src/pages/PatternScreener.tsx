@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { emptyClassFilters, applyClassFilters, type ClassFilters } from "@/lib/dataService";
 import { useGeoFilter } from "@/lib/useGeoFilter";
@@ -298,9 +299,11 @@ export default function PatternScreener() {
   const [clfSearch, setClfSearch] = useState("");
   const [clfManualTickers, setClfManualTickers] = useState<Set<string>>(new Set());
   const geo = useGeoFilter(allTickers as any[], "ps-clf-geo");
+  const basketScope = useBasketScope("reit-viz:basket-scope:pattern-screener");
   const universeFilteredTickers = useMemo(
-    () => geo.filterByGeo(applyClassFilters(allTickers as any[], clfFilters, clfSearch, clfManualTickers)),
-    [allTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo]
+    () => geo.filterByGeo(applyClassFilters(allTickers as any[], clfFilters, clfSearch, clfManualTickers))
+      .filter((t: any) => basketScope.inScope(t.ticker)),
+    [allTickers, clfFilters, clfSearch, clfManualTickers, geo.filterByGeo, basketScope.members, basketScope.inScope]
   );
 
   const [rows, setRows] = useState<ScreenerRow[]>([]);
@@ -353,7 +356,7 @@ export default function PatternScreener() {
       const tickers =
         universeFilteredTickers.length > 0
           ? universeFilteredTickers
-          : allTickers;
+          : (allTickers as any[]).filter((t: any) => basketScope.inScope(t.ticker));
       return tickers.map((t: { ticker: string }) => ({
         key: t.ticker,
         label: t.ticker,
@@ -417,7 +420,7 @@ export default function PatternScreener() {
       ];
     }
     return [];
-  }, [scope, singleTicker, universeFilteredTickers, allTickers, pairTickerA, pairTickerB, pairComboHook.pairs, baskets, selectedBasketId]);
+  }, [scope, singleTicker, universeFilteredTickers, allTickers, pairTickerA, pairTickerB, pairComboHook.pairs, baskets, selectedBasketId, basketScope.members, basketScope.inScope]);
 
   const handleRun = useCallback(async () => {
     if (workItems.length === 0) {
@@ -706,7 +709,12 @@ export default function PatternScreener() {
                   filteredCount={universeFilteredTickers.length}
                   totalCount={allTickers.length}
                   testIdPrefix="ps-clf"
-                  extraFilters={geo.geoFilterUI}
+                  extraFilters={
+                    <>
+                      {geo.geoFilterUI}
+                      <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
+                    </>
+                  }
                 />
                 <div className="text-[11px] text-muted-foreground">
                   {universeFilteredTickers.length} tickers selected

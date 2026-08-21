@@ -8,6 +8,7 @@ import { useGlobalUniverse } from "@/lib/globalUniverse";
 import { ClassificationFiltersWithSource } from "@/components/ClassificationFiltersWithSource";
 import { PagePresets } from "@/components/PagePresets";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { filterTickersByClassification } from "@/lib/classificationFilters";
 import { emptyClassFilters } from "@/lib/dataService";
 import { getPairsData } from "@/lib/dataService";
@@ -344,10 +345,11 @@ export default function PairsScreener() {
       .filter((t: string) => geo.matchesGeo(t));
   }, [filteredTickersList, metas, source, classFilters, classSearch, manualTickers, geo.matchesGeo, geo.hasActiveGeo]);
 
-  const tickerList = useMemo(() =>
-    scope === "pairCombo" ? pairComboTickers : filteredTickersList.map((t: any) => t.ticker),
-    [scope, pairComboTickers, filteredTickersList]
-  );
+  const basketScope = useBasketScope("reit-viz:basket-scope:pair-screener");
+  const tickerList = useMemo(() => {
+    const base: string[] = scope === "pairCombo" ? pairComboTickers : filteredTickersList.map((t: any) => t.ticker);
+    return base.filter((t) => basketScope.inScope(t));
+  }, [scope, pairComboTickers, filteredTickersList, basketScope.members, basketScope.inScope]);
 
   const totalPairs = useMemo(() => {
     const n = tickerList.length;
@@ -576,6 +578,10 @@ export default function PairsScreener() {
 
         <div className="flex-1" />
 
+        <label className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider">
+          Basket
+          <BasketScopeSelect scope={basketScope} className="h-7 w-[150px] text-xs" />
+        </label>
         {running
           ? <Button size="sm" variant="destructive" onClick={handleCancel} data-testid="screener-cancel"><Square className="w-3 h-3 mr-1" /> Cancel ({progress.current}/{progress.total})</Button>
           : <Button size="sm" onClick={handleRun} disabled={tickerList.length < 2} data-testid="screener-run"><Play className="w-3 h-3 mr-1" /> Run Screen</Button>

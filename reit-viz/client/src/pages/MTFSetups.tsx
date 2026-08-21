@@ -25,6 +25,7 @@ import {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { buildMtfBundle, buildPairMtfBundle, type MtfBundle, type Timeframe } from "@/lib/mtfData";
 import {
@@ -158,11 +159,14 @@ export default function MTFSetups() {
     return dims;
   }, [workbookTickers]);
 
+  const basketScope = useBasketScope("reit-viz:basket-scope:mtf-setups");
   const universeTickers = useMemo(() => {
     if (scope !== "universe") return [];
     const rows = applyClassFilters(workbookTickers as any[], classFilters, "", new Set<string>());
-    return geo.filterByGeo(rows).map((r: any) => String(r.ticker).toUpperCase());
-  }, [scope, workbookTickers, classFilters, geo.filterByGeo]);
+    return geo.filterByGeo(rows)
+      .map((r: any) => String(r.ticker).toUpperCase())
+      .filter((t: string) => basketScope.inScope(t));
+  }, [scope, workbookTickers, classFilters, geo.filterByGeo, basketScope.members, basketScope.inScope]);
 
   const scanTargets = useMemo<ScanTarget[]>(() => {
     switch (scope) {
@@ -657,6 +661,7 @@ export default function MTFSetups() {
               />
             ))}
             {geo.geoFilterUI}
+            <BasketScopeSelect scope={basketScope} className="h-6 w-[140px] text-[10px] font-mono" />
             <span className="text-[10px] text-muted-foreground font-mono">{universeTickers.length} tickers match</span>
           </div>
         )}
