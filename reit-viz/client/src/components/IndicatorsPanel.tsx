@@ -18,7 +18,7 @@ import {
 import { indicatorPeriods, getMaLines, setMaLines } from "./ChartPane";
 import type { ActiveIndicators, IndicatorOverlay, MaLine, MaKey } from "./ChartPane";
 import { FindBestMAPanel } from "./FindBestMAPanel";
-import type { PaneInfo } from "@/pages/Dashboard";
+import type { BadgeOpts } from "@/components/IndicatorChips";
 import type { HASmoothType, HASmoothConfig } from "@/lib/indicators";
 import { computeAcfSweep, type AcfSweepEntry, type OhlcBar } from "@/lib/indicators";
 import { loadMaInput, type FindBestMaInput } from "@/lib/findBestMA";
@@ -191,23 +191,49 @@ export function IndicatorSetsSection({
   );
 }
 
-interface IndicatorsPanelProps {
-  panes: PaneInfo[];
-  indicatorsMap: Record<number, ActiveIndicators>;
-  activePaneId: number | null;
-  onSelectPane: (paneId: number) => void;
-  onChangeIndicators: (paneId: number, indicators: ActiveIndicators) => void;
+/** Deep-clone an indicator config so panes never end up sharing nested
+ *  sub-objects (maLines / instances / registry). JSON round-trip is fine here:
+ *  configs are plain data, and undefined-valued keys dropping out is
+ *  equivalent to "off". Hosts must use this per pane inside apply-to-all. */
+export function cloneIndicators(ind: ActiveIndicators): ActiveIndicators {
+  return JSON.parse(JSON.stringify(ind));
+}
+
+/** Minimal pane descriptor the panel needs. Structurally compatible with the
+ *  Charts tab's PaneInfo (numeric ids) and with string-keyed hosts (Pairs
+ *  chart ids) — the panel is generic over the id type so each host keeps its
+ *  own key scheme without a shim. */
+export interface PanelPane<Id extends number | string = number | string> {
+  id: Id;
+  label: string;
+  ticker?: string; // primary ticker for this pane (for OHLC-based helpers)
+}
+
+interface IndicatorsPanelProps<Id extends number | string> {
+  panes: PanelPane<Id>[];
+  indicatorsMap: Record<Id, ActiveIndicators>;
+  activePaneId: Id | null;
+  onSelectPane: (paneId: Id) => void;
+  onChangeIndicators: (paneId: Id, indicators: ActiveIndicators) => void;
   /** Write the same indicator config to every pane in ONE atomic update.
    * Must be a single state write — looping onChangeIndicators clobbers, since
-   * the host composes each call off the same (stale) map. */
+   * the host composes each call off the same (stale) map. Assign each pane
+   * `cloneIndicators(indicators)`, not a shallow spread, so panes don't alias
+   * the same nested maLines/instances/registry objects. */
   onApplyToAllPanes: (indicators: ActiveIndicators) => void;
   /** Copy ONE indicator from a source pane to a target pane (or "all") — a
    *  single atomic merge in the host so it doesn't clobber the other panes. */
-  onCopyIndicatorToPane?: (defId: string, srcPaneId: number, target: number | "all") => void;
+  onCopyIndicatorToPane?: (defId: string, srcPaneId: Id, target: Id | "all") => void;
   onClose: () => void;
   /** Chart bar frequency — threaded to registry controls so param inputs show
    *  frequency-specific defaults. */
   frequency?: string;
+  /** Badge options for the active-indicator chips row (e.g. the Pairs family
+   *  passes { regPrefix: true, haAsOverlay: true } to match its renderer). */
+  chipsOpts?: BadgeOpts;
+  /** Host-specific extra content rendered after the canonical sections,
+   *  before Colors (e.g. the Pairs hidden-sub-panes restore chips). */
+  extraSections?: ReactNode;
 }
 
 /** Ordered list of collapsible section titles in the indicators sidebar. */
@@ -1173,7 +1199,7 @@ export function RegistryIndicatorControls({
   );
 }
 
-export default function IndicatorsPanel({
+export default function IndicatorsPanel<Id extends number | string>({
   panes,
   indicatorsMap,
   activePaneId,
@@ -1183,7 +1209,9 @@ export default function IndicatorsPanel({
   onCopyIndicatorToPane,
   onClose,
   frequency,
-}: IndicatorsPanelProps) {
+  chipsOpts,
+  extraSections,
+}: IndicatorsPanelProps<Id>) {
   // Per-section collapse state — empty set means every section is expanded (default).
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
   const isCollapsed = (name: string) => collapsedSections.has(name);
@@ -1204,6 +1232,10 @@ export default function IndicatorsPanel({
 
   const selectedPaneId = activePaneId ?? (panes.length > 0 ? panes[0].id : null);
   const activeIndicators = selectedPaneId !== null ? (indicatorsMap[selectedPaneId] || {}) : {};
+
+  // Select values are strings — resolve back to the host's id type (which may
+  // be numeric or string) by matching against the pane list.
+  const paneById = (v: string): Id | undefined => panes.find((p) => String(p.id) === v)?.id;
 
   const setActiveIndicators = (indicators: ActiveIndicators) => {
     if (selectedPaneId === null) return;
@@ -1228,8 +1260,9 @@ export default function IndicatorsPanel({
   });
 
   // Copy the current pane's indicators to every pane (one-time, atomic).
+  // Cloned so the targets never share this pane's nested config objects.
   const copyToAll = () => {
-    onApplyToAllPanes(activeIndicators);
+    onApplyToAllPanes(cloneIndicators(activeIndicators));
   };
 
   const applyHint = applyToAll && panes.length > 1 ? " to ALL panes" : "";
@@ -1323,7 +1356,10 @@ export default function IndicatorsPanel({
           <div className="flex gap-1">
             <Select
               value={selectedPaneId !== null ? String(selectedPaneId) : ""}
-              onValueChange={(v) => onSelectPane(parseInt(v))}
+              onValueChange={(v) => {
+                const id = paneById(v);
+                if (id !== undefined) onSelectPane(id);
+              }}
             >
               <SelectTrigger className="h-7 text-[11px] flex-1" data-testid="indicator-pane-select">
                 <SelectValue />
@@ -1350,7 +1386,10 @@ export default function IndicatorsPanel({
               </Button>
             )}
             {panes.length > 1 && selectedPaneId !== null && (
-              <Select value="" onValueChange={(v) => onChangeIndicators(parseInt(v, 10), activeIndicators)}>
+              <Select value="" onValueChange={(v) => {
+                const id = paneById(v);
+                if (id !== undefined) onChangeIndicators(id, cloneIndicators(activeIndicators));
+              }}>
                 <SelectTrigger className="h-7 w-auto px-2 text-[10px] gap-1 flex-shrink-0" title="Copy this pane's indicators to one chosen pane" data-testid="copy-indicators-to-pane">
                   <Copy className="w-3 h-3" />
                   <span>To…</span>
@@ -1371,6 +1410,7 @@ export default function IndicatorsPanel({
           <IndicatorChipsRow
             ind={activeIndicators}
             idKey={`panel-${selectedPaneId ?? "none"}`}
+            opts={chipsOpts}
             className="flex flex-wrap gap-0.5 pt-1"
             onToggleSubChart={(t) => {
               const hidden = activeIndicators.hiddenSubCharts ?? [];
@@ -1888,7 +1928,7 @@ export default function IndicatorsPanel({
                 ? panes.filter((p) => p.id !== selectedPaneId).map((p) => ({ id: p.id, label: p.label || `Pane ${p.id}` }))
                 : undefined}
               onCopyIndicator={onCopyIndicatorToPane && selectedPaneId !== null
-                ? (defId, target) => onCopyIndicatorToPane(defId, selectedPaneId, target as number | "all")
+                ? (defId, target) => onCopyIndicatorToPane(defId, selectedPaneId, target as Id | "all")
                 : undefined}
             />
           )}
@@ -2017,6 +2057,9 @@ export default function IndicatorsPanel({
           collapsed={isCollapsed("Indicator Overlays")}
           onToggle={() => toggleSection("Indicator Overlays")}
         />
+
+        {/* Host-specific extras (e.g. Pairs hidden-sub-panes restore chips) */}
+        {extraSections}
 
         {/* ───── Colors ───── */}
         <IndicatorColorEditor />

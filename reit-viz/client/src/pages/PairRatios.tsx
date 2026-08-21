@@ -26,7 +26,9 @@ import { useUniverseSignature } from "@/lib/universeSignature";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import GridProminenceToggle from "@/components/GridProminenceToggle";
-import { MiniChart, PairsIndicatorsPanel, usePairChartSync } from "@/pages/Pairs";
+import { MiniChart, PairsHiddenSubPanes, usePairChartSync, pairPanelFrequency, type PairChartFreq } from "@/pages/Pairs";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
+import { getInstances, setInstances } from "@/lib/indicatorInstances";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { TrendingUp } from "lucide-react";
 
@@ -348,6 +350,8 @@ export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScore
   const [indicatorChartId, setIndicatorChartId] = useState("pr-ratio");
   const [showIndicators, setShowIndicators] = useState(false);
   const [maximizedChart, setMaximizedChart] = useState<string | null>(null);
+  // Per-chart D/W/M display frequency, lifted so the indicators panel sees it.
+  const [chartFreqs, setChartFreqs] = useState<Record<string, PairChartFreq>>({});
 
   const panelCharts = [
     { id: "pr-ratio", title: "Ratio" },
@@ -365,6 +369,8 @@ export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScore
     onUnregisterChart: unregisterChart,
     onRegisterSeries: registerSeries,
     onChangeIndicators: (i: ActiveIndicators) => setIndicatorsMap((prev) => ({ ...prev, [id]: i })),
+    freq: chartFreqs[id] ?? ("chart" as PairChartFreq),
+    onFreqChange: (f: PairChartFreq) => setChartFreqs((prev) => ({ ...prev, [id]: f })),
   });
 
   return (
@@ -389,15 +395,45 @@ export function PairDetailCharts({ ratioSeries, zScoreSeries, ratioTitle, zScore
         </div>
       </div>
       {showIndicators && (
-        <PairsIndicatorsPanel
-          charts={panelCharts}
+        <IndicatorsPanel
+          panes={panelCharts.map((c) => ({ id: c.id, label: c.title }))}
           indicatorsMap={indicatorsMap}
-          activeChartId={indicatorChartId}
-          onSelectChart={setIndicatorChartId}
+          activePaneId={indicatorChartId}
+          onSelectPane={setIndicatorChartId}
           onChangeIndicators={(chartId, indicators) =>
             setIndicatorsMap((prev) => ({ ...prev, [chartId]: indicators }))
           }
+          onApplyToAllPanes={(indicators) =>
+            // Single atomic write; deep-clone per chart (see cloneIndicators).
+            setIndicatorsMap((prev) => {
+              const next = { ...prev };
+              for (const c of panelCharts) next[c.id] = cloneIndicators(indicators);
+              return next;
+            })
+          }
+          onCopyIndicatorToPane={(defId, srcId, target) =>
+            // Same semantics as ChartArea: merge ONE indicator's full
+            // instance list into the target chart(s) atomically.
+            setIndicatorsMap((prev) => {
+              const src = getInstances(prev[srcId] || {}, defId);
+              if (!src.length) return prev;
+              const ids = target === "all" ? panelCharts.filter((c) => c.id !== srcId).map((c) => c.id) : [target];
+              const next = { ...prev };
+              for (const id of ids) {
+                next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+              }
+              return next;
+            })
+          }
           onClose={() => setShowIndicators(false)}
+          frequency={pairPanelFrequency(chartFreqs[indicatorChartId])}
+          chipsOpts={{ regPrefix: true, haAsOverlay: true }}
+          extraSections={
+            <PairsHiddenSubPanes
+              ind={indicatorsMap[indicatorChartId] || EMPTY_PR_INDICATORS}
+              onChange={(i) => setIndicatorsMap((prev) => ({ ...prev, [indicatorChartId]: i }))}
+            />
+          }
         />
       )}
     </div>

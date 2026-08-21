@@ -123,7 +123,7 @@ function generateFutureBars(lastDate: string, count: number): string[] {
  *  daily chart marks ~70 daily bars, not 14. Resampling no-ops when the chart
  *  is already at (or coarser than) the indicator frequency, and on hourly
  *  epoch axes (see resampleIndicatorBars), so those return 1. */
-function chartBarsPerIndicatorBar(chartFreq: string | undefined, indFreq: string | undefined): number {
+export function chartBarsPerIndicatorBar(chartFreq: string | undefined, indFreq: string | undefined): number {
   if (indFreq !== "weekly" && indFreq !== "monthly") return 1;
   const cf = chartFreq ?? "daily";
   if (cf === "daily") return indFreq === "weekly" ? 5 : 21;

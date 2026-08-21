@@ -19,7 +19,7 @@ import type { CorrFrequency, LegTransform } from "@/lib/correlationEngine";
 import ChartPane from "@/components/ChartPane";
 import type { ActiveIndicators } from "@/components/ChartPane";
 import { deleteIndicatorBadge, getInstances, setInstances } from "@/lib/indicatorInstances";
-import IndicatorsPanel from "@/components/IndicatorsPanel";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
 import type { PaneInfo, PlottedSeries } from "@/pages/Dashboard";
 import { FilterDropdown, emptyClassFilters, serializeClassFilters, deserializeClassFilters, type ClassFilters } from "@/components/ClassificationFilters";
 import { useGridProminence, useChartChrome } from "@/lib/gridPref";
@@ -5257,7 +5257,8 @@ function PairwiseView({
         onApplyToAllPanes={(indicators) =>
           onIndicatorsMapChange(prev => {
             const next = { ...prev };
-            for (const p of lwcPaneInfos) next[p.id] = { ...indicators };
+            // Deep-clone per pane so panes never alias nested config objects.
+            for (const p of lwcPaneInfos) next[p.id] = cloneIndicators(indicators);
             return next;
           })
         }

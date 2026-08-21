@@ -29,7 +29,7 @@ import {
   EyeOff,
   X as XIcon,
 } from "lucide-react";
-import IndicatorsPanel from "@/components/IndicatorsPanel";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
 import { indicatorPeriods, getMaLines } from "@/components/ChartPane";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
 import { computeMaByType, type MaType } from "@/lib/maEngine";
@@ -1637,7 +1637,8 @@ export default function Macro() {
                     const next = { ...prev };
                     for (const p of panelPanes) {
                       const cid = numToChartId.get(p.id);
-                      if (cid) next[cid] = { ...indicators };
+                      // Deep-clone per pane so panes never alias nested config objects.
+                      if (cid) next[cid] = cloneIndicators(indicators);
                     }
                     return next;
                   });

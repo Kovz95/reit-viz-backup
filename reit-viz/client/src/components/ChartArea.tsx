@@ -23,7 +23,7 @@ import type { ActiveIndicators, ChartPaneHandle } from "./ChartPane";
 import { parseSubChartKey, getInstances, setInstances, effGroup } from "@/lib/indicatorInstances";
 import type { IChartApi } from "lightweight-charts";
 import ChartPane, { gridColorFor } from "./ChartPane";
-import IndicatorsPanel from "./IndicatorsPanel";
+import IndicatorsPanel, { cloneIndicators } from "./IndicatorsPanel";
 import CorrelationPickerPanel from "./CorrelationPickerPanel";
 import AttributionPickerPanel from "./AttributionPickerPanel";
 import QuickAnalyzePanel from "./QuickAnalyzePanel";
@@ -3049,7 +3049,9 @@ export default function ChartArea({
               // setter would clobber (each call composes off the same stale map).
               setIndicatorsMap(prev => {
                 const next = { ...prev };
-                for (const p of panes) next[p.id] = { ...indicators };
+                // Deep-clone per pane — a shallow spread would leave every
+                // pane aliasing the same nested maLines/instances/registry.
+                for (const p of panes) next[p.id] = cloneIndicators(indicators);
                 return next;
               })
             }

@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, ArrowDown, Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LayoutGrid, Eye, EyeOff, ChevronsDownUp, ListFilter, Filter, AlertTriangle, Info, Star, Plus } from "lucide-react";
+import { ArrowUp, ArrowDown, Search, Download, ArrowRightLeft, Maximize2, Minimize2, TrendingUp, X, Layers, ChevronsUpDown, Check, ChevronDown, ChevronLeft, ChevronRight, LayoutGrid, Eye, EyeOff, ListFilter, Filter, AlertTriangle, Info, Star, Plus } from "lucide-react";
 import { analyzePairSignals, signalLabel, signalValueFormat, reversionDir } from "@/lib/pairSignalAnalyzer";
 import GridLayoutPicker, { gridContainerStyle, gridSlots, parseGrid } from "@/components/GridLayoutPicker";
 import type { GridLayout } from "@/components/GridLayoutPicker";
@@ -77,7 +77,7 @@ import type { HASmoothType, HASmoothConfig, OhlcBar } from "@/lib/indicators";
 import { INDICATOR_COLORS } from "@/lib/chartColors";
 import { useIndicatorColors } from "@/lib/indicatorColorsContext";
 import type { ActiveIndicators, MaLine, MaKey } from "@/components/ChartPane";
-import { IndicatorColorEditor, RegistryIndicatorControls, IndicatorSetsSection, IndicatorOverlays, SectionHeader, MaRow, BuiltinInstanceSection } from "@/components/IndicatorsPanel";
+import IndicatorsPanel, { cloneIndicators } from "@/components/IndicatorsPanel";
 import {
   getInstances,
   setInstances,
@@ -89,21 +89,20 @@ import {
   effectiveFreq,
   freqSuffix,
   makeFreqSourceCache,
-  deleteIndicatorBadge,
-  setBadgeChrome,
   type IndicatorInstance,
   type FreqSourceCache,
 } from "@/lib/indicatorInstances";
-import { IndicatorChipsRow } from "@/components/IndicatorChips";
 import { computeFractalTrendlines, resampleWeekly, resampleMonthly } from "@/lib/fractalTrendlines";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { downsampleSeries } from "@/lib/chartFrequency";
 import { detectChartPatterns, rankRelevance } from "@/lib/detectChartPatterns";
 import { getPatternSettings } from "@/lib/patternSettings";
-import PatternsPanel from "@/components/PatternsPanel";
-import DateInput from "@/components/DateInput";
-import { ResizableSidebar } from "@/components/ResizableSidebar";
-import { indicatorPeriods, getMaLines, setMaLines, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel } from "@/components/ChartPane";
+import { indicatorPeriods, getMaLines, setSeriesAxisLabels, PANE_OVERLAY_TYPES, subChartSourceLabel, overlayPaneLabel, MA_KEYS, chartBarsPerIndicatorBar } from "@/components/ChartPane";
+import { LookbackWindowPrimitive, type LookbackEntry } from "@/lib/lookbackWindowPrimitive";
+import { IchimokuCloudPrimitive, type CloudPoint } from "@/lib/ichimokuCloudPrimitive";
+import { detectTrendlines, TrendlinesPanel as TRENDLINE_CFG } from "@/components/Trendlines";
+import { detectSRLevels, DEFAULT_SR_CONFIG } from "@/lib/srLevels";
+import { FIB_RETRACEMENTS, FIB_EXTENSIONS, computeFibSwing } from "@/lib/fibAnalysis";
 import type { IndicatorOverlay } from "@/components/ChartPane";
 import { useChartChrome } from "@/lib/gridPref";
 import { ALL_REGISTRY_INDICATORS, getIndicatorDef, resolveParams, resolveParamList, resampleIndicatorBars, type RegistryIndicatorState } from "@/lib/indicatorRegistry";
@@ -987,552 +986,37 @@ interface PairsData {
   } | null;
 }
 
-// ── Pairs Indicators Panel (mirrors Charts IndicatorsPanel exactly) ──
-// Exported for the Pair Ratios detail view (same charts/indicatorsMap contract).
-export function PairsIndicatorsPanel({
-  charts,
-  indicatorsMap,
-  activeChartId,
-  onSelectChart,
-  onChangeIndicators,
-  onClose,
+// ── Hidden sub-panes restore chips (Pairs family) — rendered into the
+// canonical IndicatorsPanel via its extraSections slot. Exported for the
+// Pair Ratios detail view, which mounts the same panel.
+export function PairsHiddenSubPanes({
+  ind,
+  onChange,
 }: {
-  charts: { id: string; title: string }[];
-  indicatorsMap: Record<string, ActiveIndicators>;
-  activeChartId: string;
-  onSelectChart: (id: string) => void;
-  onChangeIndicators: (chartId: string, i: ActiveIndicators) => void;
-  onClose: () => void;
+  ind: ActiveIndicators;
+  onChange: (i: ActiveIndicators) => void;
 }) {
-  const activeIndicators = indicatorsMap[activeChartId] || {};
-  const setIndicators = (i: ActiveIndicators) => onChangeIndicators(activeChartId, i);
-  const copyToAll = () => {
-    for (const c of charts) {
-      if (c.id !== activeChartId) onChangeIndicators(c.id, { ...activeIndicators });
-    }
-  };
-  // Copy ONE indicator's state from the active chart to a target chart (or
-  // all). Copies the full INSTANCE list (every pane/frequency of it),
-  // replacing the target's — works for registry ids and instance-enabled
-  // built-ins alike (setInstances keeps legacy fields in sync on the target).
-  const copyIndicatorToChart = (defId: string, target: string | "all") => {
-    const src = getInstances(activeIndicators, defId);
-    if (!src.length) return;
-    const ids = target === "all" ? charts.filter((c) => c.id !== activeChartId).map((c) => c.id) : [target];
-    for (const id of ids) {
-      onChangeIndicators(id, setInstances(indicatorsMap[id] || {}, defId, JSON.parse(JSON.stringify(src))));
-    }
-  };
-
-  // Per-section collapse state (Charts-tab parity) — empty set = all expanded.
-  const PAIRS_SECTIONS = [
-    "Indicator Sets", "Moving Averages", "Oscillators", "Volatility",
-    "Overlays", "Volume", "Trend", "Statistical", "More Indicators",
-  ];
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
-  const isCollapsed = (name: string) => collapsedSections.has(name);
-  const toggleSection = (name: string) =>
-    setCollapsedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  const allCollapsed = PAIRS_SECTIONS.every((s) => collapsedSections.has(s));
-  const toggleAll = () =>
-    setCollapsedSections(allCollapsed ? new Set() : new Set(PAIRS_SECTIONS));
-
-  const meanCfg = activeIndicators.mean;
-  const [meanRolling, setMeanRolling] = useState(meanCfg?.rolling ?? false);
-  const [meanPeriod, setMeanPeriod] = useState(meanCfg?.period ?? 200);
-  const [ovlCollapsed, setOvlCollapsed] = useState(false);
-  const [fractalN, setFractalN] = useState(activeIndicators.fractalLines?.n ?? 10);
-
-  // Update fractal-lines config (Charts parity). anchorDate: undefined = keep
-  // current, null = clear (live), string = set.
-  const updateFractal = (
-    on: boolean,
-    n?: number,
-    anchorDate?: string | null,
-    timeframe?: "daily" | "weekly" | "monthly",
-  ) => {
-    if (!on) {
-      setIndicators({ ...activeIndicators, fractalLines: undefined });
-      return;
-    }
-    const cur = activeIndicators.fractalLines;
-    const nextAnchor =
-      anchorDate === undefined ? cur?.anchorDate : anchorDate === null ? undefined : anchorDate;
-    setIndicators({
-      ...activeIndicators,
-      fractalLines: { n: n ?? fractalN, anchorDate: nextAnchor, timeframe: timeframe ?? cur?.timeframe },
-    });
-  };
-
-  // Heikin-Ashi state
-  const haVal = activeIndicators.heikinAshi;
-  const isHaOn = !!haVal;
-  const haSmoothCfg: HASmoothConfig =
-    typeof haVal === "object" ? haVal : { type: "none", period: 10 };
-  const [haSmoothType, setHaSmoothType] = useState<HASmoothType>(haSmoothCfg.type);
-  const [haSmoothPeriod, setHaSmoothPeriod] = useState(haSmoothCfg.period);
-
-  const updateHA = (type: HASmoothType, period: number) => {
-    setHaSmoothType(type);
-    setHaSmoothPeriod(period);
-    if (isHaOn) {
-      const val: boolean | HASmoothConfig = type === "none" ? true : { type, period };
-      setIndicators({ ...activeIndicators, heikinAshi: val });
-    }
-  };
-  const toggleHA = (on: boolean) => {
-    if (!on) {
-      setIndicators({ ...activeIndicators, heikinAshi: undefined });
-    } else {
-      const val: boolean | HASmoothConfig =
-        haSmoothType === "none" ? true : { type: haSmoothType, period: haSmoothPeriod };
-      setIndicators({ ...activeIndicators, heikinAshi: val });
-    }
-  };
-
-  const updateMean = (on: boolean, rolling?: boolean, period?: number) => {
-    const r = rolling ?? meanRolling;
-    const p = period ?? meanPeriod;
-    setIndicators({
-      ...activeIndicators,
-      mean: on ? { rolling: r, period: p } : undefined,
-    });
-  };
-
+  if (!(ind.hiddenSubCharts?.length)) return null;
   return (
-    // Docked side panel (charts yield space) instead of the old absolute
-    // overlay that covered the right edge of the chart grid.
-    <ResizableSidebar storageKey="pairs-indicators-width" defaultWidth={280}>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <div className="flex items-center gap-2">
-          <TrendingUp className="w-3.5 h-3.5 text-primary" />
-          <span className="text-xs font-semibold">Indicators</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-1.5 text-[10px] gap-1"
-            onClick={toggleAll}
-            title={allCollapsed ? "Expand all sections" : "Collapse all sections"}
-            data-testid="pairs-collapse-all-indicators"
-          >
-            {allCollapsed ? <ChevronsUpDown className="w-3.5 h-3.5" /> : <ChevronsDownUp className="w-3.5 h-3.5" />}
-          </Button>
-          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={onClose}>
-            <X className="w-3.5 h-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Chart selector */}
-      {charts.length > 0 && (
-        <div className="px-3 pt-3 space-y-1.5">
-          <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Apply to chart</Label>
-          <div className="flex gap-1">
-            <Select value={activeChartId} onValueChange={onSelectChart}>
-              <SelectTrigger className="h-7 text-[11px] flex-1" data-testid="pairs-indicator-chart-select">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {charts.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {charts.length > 1 && (
-              <Button variant="outline" size="sm" className="h-7 px-2 text-[10px] gap-1 flex-shrink-0"
-                onClick={copyToAll} title="Copy to all charts" data-testid="pairs-copy-indicators-all">
-                <Copy className="w-3 h-3" /> All
-              </Button>
-            )}
-          </div>
-          {/* Active-indicator chips for the selected chart — same component as
-              the Charts sidebar's Current Layout (show/hide, hover ✕ delete,
-              ⋮ menu w/ solo + labels/px-line, clear-all). Pairs key space:
-              registry sub-panes carry "reg:", HA is a main-chart overlay. */}
-          <IndicatorChipsRow
-            ind={activeIndicators}
-            idKey={activeChartId}
-            opts={{ regPrefix: true, haAsOverlay: true }}
-            className="flex flex-wrap gap-0.5 pt-1"
-            onToggleSubChart={(t) => {
-              const hidden = activeIndicators.hiddenSubCharts ?? [];
-              const next = hidden.includes(t) ? hidden.filter((x) => x !== t) : [...hidden, t];
-              setIndicators({ ...activeIndicators, hiddenSubCharts: next.length ? next : undefined });
+    <div className="border-t border-border pt-3 space-y-1.5">
+      <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Hidden Sub-Panes</p>
+      <div className="flex flex-wrap gap-1">
+        {ind.hiddenSubCharts!.map((t) => (
+          <button
+            key={t}
+            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50"
+            onClick={() => {
+              const rest = ind.hiddenSubCharts!.filter((x) => x !== t);
+              onChange({ ...ind, hiddenSubCharts: rest.length ? rest : undefined });
             }}
-            onDelete={(del) => setIndicators(deleteIndicatorBadge(activeIndicators, del))}
-            onBadgeChrome={(del, patch) => setIndicators(setBadgeChrome(activeIndicators, del, patch))}
-            onSetHiddenSubCharts={(h) => setIndicators({ ...activeIndicators, hiddenSubCharts: h?.length ? h : undefined })}
-            onClearIndicators={() => setIndicators({})}
-          />
-        </div>
-      )}
-
-      <div className="p-3 space-y-4">
-        {/* ───── Indicator Sets (shared, server-synced) ───── */}
-        <SectionHeader
-          title="Indicator Sets"
-          collapsed={isCollapsed("Indicator Sets")}
-          onToggle={() => toggleSection("Indicator Sets")}
-        />
-        {!isCollapsed("Indicator Sets") && (
-          <IndicatorSetsSection activeIndicators={activeIndicators} onApply={setIndicators} />
-        )}
-
-        {/* ───── Pattern Recognition (same panel + engine as the Charts tab) ───── */}
-        <PatternsPanel paneId={activeChartId} />
-
-        {/* ───── Moving Averages (full Charts-tab set) ───── */}
-        <SectionHeader
-          title="Moving Averages"
-          collapsed={isCollapsed("Moving Averages")}
-          onToggle={() => toggleSection("Moving Averages")}
-        />
-        {!isCollapsed("Moving Averages") && ([
-          ["SMA", "sma", [20, 50, 100, 200], 50],
-          ["EMA", "ema", [9, 21, 50, 100], 21],
-          ["HMA", "hma", [9, 20, 50, 100], 20],
-          ["WMA", "wma", [9, 20, 50, 100], 20],
-          ["DEMA", "dema", [9, 21, 50, 100], 21],
-          ["TEMA", "tema", [9, 21, 50, 100], 21],
-          ["KAMA", "kama", [10, 20, 50, 100], 20],
-          ["FRAMA", "frama", [16, 26, 50, 100], 26],
-          ["T3", "t3", [5, 10, 21, 50], 10],
-          ["ALMA", "alma", [9, 21, 50, 100], 21],
-          ["LSMA", "lsma", [14, 25, 50, 100], 25],
-          ["SLSMA", "slsma", [14, 25, 50, 100], 25],
-        ] as [string, MaKey, number[], number][]).map(([label, field, presets, defaultLen]) => (
-          <MaRow key={field} label={label} presets={presets} defaultLen={defaultLen} frequency="daily"
-            lines={getMaLines(activeIndicators, field)}
-            onChangeLines={(lines) => setIndicators(setMaLines(activeIndicators, field, lines))} />
+            title="Show this sub-pane again"
+            data-testid={`pairs-unhide-sub-${t}`}
+          >
+            <Eye className="w-3 h-3" /> {pairsSubChartLabel(t, ind)}
+          </button>
         ))}
-
-        {/* ───── Oscillators ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Oscillators"
-            collapsed={isCollapsed("Oscillators")}
-            onToggle={() => toggleSection("Oscillators")}
-            className="mb-3"
-          />
-          {!isCollapsed("Oscillators") && (<>
-          {/* Instance rows (shared with Charts): each row = params + freq +
-              pane, so RSI 14 daily and RSI 14 weekly can run at once. */}
-          <BuiltinInstanceSection frequency="daily" indKey="rsi" title="RSI"
-            activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} />
-          <BuiltinInstanceSection frequency="daily" indKey="macd" title="MACD"
-            activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
-          <BuiltinInstanceSection frequency="daily" indKey="stochastic" title="Stochastic"
-            activeIndicators={activeIndicators} onChange={setIndicators} className="mt-3" />
-          <BuiltinInstanceSection frequency="daily" indKey="roc" title="ROC (Rate of Change)"
-            activeIndicators={activeIndicators} onChange={setIndicators} presets={[9, 12, 20, 50]} className="mt-3" />
-          </>)}
-        </div>
-
-        {/* ───── Volatility ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Volatility"
-            collapsed={isCollapsed("Volatility")}
-            onToggle={() => toggleSection("Volatility")}
-            className="mb-3"
-          />
-          {!isCollapsed("Volatility") && (<>
-          {/* Bollinger — instance rows (overlay: no pane dropdown); ATR below. */}
-          <BuiltinInstanceSection frequency="daily" indKey="bollinger" title="Bollinger Bands"
-            activeIndicators={activeIndicators} onChange={setIndicators} presets={[10, 20, 50]} />
-          <BuiltinInstanceSection frequency="daily" indKey="atr" title="ATR"
-            activeIndicators={activeIndicators} onChange={setIndicators} presets={[7, 14, 21]} className="mt-3" />
-          </>)}
-        </div>
-
-        {/* ───── Overlays ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Overlays"
-            collapsed={isCollapsed("Overlays")}
-            onToggle={() => toggleSection("Overlays")}
-            className="mb-3"
-          />
-          {!isCollapsed("Overlays") && (
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-xs font-medium">VWAP</Label>
-              <p className="text-[10px] text-muted-foreground mt-0.5">Cumulative avg overlay</p>
-            </div>
-            <Switch checked={!!activeIndicators.vwap}
-              onCheckedChange={(on) => setIndicators({ ...activeIndicators, vwap: on || undefined })} data-testid="toggle-vwap" />
-          </div>
-          )}
-        </div>
-
-        {/* ───── Volume ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Volume"
-            collapsed={isCollapsed("Volume")}
-            onToggle={() => toggleSection("Volume")}
-            className="mb-3"
-          />
-          {!isCollapsed("Volume") && (
-          <BuiltinInstanceSection frequency="daily" indKey="obv" title="OBV"
-            activeIndicators={activeIndicators} onChange={setIndicators} />
-          )}
-        </div>
-
-        {/* ───── Trend ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Trend"
-            collapsed={isCollapsed("Trend")}
-            onToggle={() => toggleSection("Trend")}
-            className="mb-3"
-          />
-          {!isCollapsed("Trend") && (<>
-          {/* Heikin-Ashi */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label className="text-xs font-medium">Heikin-Ashi</Label>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Candle overlay on chart</p>
-              </div>
-              <Switch checked={isHaOn} onCheckedChange={toggleHA} data-testid="toggle-heikin-ashi" />
-            </div>
-            <div className="flex gap-1 items-center">
-              <span className="text-[10px] text-muted-foreground w-12">Smooth:</span>
-              {(["none", "SMA", "EMA", "WMA"] as HASmoothType[]).map((t) => (
-                <Button key={t} variant={haSmoothType === t ? "default" : "secondary"} size="sm"
-                  className="h-5 px-1.5 text-[9px] flex-1"
-                  onClick={() => updateHA(t, haSmoothPeriod)}>
-                  {t === "none" ? "Off" : t}
-                </Button>
-              ))}
-            </div>
-            {haSmoothType !== "none" && (
-              <div className="flex gap-1 items-center">
-                <span className="text-[10px] text-muted-foreground w-12">Period:</span>
-                {[5, 10, 14, 20].map((p) => (
-                  <Button key={p} variant={haSmoothPeriod === p ? "default" : "secondary"} size="sm"
-                    className="h-5 px-1.5 text-[9px] flex-1"
-                    onClick={() => updateHA(haSmoothType, p)}>
-                    {p}
-                  </Button>
-                ))}
-                <Input type="number" placeholder="#" className="h-5 w-12 text-[9px] px-1" min={2}
-                  onChange={(e) => { const n = parseInt(e.target.value); if (n > 1) updateHA(haSmoothType, n); }}
-                  data-testid="custom-ha-smooth-period" />
-              </div>
-            )}
-          </div>
-          {/* HA Signals */}
-          <div className="flex items-center justify-between mt-3">
-            <div>
-              <Label className="text-xs font-medium">HA Signals</Label>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                <span className="text-green-400">▲</span> / <span className="text-red-400">▼</span> arrows on color flips
-              </p>
-            </div>
-            <Switch checked={!!activeIndicators.haSignals}
-              onCheckedChange={(on) => setIndicators({ ...activeIndicators, haSignals: on || undefined })} data-testid="toggle-ha-signals" />
-          </div>
-
-          {/* Fractal Lines (DojiEmoji auto-trendline) — Charts parity */}
-          <div className="space-y-2 mt-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label className="text-xs font-medium">Fractal Lines</Label>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
-                  <span className="text-red-400">R</span> /{" "}
-                  <span className="text-green-400">S</span> trendlines from last 2 fractal pivots
-                </p>
-              </div>
-              <Switch
-                checked={activeIndicators.fractalLines !== undefined}
-                onCheckedChange={(on) => updateFractal(on)}
-                data-testid="pairs-toggle-fractal-lines"
-              />
-            </div>
-            {activeIndicators.fractalLines !== undefined && (<>
-              <div className="flex gap-1 items-center">
-                <span className="text-[10px] text-muted-foreground w-12">Period</span>
-                {[5, 10, 20].map((p) => (
-                  <Button
-                    key={p}
-                    variant={fractalN === p ? "default" : "secondary"}
-                    size="sm"
-                    className="h-6 px-2 text-[10px] flex-1"
-                    onClick={() => { setFractalN(p); updateFractal(true, p); }}
-                  >
-                    {p}
-                  </Button>
-                ))}
-                <Input
-                  type="number"
-                  placeholder="#"
-                  className="h-6 w-14 text-[10px] px-1.5"
-                  min={2}
-                  max={100}
-                  value={fractalN}
-                  onChange={(e) => {
-                    const n = parseInt(e.target.value);
-                    if (Number.isFinite(n) && n >= 2 && n <= 100) {
-                      setFractalN(n);
-                      updateFractal(true, n);
-                    }
-                  }}
-                  data-testid="pairs-custom-fractal-period"
-                />
-              </div>
-              <div className="flex gap-1 items-center">
-                <span className="text-[10px] text-muted-foreground w-12">Timeframe</span>
-                {(["daily", "weekly", "monthly"] as const).map((tf) => (
-                  <Button
-                    key={tf}
-                    variant={(activeIndicators.fractalLines?.timeframe ?? "daily") === tf ? "default" : "secondary"}
-                    size="sm"
-                    className="h-6 px-2 text-[10px] flex-1"
-                    onClick={() => updateFractal(true, undefined, undefined, tf)}
-                    data-testid={`pairs-fractal-tf-${tf}`}
-                  >
-                    {tf === "daily" ? "Daily" : tf === "weekly" ? "Weekly" : "Monthly"}
-                  </Button>
-                ))}
-              </div>
-              <div className="flex gap-1 items-center">
-                <span className="text-[10px] text-muted-foreground w-12">As of</span>
-                <DateInput
-                  wrapperClassName="flex-1"
-                  className="h-6 text-[10px] px-1.5 flex-1"
-                  value={activeIndicators.fractalLines.anchorDate ?? ""}
-                  onChange={(v) => updateFractal(true, undefined, v || null)}
-                  data-testid="pairs-fractal-anchor-date"
-                />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => updateFractal(true, undefined, null)}
-                  title="Use the latest bar (live)"
-                  disabled={!activeIndicators.fractalLines.anchorDate}
-                >
-                  Latest
-                </Button>
-              </div>
-            </>)}
-          </div>
-          </>)}
-        </div>
-
-        {/* ───── Statistical ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="Statistical"
-            collapsed={isCollapsed("Statistical")}
-            onToggle={() => toggleSection("Statistical")}
-            className="mb-3"
-          />
-          {!isCollapsed("Statistical") && (<>
-          {/* Mean + Std Bands */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs font-medium">Mean ± Std Bands</Label>
-              <Switch checked={meanCfg !== undefined}
-                onCheckedChange={(on) => updateMean(on)} data-testid="toggle-mean" />
-            </div>
-            <div className="flex gap-1">
-              <Button variant={!meanRolling ? "default" : "secondary"} size="sm"
-                className="h-6 px-3 text-[10px] flex-1"
-                onClick={() => { setMeanRolling(false); if (meanCfg) updateMean(true, false); }}>
-                Static
-              </Button>
-              <Button variant={meanRolling ? "default" : "secondary"} size="sm"
-                className="h-6 px-3 text-[10px] flex-1"
-                onClick={() => { setMeanRolling(true); if (meanCfg) updateMean(true, true); }}>
-                Rolling
-              </Button>
-            </div>
-            <div className="flex gap-1 items-center">
-              {[50, 100, 200, 500].map((p) => (
-                <Button key={p} variant={meanPeriod === p ? "default" : "secondary"} size="sm"
-                  className="h-6 px-2 text-[10px] flex-1"
-                  onClick={() => { setMeanPeriod(p); if (meanCfg) updateMean(true, undefined, p); }}>
-                  {p}
-                </Button>
-              ))}
-              <Input type="number" placeholder="#" className="h-6 w-14 text-[10px] px-1.5" min={10}
-                onChange={(e) => { const n = parseInt(e.target.value); if (n >= 10) { setMeanPeriod(n); if (meanCfg) updateMean(true, undefined, n); } }}
-                data-testid="custom-mean-period" />
-            </div>
-          </div>
-          </>)}
-        </div>
-
-        {/* ───── More Indicators (registry-driven, same list as the Charts tab) ───── */}
-        <div className="border-t border-border pt-3">
-          <SectionHeader
-            title="More Indicators"
-            collapsed={isCollapsed("More Indicators")}
-            onToggle={() => toggleSection("More Indicators")}
-            className="mb-3"
-          />
-          {!isCollapsed("More Indicators") && (
-            <RegistryIndicatorControls
-              activeIndicators={activeIndicators}
-              onChange={setIndicators}
-              frequency="daily"
-              copyTargets={charts.length > 1 ? charts.filter((c) => c.id !== activeChartId).map((c) => ({ id: c.id, label: c.title })) : undefined}
-              onCopyIndicator={charts.length > 1 ? (defId, target) => copyIndicatorToChart(defId, target as string | "all") : undefined}
-            />
-          )}
-        </div>
-
-        {/* ───── Indicator Overlays (indicator-on-indicator, same as Charts) ───── */}
-        <IndicatorOverlays
-          activeIndicators={activeIndicators}
-          onChangeIndicators={setIndicators}
-          collapsed={ovlCollapsed}
-          onToggle={() => setOvlCollapsed(v => !v)}
-        />
-
-        {/* ───── Hidden sub-panes (eye on a sub-pane) — click to restore ───── */}
-        {(activeIndicators.hiddenSubCharts?.length ?? 0) > 0 && (
-          <div className="border-t border-border pt-3 space-y-1.5">
-            <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Hidden Sub-Panes</p>
-            <div className="flex flex-wrap gap-1">
-              {activeIndicators.hiddenSubCharts!.map((t) => (
-                <button
-                  key={t}
-                  className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-primary/50"
-                  onClick={() => {
-                    const rest = activeIndicators.hiddenSubCharts!.filter((x) => x !== t);
-                    setIndicators({ ...activeIndicators, hiddenSubCharts: rest.length ? rest : undefined });
-                  }}
-                  title="Show this sub-pane again"
-                  data-testid={`pairs-unhide-sub-${t}`}
-                >
-                  <Eye className="w-3 h-3" /> {pairsSubChartLabel(t, activeIndicators)}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="border-t border-border pt-3">
-          <p className="text-[10px] text-muted-foreground">
-            MAs, Bollinger, VWAP, and overlay-type indicators draw on the chart. RSI, MACD, ATR, ROC, Stochastic, OBV, and sub-pane indicators render below. Select which chart to apply to above.
-          </p>
-        </div>
-
-        {/* Colors editor */}
-        <IndicatorColorEditor />
       </div>
-    </ResizableSidebar>
+    </div>
   );
 }
 
@@ -2667,6 +2151,12 @@ function PairsSubIndicatorChart({
 // Exported for the Pair Ratios detail view. `data` may contain null values
 // (warm-up bars) — they render as whitespace so several charts share one
 // logical axis; indicators compute on the finite subset.
+/** Pair-chart display frequency ("chart" = native daily bars). */
+export type PairChartFreq = "chart" | "weekly" | "monthly";
+/** Map a pair-chart freq to the indicators panel's chart-bar-frequency string
+ *  (pair charts are daily-sourced, so "chart" means daily). */
+export const pairPanelFrequency = (f?: PairChartFreq) => (f === "weekly" || f === "monthly" ? f : "daily");
+
 export function MiniChart({
   data: dataProp,
   title,
@@ -2688,6 +2178,8 @@ export function MiniChart({
   onCrosshairMove,
   onRemove,
   onChangeIndicators,
+  freq: freqProp,
+  onFreqChange,
 }: {
   data: { time: string; value: number | null }[];
   title: string;
@@ -2711,6 +2203,11 @@ export function MiniChart({
   /** Enables the sub-panes' hide/close buttons (they mutate this chart's
    *  ActiveIndicators — same contract as the Charts tab's ChartArea). */
   onChangeIndicators?: (i: ActiveIndicators) => void;
+  /** Controlled display frequency. When provided (with onFreqChange), the host
+   *  owns the D/W/M state — required for the indicators panel to see it.
+   *  Omitted → the chart keeps its own local state (legacy behavior). */
+  freq?: PairChartFreq;
+  onFreqChange?: (f: PairChartFreq) => void;
 }) {
   const effectiveFlexHeight = useFlexHeight || isMaximized;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2730,7 +2227,12 @@ export function MiniChart({
   // are daily-based, so W/M always resample. Ref bands stay at native
   // resolution (context lines). Shadows the props so the whole body — chart
   // series, indicators, fingerprints — rides the downsampled data.
-  const [chartFreq, setChartFreq] = useState<"chart" | "weekly" | "monthly">("chart");
+  const [chartFreqLocal, setChartFreqLocal] = useState<PairChartFreq>("chart");
+  const chartFreq = freqProp ?? chartFreqLocal;
+  const setChartFreq = (f: PairChartFreq) => {
+    onFreqChange?.(f);
+    if (freqProp === undefined) setChartFreqLocal(f);
+  };
   const data = useMemo(
     () => (chartFreq === "chart" ? dataProp : (downsampleSeries(dataProp as any, chartFreq) as typeof dataProp)),
     [dataProp, chartFreq],
@@ -3033,9 +2535,20 @@ export function MiniChart({
         }
       }
       // NOTE: RSI, MACD, Stochastic, ROC, ATR, OBV are now rendered in separate sub-panes below (PairsSubIndicatorChart)
-      // Mean ± Std
+      // Mean ± Std — band-line colors derive from the mean color at the chosen
+      // opacity, with optional envelope shading (Charts/ChartPane parity).
       if (activeIndicators.mean) {
         const { rolling, period } = activeIndicators.mean;
+        const bandOp = activeIndicators.mean.bandOpacity ?? 0.8;
+        const meanShade = activeIndicators.mean.shade !== false;
+        const meanRgb = (() => {
+          const m = /^#([0-9a-f]{6})$/i.exec(IC.mean ?? "");
+          if (!m) return "99, 102, 241";
+          const v = parseInt(m[1], 16);
+          return `${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}`;
+        })();
+        const bandColor = (mult: number) =>
+          `rgba(${meanRgb}, ${(Math.abs(mult) === 1 ? bandOp : bandOp * 0.65).toFixed(2)})`;
         if (rolling) {
           const rb = computeRollingMeanBands(data, period);
           if (rb.mean.length > 0) {
@@ -3046,11 +2559,30 @@ export function MiniChart({
             ml.setData(rb.mean.map(d => ({ time: d.time as Time, value: d.value })));
             for (const b of rb.bands) {
               const bs = chart.addSeries(LineSeries, {
-                color: Math.abs(b.mult) === 1 ? "rgba(99,102,241,0.4)" : "rgba(99,102,241,0.25)",
-                lineWidth: 1, title: `${b.mult > 0 ? "+" : ""}${b.mult}σ`,
+                color: bandColor(b.mult),
+                lineWidth: (Math.abs(b.mult) === 1 ? 2 : 1) as LineWidth,
+                title: `${b.mult > 0 ? "+" : ""}${b.mult}σ`,
                 lineStyle: LineStyle.Dotted,
               });
               bs.setData(b.data.map(d => ({ time: d.time as Time, value: d.value })));
+            }
+            if (meanShade) {
+              const band = (mult: number) => rb.bands.find((b) => b.mult === mult)?.data as unknown as CloudPoint[] | undefined;
+              const fills = (alpha: number) => {
+                const c = `rgba(${meanRgb}, ${alpha.toFixed(3)})`;
+                return { up: c, down: c };
+              };
+              const outerA = band(2), outerB = band(-2), innerA = band(1), innerB = band(-1);
+              try {
+                if (outerA?.length && outerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(outerA, outerB, fills(0.07 * bandOp)));
+                }
+                if (innerA?.length && innerB?.length) {
+                  (ml as unknown as { attachPrimitive: (p: unknown) => void })
+                    .attachPrimitive(new IchimokuCloudPrimitive(innerA, innerB, fills(0.1 * bandOp)));
+                }
+              } catch {}
             }
           }
         } else {
@@ -3067,8 +2599,9 @@ export function MiniChart({
             meanLine.setData([{ time: first, value: stats.mean }, { time: last, value: stats.mean }]);
             for (const mult of [1, -1, 2, -2]) {
               const band = chart.addSeries(LineSeries, {
-                color: Math.abs(mult) === 1 ? "rgba(99,102,241,0.4)" : "rgba(99,102,241,0.25)",
-                lineWidth: 1, title: `${mult > 0 ? "+" : ""}${mult}σ`,
+                color: bandColor(mult),
+                lineWidth: (Math.abs(mult) === 1 ? 2 : 1) as LineWidth,
+                title: `${mult > 0 ? "+" : ""}${mult}σ`,
                 lineStyle: LineStyle.Dotted,
               });
               band.setData([
@@ -3289,8 +2822,153 @@ export function MiniChart({
       }
     }
 
+    // ── Auto-detection overlays (Charts/ChartPane parity). Close-only series,
+    // so the detectors get highs = lows = closes (pivots run on closes).
+    // Computed inside the rebuild effect — the chart is torn down and rebuilt
+    // on every indicator change, so no memo/bookkeeping is needed.
+    if (activeIndicators.autoTrendlines || activeIndicators.srLevels || activeIndicators.fibLevels) {
+      const detOhlc = finiteData.length
+        ? {
+            dates: finiteData.map((d) => d.time),
+            closes: finiteData.map((d) => d.value as number),
+            highs: finiteData.map((d) => d.value as number),
+            lows: finiteData.map((d) => d.value as number),
+          }
+        : null;
+      const detLineOpts = {
+        title: "",
+        crosshairMarkerVisible: false,
+        priceLineVisible: false,
+        autoscaleInfoProvider: () => null,
+      } as const;
+      // Diagonal support/resistance trendlines (top few by score)
+      if (activeIndicators.autoTrendlines && detOhlc && detOhlc.closes.length >= 40) {
+        let tls: ReturnType<typeof detectTrendlines> = [];
+        try { tls = detectTrendlines(detOhlc, TRENDLINE_CFG).slice(0, 6); } catch {}
+        const lastDate = detOhlc.dates[detOhlc.dates.length - 1];
+        for (const tl of tls) {
+          if (!(tl.date1 <= lastDate)) continue;
+          const s = chart.addSeries(LineSeries, {
+            ...detLineOpts,
+            color: tl.kind === "resistance" ? "#ef5350" : "#26a69a",
+            lineWidth: 2 as LineWidth,
+            lineStyle: tl.broken ? LineStyle.Dashed : LineStyle.Solid,
+            lastValueVisible: false,
+          });
+          s.setData([
+            { time: tl.date1 as Time, value: tl.price1 },
+            { time: lastDate as Time, value: tl.currentProjection },
+          ]);
+        }
+      }
+      // Horizontal support/resistance levels
+      if (activeIndicators.srLevels && detOhlc) {
+        let lvls: ReturnType<typeof detectSRLevels> = [];
+        try { lvls = detectSRLevels(detOhlc, { ...DEFAULT_SR_CONFIG, enableHorizontal: true, enableMA: false, enableFib: false }).slice(0, 6); } catch {}
+        const firstDate = detOhlc.dates[0];
+        const lastDate = detOhlc.dates[detOhlc.dates.length - 1];
+        for (const lv of lvls) {
+          const s = chart.addSeries(LineSeries, {
+            ...detLineOpts,
+            color: "#60a5fa",
+            lineWidth: 1 as LineWidth,
+            lineStyle: LineStyle.Dashed,
+            lastValueVisible: true,
+          });
+          s.setData([
+            { time: firstDate as Time, value: lv.price },
+            { time: lastDate as Time, value: lv.price },
+          ]);
+        }
+      }
+      // Fibonacci retracements + extensions of the most recent swing
+      if (activeIndicators.fibLevels && detOhlc) {
+        const swing = computeFibSwing(detOhlc.highs, detOhlc.lows, detOhlc.dates, 252);
+        if (swing) {
+          const range = swing.swingHigh - swing.swingLow;
+          const up = swing.direction === "up";
+          const fibs = [
+            ...FIB_RETRACEMENTS.map((r) => ({ ratio: r, price: up ? swing.swingHigh - range * r : swing.swingLow + range * r })),
+            ...FIB_EXTENSIONS.map((r) => ({ ratio: r, price: up ? swing.swingLow + range * r : swing.swingHigh - range * r })),
+          ].filter((l) => Number.isFinite(l.price));
+          const FIB_COLORS: Record<string, string> = {
+            "0": "#94a3b8", "0.236": "#22c55e", "0.382": "#84cc16",
+            "0.5": "#eab308", "0.618": "#f59e0b", "0.786": "#f97316", "1": "#94a3b8",
+            "1.272": "#c084fc", "1.618": "#a855f7", "2.618": "#7c3aed",
+          };
+          const firstDate = detOhlc.dates[0];
+          const lastDate = detOhlc.dates[detOhlc.dates.length - 1];
+          for (const f of fibs) {
+            const s = chart.addSeries(LineSeries, {
+              ...detLineOpts,
+              color: FIB_COLORS[String(f.ratio)] || "#eab308",
+              lineWidth: 1 as LineWidth,
+              lineStyle: LineStyle.Dotted,
+              lastValueVisible: true,
+            });
+            s.setData([
+              { time: firstDate as Time, value: f.price },
+              { time: lastDate as Time, value: f.price },
+            ]);
+          }
+        }
+      }
+    }
+
+    // ── Hover lookback-window lines (dashed vline N bars behind the crosshair
+    // per period indicator — Charts/ChartPane parity). The primitive dies with
+    // the chart on rebuild, so no detach bookkeeping is needed.
+    let lbPrim: LookbackWindowPrimitive | null = null;
+    if (activeIndicators.showLookbackWindow !== false) {
+      const lbEntries: LookbackEntry[] = [];
+      // This chart's bar frequency ("chart" = native daily); weekly/monthly
+      // indicator instances count RESAMPLED bars, so scale to chart bars.
+      const lbBaseFreq = chartFreq === "chart" ? "daily" : chartFreq;
+      const pushLb = (bars: unknown, lbColor: string, label: string) => {
+        if (typeof bars === "number" && Number.isFinite(bars) && bars > 1) {
+          lbEntries.push({ bars: Math.round(bars), color: lbColor, label });
+        }
+      };
+      for (const k of MA_KEYS) {
+        for (const { p, f } of getMaLines(activeIndicators, k)) {
+          const maMult = chartBarsPerIndicatorBar(lbBaseFreq, f === "chart" ? undefined : f);
+          pushLb(p * maMult, (IC as any)[k] ?? "#94a3b8", k.toUpperCase());
+        }
+      }
+      const lbInstances = (key: string, lbColor: string, label: string, paramKey = "period") => {
+        for (const inst of getInstances(activeIndicators, key)) {
+          const mult = chartBarsPerIndicatorBar(lbBaseFreq, inst.freq);
+          for (const p of indicatorPeriods(inst.params[paramKey] as number | number[] | undefined)) {
+            pushLb(p * mult, lbColor, label);
+          }
+        }
+      };
+      lbInstances("rsi", (IC as any).rsi ?? "#a855f7", "RSI");
+      lbInstances("bollinger", (IC as any).bollinger_basis ?? "#f59e0b", "BB");
+      lbInstances("atr", (IC as any).atr ?? "#f59e0b", "ATR");
+      lbInstances("roc", (IC as any).roc ?? "#38bdf8", "ROC");
+      lbInstances("stochastic", (IC as any).stoch_k ?? "#22c55e", "Stoch", "kPeriod");
+      if (activeIndicators.mean?.rolling) pushLb(activeIndicators.mean.period, (IC as any).mean ?? "#94a3b8", "Mean");
+      for (const def of ALL_REGISTRY_INDICATORS) {
+        for (const inst of getInstances(activeIndicators, def.id)) {
+          const regSt: RegistryIndicatorState = { enabled: true, params: inst.params };
+          const p = resolveParams(def, regSt, lbBaseFreq);
+          if (def.id === "autocorr" && ((p as Record<string, number>).source ?? 0) !== 0) continue;
+          const barsKey = ["period", "window"].find((k2) => typeof p[k2] === "number" && p[k2] > 1);
+          const mult = chartBarsPerIndicatorBar(lbBaseFreq, inst.freq);
+          if (barsKey) pushLb(p[barsKey] * mult, (IC as any)[def.colorKeys[0]] ?? "#94a3b8", def.label.split(" ")[0]);
+        }
+      }
+      if (lbEntries.length > 0) {
+        lbPrim = new LookbackWindowPrimitive();
+        (mainSeries as unknown as { attachPrimitive: (p: unknown) => void }).attachPrimitive(lbPrim);
+        lbPrim.setEntries(lbEntries);
+      }
+    }
+
     // Crosshair value reporting + in-plot readout
     const crosshairCb = (param: any) => {
+      lbPrim?.setHover(typeof param.logical === "number" ? param.logical : null);
       if (!param.time || !param.seriesData) {
         onCrosshairMove?.(id, null);
         setHoverReadout(null);
@@ -3656,6 +3334,8 @@ function ExtraOlsZChart({
   onRemove,
   indicatorsForChart,
   onChangeIndicators,
+  freq,
+  onFreqChange,
 }: {
   row: ExtraOlsZRow;
   tickerA: string;
@@ -3675,6 +3355,8 @@ function ExtraOlsZChart({
   onRemove: () => void;
   indicatorsForChart: ActiveIndicators;
   onChangeIndicators?: (i: ActiveIndicators) => void;
+  freq?: PairChartFreq;
+  onFreqChange?: (f: PairChartFreq) => void;
 }) {
   const chartId = `olsResidZ_extra_${row.id}`;
   const { data, isLoading } = useQuery({
@@ -3766,6 +3448,8 @@ function ExtraOlsZChart({
       onCrosshairMove={onCrosshairMove}
       onRemove={onRemove}
       onChangeIndicators={onChangeIndicators}
+      freq={freq}
+      onFreqChange={onFreqChange}
     />
   );
 }
@@ -3798,6 +3482,10 @@ export default function Pairs() {
   const [pageChrome, setPageChrome] = useChartChrome();
   // Per-chart indicator state: chartId → ActiveIndicators
   const [indicatorsMap, setIndicatorsMap] = useState<Record<string, ActiveIndicators>>({});
+  // Per-chart display frequency, lifted out of MiniChart so the indicators
+  // panel can label freq dropdowns / resolve param defaults for the active
+  // chart. Missing key = "chart" (native daily).
+  const [chartFreqs, setChartFreqs] = useState<Record<string, PairChartFreq>>({});
   const [indicatorChartId, setIndicatorChartId] = useState<string>("prices");
   const [pairsLayout, setPairsLayout] = useState<GridLayout>("1x1");
   // Which chart IDs are toggled on
@@ -4692,6 +4380,8 @@ export default function Pairs() {
                       onRegisterSeries={registerSeries}
                       onCrosshairMove={handlePairsCrosshairMove}
                       onChangeIndicators={(i) => setIndicatorsMap(prev => ({ ...prev, [c.id]: i }))}
+                      freq={chartFreqs[c.id] ?? "chart"}
+                      onFreqChange={(f) => setChartFreqs(prev => ({ ...prev, [c.id]: f }))}
                     />
                   ))}
                   {/* OLS Scatter chart */}
@@ -4752,6 +4442,8 @@ export default function Pairs() {
                         onRemove={() => setExtraOlsZPlots((prev) => prev.filter((p) => p.id !== row.id))}
                         indicatorsForChart={indicatorsMap[extraId] || EMPTY_INDICATORS}
                         onChangeIndicators={(i) => setIndicatorsMap(prev => ({ ...prev, [extraId]: i }))}
+                        freq={chartFreqs[extraId] ?? "chart"}
+                        onFreqChange={(f) => setChartFreqs(prev => ({ ...prev, [extraId]: f }))}
                       />
                     );
                   })}
@@ -4775,15 +4467,45 @@ export default function Pairs() {
             ? indicatorChartId
             : (panelCharts[0]?.id ?? indicatorChartId);
           return (
-          <PairsIndicatorsPanel
-            charts={panelCharts}
+          <IndicatorsPanel
+            panes={panelCharts.map(c => ({ id: c.id, label: c.title }))}
             indicatorsMap={indicatorsMap}
-            activeChartId={effectiveChartId}
-            onSelectChart={setIndicatorChartId}
+            activePaneId={effectiveChartId}
+            onSelectPane={setIndicatorChartId}
             onChangeIndicators={(chartId, indicators) =>
               setIndicatorsMap(prev => ({ ...prev, [chartId]: indicators }))
             }
+            onApplyToAllPanes={(indicators) =>
+              // Single atomic write; deep-clone per chart (see cloneIndicators).
+              setIndicatorsMap(prev => {
+                const next = { ...prev };
+                for (const c of panelCharts) next[c.id] = cloneIndicators(indicators);
+                return next;
+              })
+            }
+            onCopyIndicatorToPane={(defId, srcId, target) =>
+              // Same semantics as ChartArea: merge ONE indicator's full
+              // instance list into the target chart(s) atomically.
+              setIndicatorsMap(prev => {
+                const src = getInstances(prev[srcId] || {}, defId);
+                if (!src.length) return prev;
+                const ids = target === "all" ? panelCharts.filter(c => c.id !== srcId).map(c => c.id) : [target];
+                const next = { ...prev };
+                for (const id of ids) {
+                  next[id] = setInstances(next[id] || {}, defId, JSON.parse(JSON.stringify(src)));
+                }
+                return next;
+              })
+            }
             onClose={() => setShowIndicators(false)}
+            frequency={pairPanelFrequency(chartFreqs[effectiveChartId])}
+            chipsOpts={{ regPrefix: true, haAsOverlay: true }}
+            extraSections={
+              <PairsHiddenSubPanes
+                ind={indicatorsMap[effectiveChartId] || {}}
+                onChange={(i) => setIndicatorsMap(prev => ({ ...prev, [effectiveChartId]: i }))}
+              />
+            }
           />
           );
         })()}
