@@ -920,12 +920,12 @@ function TablePanel({ rows, sortKey, sortDir, handleSort, loadingTable, tablePro
           <thead className="bg-muted/30 border-b border-border sticky top-0">
             <tr>
               <SortableHeader k="ticker" label="Ticker" align="left" />
-              <th className="px-2 py-1.5 text-left">Basis</th>
+              <SortableHeader k="basis" label="Basis" align="left" />
               <SortableHeader k="totalPct" label={`Total % (${windowLabel})`} />
               <SortableHeader k="multiplePct" label="Multiple %" />
               <SortableHeader k="estimatePct" label="Estimate %" />
               <SortableHeader k="multipleShare" label="Multiple Share" />
-              <th className="px-2 py-1.5 text-center">Direction</th>
+              <SortableHeader k="direction" label="Direction" align="left" />
               <th className="px-2 py-1.5 text-left w-[200px]">Composition</th>
             </tr>
           </thead>
@@ -1186,6 +1186,8 @@ export default function Attribution() {
       let va: number | string, vb: number | string;
       switch (sortKey) {
         case "ticker": va = a.ticker; vb = b.ticker; break;
+        case "basis": va = a.basis; vb = b.basis; break;
+        case "direction": va = a.sameDirection ? 1 : 0; vb = b.sameDirection ? 1 : 0; break;
         case "totalPct": va = a.totalPct; vb = b.totalPct; break;
         case "multiplePct": va = a.multiplePct; vb = b.multiplePct; break;
         case "estimatePct": va = a.estimatePct; vb = b.estimatePct; break;

@@ -487,6 +487,14 @@ export default function Heatmap() {
 
   // Sort
   const sorted = useMemo(() => {
+    if (sortCol === "ticker" || sortCol === "name" || sortCol === "group") {
+      const str = (r: HeatmapRow) =>
+        sortCol === "ticker" ? r.ticker
+          : sortCol === "name" ? (r.name ?? "")
+          : String((groupBy === "none" ? r.subindustry : (r as any)[groupBy]) ?? "");
+      return [...filtered].sort((a, b) =>
+        sortDir === "asc" ? str(a).localeCompare(str(b)) : str(b).localeCompare(str(a)));
+    }
     if (sortCol === "conviction") {
       const miss = sortDir === "asc" ? Infinity : -Infinity;
       return [...filtered].sort((a, b) => {
@@ -1314,14 +1322,17 @@ export default function Heatmap() {
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 z-20 bg-card">
               <tr>
-                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-0 bg-card z-30 w-[60px]">
-                  Ticker
+                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-0 bg-card z-30 w-[60px] cursor-pointer hover:text-foreground select-none"
+                  onClick={() => toggleSort("ticker")} data-testid="heatmap-sort-ticker">
+                  <span className="inline-flex items-center gap-1">Ticker<SortIcon colKey="ticker" /></span>
                 </th>
-                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-[60px] bg-card z-30 w-[140px]">
-                  Name
+                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-[60px] bg-card z-30 w-[140px] cursor-pointer hover:text-foreground select-none"
+                  onClick={() => toggleSort("name")} data-testid="heatmap-sort-name">
+                  <span className="inline-flex items-center gap-1">Name<SortIcon colKey="name" /></span>
                 </th>
-                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-[200px] bg-card z-30 w-[100px]">
-                  {groupBy !== "none" ? GROUP_LEVELS.find(g => g.value === groupBy)?.label || "Group" : "Subindustry"}
+                <th className="px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sticky left-[200px] bg-card z-30 w-[100px] cursor-pointer hover:text-foreground select-none"
+                  onClick={() => toggleSort("group")} data-testid="heatmap-sort-group">
+                  <span className="inline-flex items-center gap-1">{groupBy !== "none" ? GROUP_LEVELS.find(g => g.value === groupBy)?.label || "Group" : "Subindustry"}<SortIcon colKey="group" /></span>
                 </th>
                 <th
                   className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap sticky left-[300px] bg-card z-30 border-r border-border/40"

@@ -4,6 +4,7 @@ import * as React from "react";
 import { createLucideIcon } from "@/lib/createLucideIcon";
 import { createChart, ColorType, CrosshairMode, AreaSeries, LineSeries, HistogramSeries, BarSeries } from "lightweight-charts";
 import { usePersistedState } from "@/lib/persistedState";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { PagePresets } from "@/components/PagePresets";
 import { useBaskets } from "@/lib/useBaskets";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -1268,6 +1269,17 @@ export default function PremiumDiscount() {
       totalCandidates: candidates.length, droppedByGap, yearCounts, yearMin, yearMax, cluster,
     };
   }, [premiumSeries, growthSeries, closesA, closesB, similarN, similarExclusion, similarMinGap]);
+
+  // Matched-dates table sort (default: closest analogs first, like before).
+  const analogSort = useTableSort<any>("", "desc", "desc", "pd-analog-matches");
+  const sortedAnalogMatches = useMemo(() => {
+    const matches = similarAnalysis?.matches ?? [];
+    return analogSort.apply(matches, (m: any, key) => {
+      const v = m[key];
+      if (key === "date") return v;
+      return Number.isFinite(v) ? v : null;
+    });
+  }, [similarAnalysis, analogSort.apply]);
 
   // ── In-page series detail (chart expand → PairDetailCharts + indicators) ──
   const pdDetailData = useMemo(() => {
@@ -2542,17 +2554,17 @@ export default function PremiumDiscount() {
                 <table className="w-full text-[10px] font-mono">
                   <thead>
                     <tr className="text-muted-foreground/70 uppercase tracking-wider">
-                      <th className="text-left font-normal pr-3 py-1">Date</th>
-                      <th className="text-right font-normal pr-3 py-1">z‑prem</th>
-                      <th className="text-right font-normal pr-3 py-1">z‑growth</th>
-                      <th className="text-right font-normal pr-3 py-1">dist</th>
-                      <th className="text-right font-normal pr-3 py-1">fwd 3M</th>
-                      <th className="text-right font-normal pr-3 py-1">fwd 6M</th>
-                      <th className="text-right font-normal py-1">fwd 1Y</th>
+                      <th className="text-left font-normal pr-3 py-1"><SortHeader label="Date" columnKey="date" sort={analogSort} /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="z‑prem" columnKey="zPrem" sort={analogSort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="z‑growth" columnKey="zGrowth" sort={analogSort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="dist" columnKey="distance" sort={analogSort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="fwd 3M" columnKey="fwd3M" sort={analogSort} align="right" /></th>
+                      <th className="text-right font-normal pr-3 py-1"><SortHeader label="fwd 6M" columnKey="fwd6M" sort={analogSort} align="right" /></th>
+                      <th className="text-right font-normal py-1"><SortHeader label="fwd 1Y" columnKey="fwd1Y" sort={analogSort} align="right" /></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {similarAnalysis.matches.map((m: any) => (
+                    {sortedAnalogMatches.map((m: any) => (
                       <tr key={m.date} className="border-t border-border/40" data-testid={`similar-row-${m.date}`}>
                         <td className="text-foreground pr-3 py-0.5">{m.date}</td>
                         <td className="text-right text-muted-foreground pr-3 py-0.5">{m.zPrem.toFixed(2)}</td>

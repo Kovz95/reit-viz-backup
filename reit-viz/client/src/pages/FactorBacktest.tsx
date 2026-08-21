@@ -1,6 +1,7 @@
 // Reconstructed from recovered-bundle/FactorBacktest-DTdYrgz4.js on 2026-06-11
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useUniverse } from "@/lib/universeContext";
+import { useTableSort, SortHeader, type TableSort } from "@/lib/useTableSort";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import BasketPicker from "@/components/BasketPicker";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
@@ -643,7 +644,29 @@ export default function FactorBacktest() {
 
   const HORIZON_COLORS = ["#22c55e", "#0ea5e9", "#a855f7", "#f59e0b"];
 
-  const renderBucketTable = (title: string, rows: { bucket: string; horizon: string }[], statsMap: Map<string, BucketStat>, onDownload: () => void) => (
+  // Bucket-table sort: keys resolve through the statsMap join; empty key
+  // keeps the natural bucket × horizon ladder.
+  const bucketAccessor = useCallback((statsMap: Map<string, BucketStat>) =>
+    (row: { bucket: string; horizon: string }, key: string): string | number | null => {
+      if (key === "bucket") return row.bucket;
+      if (key === "horizon") return HORIZON_LABELS.indexOf(row.horizon);
+      const s = statsMap.get(`${row.bucket}|${row.horizon}`);
+      if (!s) return null;
+      switch (key) {
+        case "n": return s.n;
+        case "mean": return s.meanReturn;
+        case "median": return s.medianReturn;
+        case "stdev": return s.stdReturn;
+        case "hit": return s.hitRate;
+        case "meanSR": return s.meanReturnSR ?? null;
+        case "hitSR": return s.hitRateSR ?? null;
+        default: return null;
+      }
+    }, []);
+  const quintileSort = useTableSort<{ bucket: string; horizon: string }>("", "desc", "desc", "fb-quintile");
+  const quadSort = useTableSort<{ bucket: string; horizon: string }>("", "desc", "desc", "fb-quadrant");
+
+  const renderBucketTable = (title: string, rows: { bucket: string; horizon: string }[], statsMap: Map<string, BucketStat>, onDownload: () => void, sort: TableSort<{ bucket: string; horizon: string }>) => (
     <div className="border border-border rounded bg-card/40">
       <div className="px-3 py-2 border-b border-border flex items-center justify-between">
         <div className="font-semibold text-sm">{title}</div>
@@ -652,17 +675,17 @@ export default function FactorBacktest() {
       <div className="overflow-x-auto">
         <table className="text-xs w-full">
           <thead><tr className="border-b border-border bg-muted/30">
-            <th className="text-left px-2 py-1.5 font-medium">Bucket</th>
-            <th className="text-right px-2 py-1.5 font-medium">Horizon</th>
-            <th className="text-right px-2 py-1.5 font-medium">N</th>
-            <th className="text-right px-2 py-1.5 font-medium">Mean</th>
-            <th className="text-right px-2 py-1.5 font-medium">Median</th>
-            <th className="text-right px-2 py-1.5 font-medium">Stdev</th>
-            <th className="text-right px-2 py-1.5 font-medium">Hit ≥{thresholdPct}%</th>
-            {sectorRelative && <><th className="text-right px-2 py-1.5 font-medium text-amber-400">Mean (SR)</th><th className="text-right px-2 py-1.5 font-medium text-amber-400">Hit (SR)</th></>}
+            <th className="text-left px-2 py-1.5 font-medium"><SortHeader label="Bucket" columnKey="bucket" sort={sort} /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label="Horizon" columnKey="horizon" sort={sort} align="right" /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label="N" columnKey="n" sort={sort} align="right" /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label="Mean" columnKey="mean" sort={sort} align="right" /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label="Median" columnKey="median" sort={sort} align="right" /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label="Stdev" columnKey="stdev" sort={sort} align="right" /></th>
+            <th className="text-right px-2 py-1.5 font-medium"><SortHeader label={`Hit ≥${thresholdPct}%`} columnKey="hit" sort={sort} align="right" /></th>
+            {sectorRelative && <><th className="text-right px-2 py-1.5 font-medium text-amber-400"><SortHeader label="Mean (SR)" columnKey="meanSR" sort={sort} align="right" /></th><th className="text-right px-2 py-1.5 font-medium text-amber-400"><SortHeader label="Hit (SR)" columnKey="hitSR" sort={sort} align="right" /></th></>}
           </tr></thead>
           <tbody>
-            {rows.map(({ bucket, horizon }) => {
+            {sort.apply(rows, bucketAccessor(statsMap)).map(({ bucket, horizon }) => {
               const stat = statsMap.get(`${bucket}|${horizon}`);
               if (!stat) return null;
               return (
@@ -896,7 +919,7 @@ export default function FactorBacktest() {
               </div>
             )}
 
-            {renderBucketTable("Quintile Buckets (Q1 = cheapest PEG = lowest mult/grw)", quintileRows, quintileMap, downloadQuintile)}
+            {renderBucketTable("Quintile Buckets (Q1 = cheapest PEG = lowest mult/grw)", quintileRows, quintileMap, downloadQuintile, quintileSort)}
 
             {/* Long-short spread */}
             <div className="border border-border rounded bg-card/40">
@@ -952,7 +975,7 @@ export default function FactorBacktest() {
               </div>
             )}
 
-            {renderBucketTable("Quadrant Buckets (BR = LowMult + HighGrowth — your target)", quadRows, quadMap, downloadQuadrant)}
+            {renderBucketTable("Quadrant Buckets (BR = LowMult + HighGrowth — your target)", quadRows, quadMap, downloadQuadrant, quadSort)}
 
             {/* BR vs Rest */}
             <div className="border border-border rounded bg-card/40">

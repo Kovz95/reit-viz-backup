@@ -442,6 +442,7 @@ export default function MTFSetups() {
         case "legs": return row.legs.map((l) => l.label).join(" + ");
         case "direction": return row.direction;
         case "lastFiredLabel": return row.lastFiredLabel;
+        case "activeNow": return row.activeNow ? 1 : 0;
         default: return row[key as keyof MtfSetupRow] as number;
       }
     });
@@ -820,7 +821,7 @@ export default function MTFSetups() {
                   <th className="text-right py-1 pr-2"><SortHeader label="N" columnKey="occurrences" sort={sort} align="right" /></th>
                   <th className="text-right py-1 pr-2"><SortHeader label="Freq/yr" columnKey="freqPerYear" sort={sort} align="right" /></th>
                   <th className="text-right py-1 pr-2"><SortHeader label="Last fired" columnKey="lastFiredLabel" sort={sort} align="right" /></th>
-                  <th className="text-center py-1 pr-2">Now</th>
+                  <th className="text-center py-1 pr-2"><SortHeader label="Now" columnKey="activeNow" sort={sort} align="center" title="Active setups first" /></th>
                   <th className="text-right py-1 pr-2" />
                 </tr>
               </thead>

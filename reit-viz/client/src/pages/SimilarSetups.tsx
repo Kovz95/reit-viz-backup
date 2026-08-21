@@ -992,7 +992,7 @@ function PerTickerTable({
               <SortHeader k="med1Y" label="Med 1Y" />
               <SortHeader k="hLong3M" label="Hit L 3M" />
               <SortHeader k="hShort3M" label="Hit S 3M" />
-              <th className="text-left font-normal pr-3 py-1">Note</th>
+              <SortHeader k="note" label="Note" align="left" />
             </tr>
           </thead>
           <tbody>
@@ -1706,6 +1706,7 @@ export default function SimilarSetups() {
     const mult = dir === "asc" ? 1 : -1;
     copy.sort((a, b) => {
       if (key === "ticker") return a.ticker.localeCompare(b.ticker) * mult;
+      if (key === "note") return ((a as any).note ?? "").localeCompare((b as any).note ?? "") * mult;
       const va = (a as unknown as Record<string, number>)[key];
       const vb = (b as unknown as Record<string, number>)[key];
       const fa = Number.isFinite(va);
@@ -1721,7 +1722,7 @@ export default function SimilarSetups() {
     setPerTickerSort((prev) =>
       prev.key === key
         ? { key, dir: prev.dir === "desc" ? "asc" : "desc" }
-        : { key, dir: key === "ticker" ? "asc" : "desc" }
+        : { key, dir: key === "ticker" || key === "note" ? "asc" : "desc" }
     );
   };
 

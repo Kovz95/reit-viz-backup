@@ -747,6 +747,10 @@ export default function DualMAOptimizer() {
         case "meanRet": va = ta.stats.meanRet; vb = tb.stats.meanRet; break;
         case "vsBH": va = ta.stats.totalReturn - ta.stats.buyHoldReturn; vb = tb.stats.totalReturn - tb.stats.buyHoldReturn; break;
         case "ticker": return sortAsc ? a.ticker.localeCompare(b.ticker) : b.ticker.localeCompare(a.ticker);
+        case "bestParams": {
+          const pa = paramsLabel(ta.params), pb = paramsLabel(tb.params);
+          return sortAsc ? pa.localeCompare(pb) : pb.localeCompare(pa);
+        }
         default: va = ta.stats.sharpe; vb = tb.stats.sharpe;
       }
       if (!Number.isFinite(va)) va = -Infinity;
@@ -1015,7 +1019,9 @@ export default function DualMAOptimizer() {
                         <th className="text-left px-2 py-1 font-bold sticky left-0 bg-card z-10 border-r border-border cursor-pointer" onClick={() => handleSortClick("ticker")}>
                           Ticker {sortIcon("ticker")}
                         </th>
-                        <th className="text-left px-2 py-1 font-bold">Best Params</th>
+                        <th className="text-left px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("bestParams")}>
+                          Best Params {sortIcon("bestParams")}
+                        </th>
                         <th className="text-center px-2 py-1 font-bold cursor-pointer" onClick={() => handleSortClick("nTrades")}>
                           Trades {sortIcon("nTrades")}
                         </th>

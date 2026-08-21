@@ -1703,6 +1703,12 @@ export default function Screener() {
       else if (sort.key === "rv_prem_pct") { av = a.rv?.premPctile ?? -Infinity; bv = b.rv?.premPctile ?? -Infinity; }
       else if (sort.key === "rv_growth_pct") { av = a.rv?.growthPctile ?? -Infinity; bv = b.rv?.growthPctile ?? -Infinity; }
       else if (sort.key === "rv_prem_gap") { av = a.rv?.premGap ?? -Infinity; bv = b.rv?.premGap ?? -Infinity; }
+      else if (sort.key.endsWith("-date")) {
+        // "<conditionId>-date" → the condition's match date (ISO string sorts).
+        const condId = sort.key.slice(0, -5);
+        av = a.matchDates?.[condId] ?? "";
+        bv = b.matchDates?.[condId] ?? "";
+      }
       else {
         // condition id → numeric value
         av = a.values[sort.key] ?? -Infinity;
@@ -2343,10 +2349,12 @@ export default function Screener() {
                               hasLookback && (
                                 <th
                                   key={`${cond.id}-date`}
-                                  className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap"
+                                  className="px-2 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground cursor-pointer select-none hover:text-foreground whitespace-nowrap"
+                                  onClick={() => toggleSort(`${cond.id}-date`)}
                                   title="Most recent date when condition was true"
                                 >
                                   Match Date
+                                  <SortIcon colKey={`${cond.id}-date`} />
                                 </th>
                               ),
                             ];

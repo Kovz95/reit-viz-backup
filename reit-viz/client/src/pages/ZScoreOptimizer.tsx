@@ -1127,6 +1127,28 @@ export default function ZScoreOptimizer() {
     return { windows, matrix };
   }, [results]);
 
+  // Heatmap column sort: click a window header to rank tickers by that
+  // window's score; "ticker" = A→Z; null = keep best-score order.
+  const [matrixSort, setMatrixSort] = useState<{ key: number | "ticker"; asc: boolean } | null>(null);
+  const toggleMatrixSort = (key: number | "ticker") =>
+    setMatrixSort((prev) => (prev && prev.key === key ? { key, asc: !prev.asc } : { key, asc: key === "ticker" }));
+  const sortedMatrix = useMemo(() => {
+    if (!heatmapData) return null;
+    if (!matrixSort) return heatmapData.matrix;
+    const rows = [...heatmapData.matrix];
+    const { key, asc } = matrixSort;
+    rows.sort((a, b) => {
+      if (key === "ticker") return asc ? a.ticker.localeCompare(b.ticker) : b.ticker.localeCompare(a.ticker);
+      const idx = heatmapData.windows.indexOf(key);
+      const va = a.scores[idx], vb = b.scores[idx];
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return asc ? va - vb : vb - va;
+    });
+    return rows;
+  }, [heatmapData, matrixSort]);
+
   const isBand = returnMode === "band";
 
   return (
@@ -1471,15 +1493,21 @@ export default function ZScoreOptimizer() {
                   <table className="w-full text-[10px] font-mono">
                     <thead>
                       <tr className="bg-card">
-                        <th className="text-left px-2 py-1 text-muted-foreground font-bold sticky left-0 bg-card z-10 border-r border-border">Ticker</th>
+                        <th className="text-left px-2 py-1 text-muted-foreground font-bold sticky left-0 bg-card z-10 border-r border-border cursor-pointer hover:text-foreground select-none"
+                          onClick={() => toggleMatrixSort("ticker")} title="Sort A→Z">
+                          Ticker{matrixSort?.key === "ticker" ? (matrixSort.asc ? " ▲" : " ▼") : ""}
+                        </th>
                         {heatmapData.windows.map((e) => (
-                          <th key={e} className="text-center px-2 py-1 text-muted-foreground font-bold whitespace-nowrap">{windowLabelFor(e, frequency)}</th>
+                          <th key={e} className="text-center px-2 py-1 text-muted-foreground font-bold whitespace-nowrap cursor-pointer hover:text-foreground select-none"
+                            onClick={() => toggleMatrixSort(e)} title={`Sort tickers by their ${windowLabelFor(e, frequency)} score`}>
+                            {windowLabelFor(e, frequency)}{matrixSort?.key === e ? (matrixSort.asc ? " ▲" : " ▼") : ""}
+                          </th>
                         ))}
                         <th className="text-center px-2 py-1 text-muted-foreground font-bold">Best</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {heatmapData.matrix.map((e) => {
+                      {(sortedMatrix ?? heatmapData.matrix).map((e) => {
                         const tr = results.find((r) => r.ticker === e.ticker);
                         return (
                           <tr key={e.ticker} className="hover:bg-white/5 cursor-pointer" onClick={() => setExpandedTicker(expandedTicker === e.ticker ? null : e.ticker)}>

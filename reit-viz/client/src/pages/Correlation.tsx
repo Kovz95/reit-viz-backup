@@ -1177,6 +1177,9 @@ function DislocationScanPanel({
           case "kind": return r.kind;
           case "spreadRet": return Math.abs(r.spreadRet);
           case "score": return r.score;
+          // Non-MR pairs always sort last (null); asc = shortest half-life first.
+          case "mrHl": return r.spreadMR ? (r.spreadHalfLife ?? null) : null;
+          case "legZ": return Math.max(Math.abs(r.legZA ?? 0), Math.abs(r.legZB ?? 0));
           default: return null;
         }
       })
@@ -1195,6 +1198,7 @@ function DislocationScanPanel({
           case "relRet": return r.relRet;
           case "side": return r.side;
           case "score": return r.score;
+          case "peers": return r.peers;
           default: return null;
         }
       })
@@ -1484,7 +1488,7 @@ function DislocationScanPanel({
                     <th className={thCls}>#</th>
                     <th className={thCls}><SortHeader label="Ticker" columnKey="ticker" sort={idioSort} /></th>
                     <th className={thCls}><SortHeader label="Subindustry" columnKey="group" sort={idioSort} /></th>
-                    <th className={thCls}>Peers</th>
+                    <th className={thCls}><SortHeader label="Peers" columnKey="peers" sort={idioSort} /></th>
                     <th className={thCls}><SortHeader label="Hist ρ̄" columnKey="histAvgCorr" sort={idioSort} /></th>
                     <th className={thCls}><SortHeader label="Now ρ̄" columnKey="curAvgCorr" sort={idioSort} /></th>
                     <th className={thCls}><SortHeader label="z" columnKey="z" sort={idioSort} /></th>
@@ -1550,8 +1554,8 @@ function DislocationScanPanel({
                     <th className={thCls}><SortHeader label="Gap" columnKey="zGap" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Δρ 20d" columnKey="corrDelta" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Spread z" columnKey="spreadZ" sort={sort} /></th>
-                    <th className={thCls} title="Spread mean-reverting? (Dickey-Fuller) · half-life">MR·HL</th>
-                    <th className={thCls} title="Each leg's window return z-scored vs its own history — who moved?">Leg z A·B</th>
+                    <th className={thCls} title="Spread mean-reverting? (Dickey-Fuller) · half-life — sort: MR pairs first, shortest half-life first"><SortHeader label="MR·HL" columnKey="mrHl" sort={sort} /></th>
+                    <th className={thCls} title="Each leg's window return z-scored vs its own history — who moved? Sort: max |leg z|"><SortHeader label="Leg z A·B" columnKey="legZ" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Type" columnKey="kind" sort={sort} /></th>
                     <th className={thCls}><SortHeader label="Spread" columnKey="spreadRet" sort={sort} /></th>
                     <th className={thCls}>Trade idea</th>

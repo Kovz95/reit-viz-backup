@@ -617,6 +617,8 @@ export default function UniversalScreener() {
         case "signal": return `${row.signalLabel} ${row.paramsLabel}`;
         case "direction": return row.direction;
         case "lastSignalDate": return row.lastSignalDate;
+        // Desc (the default): firing rows first, then most-recent signals.
+        case "firing": return row.firingNow ? Number.MAX_SAFE_INTEGER : -(row.lastSignalBarsAgo ?? Number.MAX_SAFE_INTEGER);
         default: return row[key as keyof QualifiedSetup] as number;
       }
     });
@@ -1058,7 +1060,7 @@ export default function UniversalScreener() {
                 <th className="text-right py-1 pr-2"><SortHeader label="Occ" columnKey="occurrences" sort={sort} align="right" /></th>
                 <th className="text-right py-1 pr-2"><SortHeader label="Freq/yr" columnKey="freqPerYear" sort={sort} align="right" /></th>
                 <th className="text-right py-1 pr-2"><SortHeader label="Last fired" columnKey="lastSignalDate" sort={sort} align="right" /></th>
-                <th className="text-center py-1 pr-2">Firing</th>
+                <th className="text-center py-1 pr-2"><SortHeader label="Firing" columnKey="firing" sort={sort} align="center" title="Firing rows first, then by bars since the last signal" /></th>
                 <th className="text-right py-1 pr-2">Actions</th>
               </tr>
             </thead>

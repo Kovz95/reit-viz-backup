@@ -341,7 +341,7 @@ function checkWindowRelevance(
 
 // ─── Upcoming Windows Panel ───────────────────────────────────────────────────
 
-type UpcomingSortKey = "starts" | "avg" | "median" | "win" | "n" | "t" | "ticker";
+type UpcomingSortKey = "starts" | "avg" | "median" | "win" | "n" | "t" | "ticker" | "status" | "name" | "dir" | "window";
 
 function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
   const [lookaheadDays, setLookaheadDays] = useState(30);
@@ -381,6 +381,11 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
     const val = (r: any): number | string => {
       switch (sortKey) {
         case "ticker": return r.ticker;
+        case "name": return r.name ?? "";
+        case "dir": return r.direction ?? "";
+        case "window": return r.window.startLabel ?? "";
+        // Live (2) → Soon/upcoming (1) → Ended (0); asc reverses.
+        case "status": return r.isActive ? 2 : r.daysUntilEnd < 0 ? 0 : 1;
         case "avg": return r.window.avgReturn;
         case "median": return r.window.medianReturn ?? r.window.avgReturn;
         case "win": return r.window.winRate;
@@ -405,8 +410,8 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
 
   const handleSort = (key: UpcomingSortKey) => {
     if (sortKey === key) setSortAsc(!sortAsc);
-    // Numbers default to descending (biggest edge first), starts/ticker ascending.
-    else { setSortKey(key); setSortAsc(key === "starts" || key === "ticker"); }
+    // Numbers default to descending (biggest edge first), text/date ascending.
+    else { setSortKey(key); setSortAsc(key === "starts" || key === "ticker" || key === "name" || key === "dir" || key === "window"); }
   };
 
   const SortableTh = ({ k, label, className }: { k: UpcomingSortKey; label: string; className?: string }) => (
@@ -524,11 +529,11 @@ function UpcomingWindowsPanel({ data }: { data: SeasonalPatternRow[] }) {
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-card border-b border-border/50 z-10">
                   <tr>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-12">Status</th>
+                    <SortableTh k="status" label="Status" className="text-left w-12" />
                     <SortableTh k="ticker" label="Ticker" className="text-left w-16" />
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Name</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground w-10">Dir</th>
-                    <th className="px-2 py-1 text-left text-[10px] font-medium text-muted-foreground">Window</th>
+                    <SortableTh k="name" label="Name" className="text-left" />
+                    <SortableTh k="dir" label="Dir" className="text-left w-10" />
+                    <SortableTh k="window" label="Window" className="text-left" />
                     <SortableTh k="starts" label="Starts" className="text-right w-20" />
                     <SortableTh k="avg" label="Avg" className="text-right w-14" />
                     <SortableTh k="median" label="Med" className="text-right w-14" />
@@ -951,6 +956,25 @@ export default function PerfFamily() {
           const suffix = periodStat === "max" ? "Max" : "Min";
           av = a[sortKey + suffix] ?? null;
           bv = b[sortKey + suffix] ?? null;
+        } else if (viewMode === "seasonal-patterns" && (sortKey.startsWith("bull_") || sortKey.startsWith("bear_"))) {
+          // Seasonal sub-columns sort tickers by their TOP window's stat.
+          const side = sortKey.startsWith("bull_") ? "bullish" : "bearish";
+          const stat = sortKey.slice(5);
+          const pick = (r: any) => {
+            const w = r[side]?.[0];
+            if (!w) return null;
+            switch (stat) {
+              case "avg": return w.avgReturn;
+              case "med": return w.medianReturn ?? w.avgReturn;
+              case "win": return w.winRate;
+              case "n": return w.years;
+              case "t": return w.tStat;
+              case "days": return w.calendarDays ?? null;
+              default: return w.startLabel ?? null;
+            }
+          };
+          av = pick(a);
+          bv = pick(b);
         } else {
           av = a[sortKey];
           bv = b[sortKey];
@@ -1434,28 +1458,27 @@ export default function PerfFamily() {
             <table className="w-full text-xs" data-testid="seasonal-patterns-table">
               <thead className="sticky top-0 bg-card border-b border-border z-10">
                 <tr>
-                  <th className="px-2 py-1.5 text-left text-xs font-medium text-muted-foreground w-16">Ticker</th>
-                  <th className="px-2 py-1.5 text-left text-xs font-medium text-muted-foreground w-44">Name</th>
-                  <th className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground w-10">Yrs</th>
+                  <ColHeader col="ticker" label="Ticker" className="w-16" />
+                  <ColHeader col="name" label="Name" className="w-44" />
+                  <ColHeader col="yearsOfData" label="Yrs" className="w-10" />
                   <th className="px-2 py-1.5 text-left text-xs font-medium text-emerald-500" colSpan={7}>Top Bullish Windows</th>
                   <th className="px-2 py-1.5 text-left text-xs font-medium text-red-500" colSpan={7}>Top Bearish Windows</th>
                 </tr>
                 <tr className="border-b border-border/30">
                   <th colSpan={3} />
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal">Window</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Days</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Avg</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Med</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Win%</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">N</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">t-stat</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal">Window</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Days</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Avg</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Med</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">Win%</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">N</th>
-                  <th className="px-1.5 py-1 text-[10px] text-muted-foreground font-normal text-right">t-stat</th>
+                  {(["bull", "bear"] as const).map((side) =>
+                    ([["window", "Window", "text-left"], ["days", "Days", "text-right"], ["avg", "Avg", "text-right"], ["med", "Med", "text-right"], ["win", "Win%", "text-right"], ["n", "N", "text-right"], ["t", "t-stat", "text-right"]] as const).map(([stat, label, align]) => (
+                      <th
+                        key={`${side}_${stat}`}
+                        className={`px-1.5 py-1 text-[10px] text-muted-foreground font-normal cursor-pointer select-none hover:text-foreground ${align}`}
+                        onClick={() => handleSort(`${side}_${stat}`)}
+                        title={`Sort tickers by their top ${side === "bull" ? "bullish" : "bearish"} window's ${label}`}
+                        data-testid={`seasonal-sort-${side}-${stat}`}
+                      >
+                        {label}{sortKey === `${side}_${stat}` ? (sortAsc ? " ▲" : " ▼") : ""}
+                      </th>
+                    ))
+                  )}
                 </tr>
               </thead>
               <tbody>

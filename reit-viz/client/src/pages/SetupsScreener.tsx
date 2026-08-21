@@ -586,6 +586,12 @@ export default function SetupsScreener() {
   const resultsWithComposite = useMemo(() => results.map(r => r.status === "ok" ? { ...r, composite: compositeScore(r, selectedHorizon, consensusMode) } : r), [results, selectedHorizon, consensusMode]);
 
   const sortedResults = useMemo(() => {
+    // Status sorts the WHOLE list (the ok/other split below intentionally
+    // pins non-ok rows to the bottom for every other column).
+    if (sortCol === "status") {
+      return [...resultsWithComposite].sort((a, b) =>
+        sortDir === "asc" ? a.status.localeCompare(b.status) : b.status.localeCompare(a.status));
+    }
     const ok = resultsWithComposite.filter(r => r.status === "ok");
     const other = resultsWithComposite.filter(r => r.status !== "ok");
     const getVal = (r: TickerResult): number | string => {
@@ -606,6 +612,7 @@ export default function SetupsScreener() {
         case "dispersion": return (selectedHorizon === "1M" ? r.consensus_sd1M : selectedHorizon === "3M" ? r.consensus_sd3M : selectedHorizon === "6M" ? r.consensus_sd6M : r.consensus_sd1Y) ?? NaN;
         case "snr": return r.consensus_snr ?? NaN;
         case "validPresets": return r.consensus_validPresets ?? NaN;
+        case "verdict": return r.consensus_verdict ?? "";
         default: return NaN;
       }
     };
@@ -902,8 +909,8 @@ export default function SetupsScreener() {
                 {consensusMode && sortHeader("snr", "SNR")}
                 {consensusMode && sortHeader("validPresets", "Presets")}
                 {!consensusMode && sortHeader("n", "matches")}
-                {consensusMode && <th className="text-left font-normal py-1 px-2">Verdict</th>}
-                <th className="text-left font-normal py-1 px-2">status</th>
+                {consensusMode && sortHeader("verdict", "Verdict", "left")}
+                {sortHeader("status", "status", "left")}
               </tr>
             </thead>
             <tbody>

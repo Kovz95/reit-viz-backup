@@ -559,6 +559,12 @@ export default function DividendSpread() {
       if (sortCol === "ticker") {
         return sortDir === "asc" ? a.ticker.localeCompare(b.ticker) : b.ticker.localeCompare(a.ticker);
       }
+      if (sortCol === "name") {
+        return sortDir === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+      }
+      if (sortCol === "subindustry") {
+        return sortDir === "asc" ? a.subindustry.localeCompare(b.subindustry) : b.subindustry.localeCompare(a.subindustry);
+      }
       const va = getValue(a);
       const vb = getValue(b);
       return sortDir === "asc" ? va - vb : vb - va;
@@ -803,8 +809,8 @@ export default function DividendSpread() {
               <tr className="border-b border-border">
                 <th className="text-center px-2 py-1.5 w-8 text-muted-foreground font-medium">#</th>
                 <SortHeader col="ticker" label="Ticker" className="text-left w-14" />
-                <th className="text-left px-2 py-1.5 text-muted-foreground font-medium max-w-[140px]">Name</th>
-                <th className="text-left px-2 py-1.5 w-28 text-muted-foreground font-medium">SubInd</th>
+                <SortHeader col="name" label="Name" className="text-left max-w-[140px]" />
+                <SortHeader col="subindustry" label="SubInd" className="text-left w-28" />
                 <SortHeader col="divYield" label="Div Yld" className="text-right" />
                 <SortHeader col="treasuryRate" label={treasuryLabel.replace(" Treasury", "")} className="text-right" />
                 <SortHeader col="spread" label="Spread" className="text-right" />

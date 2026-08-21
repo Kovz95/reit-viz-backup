@@ -8,6 +8,7 @@ import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "rea
 import { useQuery } from "@tanstack/react-query";
 import { GripVertical, ChevronUp, ChevronDown, X, Flag, AlertTriangle, Check, Trophy, Download, Save, Swords, ListOrdered, TrendingUp, SkipForward, Undo2, Plus, Pencil, Trash2 } from "lucide-react";
 import { getTickers } from "@/lib/dataService";
+import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useUniverse } from "@/lib/universeContext";
 import { BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { useBaskets } from "@/lib/useBaskets";
@@ -250,6 +251,22 @@ export default function WeeklyRanks() {
 
   // Week-over-week diff for the Changes view.
   const cmp = useMemo(() => (compareSnap ? compareRankings(order, compareSnap.order) : null), [order, compareSnap]);
+
+  // Movers table sort — empty key keeps compareRankings' |Δ|-desc default.
+  const moversSort = useTableSort<any>("", "desc", "desc", "wr-movers");
+  const sortedMovers = useMemo(() => {
+    const movers = cmp?.movers ?? [];
+    return moversSort.apply(movers, (m: any, key) => {
+      switch (key) {
+        case "ticker": return m.ticker;
+        case "name": return metaMap.get(m.ticker)?.name ?? "";
+        case "from": return m.from ?? null;
+        case "to": return m.to;
+        case "delta": return m.delta ?? null; // NEW entries (no delta) sort last
+        default: return null;
+      }
+    });
+  }, [cmp, moversSort.apply, metaMap]);
 
   // Group the ranking by a classification level, preserving each name's global
   // rank. Groups are ordered by their best (top) rank; each carries count +
@@ -790,10 +807,16 @@ export default function WeeklyRanks() {
               <div className="border border-border rounded overflow-hidden">
                 <table className="w-full text-xs" data-testid="wr-movers">
                   <thead className="bg-card text-[10px] text-muted-foreground">
-                    <tr><th className="text-left p-1.5">Ticker</th><th className="text-left p-1.5">Name</th><th className="text-right p-1.5">Last</th><th className="text-right p-1.5">Now</th><th className="text-right p-1.5 pr-3">Δ</th></tr>
+                    <tr>
+                      <th className="text-left p-1.5"><SortHeader label="Ticker" columnKey="ticker" sort={moversSort} /></th>
+                      <th className="text-left p-1.5"><SortHeader label="Name" columnKey="name" sort={moversSort} /></th>
+                      <th className="text-right p-1.5"><SortHeader label="Last" columnKey="from" sort={moversSort} align="right" /></th>
+                      <th className="text-right p-1.5"><SortHeader label="Now" columnKey="to" sort={moversSort} align="right" /></th>
+                      <th className="text-right p-1.5 pr-3"><SortHeader label="Δ" columnKey="delta" sort={moversSort} align="right" title="Default order: biggest |Δ| first; NEW entries sort last on Δ" /></th>
+                    </tr>
                   </thead>
                   <tbody>
-                    {cmp.movers.map((m) => (
+                    {sortedMovers.map((m) => (
                       <tr key={m.ticker} className="border-t border-border/40" data-testid={`wr-mover-${m.ticker}`}>
                         <td className="p-1.5 font-mono font-semibold">{m.ticker}</td>
                         <td className="p-1.5 text-muted-foreground truncate max-w-[240px]">{metaMap.get(m.ticker)?.name ?? ""}</td>
