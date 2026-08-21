@@ -513,6 +513,9 @@ function DriverScanResults({
 
 // ── Driver scan panel (main area) ──
 function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (specA: string, specB: string, window: number) => void }) {
+  const { baskets } = useBaskets();
+  const [targetSource, setTargetSource] = useState<"stock" | "basket">("stock");
+  const [basketId, setBasketId] = useState("");
   const [ticker, setTicker] = useState("SPG");
   const [targetMode, setTargetMode] = useState("1d");
   const [includeMacro, setIncludeMacro] = useState(true);
@@ -526,13 +529,16 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
   const abortRef = useRef<AbortController | null>(null);
   const hasFund = getCustomFundamentalMetrics().length > 0;
 
+  const isBasketTarget = targetSource === "basket";
+  const targetBasket = isBasketTarget ? baskets.find((b) => b.id === basketId) ?? null : null;
+
   const runScan = useCallback(async () => {
     if (scanning) {
       abortRef.current?.abort();
       setScanning(false);
       return;
     }
-    if (!ticker) return;
+    if (isBasketTarget ? !targetBasket : !ticker) return;
     setScanning(true);
     setError(null);
     setResult(null);
@@ -541,13 +547,25 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      // Basket target: aggregate close as the target series. Fund factors key
+      // off a single ticker's workbook metrics, so they're skipped for baskets.
+      let priceOverride: { time: string; value: number }[] | undefined;
+      if (isBasketTarget) {
+        if (targetBasket!.tickers.length === 0) throw new Error(`Basket "${targetBasket!.name}" is empty.`);
+        const ohlc = await getBasketOhlc(buildBasketOhlc(targetBasket!.tickers, targetBasket!, { weighting: targetBasket!.weighting, rebalance: targetBasket!.rebalance }));
+        if (!ohlc || !ohlc.dates || ohlc.dates.length === 0) throw new Error(`No data for basket "${targetBasket!.name}".`);
+        priceOverride = ohlc.dates
+          .map((d, i) => ({ time: d, value: ohlc.closes[i] }))
+          .filter((p) => Number.isFinite(p.value));
+      }
       const res = await runDriverScan({
-        ticker,
+        ticker: isBasketTarget ? `${BASKET_SPEC_PREFIX}${targetBasket!.id}` : ticker,
         targetMode,
         includeMacro,
-        includeFund: includeFund && hasFund,
+        includeFund: includeFund && hasFund && !isBasketTarget,
         minObs,
         signal: controller.signal,
+        priceOverride,
         onProgress: (done: number, total: number, phase: string) => {
           setProgress({ done, total, phase });
         },
@@ -560,7 +578,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
       setProgress(null);
       abortRef.current = null;
     }
-  }, [ticker, targetMode, includeMacro, includeFund, hasFund, minObs, scanning]);
+  }, [ticker, targetMode, includeMacro, includeFund, hasFund, minObs, scanning, isBasketTarget, targetBasket]);
 
   const exportCSV = useCallback(() => {
     if (!result) return;
@@ -569,7 +587,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `driver_scan_${result.ticker}_${result.targetMode}.csv`;
+    a.download = `driver_scan_${formatSpec(result.ticker).replace(/[^\w.-]+/g, "_")}_${result.targetMode}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }, [result]);
@@ -584,8 +602,9 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
     } else {
       spec = row.spec;
     }
-    onPin?.(`${ticker}:close`, spec, row.bestWindow);
-  }, [ticker, onPin]);
+    const targetSpec = isBasketTarget && targetBasket ? `${BASKET_SPEC_PREFIX}${targetBasket.id}` : `${ticker}:close`;
+    onPin?.(targetSpec, spec, row.bestWindow);
+  }, [ticker, onPin, isBasketTarget, targetBasket]);
 
   const targetModes = [
     { value: "price", label: "Price", testId: "driver-target-mode-price" },
@@ -601,15 +620,42 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
     <div className="flex flex-col h-full">
       <div className="flex-shrink-0 border-b border-border/40 px-3 py-2 bg-card/30 flex flex-wrap items-end gap-3">
         <div className="space-y-0.5">
-          <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">Ticker</div>
+          <div className="flex items-center gap-1.5">
+            <div className="text-[9px] uppercase font-semibold text-muted-foreground tracking-wider">{isBasketTarget ? "Basket" : "Ticker"}</div>
+            <div className="flex gap-0.5">
+              <button
+                onClick={() => setTargetSource("stock")}
+                className={`px-1 py-0 text-[9px] font-mono rounded border transition-colors ${!isBasketTarget ? "bg-primary/20 border-primary/50 text-primary" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+                data-testid="driver-source-stock"
+              >
+                Stock
+              </button>
+              <button
+                onClick={() => setTargetSource("basket")}
+                className={`px-1 py-0 text-[9px] font-mono rounded border transition-colors ${isBasketTarget ? "bg-amber-500/20 border-amber-500/50 text-amber-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+                data-testid="driver-source-basket"
+              >
+                Basket
+              </button>
+            </div>
+          </div>
           {/* Charts-carousel-style picker (classification chips + search + custom entry) */}
-          <div className="w-[140px]">
-            <TickerClassSelect
-              value={ticker}
-              onChange={setTicker}
-              tickers={tickers}
-              testId="driver-ticker-selector"
-            />
+          <div className="w-[170px]">
+            {isBasketTarget ? (
+              <BasketSelect
+                baskets={baskets}
+                value={basketId}
+                onChange={setBasketId}
+                testId="driver-basket-selector"
+              />
+            ) : (
+              <TickerClassSelect
+                value={ticker}
+                onChange={setTicker}
+                tickers={tickers}
+                testId="driver-ticker-selector"
+              />
+            )}
           </div>
         </div>
 
@@ -640,7 +686,9 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
             </button>
             <button
               onClick={() => setIncludeFund(v => !v)}
-              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${includeFund ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
+              disabled={isBasketTarget}
+              title={isBasketTarget ? "Fundamental factors key off a single ticker's workbook metrics — unavailable for basket targets" : undefined}
+              className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${isBasketTarget ? "border-border/40 text-muted-foreground/30 cursor-not-allowed" : includeFund ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300" : "border-border/40 text-muted-foreground/50 hover:bg-accent"}`}
             >
               Fundamentals
             </button>
@@ -660,7 +708,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
         </div>
 
         <div className="flex gap-2 items-end">
-          <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={runScan} data-testid="run-driver-scan" disabled={!ticker}>
+          <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={runScan} data-testid="run-driver-scan" disabled={isBasketTarget ? !targetBasket : !ticker}>
             {scanning ? (
               <><X className="w-3 h-3" /> Cancel</>
             ) : (
@@ -689,7 +737,7 @@ function DriverScanPanel({ tickers, onPin }: { tickers: TickerMeta[]; onPin?: (s
         )}
         {scanning && progress && <ScanProgress done={progress.done} total={progress.total} phase={progress.phase} />}
         {scanning && !progress && (
-          <div className="text-[11px] text-muted-foreground font-mono animate-pulse">Initializing scan for {ticker}…</div>
+          <div className="text-[11px] text-muted-foreground font-mono animate-pulse">Initializing scan for {isBasketTarget ? targetBasket?.name ?? "basket" : ticker}…</div>
         )}
         {error && (
           <div className="border border-red-500/40 bg-red-500/10 rounded px-3 py-2 text-[11px] text-red-400">{error}</div>
@@ -1947,10 +1995,12 @@ function HeatmapMatrix({
   fullLabels?: string[];
 }) {
   // Cell click → Pairs page with that row/column pair loaded. Only for plain
-  // ticker legs (MACRO rows have no pair-trade meaning).
+  // ticker and basket legs (MACRO rows have no pair-trade meaning). Basket
+  // rows pass their BASKET:<id> token whole — /pairs resolves those natively.
   const pairLeg = (idx: number): { ticker: string; metric: string } | null => {
     const spec = (fullLabels ?? labels)[idx];
     if (!spec || spec.startsWith("MACRO:")) return null;
+    if (isBasketSpec(spec)) return { ticker: spec, metric: "close" };
     const [ticker, ...rest] = spec.split(":");
     if (!ticker || !/^[A-Za-z0-9.\-]{1,12}$/.test(ticker)) return null;
     return { ticker: ticker.toUpperCase(), metric: rest.join(":") || "close" };
@@ -2774,7 +2824,7 @@ function SeriesPicker({
   tickers: TickerMeta[];
   macroCatalog: MacroSeriesMeta[];
   /** When provided, a "Basket" source appears (leg = weighted aggregate close).
-   *  Omit on surfaces whose downstream can't resolve BASKET: specs (matrix). */
+   *  Omit on surfaces whose downstream can't resolve BASKET: specs. */
   baskets?: Basket[];
   testId: string;
   /** Optional per-leg technical transform (RSI/SMA/… applied to the series). */
@@ -3516,11 +3566,18 @@ export default function Correlation() {
   ];
 
 
-  // Universe matrix query
+  // Universe matrix query. BASKET: specs (custom list) resolve to aggregate
+  // closes here and ride into the engine as per-spec overrides.
   const uniLegKey = JSON.stringify({ t: uniTransform, l: uniLagNum });
   const { data: uniMatrixData, isLoading: uniMatrixLoading } = useQuery<MatrixResult>({
-    queryKey: ["correlation-universe-matrix", universeSpecs.join(","), uniMode, uniWindowEff, uniLegKey],
-    queryFn: () => fetchMatrixCorrelation(universeSpecs, uniMode, uniWindowEff, { transform: uniTransform, lagBars: uniLagNum }),
+    queryKey: ["correlation-universe-matrix", universeSpecs.map(basketLegSig).join(","), uniMode, uniWindowEff, uniLegKey],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        universeSpecs.map(async (s) => [s, await resolveBasketLeg(s)] as const)
+      );
+      const overrides = Object.fromEntries(entries.filter(([, v]) => v != null)) as Record<string, { time: string; value: number }[]>;
+      return fetchMatrixCorrelation(universeSpecs, uniMode, uniWindowEff, { transform: uniTransform, lagBars: uniLagNum, overrides });
+    },
     enabled: activeTab === "matrix" && universeSpecs.length >= 2,
   });
 
@@ -3989,6 +4046,7 @@ export default function Correlation() {
               onChange={(v) => { addMatrixSpec(v); setNewMatrixSpec(""); }}
               tickers={tickers}
               macroCatalog={macroCatalog}
+              baskets={baskets}
               testId="matrix-add-series"
             />
 

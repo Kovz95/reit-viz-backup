@@ -824,18 +824,21 @@ export interface MatrixOpts {
   /** Lead/lag matrix: cell[i][j] = corr(row_i(t), col_j(t − lag)). Asymmetric
    *  when non-zero; the diagonal becomes each series' autocorrelation at lag. */
   lagBars?: number;
+  /** Pre-resolved series keyed by spec (e.g. BASKET: legs) — replace the spec
+   *  lookup for those entries. Keys must match the specs passed in verbatim. */
+  overrides?: Record<string, DataPoint[]>;
 }
 
 async function computeMatrixStatic(
   specs: string[], mode: string, windowParam: string, opts: MatrixOpts = {}
 ): Promise<MatrixResult> {
   const window = parseInt(windowParam) || 252;
-  const { transform = null, lagBars = 0 } = opts;
+  const { transform = null, lagBars = 0, overrides = {} } = opts;
   const lag = Math.round(lagBars) || 0;
   const lagAbs = Math.abs(lag);
 
   // Resolve all series (+ optional per-series transform)
-  let allData = await Promise.all(specs.map(s => resolveSeriesDataStatic(s)));
+  let allData = await Promise.all(specs.map(s => overrides[s] ? Promise.resolve(overrides[s]) : resolveSeriesDataStatic(s)));
   if (transform) allData = allData.map((d) => applyLegTransform(d, transform));
 
   // Build common dates

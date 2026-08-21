@@ -241,6 +241,10 @@ export interface RunDriverScanOptions {
   minObs?: number;
   signal?: AbortSignal;
   onProgress?: (done: number, total: number, phase: string) => void;
+  /** Pre-resolved target price series (e.g. a basket's aggregate close) —
+   *  used instead of fetching `ticker`'s close. Fund factors still key off
+   *  `ticker`, so callers passing a synthetic target should disable them. */
+  priceOverride?: Point[];
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -446,9 +450,10 @@ export async function runDriverScan(
     minObs = 60,
     onProgress,
     signal,
+    priceOverride,
   } = opts;
 
-  const price = await getMetricSeries(ticker, "close");
+  const price = priceOverride ?? (await getMetricSeries(ticker, "close"));
   if (price.length === 0) {
     throw new Error(`No price data found for ${ticker}`);
   }
