@@ -22,6 +22,8 @@ interface ClassificationFiltersWithSourceProps {
   /** Extra filter controls (e.g. Country / Exchange geo dropdowns) rendered
    *  right after the 6 classification dropdowns. */
   extraFilters?: React.ReactNode;
+  /** Forwarded: let the manual add accept off-universe Yahoo symbols. */
+  allowUnknownTickers?: boolean;
 }
 
 export function ClassificationFiltersWithSource({
@@ -39,6 +41,7 @@ export function ClassificationFiltersWithSource({
   onSourceChange,
   children,
   extraFilters,
+  allowUnknownTickers,
 }: ClassificationFiltersWithSourceProps) {
   const [localSource, setLocalSource] = useState("workbook");
   const effectiveSource = sourceProp ?? localSource;
@@ -124,6 +127,7 @@ export function ClassificationFiltersWithSource({
         testIdPrefix={testIdPrefix}
         tickerPoolOverride={globalTickerPool}
         extraFilters={extraFilters}
+        allowUnknownTickers={allowUnknownTickers}
       />
     </div>
   );

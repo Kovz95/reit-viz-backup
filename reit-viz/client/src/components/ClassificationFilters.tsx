@@ -488,6 +488,7 @@ export default function ClassificationFilters({
   totalCount,
   children,
   testIdPrefix = "clf",
+  tickerPoolOverride,
   extraFilters,
   allowUnknownTickers = false,
 }: ClassificationFiltersProps) {
@@ -497,12 +498,17 @@ export default function ClassificationFilters({
     queryFn: getTickers,
   });
 
+  // tickerPoolOverride swaps the pool the dropdown options + manual-add
+  // suggestions derive from (e.g. the ~9.4k global universe instead of the
+  // workbook when a page's Universe Source toggle is on "Global").
+  const optionPool = tickerPoolOverride ?? tickersMeta;
+
   // Compute unique options per classification field
   const filterOptions = useMemo(() => {
-    if (!tickersMeta) return {} as Record<ClassKey, string[]>;
+    if (!optionPool) return {} as Record<ClassKey, string[]>;
     const opts: Record<string, Set<string>> = {};
     for (const { key } of CLASSIFICATION_FIELDS) opts[key] = new Set();
-    for (const t of tickersMeta) {
+    for (const t of optionPool) {
       for (const { key } of CLASSIFICATION_FIELDS) {
         const val = (t as any)[key];
         if (val) opts[key].add(val);
@@ -513,11 +519,11 @@ export default function ClassificationFilters({
       result[key] = [...opts[key]].sort();
     }
     return result as Record<ClassKey, string[]>;
-  }, [tickersMeta]);
+  }, [optionPool]);
 
   const tickerMetaList = useMemo(
-    () => (tickersMeta || []).map((t) => ({ ticker: t.ticker, name: t.name })),
-    [tickersMeta]
+    () => (optionPool || []).map((t: any) => ({ ticker: t.ticker, name: t.name })),
+    [optionPool]
   );
 
   const updateFilter = useCallback(
