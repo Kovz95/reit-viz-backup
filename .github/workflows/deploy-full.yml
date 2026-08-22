@@ -85,16 +85,19 @@ jobs:
             echo "::error::VULTR_SSH_PASSWORD secret is not set."; exit 1
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
-          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
           sshpass -e scp $SSHOPTS /tmp/reit-viz-full.tar.gz "$VUSER@$VHOST:/tmp/"
           sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" "VDIR='$VDIR' APP='$PM2_APP' bash -s" <<'REMOTE'
             set -euo pipefail
             TS="$(date +%Y%m%d-%H%M%S)"
             cd "$VDIR"
             # 1) Backup current dist + data + DBs (data/DBs live outside dist and are preserved as-is).
+            # data/yahoo-cache is a 1h-TTL scratch cache that grew to ~9.4k full-history
+            # files with the nightly global ADV job — tarring it made backups take
+            # minutes (and dropped the SSH session), and it has zero restore value.
             mkdir -p "$VDIR/backups"
             tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" \
-              --exclude='./backups' dist scripts package.json package-lock.json data.db* data 2>/dev/null || \
+              --exclude='./backups' --exclude='data/yahoo-cache' dist scripts package.json package-lock.json data.db* data 2>/dev/null || \
             tar -czf "$VDIR/backups/reit-viz-$TS.tar.gz" --exclude='./backups' dist scripts package.json package-lock.json 2>/dev/null || true
             echo "Backed up to $VDIR/backups/reit-viz-$TS.tar.gz"
             # Retention: keep only the newest 5 backups — unbounded backups
