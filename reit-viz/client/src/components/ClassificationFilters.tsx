@@ -324,11 +324,14 @@ function ManualTickerAdd({
   manualTickers,
   onAdd,
   onRemove,
+  allowUnknown = false,
 }: {
   tickerMeta: { ticker: string; name: string }[];
   manualTickers: Set<string>;
   onAdd: (t: string) => void;
   onRemove: (t: string) => void;
+  /** Accept symbols absent from the workbook list (off-universe Yahoo names). */
+  allowUnknown?: boolean;
 }) {
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -371,6 +374,11 @@ function ManualTickerAdd({
     setShowSuggestions(false);
   };
 
+  // A plausible raw Yahoo symbol (AAPL, BRK-B, ^GSPC, EURUSD=X) for allowUnknown.
+  const rawSymbol = allowUnknown && /^[A-Za-z0-9.^=-]{1,12}$/.test(input.trim())
+    ? input.trim().toUpperCase()
+    : null;
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && input) {
       const q = input.toLowerCase();
@@ -380,6 +388,7 @@ function ManualTickerAdd({
       );
       const pick = exact ?? suggestions[0];
       if (pick) addTicker(pick.ticker);
+      else if (rawSymbol) addTicker(rawSymbol);
     }
   };
 
@@ -396,7 +405,7 @@ function ManualTickerAdd({
           onKeyDown={handleKeyDown}
           data-testid="manual-ticker-input"
         />
-        {showSuggestions && suggestions.length > 0 && (
+        {showSuggestions && (suggestions.length > 0 || rawSymbol) && (
           <div className="absolute z-50 mt-1 w-56 max-h-48 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1">
             {suggestions.map((s) => (
               <button
@@ -408,6 +417,16 @@ function ManualTickerAdd({
                 <span className="truncate text-muted-foreground">{s.name}</span>
               </button>
             ))}
+            {rawSymbol && !suggestions.some((s) => s.ticker === rawSymbol) && !manualTickers.has(rawSymbol) && (
+              <button
+                className="flex items-center gap-2 w-full px-2 py-0.5 text-xs text-left hover:bg-accent rounded"
+                onClick={() => addTicker(rawSymbol)}
+                data-testid="manual-ticker-add-unknown"
+              >
+                <span className="font-mono flex-shrink-0">{rawSymbol}</span>
+                <span className="truncate text-muted-foreground">add off-universe (Yahoo)</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -453,6 +472,9 @@ export interface ClassificationFiltersProps {
   /** Optional extra filter controls rendered right after the classification
    *  dropdowns (e.g. Country / Exchange geo filters). */
   extraFilters?: React.ReactNode;
+  /** Let the manual add accept symbols absent from the workbook list
+   *  (off-universe Yahoo names like AAPL). The page must handle them itself. */
+  allowUnknownTickers?: boolean;
 }
 
 export default function ClassificationFilters({
@@ -467,6 +489,7 @@ export default function ClassificationFilters({
   children,
   testIdPrefix = "clf",
   extraFilters,
+  allowUnknownTickers = false,
 }: ClassificationFiltersProps) {
   // Fetch ticker metadata for filter options
   const { data: tickersMeta } = useQuery({
@@ -549,6 +572,7 @@ export default function ClassificationFilters({
       {/* Manual ticker add */}
       <ManualTickerAdd
         tickerMeta={tickerMetaList}
+        allowUnknown={allowUnknownTickers}
         manualTickers={manualTickers}
         onAdd={(t) => {
           const next = new Set(manualTickers);

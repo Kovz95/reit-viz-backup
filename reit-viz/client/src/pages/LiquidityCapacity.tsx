@@ -331,6 +331,7 @@ export default function LiquidityCapacity() {
             totalCount={universeNarrowed.length}
             testIdPrefix="liqcap"
             extraFilters={geo.geoFilterUI}
+            allowUnknownTickers
           />
           <BasketScopeSelect scope={basketScope} />
         </div>
