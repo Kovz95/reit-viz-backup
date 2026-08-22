@@ -15,6 +15,7 @@ import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import { PagePresets } from "@/components/PagePresets";
 import { usePersistedState } from "@/lib/persistedState";
+import { useCollapsedGroups } from "@/lib/useCollapsedGroups";
 import { useWorkspaceState } from "@/lib/workspaceState";
 import { navigateToTicker } from "@/lib/navigateToTicker";
 import { fmtUsdMM } from "@/lib/numericFilter";
@@ -305,18 +306,13 @@ export default function LiquidityCapacity() {
   }, [thresholds]);
 
   // ── Collapsible groups (keys are stable: tier:i / sec:name / floor / nodata)
-  const [collapsedKeys, setCollapsedKeys] = usePersistedState<string[]>("reit-viz:liquidity-capacity:collapsed-v1", []);
-  const collapsed = useMemo(() => new Set(collapsedKeys), [collapsedKeys]);
-  const toggleGroup = useCallback((key: string) => {
-    setCollapsedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
-  }, [setCollapsedKeys]);
-  const allCollapsed = groupBy !== "flat" && groups.length > 0 && groups.every((g) => collapsed.has(g.key));
+  const grpCollapse = useCollapsedGroups("reit-viz:liquidity-capacity:collapsed-v1");
+  const collapsed = grpCollapse.collapsed;
+  const toggleGroup = grpCollapse.toggle;
+  const allCollapsed = groupBy !== "flat" && grpCollapse.allCollapsed(groups.map((g) => g.key));
   const collapseAll = useCallback(() => {
-    setCollapsedKeys((prev) => {
-      const keys = groups.map((g) => g.key);
-      return keys.every((k) => prev.includes(k)) ? [] : keys;
-    });
-  }, [setCollapsedKeys, groups]);
+    grpCollapse.toggleAll(groups.map((g) => g.key));
+  }, [grpCollapse.toggleAll, groups]);
 
   // ── Tier editing
   const setTierPct = useCallback((idx: number, pct: number) => {

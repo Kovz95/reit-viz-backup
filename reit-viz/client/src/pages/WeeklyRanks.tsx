@@ -17,6 +17,7 @@ import { PagePresets } from "@/components/PagePresets";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { analyzeConviction, compareRankings, pairKey, type ConvictionState } from "@/lib/convictionGraph";
+import { useCollapsedGroups } from "@/lib/useCollapsedGroups";
 
 interface Snapshot { id: string; name: string; date: string; order: string[]; pins: Array<[string, string]>; ties?: Array<[string, string]>; }
 const SNAP_KEY = "reit-viz:weekly-ranks:snapshots"; // legacy single-list snapshots (migrated into a default list)
@@ -74,6 +75,7 @@ export default function WeeklyRanks() {
   const [tieFrom, setTieFrom] = useState<string | null>(null); // "tie X with…" armed
   const [view, setView] = useState<"rank" | "duel" | "changes">("rank");
   const [groupBy, setGroupBy] = useState<GroupLevel>("subindustry");
+  const grpCollapse = useCollapsedGroups("reit-viz:weekly-ranks:collapsed-v1");
   const [skipped, setSkipped] = useState<Set<string>>(new Set()); // duel pairs passed on
   const [duelUndo, setDuelUndo] = useState<Array<{ kind: "pin" | "tie"; a: string; b: string }>>([]); // duel actions, for undo
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -612,6 +614,13 @@ export default function WeeklyRanks() {
           className="h-6 bg-background border border-border rounded px-1 text-[11px]" title="Cluster the ranking by classification to see how you rank within subcategories">
           {GROUP_LEVELS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
         </select>
+        {view === "rank" && groups && (
+          <button onClick={() => grpCollapse.toggleAll(groups.map((g) => g.label))}
+            className="h-6 px-2 rounded text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
+            data-testid="wr-collapse-all">
+            {grpCollapse.allCollapsed(groups.map((g) => g.label)) ? "Expand all" : "Collapse all"}
+          </button>
+        )}
         {pinFrom && (
           <span className="ml-auto text-[11px] text-cyan-300">Pinning <b>{pinFrom}</b> over… click a flag below (or <button className="underline" onClick={() => setPinFrom(null)}>cancel</button>)</span>
         )}
@@ -647,13 +656,15 @@ export default function WeeklyRanks() {
                 {groups
                   ? groups.map((grp) => (
                     <Fragment key={grp.label}>
-                      <tr className="bg-card/70 border-y border-border" data-testid="wr-group-header">
+                      <tr className="bg-card/70 border-y border-border cursor-pointer select-none hover:bg-card"
+                        onClick={() => grpCollapse.toggle(grp.label)} data-testid="wr-group-header">
                         <td colSpan={9} className="px-2 py-1 text-[10px]">
+                          <span className="inline-block w-3">{grpCollapse.isCollapsed(grp.label) ? "▸" : "▾"}</span>
                           <span className="font-semibold text-foreground uppercase tracking-wide">{grp.label}</span>
                           <span className="ml-2 text-muted-foreground">{grp.count} name{grp.count > 1 ? "s" : ""} · best #{grp.best} · avg #{grp.avg.toFixed(1)}</span>
                         </td>
                       </tr>
-                      {grp.members.map(renderRow)}
+                      {!grpCollapse.isCollapsed(grp.label) && grp.members.map(renderRow)}
                     </Fragment>
                   ))
                   : order.map(renderRow)}

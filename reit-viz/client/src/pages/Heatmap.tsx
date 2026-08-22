@@ -18,6 +18,7 @@ import ClassificationFilters, {
   type ClassFilters,
 } from "@/components/ClassificationFilters";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useCollapsedGroups } from "@/lib/useCollapsedGroups";
 import { useUniverse } from "@/lib/universeContext";
 import { useBasketScope, BasketScopeSelect } from "@/components/BasketScopeSelect";
 import {
@@ -273,6 +274,7 @@ export default function Heatmap() {
   const [reference, setReference] = useState<Reference>("peers");
   const [displayMode, setDisplayMode] = useState<DisplayMode>("raw");
   const [groupBy, setGroupBy] = useState<GroupLevel>("subindustry");
+  const grpCollapse = useCollapsedGroups("reit-viz:heatmap:collapsed-v1");
   // Peer z scope: vs the classification group (default) or the whole universe.
   const [peerScope, setPeerScope] = useState<"group" | "universe">("group");
   // Dislocation filter: hide rows whose strongest |z| is below this (0 = off).
@@ -901,8 +903,10 @@ export default function Heatmap() {
   );
 
   const renderGroupHeader = (label: string, count: number) => (
-    <tr key={`header-${label}`} className="bg-card/50">
+    <tr key={`header-${label}`} className="bg-card/50 cursor-pointer select-none hover:bg-card/80"
+      onClick={() => grpCollapse.toggle(label)} data-testid={`heatmap-grouprow-${label}`}>
       <td colSpan={4 + COLUMNS.length} className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+        <span className="inline-block w-3">{grpCollapse.isCollapsed(label) ? "▸" : "▾"}</span>
         {label} <span className="font-normal ml-1 opacity-60">({count})</span>
       </td>
     </tr>
@@ -1086,6 +1090,13 @@ export default function Heatmap() {
             ))}
           </SelectContent>
         </Select>
+
+        {viewMode === "metrics" && grouped && (
+          <Button variant="outline" size="sm" className="h-6 text-[11px]"
+            onClick={() => grpCollapse.toggleAll([...grouped.keys()])} data-testid="heatmap-collapse-all">
+            {grpCollapse.allCollapsed([...grouped.keys()]) ? "Expand all" : "Collapse all"}
+          </Button>
+        )}
 
         <div className="flex-1" />
 
@@ -1361,7 +1372,7 @@ export default function Heatmap() {
             <tbody>
               {grouped ? (
                 Array.from(grouped.entries()).map(([label, groupRows]) => (
-                  <React.Fragment key={label}>{renderGroupHeader(label, groupRows.length)}{groupRows.map(renderRow)}</React.Fragment>
+                  <React.Fragment key={label}>{renderGroupHeader(label, groupRows.length)}{!grpCollapse.isCollapsed(label) && groupRows.map(renderRow)}</React.Fragment>
                 ))
               ) : (
                 sorted.map(renderRow)

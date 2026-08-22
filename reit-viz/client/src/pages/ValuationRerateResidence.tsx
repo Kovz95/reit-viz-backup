@@ -12,6 +12,7 @@ import { getMetricSeries } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { usePersistedState } from "@/lib/persistedState";
 import { useGeoFilter } from "@/lib/useGeoFilter";
+import { useCollapsedGroups } from "@/lib/useCollapsedGroups";
 import { navigateToPairs } from "@/lib/navigateToPairs";
 import {
   PAIR_RATIO_METRIC, ratioSeries, unorderedPairs, MAX_PAIR_LEGS, type PairBasis,
@@ -148,6 +149,7 @@ export default function ValuationRerateResidence() {
   const [showRerate, setShowRerate] = usePersistedState("reit-viz:vrr:showRerate", true);
   const [showResidence, setShowResidence] = usePersistedState("reit-viz:vrr:showResidence", true);
   const [groupBy, setGroupBy] = usePersistedState<GroupLevel>("reit-viz:vrr:groupBy", "none");
+  const grpCollapse = useCollapsedGroups("reit-viz:vrr:collapsed-v1");
   const [search, setSearch] = useState("");
   const [pairMode, setPairMode] = usePersistedState("reit-viz:vrr:pairMode", false);
   const [pairBasis, setPairBasis] = usePersistedState<PairBasis>("reit-viz:vrr:pairBasis", "price");
@@ -906,6 +908,16 @@ export default function ValuationRerateResidence() {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Search</div>
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ticker / name" className="h-7 text-xs max-w-[220px]" />
         </div>
+        {grouped && (
+          <div className="self-end">
+            <button type="button"
+              onClick={() => grpCollapse.toggleAll(grouped.map(([name]) => name))}
+              className="h-7 px-2 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
+              data-testid="vrr-collapse-all">
+              {grpCollapse.allCollapsed(grouped.map(([name]) => name)) ? "Expand all" : "Collapse all"}
+            </button>
+          </div>
+        )}
         <div className="text-[11px] text-muted-foreground ml-auto self-center">
           {visible.length} {pairMode ? "pairs" : "names"}
           {pairMode && pairLegOverflow > 0 && (
@@ -957,12 +969,14 @@ export default function ValuationRerateResidence() {
             {!isLoading && !grouped && visible.map(renderRow)}
             {!isLoading && grouped && grouped.map(([name, gr]) => (
               <Fragment key={name}>
-                <tr className="bg-muted/40 border-y border-border">
+                <tr className="bg-muted/40 border-y border-border cursor-pointer select-none hover:bg-muted/60"
+                  onClick={() => grpCollapse.toggle(name)} data-testid={`vrr-grouprow-${name}`}>
                   <td colSpan={totalCols} className={`px-2 py-1 text-left text-[11px] font-semibold text-foreground/80 uppercase tracking-wider ${STICKY0}`}>
+                    <span className="inline-block w-3">{grpCollapse.isCollapsed(name) ? "▸" : "▾"}</span>
                     {name}<span className="text-muted-foreground font-normal normal-case"> · {gr.length}</span>
                   </td>
                 </tr>
-                {gr.map(renderRow)}
+                {!grpCollapse.isCollapsed(name) && gr.map(renderRow)}
               </Fragment>
             ))}
           </tbody>
