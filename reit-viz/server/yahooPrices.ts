@@ -61,22 +61,56 @@ function writeCache(data: YahooPriceData): void {
 // returns no data — which is why non-US names had no $ ADV / price history.
 // Translate to the Yahoo form for the request only; the cache key, the returned
 // `ticker`, and error messages stay the internal symbol so callers are
-// unaffected. Covers the FactSet-region suffixes present in the universe; add
-// more entries here as other listings are onboarded.
-const YAHOO_EXCHANGE_SUFFIX: Record<string, string> = {
-  GB: "L",  // London Stock Exchange
-  FR: "PA", // Euronext Paris
-  ES: "MC", // Bolsa de Madrid
-  NL: "AS", // Euronext Amsterdam
+// unaffected.
+//
+// Countries with more than one venue Yahoo splits by suffix (Korea KOSPI/KOSDAQ,
+// India NSE/BSE, Canada TSX/TSXV, Taiwan TWSE/TPEx…) list every candidate;
+// fetchYahooPrices tries them in order and keeps the first that returns data.
+const YAHOO_EXCHANGE_SUFFIXES: Record<string, string[]> = {
+  GB: ["L"], FR: ["PA"], ES: ["MC"], NL: ["AS"],
+  JP: ["T"], TW: ["TW", "TWO"], HK: ["HK"], KR: ["KS", "KQ"],
+  CA: ["TO", "V"], AU: ["AX"], NZ: ["NZ"],
+  DE: ["DE", "F"], IT: ["MI"], SE: ["ST"], CH: ["SW"], DK: ["CO"],
+  NO: ["OL"], FI: ["HE"], BE: ["BR"], PT: ["LS"], AT: ["VI"],
+  IE: ["IR", "L"], PL: ["WA"], GR: ["AT"], CZ: ["PR"], HU: ["BD"],
+  TR: ["IS"], IL: ["TA"], SA: ["SR"], QA: ["QA"], KW: ["KW"], AE: ["AD", "DU"],
+  IN: ["NS", "BO"], SG: ["SI"], TH: ["BK"], MY: ["KL"], ID: ["JK"], PH: ["PS"],
+  BR: ["SA"], MX: ["MX"], CL: ["SN"], AR: ["BA"], CO: ["CL"], PE: ["LM"],
+  ZA: ["JO"], EG: ["CA"],
 };
 
-export function toYahooSymbol(sym: string): string {
+/** All candidate Yahoo symbols for an internal symbol, best guess first. */
+export function yahooSymbolCandidates(sym: string): string[] {
   const m = sym.match(/^(.+)-([A-Z]{2})$/);
-  if (m) {
-    const yx = YAHOO_EXCHANGE_SUFFIX[m[2]];
-    if (yx) return `${m[1]}.${yx}`;
+  if (!m) return [sym];
+  let base = m[1];
+  const cc = m[2];
+  // US listings: strip the region and use Yahoo's dash form for share classes
+  // (BRK.B-US → BRK-B).
+  if (cc === "US") return [base.replace(/\./g, "-")];
+  // Mainland China splits by code prefix: 60/68/9 → Shanghai, 0/2/3 → Shenzhen,
+  // 4/8 (ex-legacy) → Beijing. Compute rather than probe.
+  if (cc === "CN" && /^\d+$/.test(base)) {
+    if (/^(60|68|9)/.test(base)) return [`${base}.SS`, `${base}.SZ`];
+    if (/^(0|2|3)/.test(base)) return [`${base}.SZ`, `${base}.SS`];
+    return [`${base}.BJ`, `${base}.SS`, `${base}.SZ`];
   }
-  return sym;
+  // Hong Kong codes are zero-padded to 4 digits on Yahoo (700 → 0700.HK).
+  if (cc === "HK" && /^\d+$/.test(base)) base = base.padStart(4, "0");
+  const suffixes = YAHOO_EXCHANGE_SUFFIXES[cc];
+  if (!suffixes) return [sym];
+  return suffixes.map((yx) => `${base}.${yx}`);
+}
+
+/** True when the internal symbol's country suffix has a Yahoo mapping (or none is needed). */
+export function isYahooMappable(sym: string): boolean {
+  const m = sym.match(/^(.+)-([A-Z]{2})$/);
+  if (!m) return true; // plain symbol — passed through as-is
+  return m[2] === "CN" || m[2] === "US" || YAHOO_EXCHANGE_SUFFIXES[m[2]] !== undefined;
+}
+
+export function toYahooSymbol(sym: string): string {
+  return yahooSymbolCandidates(sym)[0];
 }
 
 /**
@@ -98,37 +132,47 @@ export async function fetchYahooPrices(
   const period1 = Math.floor(new Date(HISTORY_START).getTime() / 1000);
   const period2 = Math.floor(Date.now() / 1000);
   // Request Yahoo with its own exchange-suffix form (e.g. BLND-GB → BLND.L);
-  // the cache and returned data stay keyed on the internal `sym`.
-  const yahooSym = toYahooSymbol(sym);
-  const url =
-    `${CHART_BASE}/${encodeURIComponent(yahooSym)}` +
-    `?period1=${period1}&period2=${period2}` +
-    `&interval=1d&includePrePost=false&events=div%2Csplit&includeAdjustedClose=true`;
-
-  const resp = await fetch(url, {
-    headers: {
-      // Yahoo rate-limits/blocks requests without a browser-like User-Agent.
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      Accept: "application/json",
-    },
-  });
-  // Parse the body even on a non-2xx status: Yahoo returns a chart.error
-  // ("Not Found · No data found, symbol may be delisted") for delisted/unknown
-  // symbols, usually with a 404. We want that specific signal — flagged as
-  // `notFound` — so callers can tell "delisted" apart from a transient failure.
-  const json: any = await resp.json().catch(() => null);
-  const chartErr = json?.chart?.error;
-  if (chartErr) {
-    const err: any = new Error(chartErr.description || chartErr.code || `Yahoo error for ${sym}`);
-    if (/not\s*found|delisted/i.test(`${chartErr.code ?? ""} ${chartErr.description ?? ""}`)) {
-      err.notFound = true;
+  // the cache and returned data stay keyed on the internal `sym`. Ambiguous
+  // markets list several candidate suffixes — try each until one returns data,
+  // treating a notFound only as final after the last candidate.
+  const candidates = yahooSymbolCandidates(sym);
+  let json: any = null;
+  let lastErr: any = null;
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const url =
+      `${CHART_BASE}/${encodeURIComponent(candidates[ci])}` +
+      `?period1=${period1}&period2=${period2}` +
+      `&interval=1d&includePrePost=false&events=div%2Csplit&includeAdjustedClose=true`;
+    const resp = await fetch(url, {
+      headers: {
+        // Yahoo rate-limits/blocks requests without a browser-like User-Agent.
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "application/json",
+      },
+    });
+    // Parse the body even on a non-2xx status: Yahoo returns a chart.error
+    // ("Not Found · No data found, symbol may be delisted") for delisted/unknown
+    // symbols, usually with a 404. We want that specific signal — flagged as
+    // `notFound` — so callers can tell "delisted" apart from a transient failure.
+    const body: any = await resp.json().catch(() => null);
+    const chartErr = body?.chart?.error;
+    if (chartErr) {
+      const err: any = new Error(chartErr.description || chartErr.code || `Yahoo error for ${sym}`);
+      if (/not\s*found|delisted/i.test(`${chartErr.code ?? ""} ${chartErr.description ?? ""}`)) {
+        err.notFound = true;
+        lastErr = err;
+        continue; // unknown on this venue — try the next candidate suffix
+      }
+      throw err;
     }
-    throw err;
+    if (!resp.ok) {
+      throw new Error(`Yahoo chart API returned HTTP ${resp.status} for ${sym}`);
+    }
+    json = body;
+    break;
   }
-  if (!resp.ok) {
-    throw new Error(`Yahoo chart API returned HTTP ${resp.status} for ${sym}`);
-  }
+  if (json == null) throw lastErr ?? new Error(`No Yahoo data for ${sym}`);
   const result = json?.chart?.result?.[0];
   const currency: string | undefined = result?.meta?.currency ?? undefined;
   const timestamps: number[] = result?.timestamp ?? [];

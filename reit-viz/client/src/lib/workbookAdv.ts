@@ -74,6 +74,65 @@ export function refreshWorkbookAdv(symbols: string[], window = 90): Promise<AdvM
   return p;
 }
 
+// ── Bulk ADV for the global universe ────────────────────────────────────────
+// GET /api/liquidity/adv-bulk returns every cached entry the nightly job
+// (server/advNightly.ts) has computed, keyed by the global dataset's primary
+// ticker. Names the job hasn't reached (or can't map to Yahoo) are absent and
+// callers fall back to the baked snapshot figure.
+
+export interface BulkAdvStatus {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  attempted: number;
+  withAdv: number;
+  unmappable: number;
+}
+
+let _bulkMemo: Promise<{ map: AdvMap; status: BulkAdvStatus | null }> | null = null;
+
+export function loadBulkAdv(window = 63): Promise<{ map: AdvMap; status: BulkAdvStatus | null }> {
+  if (_bulkMemo) return _bulkMemo;
+  _bulkMemo = (async () => {
+    const { API_BASE } = await import("@/lib/queryClient");
+    const resp = await fetch(`${API_BASE}/api/liquidity/adv-bulk?window=${window}`);
+    const text = await resp.text();
+    // Guard against an old server answering unmatched /api routes with the SPA
+    // index.html (200 + HTML) — treat that as "no bulk data".
+    if (!resp.ok || !text || text.trimStart().startsWith("<")) return { map: new Map(), status: null };
+    const data = JSON.parse(text) as { results?: Record<string, AdvEntry>; nightly?: BulkAdvStatus };
+    const map: AdvMap = new Map();
+    for (const [ticker, entry] of Object.entries(data.results || {})) {
+      if (entry) map.set(ticker.toUpperCase(), entry);
+    }
+    return { map, status: data.nightly ?? null };
+  })().catch(() => {
+    _bulkMemo = null; // allow retry next mount
+    return { map: new Map<string, AdvEntry>(), status: null };
+  });
+  return _bulkMemo;
+}
+
+/** Hook: the nightly bulk ADV map (empty until `enabled`). */
+export function useBulkAdv(enabled: boolean, window = 63): {
+  bulkMap: AdvMap; bulkStatus: BulkAdvStatus | null; loading: boolean;
+} {
+  const [state, setState] = useState<{ bulkMap: AdvMap; bulkStatus: BulkAdvStatus | null; loading: boolean }>(
+    () => ({ bulkMap: new Map(), bulkStatus: null, loading: false }),
+  );
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true }));
+    loadBulkAdv(window).then(({ map, status }) => {
+      if (!cancelled) setState({ bulkMap: map, bulkStatus: status, loading: false });
+    });
+    return () => { cancelled = true; };
+  }, [enabled, window]);
+  return state;
+}
+
 /**
  * Hook: returns the real $ ADV map for `symbols`. `refreshToken` is an opaque
  * value — bump it (e.g. Date.now()) to force a Yahoo re-pull.

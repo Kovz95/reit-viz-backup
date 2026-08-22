@@ -43,7 +43,7 @@ export default defineConfig({
       name: "verify-adv-route",
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (!req.url?.startsWith("/api/liquidity/adv") || req.method !== "POST") return next();
+          if (!/^\/api\/liquidity\/adv(\?|$)/.test(req.url ?? "") || req.method !== "POST") return next();
           let body = "";
           req.on("data", (c) => (body += c));
           req.on("end", async () => {
@@ -62,6 +62,40 @@ export default defineConfig({
               res.end(JSON.stringify({ error: e?.message ?? String(e) }));
             }
           });
+        });
+      },
+    },
+    // Bulk/nightly ADV routes (also newer than the baked container).
+    {
+      name: "verify-adv-bulk-routes",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const json = (body: unknown, code = 200) => {
+            res.statusCode = code;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(body));
+          };
+          if (req.url?.startsWith("/api/liquidity/adv-bulk") && req.method === "GET") {
+            import("./server/advNightly").then(({ getGlobalAdvBulk, nightlyStatus, GLOBAL_ADV_WINDOW }) => {
+              json({ window: GLOBAL_ADV_WINDOW, results: getGlobalAdvBulk(), nightly: nightlyStatus() });
+            }).catch((e) => json({ error: e?.message ?? String(e) }, 500));
+            return;
+          }
+          if (req.url?.startsWith("/api/liquidity/adv-nightly") && req.method === "POST") {
+            let body = "";
+            req.on("data", (c) => (body += c));
+            req.on("end", async () => {
+              try {
+                const { runGlobalAdvRefresh } = await import("./server/advNightly");
+                const limit = Number(JSON.parse(body || "{}").limit) || 25;
+                json({ status: await runGlobalAdvRefresh(limit) });
+              } catch (e: any) {
+                json({ error: e?.message ?? String(e) }, 500);
+              }
+            });
+            return;
+          }
+          next();
         });
       },
     },

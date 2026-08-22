@@ -171,6 +171,21 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
   };
 }
 
+/**
+ * Read-only view of every cached entry for a window, keyed by ticker (without
+ * the @window suffix). Serves the bulk endpoint — no computation, no TTL check
+ * (a stale-but-present ADV beats no ADV until the nightly job replaces it).
+ */
+export function getCachedAdvEntries(window: number): Record<string, AdvEntry> {
+  const cache = loadCache();
+  const suffix = `@${window}`;
+  const out: Record<string, AdvEntry> = {};
+  for (const [key, entry] of Object.entries(cache)) {
+    if (key.endsWith(suffix)) out[key.slice(0, -suffix.length)] = entry;
+  }
+  return out;
+}
+
 /** Bounded-concurrency map over async work. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);

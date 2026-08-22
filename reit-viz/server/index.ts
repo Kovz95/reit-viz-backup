@@ -110,4 +110,9 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // Nightly global-universe $ ADV refresh (production-gated; ADV_NIGHTLY=1 to
+  // opt in elsewhere). Catch-up pass shortly after boot, then daily pre-open.
+  const { scheduleNightlyAdv } = await import("./advNightly");
+  scheduleNightlyAdv();
 })();

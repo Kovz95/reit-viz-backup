@@ -5266,6 +5266,40 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // GET /api/liquidity/adv-bulk?window=63 — cached ADV for the whole global
+  // universe, keyed by the global dataset's primary ticker. Read-only (the
+  // nightly job in server/advNightly.ts does the computing); names without a
+  // cached entry are simply absent and the client falls back to the snapshot.
+  app.get("/api/liquidity/adv-bulk", async (req, res) => {
+    try {
+      const { getGlobalAdvBulk, nightlyStatus, GLOBAL_ADV_WINDOW } = await import("./advNightly");
+      const window = Number.isFinite(Number(req.query.window)) && Number(req.query.window) > 0
+        ? Math.min(Math.floor(Number(req.query.window)), 504)
+        : GLOBAL_ADV_WINDOW;
+      res.json({ window, results: getGlobalAdvBulk(window), nightly: nightlyStatus() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "failed to read bulk ADV" });
+    }
+  });
+
+  // POST /api/liquidity/adv-nightly  Body: { limit?: number }
+  // Manual trigger for the global refresh. Small limits run synchronously and
+  // return the summary; a full run is kicked off in the background.
+  app.post("/api/liquidity/adv-nightly", async (req, res) => {
+    try {
+      const { runGlobalAdvRefresh, nightlyStatus } = await import("./advNightly");
+      if (nightlyStatus().running) return res.status(200).json({ alreadyRunning: true, status: nightlyStatus() });
+      const limit = Number.isFinite(Number(req.body?.limit)) ? Math.floor(Number(req.body.limit)) : 0;
+      if (limit > 0 && limit <= 200) {
+        return res.json({ status: await runGlobalAdvRefresh(limit) });
+      }
+      runGlobalAdvRefresh().catch(() => {});
+      res.json({ started: true, status: nightlyStatus() });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "failed to start refresh" });
+    }
+  });
+
   // ── Yahoo Finance symbol search ─────────────────────────────────────────
   // GET /api/yahoo-search?q=...  → { results: [{ symbol, name, exchange }] }
   // Proxies Yahoo's public v1 search/autocomplete endpoint.

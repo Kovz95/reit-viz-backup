@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { fetchWorkbookTickers, type TickerMeta } from "@/lib/fetchWorkbookTickers";
-import { useWorkbookAdv, type AdvEntry } from "@/lib/workbookAdv";
+import { useWorkbookAdv, useBulkAdv, type AdvEntry } from "@/lib/workbookAdv";
 import { useUniverse } from "@/lib/universeContext";
 import { useGeoFilter } from "@/lib/useGeoFilter";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -180,19 +180,22 @@ export default function LiquidityCapacity() {
   );
   const [refreshToken, setRefreshToken] = useState(0);
   const { advMap, loading, error } = useWorkbookAdv(symbols, ADV_WINDOW, refreshToken);
+  // The nightly server job (server/advNightly.ts) precomputes live Yahoo ADV
+  // for the whole global universe; names it hasn't reached fall back to the
+  // snapshot mean.
+  const { bulkMap, bulkStatus, loading: bulkLoading } = useBulkAdv(isGlobal, ADV_WINDOW);
 
-  // The global snapshot only carries a MEAN $ ADV — median/p25 need per-name
-  // Yahoo history, which isn't feasible for 9.4k international names.
-  const effBasis: AdvBasis = isGlobal ? "mean" : cfg.advBasis;
+  const effBasis: AdvBasis = cfg.advBasis;
 
   // ── Derived: thresholds + rows + buckets
   const thresholds = useMemo(() => tierThresholds(cfg), [cfg]);
   const rows = useMemo<Row[]>(() => {
     return poolMeta.map((t: any) => {
-      const entry = advMap.get(String(t.ticker).toUpperCase());
+      const key = String(t.ticker).toUpperCase();
+      const entry = advMap.get(key) ?? (isGlobal ? bulkMap.get(key) : undefined);
       const g = t as GlobalRecord;
       const snapshotMM = isGlobal && Number.isFinite(g.dollarVolMM as number) ? (g.dollarVolMM as number) : null;
-      const basisMM = entry ? basisValue(entry, effBasis) : snapshotMM;
+      const basisMM = entry ? basisValue(entry, effBasis) ?? snapshotMM : snapshotMM;
       const eff = effectiveAdvMM(cfg, basisMM);
       const bucket = bucketIndex(thresholds, eff);
       const tierPct = bucket >= 0 && bucket < thresholds.length ? thresholds[bucket].tier.pct : null;
@@ -216,7 +219,13 @@ export default function LiquidityCapacity() {
         delisted: entry?.delisted === true,
       };
     });
-  }, [poolMeta, advMap, cfg, thresholds, isGlobal, effBasis]);
+  }, [poolMeta, advMap, bulkMap, cfg, thresholds, isGlobal, effBasis]);
+
+  // How many in-scope names ride on live nightly ADV vs the snapshot fallback.
+  const liveCount = useMemo(
+    () => (isGlobal ? rows.filter((r) => r.medianMM != null).length : rows.length),
+    [rows, isGlobal],
+  );
 
   const asOf = useMemo(() => {
     let latest: string | null = null;
@@ -340,8 +349,8 @@ export default function LiquidityCapacity() {
             <h1 className="text-base font-bold">Liquidity Capacity</h1>
             <p className="text-[10px] text-muted-foreground">
               Required ADV per sizing tier = AUM × position% ÷ (days × participation); each name is bucketed by the largest
-              tier its {isGlobal ? "snapshot mean" : `real ${ADV_WINDOW}-day ${effBasis}`} $ ADV clears. "Size for the exit"
-              also requires the position to clear in the exit window — the binding (larger) requirement wins.
+              tier its real {ADV_WINDOW}-day {effBasis} $ ADV clears{isGlobal ? " (snapshot-mean fallback for names Yahoo can't resolve)" : ""}.
+              "Size for the exit" also requires the position to clear in the exit window — the binding (larger) requirement wins.
             </p>
           </div>
           <PagePresets
@@ -436,13 +445,13 @@ export default function LiquidityCapacity() {
           </div>
           <div className="flex flex-col">
             <label className={labelCls} title={isGlobal
-              ? "The global snapshot only carries a mean $ ADV — median/p25 need per-name Yahoo history (workbook mode)."
+              ? "Live nightly Yahoo ADV where available; names the nightly job can't reach fall back to the snapshot mean regardless of basis."
               : "Median ignores earnings/rebalance volume spikes — the honest sizing number. P25 is a quiet-tape read."}>ADV basis</label>
-            <select value={effBasis} disabled={isGlobal}
+            <select value={effBasis}
               onChange={(e) => patchCfg({ advBasis: e.target.value as AdvBasis })}
-              className={`${inputCls} mt-0.5 disabled:opacity-60`} data-testid="liqcap-basis">
+              className={`${inputCls} mt-0.5`} data-testid="liqcap-basis">
               <option value="median">Median (3mo)</option>
-              <option value="mean">{isGlobal ? "Mean (snapshot)" : "Mean (3mo)"}</option>
+              <option value="mean">Mean (3mo)</option>
               <option value="p25">25th pct (3mo)</option>
             </select>
           </div>
@@ -450,8 +459,15 @@ export default function LiquidityCapacity() {
           <div className="flex flex-col items-end gap-0.5">
             {isGlobal ? (
               <span className="text-[9px] text-muted-foreground text-right" data-testid="liqcap-snapshot-note">
-                static FactSet snapshot ({global.metas.length.toLocaleString()} names)<br />
-                mean $ ADV, USD-normalized
+                {bulkLoading
+                  ? "loading nightly ADV…"
+                  : `live nightly ADV: ${liveCount.toLocaleString()} of ${rows.length.toLocaleString()} in scope`}
+                <br />
+                {bulkStatus?.finishedAt
+                  ? `last refresh ${bulkStatus.finishedAt.slice(0, 16).replace("T", " ")}Z`
+                  : bulkStatus?.running
+                    ? `refresh running (${bulkStatus.attempted}/${bulkStatus.total})…`
+                    : "rest from FactSet snapshot"}
               </span>
             ) : (
               <>
@@ -563,13 +579,9 @@ export default function LiquidityCapacity() {
                     {groupBy !== "bucket" && (
                       <th className="text-left px-2 py-1 font-mono"><SortHeader label="Bucket" columnKey="bucket" sort={sort} /></th>
                     )}
-                    {!isGlobal && (
-                      <th className="text-right px-2 py-1 font-mono" title="3-month median daily $ volume (spike-resistant)"><SortHeader label="Median ADV" columnKey="medianMM" sort={sort} align="right" /></th>
-                    )}
-                    <th className="text-right px-2 py-1 font-mono" title={isGlobal ? "Snapshot mean daily $ volume, USD-normalized" : "Mean daily $ volume"}><SortHeader label={isGlobal ? "$ ADV" : "Mean ADV"} columnKey="meanMM" sort={sort} align="right" /></th>
-                    {!isGlobal && (
-                      <th className="text-right px-2 py-1 font-mono" title="25th-percentile daily $ volume — quiet-tape liquidity"><SortHeader label="P25 ADV" columnKey="p25MM" sort={sort} align="right" /></th>
-                    )}
+                    <th className="text-right px-2 py-1 font-mono" title="3-month median daily $ volume (spike-resistant). Blank = name still on snapshot fallback."><SortHeader label="Median ADV" columnKey="medianMM" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title={isGlobal ? "Mean daily $ volume — live nightly where available, else the snapshot figure" : "Mean daily $ volume"}><SortHeader label="Mean ADV" columnKey="meanMM" sort={sort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="25th-percentile daily $ volume — quiet-tape liquidity"><SortHeader label="P25 ADV" columnKey="p25MM" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title="Largest position (% of AUM) this name's ADV supports at your build/exit settings"><SortHeader label="Max pos %" columnKey="maxPosPct" sort={sort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title="Max position in dollars">Max pos $</th>
                     <th className="text-right px-2 py-1 font-mono" title="Trading days to fully exit a position at this name's bucketed tier size, at the exit participation rate"><SortHeader label="Exit days" columnKey="exitDays" sort={sort} align="right" /></th>
@@ -587,7 +599,7 @@ export default function LiquidityCapacity() {
 
         <p className="text-[9px] text-muted-foreground">
           {isGlobal
-            ? "Global mode: mean $ ADV from the baked FactSet universe snapshot (USD-normalized, ~9.4k US + international names). It refreshes when the GLOBAL-UNIVERSE.xlsx export is rebuilt — not daily. Manually added symbols still get live Yahoo median ADV."
+            ? `Global mode: a nightly server job pulls fresh Yahoo daily volume for the whole ~9.4k-name universe (close × volume, FX→USD, ${ADV_WINDOW} trading days), so median/mean/p25 re-rank every day. Names Yahoo can't resolve keep the FactSet snapshot mean (blank median column). Manually added symbols fetch live immediately.`
             : `Workbook mode: $ ADV from Yahoo daily bars (close × volume, FX-converted to USD), ${ADV_WINDOW} trading days ≈ 3 months. Server cache refreshes daily, so the buckets re-rank every day. Add off-universe symbols (AAPL, …) via the +Ticker filter.`}
         </p>
       </div>
@@ -631,9 +643,9 @@ function GroupRows({ group, groupBy, colCount, bucketName, isGlobal }: {
           <td className="px-2 py-1 text-muted-foreground">{row.sector}</td>
           <td className="px-2 py-1 text-muted-foreground">{row.subsector}</td>
           {groupBy !== "bucket" && <td className="px-2 py-1">{bucketName(row.bucket)}</td>}
-          {!isGlobal && <td className="px-2 py-1 text-right font-bold">{fmtUsdMM(row.medianMM)}</td>}
-          <td className={`px-2 py-1 text-right ${isGlobal ? "font-bold" : "text-muted-foreground"}`}>{fmtUsdMM(row.meanMM)}</td>
-          {!isGlobal && <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(row.p25MM)}</td>}
+          <td className="px-2 py-1 text-right font-bold">{fmtUsdMM(row.medianMM)}</td>
+          <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(row.meanMM)}</td>
+          <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(row.p25MM)}</td>
           <td className="px-2 py-1 text-right font-bold">{row.maxPosPct == null ? "—" : `${row.maxPosPct.toFixed(2)}%`}</td>
           <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(row.maxPosMM)}</td>
           <td className="px-2 py-1 text-right">{fmtDays(row.exitDays)}</td>
