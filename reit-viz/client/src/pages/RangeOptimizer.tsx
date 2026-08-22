@@ -2311,7 +2311,7 @@ export default function RangeOptimizer() {
     (mode === "pairCombo" && pairCombo.pairs.length === 0);
 
   return (
-    <div className="flex flex-col gap-3 p-3 text-foreground">
+    <div className="h-full overflow-y-auto flex flex-col gap-3 p-3 text-foreground">
       {/* Header */}
       <div className="flex flex-col gap-1">
         <h1 className="text-lg font-bold tracking-tight">Range Optimizer</h1>
