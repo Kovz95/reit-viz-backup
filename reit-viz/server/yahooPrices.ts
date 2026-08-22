@@ -97,8 +97,14 @@ export function yahooSymbolCandidates(sym: string): string[] {
   }
   // Hong Kong codes are zero-padded to 4 digits on Yahoo (700 → 0700.HK).
   if (cc === "HK" && /^\d+$/.test(base)) base = base.padStart(4, "0");
+  // Borsa Istanbul: FactSet appends an ".E" equity-class marker (ASELS.E-TR)
+  // that Yahoo's ASELS.IS form doesn't carry.
+  if (cc === "TR") base = base.replace(/\.E$/, "");
   const suffixes = YAHOO_EXCHANGE_SUFFIXES[cc];
   if (!suffixes) return [sym];
+  // Share classes use a dot in FactSet symbols (INVE.B-SE, NOVO.B-DK, BAM.A-CA)
+  // but a dash on Yahoo (INVE-B.ST, NOVO-B.CO, BAM-A.TO).
+  base = base.replace(/\./g, "-");
   return suffixes.map((yx) => `${base}.${yx}`);
 }
 
