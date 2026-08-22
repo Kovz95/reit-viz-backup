@@ -20,6 +20,12 @@ const MAX_CONCURRENCY = 6; // be gentle with Yahoo on cold batches
 export interface AdvEntry {
   /** Trailing-window average daily dollar volume (mean of close × volume), in $ millions. */
   advUsdMM: number | null;
+  /** Trailing-window MEDIAN daily dollar volume, in $ millions. The median ignores
+   *  earnings-day / rebalance spikes that inflate the mean, so it's the honest
+   *  liquidity number for sizing. */
+  medianUsdMM: number | null;
+  /** 25th-percentile daily dollar volume, in $ millions — a stressed-tape read. */
+  p25UsdMM: number | null;
   /** Trailing-window average daily share volume, in millions of shares. */
   advShares: number | null;
   /** Most recent close used in the window (in the listing currency). */
@@ -64,6 +70,8 @@ function saveCache(cache: AdvCache): void {
 
 function isFresh(entry: AdvEntry | undefined, window: number): boolean {
   if (!entry || entry.window !== window) return false;
+  // Entries cached before the median fields existed must recompute once.
+  if (entry.medianUsdMM === undefined) return false;
   const age = Date.now() - new Date(entry.computedAt).getTime();
   if (!Number.isFinite(age)) return false;
   // A null result (Yahoo error / no data) is only briefly fresh, so a transient
@@ -128,7 +136,8 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
   const days = slice.length;
   if (days === 0) {
     return {
-      advUsdMM: null, advShares: null, lastClose: null, currency: bars.currency ?? null,
+      advUsdMM: null, medianUsdMM: null, p25UsdMM: null,
+      advShares: null, lastClose: null, currency: bars.currency ?? null,
       days: 0, asOf: null, window, computedAt: new Date().toISOString(),
     };
   }
@@ -138,10 +147,20 @@ async function computeOne(ticker: string, window: number, forceRefresh: boolean)
     sumLocal += b.close * b.vol; // turnover in the listing currency
     sumSh += b.vol;
   }
+  // Sorted per-day turnovers (local currency) for the median / p25.
+  const sorted = slice.map((b) => b.close * b.vol).sort((a, b) => a - b);
+  const quantile = (p: number): number => {
+    const pos = p * (sorted.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  };
   return {
     // Convert local-currency turnover to USD. If the FX rate is unavailable for a
     // non-USD name, leave $ ADV null (blank) rather than show an unconverted figure.
     advUsdMM: usdFactor == null ? null : (sumLocal / days / 1e6) * usdFactor,
+    medianUsdMM: usdFactor == null ? null : (quantile(0.5) / 1e6) * usdFactor,
+    p25UsdMM: usdFactor == null ? null : (quantile(0.25) / 1e6) * usdFactor,
     advShares: sumSh / days / 1e6,
     lastClose: slice[slice.length - 1].close,
     currency: bars.currency ?? null,
@@ -193,7 +212,8 @@ export async function getAdvBatch(
         return [ticker, await computeOne(ticker, window, forceRefresh)] as const;
       } catch (err) {
         const empty: AdvEntry = {
-          advUsdMM: null, advShares: null, lastClose: null, currency: null,
+          advUsdMM: null, medianUsdMM: null, p25UsdMM: null,
+          advShares: null, lastClose: null, currency: null,
           days: 0, asOf: null, window, computedAt: new Date().toISOString(),
           ...((err as any)?.notFound ? { delisted: true } : {}),
         };

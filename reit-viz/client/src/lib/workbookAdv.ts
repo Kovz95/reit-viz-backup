@@ -10,6 +10,10 @@ import { useEffect, useState } from "react";
 
 export interface AdvEntry {
   advUsdMM: number | null;
+  /** Trailing-window MEDIAN daily $ volume in $MM (spike-resistant sizing number). */
+  medianUsdMM?: number | null;
+  /** 25th-percentile daily $ volume in $MM (stressed-tape read). */
+  p25UsdMM?: number | null;
   advShares: number | null;
   lastClose: number | null;
   /** Listing currency of the price (e.g. "USD", "GBp", "EUR"). */

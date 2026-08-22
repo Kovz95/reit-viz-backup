@@ -36,6 +36,35 @@ export default defineConfig({
         });
       },
     },
+    // The baked 5001 container's /api/liquidity/adv predates the median/p25
+    // fields — answer it here via the edited server/adv.ts so the Liquidity
+    // Capacity page can be verified against real computed medians.
+    {
+      name: "verify-adv-route",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (!req.url?.startsWith("/api/liquidity/adv") || req.method !== "POST") return next();
+          let body = "";
+          req.on("data", (c) => (body += c));
+          req.on("end", async () => {
+            try {
+              const { getAdvBatch } = await import("./server/adv");
+              const parsed = JSON.parse(body || "{}");
+              const tickers: string[] = Array.isArray(parsed.tickers) ? parsed.tickers.map(String) : [];
+              const window = Number.isFinite(Number(parsed.window)) && Number(parsed.window) > 0
+                ? Math.min(Math.floor(Number(parsed.window)), 504) : 90;
+              const results = await getAdvBatch(tickers.slice(0, 600), window, parsed.refresh === true);
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ window, results }));
+            } catch (e: any) {
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ error: e?.message ?? String(e) }));
+            }
+          });
+        });
+      },
+    },
     // The baked 5001 container also predates /api/prefs (generic KV backing
     // the server-synced template stores). An in-memory map is enough for
     // verification — it persists across page reloads within one vite session.
