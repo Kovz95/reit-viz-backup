@@ -642,7 +642,7 @@ export default function MaSlope() {
   const horizonOptions = SLOPE_HORIZONS[freq];
 
   return (
-    <div className="p-4 space-y-3" data-testid="ma-slope-page">
+    <div className="h-full overflow-y-auto p-4 space-y-3" data-testid="ma-slope-page">
       {/* ── Header ── */}
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-base font-semibold flex items-center gap-2">

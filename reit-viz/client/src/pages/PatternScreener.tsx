@@ -632,7 +632,7 @@ export default function PatternScreener() {
   };
 
   return (
-    <div className="p-4 space-y-4" data-testid="page-pattern-screener">
+    <div className="h-full overflow-y-auto p-4 space-y-4" data-testid="page-pattern-screener">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
