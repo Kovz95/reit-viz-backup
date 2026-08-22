@@ -98,6 +98,13 @@ function sanitizeConfig(raw: any): CapacityConfig {
 
 const fmtDays = (d: number | null): string => (d == null ? "—" : d >= 10 ? d.toFixed(0) : d.toFixed(1));
 
+// Nightly-refresh timestamp arrives as UTC ISO; show it in local 12-hour time.
+const fmtRefreshTime = (iso: string): string => {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true });
+};
+
 export default function LiquidityCapacity() {
   const { universeTickers } = useUniverse();
   const [allTickers, setAllTickers] = useState<TickerMeta[]>([]);
@@ -297,6 +304,20 @@ export default function LiquidityCapacity() {
     return thresholds[b]?.tier.label ?? "—";
   }, [thresholds]);
 
+  // ── Collapsible groups (keys are stable: tier:i / sec:name / floor / nodata)
+  const [collapsedKeys, setCollapsedKeys] = usePersistedState<string[]>("reit-viz:liquidity-capacity:collapsed-v1", []);
+  const collapsed = useMemo(() => new Set(collapsedKeys), [collapsedKeys]);
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }, [setCollapsedKeys]);
+  const allCollapsed = groupBy !== "flat" && groups.length > 0 && groups.every((g) => collapsed.has(g.key));
+  const collapseAll = useCallback(() => {
+    setCollapsedKeys((prev) => {
+      const keys = groups.map((g) => g.key);
+      return keys.every((k) => prev.includes(k)) ? [] : keys;
+    });
+  }, [setCollapsedKeys, groups]);
+
   // ── Tier editing
   const setTierPct = useCallback((idx: number, pct: number) => {
     const tiers = cfg.tiers.map((t, i) => (i === idx ? { ...t, pct } : t));
@@ -464,7 +485,7 @@ export default function LiquidityCapacity() {
                   : `live nightly ADV: ${liveCount.toLocaleString()} of ${rows.length.toLocaleString()} in scope`}
                 <br />
                 {bulkStatus?.finishedAt
-                  ? `last refresh ${bulkStatus.finishedAt.slice(0, 16).replace("T", " ")}Z`
+                  ? `last refresh ${fmtRefreshTime(bulkStatus.finishedAt)}`
                   : bulkStatus?.running
                     ? `refresh running (${bulkStatus.attempted}/${bulkStatus.total})…`
                     : "rest from FactSet snapshot"}
@@ -556,6 +577,13 @@ export default function LiquidityCapacity() {
               {rows.length} names · {tierCounts[0] ?? 0} clear the top tier
               {noData > 0 && <span className="ml-2 text-[10px] text-muted-foreground">({noData} no data)</span>}
             </span>
+            {groupBy !== "flat" && rows.length > 0 && (
+              <button onClick={collapseAll}
+                className="px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
+                data-testid="liqcap-collapse-all">
+                {allCollapsed ? "Expand all" : "Collapse all"}
+              </button>
+            )}
             <button onClick={exportCsv} disabled={rows.length === 0}
               className="mx-2 px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80 disabled:opacity-40 disabled:cursor-not-allowed"
               data-testid="liqcap-export-csv">
@@ -589,7 +617,8 @@ export default function LiquidityCapacity() {
                 </thead>
                 <tbody>
                   {groups.map((g) => (
-                    <GroupRows key={g.key} group={g} groupBy={groupBy} colCount={colCount} bucketName={bucketName} isGlobal={isGlobal} />
+                    <GroupRows key={g.key} group={g} groupBy={groupBy} colCount={colCount} bucketName={bucketName} isGlobal={isGlobal}
+                      isCollapsed={collapsed.has(g.key)} onToggle={toggleGroup} />
                   ))}
                 </tbody>
               </table>
@@ -611,26 +640,30 @@ export default function LiquidityCapacity() {
 // summary counts and CSV always cover the full filtered set.
 const MAX_RENDER_PER_GROUP = 400;
 
-function GroupRows({ group, groupBy, colCount, bucketName, isGlobal }: {
+function GroupRows({ group, groupBy, colCount, bucketName, isGlobal, isCollapsed, onToggle }: {
   group: { key: string; label: string; sublabel?: string; rows: Row[] };
   groupBy: "bucket" | "sector" | "flat";
   colCount: number;
   bucketName: (b: number) => string;
   isGlobal: boolean;
+  isCollapsed: boolean;
+  onToggle: (key: string) => void;
 }) {
   const shown = group.rows.length > MAX_RENDER_PER_GROUP ? group.rows.slice(0, MAX_RENDER_PER_GROUP) : group.rows;
   return (
     <>
       {groupBy !== "flat" && (
-        <tr className="border-t border-border bg-card/60" data-testid={`liqcap-group-${group.key}`}>
+        <tr className="border-t border-border bg-card/60 cursor-pointer select-none hover:bg-card/80" data-testid={`liqcap-group-${group.key}`}
+          onClick={() => onToggle(group.key)}>
           <td colSpan={colCount} className="px-2 py-1 font-bold text-[11px]">
+            <span className="inline-block w-3 text-muted-foreground">{isCollapsed ? "▸" : "▾"}</span>
             {group.label}
             {group.sublabel && <span className="ml-2 font-normal text-[10px] text-muted-foreground">{group.sublabel}</span>}
             <span className="ml-2 font-normal text-[10px] text-muted-foreground">· {group.rows.length} name{group.rows.length === 1 ? "" : "s"}</span>
           </td>
         </tr>
       )}
-      {shown.map((row) => (
+      {(groupBy === "flat" || !isCollapsed) && shown.map((row) => (
         <tr key={row.ticker} className="border-t border-border hover:bg-card/40" data-testid={`liqcap-row-${row.ticker}`}>
           <td className="px-2 py-1 font-bold">
             <button onClick={() => navigateToTicker(row.ticker)} className="hover:text-primary hover:underline" title="Open in Charts">
@@ -651,7 +684,7 @@ function GroupRows({ group, groupBy, colCount, bucketName, isGlobal }: {
           <td className="px-2 py-1 text-right">{fmtDays(row.exitDays)}</td>
         </tr>
       ))}
-      {shown.length < group.rows.length && (
+      {(groupBy === "flat" || !isCollapsed) && shown.length < group.rows.length && (
         <tr className="border-t border-border">
           <td colSpan={colCount} className="px-2 py-1 text-[10px] text-muted-foreground italic" data-testid={`liqcap-truncated-${group.key}`}>
             … {(group.rows.length - shown.length).toLocaleString()} more — narrow the filters or export the CSV for the full list.
