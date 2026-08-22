@@ -1091,7 +1091,7 @@ export default function Heatmap() {
           </SelectContent>
         </Select>
 
-        {viewMode === "metrics" && grouped && (
+        {viewMode === "metrics" && grouped && grouped.size > 0 && (
           <Button variant="outline" size="sm" className="h-6 text-[11px]"
             onClick={() => grpCollapse.toggleAll([...grouped.keys()])} data-testid="heatmap-collapse-all">
             {grpCollapse.allCollapsed([...grouped.keys()]) ? "Expand all" : "Collapse all"}

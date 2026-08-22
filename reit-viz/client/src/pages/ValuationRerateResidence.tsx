@@ -908,7 +908,7 @@ export default function ValuationRerateResidence() {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-0.5">Search</div>
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ticker / name" className="h-7 text-xs max-w-[220px]" />
         </div>
-        {grouped && (
+        {grouped && grouped.length > 0 && (
           <div className="self-end">
             <button type="button"
               onClick={() => grpCollapse.toggleAll(grouped.map(([name]) => name))}

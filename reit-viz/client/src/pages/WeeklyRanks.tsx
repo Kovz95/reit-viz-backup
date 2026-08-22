@@ -614,7 +614,7 @@ export default function WeeklyRanks() {
           className="h-6 bg-background border border-border rounded px-1 text-[11px]" title="Cluster the ranking by classification to see how you rank within subcategories">
           {GROUP_LEVELS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
         </select>
-        {view === "rank" && groups && (
+        {view === "rank" && groups && groups.length > 0 && (
           <button onClick={() => grpCollapse.toggleAll(groups.map((g) => g.label))}
             className="h-6 px-2 rounded text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
             data-testid="wr-collapse-all">
