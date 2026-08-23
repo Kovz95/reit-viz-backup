@@ -5215,8 +5215,18 @@ export async function registerRoutes(server: Server, app: Express) {
         if (!data || !Array.isArray(data.dates) || data.dates.length === 0) continue;
         const closes = data.adjCloses?.length === data.dates.length ? data.adjCloses : data.closes;
         if (!Array.isArray(closes)) continue;
-        const n = Math.min(d, data.dates.length);
-        results[sym] = { dates: data.dates.slice(-n), closes: closes.slice(-n) };
+        // Yahoo pads dead/halted tickers (delistings, merger closes like
+        // EQR/AVB→VMRK 2026-08-17) with zero-volume repeats of the last real
+        // close — trim that phantom tail (bounded) so consumers see the series
+        // end at the last REAL bar and can flag staleness honestly.
+        let end = data.dates.length;
+        if (Array.isArray(data.volumes) && data.volumes.length === data.dates.length) {
+          const floor = Math.max(0, end - 15);
+          while (end > floor && !(data.volumes[end - 1] > 0)) end--;
+        }
+        if (end === 0) continue;
+        const n = Math.min(d, end);
+        results[sym] = { dates: data.dates.slice(end - n, end), closes: closes.slice(end - n, end) };
       }
       res.json({ days: d, results });
     } catch (e: any) {

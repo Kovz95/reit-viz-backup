@@ -426,15 +426,39 @@ export default function LiquidityCapacity() {
     },
   });
   const pairStats = useMemo(() => {
-    const m = new Map<string, { corr: number | null; z: number | null }>();
+    const m = new Map<string, { corr: number | null; z: number | null; asOf: string | null; stale: boolean }>();
     if (!pairResult || !closesData) return m;
+    // The server trims phantom zero-volume tails, so a series ending early
+    // means the ticker stopped trading (delisting / merger close — e.g.
+    // EQR/AVB→VMRK 2026-08-17) or lost its feed. Staleness is measured in
+    // TRADING sessions against the freshest series' calendar, so a long
+    // weekend never false-positives but a dead leg flags within ~3 sessions.
+    let freshSeries: CloseSeries | null = null;
+    for (const s of Object.values(closesData)) {
+      const last = s.dates[s.dates.length - 1];
+      if (last && (!freshSeries || last > freshSeries.dates[freshSeries.dates.length - 1])) freshSeries = s;
+    }
+    const sessionsBehind = (asOf: string): number => {
+      if (!freshSeries) return 0;
+      let k = 0;
+      for (let i = freshSeries.dates.length - 1; i >= 0 && freshSeries.dates[i] > asOf; i--) k++;
+      return k;
+    };
     for (const g of pairResult.groups) {
       for (const p of g.pairs) {
         const sa = closesData[p.a.display.toUpperCase()];
         const sb = closesData[p.b.display.toUpperCase()];
-        m.set(p.key, sa && sb
-          ? { corr: pairReturnCorrelation(sa, sb, ADV_WINDOW), z: pairSpreadZ(sa, sb, ADV_WINDOW) }
-          : { corr: null, z: null });
+        if (!sa || !sb) { m.set(p.key, { corr: null, z: null, asOf: null, stale: false }); continue; }
+        const lastA = sa.dates[sa.dates.length - 1] ?? "";
+        const lastB = sb.dates[sb.dates.length - 1] ?? "";
+        const asOf = lastA < lastB ? lastA : lastB;
+        const stale = !!asOf && sessionsBehind(asOf) >= 3;
+        m.set(p.key, {
+          corr: pairReturnCorrelation(sa, sb, ADV_WINDOW),
+          z: pairSpreadZ(sa, sb, ADV_WINDOW),
+          asOf,
+          stale,
+        });
       }
     }
     return m;
@@ -466,11 +490,12 @@ export default function LiquidityCapacity() {
 
   const exportPairsCsv = useCallback(() => {
     if (!pairResult || pairResult.totalPairs === 0) return;
-    const headers = ["leg_a", "leg_b", "group", "bucket_a", "bucket_b", "adv_a_mm", "adv_b_mm", "adv_ratio", "corr_63d", "spread_z_63d", "pair_max_pos_pct", "pair_max_pos_mm", "pair_exit_days"];
+    const headers = ["leg_a", "leg_b", "group", "bucket_a", "bucket_b", "adv_a_mm", "adv_b_mm", "adv_ratio", "corr_63d", "spread_z_63d", "stale_as_of", "pair_max_pos_pct", "pair_max_pos_mm", "pair_exit_days"];
     const dataRows = pairResult.groups.flatMap((g) => g.pairs.map((p) => [
       p.a.display, p.b.display, `"${p.group.replace(/"/g, '""')}"`, bucketName(p.a.bucket), bucketName(p.b.bucket),
       p.a.effAdvMM?.toFixed(2) ?? "", p.b.effAdvMM?.toFixed(2) ?? "", p.advRatio.toFixed(3),
       pairStats.get(p.key)?.corr?.toFixed(3) ?? "", pairStats.get(p.key)?.z?.toFixed(2) ?? "",
+      pairStats.get(p.key)?.stale ? pairStats.get(p.key)?.asOf ?? "stale" : "",
       p.pairMaxPosPct?.toFixed(3) ?? "", p.pairMaxPosMM?.toFixed(1) ?? "", p.pairExitDays?.toFixed(2) ?? "",
     ]));
     const csv = [headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
@@ -915,7 +940,7 @@ const MAX_RENDER_PER_GROUP = 400;
 function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle }: {
   label: string;
   pairs: LiquidityPair[];
-  stats: Map<string, { corr: number | null; z: number | null }>;
+  stats: Map<string, { corr: number | null; z: number | null; asOf: string | null; stale: boolean }>;
   bucketName: (b: number) => string;
   isCollapsed: boolean;
   onToggle: (key: string) => void;
@@ -940,6 +965,13 @@ function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle 
             onClick={() => navigateToPairs(p.a.display, p.b.display)} title={`${p.a.name}  vs  ${p.b.name} — open in Pairs`}>
             <td className="px-2 py-1 font-bold whitespace-nowrap">
               {p.a.display} <span className="text-muted-foreground font-normal">/</span> {p.b.display}
+              {st?.stale && (
+                <span className="ml-1.5 px-1 rounded text-[9px] font-normal bg-amber-500/15 text-amber-400 border border-amber-500/40"
+                  title={`A leg stopped trading — bars end ${st.asOf} (delisting or corporate action, e.g. a merger close). Corr/z are as of that date.`}
+                  data-testid={`liqcap-pair-stale-${p.a.ticker}-${p.b.ticker}`}>
+                  stale {st.asOf?.slice(5)}
+                </span>
+              )}
             </td>
             <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">
               {p.a.bucket === p.b.bucket ? bucketName(p.a.bucket) : `${bucketName(p.a.bucket)} / ${bucketName(p.b.bucket)}`}
@@ -948,8 +980,8 @@ function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle 
             <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.b.effAdvMM)}</td>
             <td className="px-2 py-1 text-right">{(p.advRatio * 100).toFixed(0)}%</td>
             <td className={`px-2 py-1 text-right ${corr != null && corr >= 0.7 ? "text-emerald-400" : corr != null && corr < 0.3 ? "text-rose-400" : ""}`}>{fmtCorr(corr)}</td>
-            <td className={`px-2 py-1 text-right ${z != null && Math.abs(z) >= 2 ? "font-bold text-amber-400" : z != null && Math.abs(z) >= 1 ? "text-amber-300/70" : "text-muted-foreground"}`}
-              title={z == null ? undefined : z > 0 ? `${p.a.display} rich vs ${p.b.display} — fade: short ${p.a.display} / long ${p.b.display}` : `${p.a.display} cheap vs ${p.b.display} — fade: long ${p.a.display} / short ${p.b.display}`}>
+            <td className={`px-2 py-1 text-right ${st?.stale ? "text-muted-foreground/60 line-through" : z != null && Math.abs(z) >= 2 ? "font-bold text-amber-400" : z != null && Math.abs(z) >= 1 ? "text-amber-300/70" : "text-muted-foreground"}`}
+              title={st?.stale ? `Stale — bars end ${st.asOf}; the ratio is no longer live` : z == null ? undefined : z > 0 ? `${p.a.display} rich vs ${p.b.display} — fade: short ${p.a.display} / long ${p.b.display}` : `${p.a.display} cheap vs ${p.b.display} — fade: long ${p.a.display} / short ${p.b.display}`}>
               {z == null ? "—" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}`}
             </td>
             <td className="px-2 py-1 text-right font-bold">{p.pairMaxPosPct == null ? "—" : `${p.pairMaxPosPct.toFixed(2)}%`}</td>
