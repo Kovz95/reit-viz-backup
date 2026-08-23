@@ -46,6 +46,20 @@ function readCache(ticker: string): YahooPriceData | null {
   }
 }
 
+/** Cache read that tolerates staleness (default 7 days) — for bulk consumers
+ *  (e.g. pair-correlation columns) that prefer yesterday's nightly bars over
+ *  kicking off a live Yahoo fetch storm. Returns null when absent/too old. */
+export function readCachedPrices(ticker: string, maxAgeMs = 7 * 24 * 60 * 60 * 1000): YahooPriceData | null {
+  try {
+    const fp = cacheFile(ticker);
+    const stat = fs.statSync(fp);
+    if (Date.now() - stat.mtimeMs > maxAgeMs) return null;
+    return JSON.parse(fs.readFileSync(fp, "utf-8")) as YahooPriceData;
+  } catch {
+    return null;
+  }
+}
+
 function writeCache(data: YahooPriceData): void {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });

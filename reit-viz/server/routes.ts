@@ -5196,6 +5196,34 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // POST /api/yahoo-prices/closes  Body: { tickers: string[], days?: number }
+  // Cache-only tail read (dates + adjusted closes) for bulk consumers like the
+  // Liquidity Capacity pair-correlation column. Names without a warm cache
+  // file are simply absent from results — no live Yahoo fetch is triggered.
+  app.post("/api/yahoo-prices/closes", async (req, res) => {
+    try {
+      const { tickers, days } = req.body as { tickers?: unknown; days?: unknown };
+      if (!Array.isArray(tickers) || tickers.length === 0) {
+        return res.status(400).json({ error: "Body must include tickers: string[]" });
+      }
+      const d = Math.min(Math.max(Math.floor(Number(days)) || 80, 10), 300);
+      const { readCachedPrices } = await import("./yahooPrices");
+      const results: Record<string, { dates: string[]; closes: number[] }> = {};
+      for (const raw of (tickers as string[]).slice(0, 250)) {
+        const sym = String(raw).toUpperCase();
+        const data = readCachedPrices(sym);
+        if (!data || !Array.isArray(data.dates) || data.dates.length === 0) continue;
+        const closes = data.adjCloses?.length === data.dates.length ? data.adjCloses : data.closes;
+        if (!Array.isArray(closes)) continue;
+        const n = Math.min(d, data.dates.length);
+        results[sym] = { dates: data.dates.slice(-n), closes: closes.slice(-n) };
+      }
+      res.json({ days: d, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message ?? "failed to read cached closes" });
+    }
+  });
+
   // POST /api/yahoo-prices/:ticker/refresh  — force re-fetch
   app.post("/api/yahoo-prices/:ticker/refresh", async (req, res) => {
     const ticker = req.params.ticker.toUpperCase();

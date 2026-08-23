@@ -99,6 +99,42 @@ export default defineConfig({
         });
       },
     },
+    // Cache-only recent-closes bulk read (newer than the baked container) —
+    // powers the Liquidity Capacity pair-correlation column.
+    {
+      name: "verify-yahoo-closes-route",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (!/^\/api\/yahoo-prices\/closes(\?|$)/.test(req.url ?? "") || req.method !== "POST") return next();
+          let body = "";
+          req.on("data", (c) => (body += c));
+          req.on("end", async () => {
+            try {
+              const { readCachedPrices } = await import("./server/yahooPrices");
+              const parsed = JSON.parse(body || "{}");
+              const tickers: string[] = Array.isArray(parsed.tickers) ? parsed.tickers.map(String) : [];
+              const d = Math.min(Math.max(Math.floor(Number(parsed.days)) || 80, 10), 300);
+              const results: Record<string, { dates: string[]; closes: number[] }> = {};
+              for (const raw of tickers.slice(0, 250)) {
+                const sym = raw.toUpperCase();
+                const data = readCachedPrices(sym);
+                if (!data || !Array.isArray(data.dates) || data.dates.length === 0) continue;
+                const closes = data.adjCloses?.length === data.dates.length ? data.adjCloses : data.closes;
+                if (!Array.isArray(closes)) continue;
+                const n = Math.min(d, data.dates.length);
+                results[sym] = { dates: data.dates.slice(-n), closes: closes.slice(-n) };
+              }
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ days: d, results }));
+            } catch (e: any) {
+              res.statusCode = 500;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ error: e?.message ?? String(e) }));
+            }
+          });
+        });
+      },
+    },
     // The baked 5001 container also predates /api/prefs (generic KV backing
     // the server-synced template stores). An in-memory map is enough for
     // verification — it persists across page reloads within one vite session.

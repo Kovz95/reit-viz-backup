@@ -7,7 +7,17 @@
 // The server cache refreshes daily, so the buckets re-rank every day on load.
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { fetchWorkbookTickers, type TickerMeta } from "@/lib/fetchWorkbookTickers";
+import { navigateToPairs } from "@/lib/navigateToPairs";
+import {
+  buildLiquidityPairs,
+  pairReturnCorrelation,
+  type PairLeg,
+  type LiquidityPair,
+  type CloseSeries,
+} from "@/lib/liquidityPairs";
 import { useWorkbookAdv, useBulkAdv, type AdvEntry } from "@/lib/workbookAdv";
 import { useUniverse } from "@/lib/universeContext";
 import { useGeoFilter } from "@/lib/useGeoFilter";
@@ -49,8 +59,11 @@ interface Row {
   display: string;
   name: string;
   nation: string;
+  economy: string;
   sector: string;
   subsector: string;
+  industryGroup: string;
+  subindustry: string;
   medianMM: number | null;
   meanMM: number | null;
   p25MM: number | null;
@@ -98,6 +111,46 @@ function sanitizeConfig(raw: any): CapacityConfig {
 }
 
 const fmtDays = (d: number | null): string => (d == null ? "—" : d >= 10 ? d.toFixed(0) : d.toFixed(1));
+
+// ── Pairs view config ────────────────────────────────────────────────────────
+type PairLevel = "economy" | "sector" | "subsector" | "industryGroup" | "subindustry";
+const PAIR_LEVELS: Array<{ value: PairLevel; label: string }> = [
+  { value: "subindustry", label: "Subindustry" },
+  { value: "industryGroup", label: "Industry Group" },
+  { value: "subsector", label: "Subsector" },
+  { value: "sector", label: "Sector" },
+  { value: "economy", label: "Economy" },
+];
+
+interface PairCfg {
+  level: PairLevel;
+  sameBucketOnly: boolean;
+  /** Smaller leg's ADV must be ≥ this % of the larger leg's. */
+  minAdvRatioPct: number;
+  /** Highest tier index allowed (99 = any bucketed name). */
+  maxTier: number;
+}
+const DEFAULT_PAIR_CFG: PairCfg = { level: "subindustry", sameBucketOnly: true, minAdvRatioPct: 50, maxTier: 99 };
+
+function sanitizePairCfg(raw: any): PairCfg {
+  const d = DEFAULT_PAIR_CFG;
+  if (!raw || typeof raw !== "object") return d;
+  return {
+    level: PAIR_LEVELS.some((l) => l.value === raw.level) ? raw.level : d.level,
+    sameBucketOnly: typeof raw.sameBucketOnly === "boolean" ? raw.sameBucketOnly : d.sameBucketOnly,
+    minAdvRatioPct: Number.isFinite(raw.minAdvRatioPct) && raw.minAdvRatioPct >= 0 && raw.minAdvRatioPct <= 100 ? raw.minAdvRatioPct : d.minAdvRatioPct,
+    maxTier: Number.isFinite(raw.maxTier) && raw.maxTier >= 0 ? Math.floor(raw.maxTier) : d.maxTier,
+  };
+}
+
+// Per-group cap on names entering the pairing pool (largest ADV first) and on
+// rendered pairs — bounds the quadratic blow-up on the ~9.4k global universe.
+const PAIR_POOL_PER_GROUP = 25;
+const MAX_PAIRS_RENDERED_PER_GROUP = 100;
+// Unique symbols fetched for the correlation column (cache-only server read).
+const CORR_SYMBOL_CAP = 200;
+
+const fmtCorr = (c: number | null | undefined): string => (c == null ? "—" : c.toFixed(2));
 
 // Nightly-refresh timestamp arrives as UTC ISO; show it in local 12-hour time.
 const fmtRefreshTime = (iso: string): string => {
@@ -214,8 +267,11 @@ export default function LiquidityCapacity() {
         display: isGlobal && !usName && g.fdsTicker ? g.fdsTicker : t.ticker,
         name: t.name || t.ticker,
         nation: t.nation || "",
+        economy: t.economy || "—",
         sector: t.sector || "—",
         subsector: t.subsector || "—",
+        industryGroup: t.industryGroup || "—",
+        subindustry: t.subindustry || "—",
         medianMM: entry?.medianUsdMM ?? null,
         meanMM: entry?.advUsdMM ?? snapshotMM,
         p25MM: entry?.p25UsdMM ?? null,
@@ -314,6 +370,111 @@ export default function LiquidityCapacity() {
     grpCollapse.toggleAll(groups.map((g) => g.key));
   }, [grpCollapse.toggleAll, groups]);
 
+  // ── Pairs view: liquidity-matched pair ideas within a classification group
+  const [pageView, setPageView] = usePersistedState<"names" | "pairs">("reit-viz:liquidity-capacity:view-v1", "names");
+  const [storedPairCfg, setStoredPairCfg] = usePersistedState<PairCfg>("reit-viz:liquidity-capacity:pairs-v1", DEFAULT_PAIR_CFG);
+  const pairCfg = useMemo(() => sanitizePairCfg(storedPairCfg), [storedPairCfg]);
+  const patchPairCfg = useCallback(
+    (patch: Partial<PairCfg>) => setStoredPairCfg((prev) => ({ ...sanitizePairCfg(prev), ...patch })),
+    [setStoredPairCfg],
+  );
+
+  const pairResult = useMemo(() => {
+    if (pageView !== "pairs") return null;
+    const legs: PairLeg[] = rows.map((r) => ({
+      ticker: r.ticker,
+      display: r.display,
+      name: r.name,
+      group: r[pairCfg.level] || "—",
+      bucket: r.bucket,
+      effAdvMM: r.effAdvMM,
+      maxPosPct: r.maxPosPct,
+      maxPosMM: r.maxPosMM,
+      exitDays: r.exitDays,
+    }));
+    return buildLiquidityPairs(legs, {
+      sameBucketOnly: pairCfg.sameBucketOnly,
+      minAdvRatio: pairCfg.minAdvRatioPct / 100,
+      maxTier: Math.min(pairCfg.maxTier, Math.max(0, thresholds.length - 1)),
+      topPerGroup: PAIR_POOL_PER_GROUP,
+    });
+  }, [pageView, rows, pairCfg, thresholds.length]);
+
+  // Correlation column: cache-only bulk closes read (the nightly ADV job keeps
+  // the whole universe's bars warm server-side), Pearson on 63d daily returns.
+  const corrSymbols = useMemo(() => {
+    if (!pairResult) return [] as string[];
+    const seen = new Set<string>();
+    outer: for (const g of pairResult.groups) {
+      for (const p of g.pairs.slice(0, MAX_PAIRS_RENDERED_PER_GROUP)) {
+        seen.add(p.a.display.toUpperCase());
+        seen.add(p.b.display.toUpperCase());
+        if (seen.size >= CORR_SYMBOL_CAP) break outer;
+      }
+    }
+    return [...seen].sort();
+  }, [pairResult]);
+  const { data: closesData } = useQuery({
+    queryKey: ["liqcap-pair-closes", corrSymbols.join(",")],
+    enabled: pageView === "pairs" && corrSymbols.length > 0,
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const res = await apiRequest("POST", "/api/yahoo-prices/closes", { tickers: corrSymbols, days: ADV_WINDOW + 17 });
+      const json = await res.json();
+      return (json?.results ?? {}) as Record<string, CloseSeries>;
+    },
+  });
+  const corrMap = useMemo(() => {
+    const m = new Map<string, number | null>();
+    if (!pairResult || !closesData) return m;
+    for (const g of pairResult.groups) {
+      for (const p of g.pairs) {
+        const sa = closesData[p.a.display.toUpperCase()];
+        const sb = closesData[p.b.display.toUpperCase()];
+        m.set(p.key, sa && sb ? pairReturnCorrelation(sa, sb, ADV_WINDOW) : null);
+      }
+    }
+    return m;
+  }, [pairResult, closesData]);
+
+  const pairSort = useTableSort<LiquidityPair>("pairMaxPosPct", "desc", "desc", "liqcap-pairs");
+  const pairAccessor = useCallback((p: LiquidityPair, key: string) => {
+    switch (key) {
+      case "pair": return p.a.display;
+      case "bucket": return Math.max(p.a.bucket, p.b.bucket);
+      case "advA": return p.a.effAdvMM;
+      case "advB": return p.b.effAdvMM;
+      case "advRatio": return p.advRatio;
+      case "corr": return corrMap.get(p.key) ?? null;
+      case "pairMaxPosPct": return p.pairMaxPosPct;
+      case "pairExitDays": return p.pairExitDays;
+      default: return null;
+    }
+  }, [corrMap]);
+  const pairGroups = useMemo(() => {
+    if (!pairResult) return [];
+    return pairResult.groups.map((g) => ({ label: g.label, pairs: pairSort.apply(g.pairs, pairAccessor) }));
+  }, [pairResult, pairSort.sortKey, pairSort.sortDir, pairAccessor]);
+  const pairCollapse = useCollapsedGroups("reit-viz:liquidity-capacity:pairs-collapsed-v1");
+
+  const exportPairsCsv = useCallback(() => {
+    if (!pairResult || pairResult.totalPairs === 0) return;
+    const headers = ["leg_a", "leg_b", "group", "bucket_a", "bucket_b", "adv_a_mm", "adv_b_mm", "adv_ratio", "corr_63d", "pair_max_pos_pct", "pair_max_pos_mm", "pair_exit_days"];
+    const dataRows = pairResult.groups.flatMap((g) => g.pairs.map((p) => [
+      p.a.display, p.b.display, `"${p.group.replace(/"/g, '""')}"`, bucketName(p.a.bucket), bucketName(p.b.bucket),
+      p.a.effAdvMM?.toFixed(2) ?? "", p.b.effAdvMM?.toFixed(2) ?? "", p.advRatio.toFixed(3),
+      corrMap.get(p.key)?.toFixed(3) ?? "", p.pairMaxPosPct?.toFixed(3) ?? "", p.pairMaxPosMM?.toFixed(1) ?? "", p.pairExitDays?.toFixed(2) ?? "",
+    ]));
+    const csv = [headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `liquidity-pairs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [pairResult, corrMap, bucketName]);
+
   // ── Tier editing
   const setTierPct = useCallback((idx: number, pct: number) => {
     const tiers = cfg.tiers.map((t, i) => (i === idx ? { ...t, pct } : t));
@@ -372,11 +533,13 @@ export default function LiquidityCapacity() {
           </div>
           <PagePresets
             storageKey="reit-viz:liquidity-capacity:presets"
-            capture={() => ({ cfg, groupBy, source })}
+            capture={() => ({ cfg, groupBy, source, pageView, pairCfg })}
             apply={(s: any) => {
               if (s?.cfg) setStoredCfg(sanitizeConfig(s.cfg));
               if (s?.groupBy) setGroupBy(s.groupBy);
               if (s?.source === "workbook" || s?.source === "global") setSource(s.source);
+              if (s?.pageView === "names" || s?.pageView === "pairs") setPageView(s.pageView);
+              if (s?.pairCfg) setStoredPairCfg(sanitizePairCfg(s.pairCfg));
             }}
             testIdPrefix="liqcap-presets"
           />
@@ -519,16 +682,65 @@ export default function LiquidityCapacity() {
             <button onClick={addTier} className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground" data-testid="liqcap-tier-add">+ tier</button>
           )}
           <div className="flex-1" />
-          <div className="flex items-center gap-0.5 pb-0.5">
-            {(["bucket", "sector", "flat"] as const).map((g) => (
-              <button key={g} onClick={() => setGroupBy(g)}
-                className={`text-[10px] px-2 py-1 rounded border ${groupBy === g ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:text-foreground"}`}
-                data-testid={`liqcap-group-${g}`}>
-                {g === "bucket" ? "By bucket" : g === "sector" ? "By sector" : "Flat"}
+          <div className="flex items-center gap-0.5 pb-0.5 mr-2">
+            {(["names", "pairs"] as const).map((v) => (
+              <button key={v} onClick={() => setPageView(v)}
+                className={`text-[10px] px-2 py-1 rounded border ${pageView === v ? "bg-sky-600 text-white border-sky-600" : "bg-background text-muted-foreground border-border hover:text-foreground"}`}
+                data-testid={`liqcap-view-${v}`}>
+                {v === "names" ? "Names" : "Pairs"}
               </button>
             ))}
           </div>
+          {pageView === "names" && (
+            <div className="flex items-center gap-0.5 pb-0.5">
+              {(["bucket", "sector", "flat"] as const).map((g) => (
+                <button key={g} onClick={() => setGroupBy(g)}
+                  className={`text-[10px] px-2 py-1 rounded border ${groupBy === g ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border hover:text-foreground"}`}
+                  data-testid={`liqcap-group-${g}`}>
+                  {g === "bucket" ? "By bucket" : g === "sector" ? "By sector" : "Flat"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
+        {/* Pairs view controls */}
+        {pageView === "pairs" && (
+          <div className="flex flex-wrap items-end gap-3 border border-border rounded p-2 bg-card/40" data-testid="liqcap-pairs-controls">
+            <div className="flex flex-col">
+              <label className={labelCls} title="Pairs only form between names sharing this classification value">Pair within</label>
+              <select value={pairCfg.level} onChange={(e) => patchPairCfg({ level: e.target.value as PairLevel })}
+                className={`${inputCls} mt-0.5`} data-testid="liqcap-pair-level">
+                {PAIR_LEVELS.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+              </select>
+            </div>
+            <label className="flex items-center gap-1.5 pb-1 cursor-pointer" title="Both legs must have cleared the same sizing tier">
+              <input type="checkbox" checked={pairCfg.sameBucketOnly}
+                onChange={(e) => patchPairCfg({ sameBucketOnly: e.target.checked })} data-testid="liqcap-pair-samebucket" />
+              <span className="text-[11px]">Same bucket only</span>
+            </label>
+            <div className="flex flex-col">
+              <label className={labelCls} title="Smaller leg's ADV must be at least this % of the larger leg's — keeps the legs tradeable at equal size">Min ADV ratio %</label>
+              <input type="number" min={0} max={100} step={5} value={pairCfg.minAdvRatioPct}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= 0 && v <= 100) patchPairCfg({ minAdvRatioPct: v }); }}
+                className={`${inputCls} mt-0.5 w-20`} data-testid="liqcap-pair-minratio" />
+            </div>
+            <div className="flex flex-col">
+              <label className={labelCls} title="Only names that cleared at least this tier enter the pairing pool">Min tier</label>
+              <select value={String(Math.min(pairCfg.maxTier, thresholds.length - 1))}
+                onChange={(e) => patchPairCfg({ maxTier: parseInt(e.target.value) })}
+                className={`${inputCls} mt-0.5`} data-testid="liqcap-pair-mintier">
+                {thresholds.map((th, i) => (
+                  <option key={i} value={String(i)}>{i === thresholds.length - 1 ? "Any bucketed" : `${th.tier.label} or better`}</option>
+                ))}
+              </select>
+            </div>
+            <div className="text-[10px] text-muted-foreground pb-1">
+              Legs pair within a {PAIR_LEVELS.find((l) => l.value === pairCfg.level)?.label.toLowerCase()}; pair size = the smaller leg's capacity, exit = the slower leg.
+              {(pairResult?.cappedNames ?? 0) > 0 && <span className="text-amber-400"> Pool capped at {PAIR_POOL_PER_GROUP} names/group by ADV ({pairResult!.cappedNames} skipped).</span>}
+            </div>
+          </div>
+        )}
 
         {/* Summary strip: required ADV + cumulative counts per tier */}
         <div className="flex flex-wrap gap-2" data-testid="liqcap-summary">
@@ -567,6 +779,7 @@ export default function LiquidityCapacity() {
         )}
 
         {/* Bucketed table */}
+        {pageView === "names" && (
         <div className="border border-border rounded">
           <div className="flex items-center bg-card/50 border-b border-border">
             <span className="flex-1 px-2 py-1 text-[11px] font-bold">
@@ -621,6 +834,60 @@ export default function LiquidityCapacity() {
             </div>
           )}
         </div>
+        )}
+
+        {/* Pairs table */}
+        {pageView === "pairs" && (
+        <div className="border border-border rounded" data-testid="liqcap-pairs-table">
+          <div className="flex items-center bg-card/50 border-b border-border">
+            <span className="flex-1 px-2 py-1 text-[11px] font-bold">
+              {pairResult?.totalPairs ?? 0} pairs · {pairGroups.length} group{pairGroups.length === 1 ? "" : "s"}
+              <span className="ml-2 text-[10px] font-normal text-muted-foreground">click a pair to open it in Pairs</span>
+            </span>
+            {pairGroups.length > 0 && (
+              <button onClick={() => pairCollapse.toggleAll(pairGroups.map((g) => g.label))}
+                className="px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80"
+                data-testid="liqcap-pairs-collapse-all">
+                {pairCollapse.allCollapsed(pairGroups.map((g) => g.label)) ? "Expand all" : "Collapse all"}
+              </button>
+            )}
+            <button onClick={exportPairsCsv} disabled={(pairResult?.totalPairs ?? 0) === 0}
+              className="mx-2 px-2 py-0.5 rounded text-[10px] border border-border text-muted-foreground hover:text-foreground hover:bg-card/80 disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="liqcap-pairs-export-csv">
+              CSV
+            </button>
+          </div>
+          {pairGroups.length === 0 ? (
+            <div className="p-3 text-[11px] text-muted-foreground">
+              No pairs at these settings — loosen the ADV ratio floor, allow cross-bucket pairs, or widen the classification level.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead className="bg-card/40 sticky top-0">
+                  <tr>
+                    <th className="text-left px-2 py-1 font-mono"><SortHeader label="Pair" columnKey="pair" sort={pairSort} /></th>
+                    <th className="text-left px-2 py-1 font-mono" title="Worse leg's tier"><SortHeader label="Bucket" columnKey="bucket" sort={pairSort} /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Larger leg's basis ADV (after haircut)"><SortHeader label="ADV A" columnKey="advA" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Smaller leg's basis ADV (after haircut)"><SortHeader label="ADV B" columnKey="advB" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Smaller ÷ larger leg ADV — 100% = perfectly matched liquidity"><SortHeader label="ADV ratio" columnKey="advRatio" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title={`Pearson correlation of daily returns over the last ${ADV_WINDOW} sessions (— = bars not cached server-side yet)`}><SortHeader label={`Corr ${ADV_WINDOW}d`} columnKey="corr" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Equal-sized legs: the smaller leg's max position binds the pair"><SortHeader label="Pair max %" columnKey="pairMaxPosPct" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title="Pair position per leg, in dollars">Pair max $</th>
+                    <th className="text-right px-2 py-1 font-mono" title="Days to unwind the pair — the slower leg"><SortHeader label="Exit days" columnKey="pairExitDays" sort={pairSort} align="right" /></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pairGroups.map((g) => (
+                    <PairGroupRows key={g.label} label={g.label} pairs={g.pairs} corrMap={corrMap} bucketName={bucketName}
+                      isCollapsed={pairCollapse.isCollapsed(g.label)} onToggle={pairCollapse.toggle} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        )}
 
         <p className="text-[9px] text-muted-foreground">
           {isGlobal
@@ -635,6 +902,57 @@ export default function LiquidityCapacity() {
 // Render cap per group so the ~9.4k-name global universe stays responsive; the
 // summary counts and CSV always cover the full filtered set.
 const MAX_RENDER_PER_GROUP = 400;
+
+function PairGroupRows({ label, pairs, corrMap, bucketName, isCollapsed, onToggle }: {
+  label: string;
+  pairs: LiquidityPair[];
+  corrMap: Map<string, number | null>;
+  bucketName: (b: number) => string;
+  isCollapsed: boolean;
+  onToggle: (key: string) => void;
+}) {
+  const shown = pairs.length > MAX_PAIRS_RENDERED_PER_GROUP ? pairs.slice(0, MAX_PAIRS_RENDERED_PER_GROUP) : pairs;
+  return (
+    <>
+      <tr className="border-t border-border bg-card/60 cursor-pointer select-none hover:bg-card/80"
+        onClick={() => onToggle(label)} data-testid={`liqcap-pairgroup-${label}`}>
+        <td colSpan={9} className="px-2 py-1 font-bold text-[11px]">
+          <span className="inline-block w-3 text-muted-foreground">{isCollapsed ? "▸" : "▾"}</span>
+          {label}
+          <span className="ml-2 font-normal text-[10px] text-muted-foreground">· {pairs.length} pair{pairs.length === 1 ? "" : "s"}</span>
+        </td>
+      </tr>
+      {!isCollapsed && shown.map((p) => {
+        const corr = corrMap.get(p.key);
+        return (
+          <tr key={p.key} className="border-t border-border hover:bg-card/40 cursor-pointer" data-testid={`liqcap-pair-${p.a.ticker}-${p.b.ticker}`}
+            onClick={() => navigateToPairs(p.a.display, p.b.display)} title={`${p.a.name}  vs  ${p.b.name} — open in Pairs`}>
+            <td className="px-2 py-1 font-bold whitespace-nowrap">
+              {p.a.display} <span className="text-muted-foreground font-normal">/</span> {p.b.display}
+            </td>
+            <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">
+              {p.a.bucket === p.b.bucket ? bucketName(p.a.bucket) : `${bucketName(p.a.bucket)} / ${bucketName(p.b.bucket)}`}
+            </td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.a.effAdvMM)}</td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.b.effAdvMM)}</td>
+            <td className="px-2 py-1 text-right">{(p.advRatio * 100).toFixed(0)}%</td>
+            <td className={`px-2 py-1 text-right ${corr != null && corr >= 0.7 ? "text-emerald-400" : corr != null && corr < 0.3 ? "text-rose-400" : ""}`}>{fmtCorr(corr)}</td>
+            <td className="px-2 py-1 text-right font-bold">{p.pairMaxPosPct == null ? "—" : `${p.pairMaxPosPct.toFixed(2)}%`}</td>
+            <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.pairMaxPosMM)}</td>
+            <td className="px-2 py-1 text-right">{fmtDays(p.pairExitDays)}</td>
+          </tr>
+        );
+      })}
+      {!isCollapsed && shown.length < pairs.length && (
+        <tr className="border-t border-border">
+          <td colSpan={9} className="px-2 py-1 text-[10px] text-muted-foreground italic" data-testid={`liqcap-pairs-truncated-${label}`}>
+            … {(pairs.length - shown.length).toLocaleString()} more — tighten the filters or export the CSV for the full list.
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
 
 function GroupRows({ group, groupBy, colCount, bucketName, isGlobal, isCollapsed, onToggle }: {
   group: { key: string; label: string; sublabel?: string; rows: Row[] };
