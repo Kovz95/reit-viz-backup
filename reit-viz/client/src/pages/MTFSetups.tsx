@@ -88,7 +88,9 @@ const BOOKMARKS_KEY = "reit-viz:mtf-bookmarks";
 const DEFAULT_BOOKMARKS: MtfBookmark[] = [
   { name: "MAA dip-buy (t 5.8)", symbol: "MAA", direction: "long",
     legKeys: ["dmi_bear@D", "ichi_tk_bull@W", "cross_frama_bear@D"] },
-  { name: "AVB shallow-dip (t 5.6)", symbol: "AVB", direction: "long",
+  // AVB merged into Vivmark (VMRK) 2026-08-17; the setup was scanned on AVB
+  // but the successor listing carries the book-mark forward.
+  { name: "VMRK shallow-dip (ex-AVB, t 5.6)", symbol: "VMRK", direction: "long",
     legKeys: ["stoch_ob@W", "px_lt_hma21@W", "cross_kama_bull@D"] },
   { name: "GLPI capitulation (t 5.1)", symbol: "GLPI", direction: "long",
     legKeys: ["px_lt_sma50@D", "cross_frama_bear@W", "st_bear@D"] },
@@ -136,7 +138,7 @@ export default function MTFSetups() {
     return () => { active = false; };
   }, []);
 
-  const [ticker, setTicker] = useState("AVB");
+  const [ticker, setTicker] = useState("VMRK");
 
   // ── Scan scope ─────────────────────────────────────────────────────────────
   const [scope, setScope] = useState<ScanScope>("single");

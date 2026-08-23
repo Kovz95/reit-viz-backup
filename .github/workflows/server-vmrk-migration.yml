@@ -1,0 +1,98 @@
+name: Server VMRK migration (EQR/AVB -> VMRK)
+
+# One-off prod data surgery for the 2026-08-17 merger of Equity Residential
+# (EQR) and AvalonBay (AVB) into Vivmark Residential (VMRK). EQR was the
+# surviving listing (each AVB share -> 2.793 EQR shares), so VMRK inherits
+# EQR's per-ticker workbook container; AVB is dropped from the universe.
+# Backup-first; the app reads these files per-request so no restart is needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type VMRK to confirm replacing EQR/AVB with VMRK in the prod workbook universe'
+        type: string
+        required: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard - require confirm phrase
+        if: ${{ inputs.confirm != 'VMRK' }}
+        run: |
+          echo "::error::confirm input must be exactly VMRK (got '${{ inputs.confirm }}'). Aborting."
+          exit 1
+
+      - name: Migrate over SSH
+        env:
+          SSHPASS: ${{ secrets.VULTR_SSH_PASSWORD }}
+          VHOST: ${{ vars.VULTR_HOST || '45.63.20.126' }}
+          VUSER: ${{ vars.VULTR_USER || 'root' }}
+          VDIR:  ${{ vars.VULTR_DIR  || '/opt/reit-viz' }}
+        run: |
+          if [ -z "$SSHPASS" ]; then echo "::error::VULTR_SSH_PASSWORD not set"; exit 1; fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          SSHOPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15"
+          sshpass -e ssh $SSHOPTS "$VUSER@$VHOST" "VDIR='$VDIR' bash -s" <<'REMOTE'
+            set -euo pipefail
+            cd "$VDIR/data"
+            TS="$(date +%Y%m%d-%H%M%S)"
+            cp tickers.json "tickers.json.bak-vmrk-$TS"
+            [ -f tickers/EQR.json ] && cp tickers/EQR.json "tickers/EQR.json.bak-vmrk-$TS"
+            echo "backed up tickers.json + EQR.json (suffix .bak-vmrk-$TS)"
+
+            cat > /tmp/vmrk-migrate.cjs <<'JS'
+            const fs = require("fs");
+            const path = require("path");
+            const dataDir = process.argv[2];
+            const tickersPath = path.join(dataDir, "tickers.json");
+            const list = JSON.parse(fs.readFileSync(tickersPath, "utf-8"));
+            if (list.some((t) => t.ticker === "VMRK")) { console.log("VMRK already present - nothing to do"); process.exit(0); }
+            const eqrIdx = list.findIndex((t) => t.ticker === "EQR");
+            if (eqrIdx < 0) throw new Error("EQR not found in tickers.json");
+            const vmrk = { ...list[eqrIdx], ticker: "VMRK", name: "Vivmark Residential" };
+            const out = list.filter((t) => t.ticker !== "EQR" && t.ticker !== "AVB");
+            out.splice(Math.min(eqrIdx, out.length), 0, vmrk);
+            fs.writeFileSync(tickersPath, JSON.stringify(out, null, 2));
+            console.log("tickers.json:", list.length, "->", out.length, "entries (EQR+AVB out, VMRK in)");
+            // Per-ticker container: EQR's series continues as VMRK.
+            const eqrFile = path.join(dataDir, "tickers", "EQR.json");
+            const vmrkFile = path.join(dataDir, "tickers", "VMRK.json");
+            const obj = JSON.parse(fs.readFileSync(eqrFile, "utf-8"));
+            if (typeof obj.ticker === "string") obj.ticker = "VMRK";
+            if (typeof obj.name === "string") obj.name = "Vivmark Residential";
+            fs.writeFileSync(vmrkFile, JSON.stringify(obj));
+            console.log("VMRK.json written from EQR container; top-level keys:", Object.keys(obj).slice(0, 12).join(","));
+          JS
+            node /tmp/vmrk-migrate.cjs "$PWD"
+            rm -f /tmp/vmrk-migrate.cjs
+
+            echo "== verify via live API =="
+            curl -s http://localhost:3000/api/tickers | node -e '
+              let d = ""; process.stdin.on("data", (c) => (d += c)).on("end", () => {
+                const j = JSON.parse(d);
+                const has = (s) => j.some((t) => t.ticker === s);
+                console.log("api tickers:", j.length, "| VMRK:", has("VMRK"), "| EQR:", has("EQR"), "| AVB:", has("AVB"));
+                const v = j.find((t) => t.ticker === "VMRK");
+                console.log("VMRK meta:", JSON.stringify({ name: v.name, subindustry: v.subindustry, dates: v.dates }));
+                if (!has("VMRK") || has("EQR") || has("AVB")) { console.error("MIGRATION VERIFY FAILED"); process.exit(1); }
+              });'
+            echo "== per-ticker container reachable =="
+            curl -s -o /dev/null -w "GET /api/ticker/VMRK -> %{http_code} (%{size_download} bytes)\n" http://localhost:3000/api/ticker/VMRK
+            echo "== baskets still referencing dead tickers (report only) =="
+            curl -s http://localhost:3000/api/baskets | node -e '
+              let d = ""; process.stdin.on("data", (c) => (d += c)).on("end", () => {
+                try {
+                  const j = JSON.parse(d);
+                  const baskets = j.baskets ?? j ?? [];
+                  let hits = 0;
+                  for (const b of baskets) {
+                    const members = b.members ?? b.tickers ?? [];
+                    const dead = members.filter((m) => m === "EQR" || m === "AVB" || String(m?.ticker) === "EQR" || String(m?.ticker) === "AVB");
+                    if (dead.length) { hits++; console.log(" basket \"" + (b.name ?? b.id) + "\" contains:", JSON.stringify(dead)); }
+                  }
+                  if (!hits) console.log(" (none)");
+                } catch (e) { console.log(" (baskets unreadable:", e.message + ")"); }
+              });'
+          REMOTE
