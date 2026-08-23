@@ -116,6 +116,43 @@ export interface CloseSeries {
  * sessions (date-aligned inner join). Null when overlap is too thin to trust
  * (< 60% of the window) or a series is degenerate.
  */
+/** Date-aligned A/B close ratios (inner join), oldest→newest. */
+function alignedRatios(a: CloseSeries, b: CloseSeries): number[] {
+  if (!a?.dates?.length || !b?.dates?.length) return [];
+  const mb = new Map<string, number>();
+  for (let i = 0; i < b.dates.length; i++) {
+    const c = b.closes[i];
+    if (Number.isFinite(c) && c > 0) mb.set(b.dates[i], c);
+  }
+  const out: number[] = [];
+  for (let i = 0; i < a.dates.length; i++) {
+    const ca = a.closes[i];
+    const cb = mb.get(a.dates[i]);
+    if (cb !== undefined && Number.isFinite(ca) && ca > 0) out.push(ca / cb);
+  }
+  return out;
+}
+
+/**
+ * Z-score of the CURRENT A/B price ratio vs its own trailing `window` sessions
+ * (current included). Positive = A rich vs B (short A / long B to fade), and
+ * vice versa. Null when overlap is too thin (< 60% of window) or flat.
+ */
+export function pairSpreadZ(a: CloseSeries, b: CloseSeries, window: number): number | null {
+  const ratios = alignedRatios(a, b);
+  const tail = ratios.slice(-window);
+  if (tail.length < Math.ceil(window * 0.6)) return null;
+  const n = tail.length;
+  let sum = 0;
+  for (const r of tail) sum += r;
+  const mean = sum / n;
+  let varSum = 0;
+  for (const r of tail) varSum += (r - mean) * (r - mean);
+  const std = Math.sqrt(varSum / n);
+  if (std < 1e-9 * Math.max(1, Math.abs(mean))) return null;
+  return (tail[n - 1] - mean) / std;
+}
+
 export function pairReturnCorrelation(a: CloseSeries, b: CloseSeries, window: number): number | null {
   if (!a?.dates?.length || !b?.dates?.length) return null;
   const mb = new Map<string, number>();

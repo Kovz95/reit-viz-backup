@@ -14,6 +14,7 @@ import { navigateToPairs } from "@/lib/navigateToPairs";
 import {
   buildLiquidityPairs,
   pairReturnCorrelation,
+  pairSpreadZ,
   type PairLeg,
   type LiquidityPair,
   type CloseSeries,
@@ -424,14 +425,16 @@ export default function LiquidityCapacity() {
       return (json?.results ?? {}) as Record<string, CloseSeries>;
     },
   });
-  const corrMap = useMemo(() => {
-    const m = new Map<string, number | null>();
+  const pairStats = useMemo(() => {
+    const m = new Map<string, { corr: number | null; z: number | null }>();
     if (!pairResult || !closesData) return m;
     for (const g of pairResult.groups) {
       for (const p of g.pairs) {
         const sa = closesData[p.a.display.toUpperCase()];
         const sb = closesData[p.b.display.toUpperCase()];
-        m.set(p.key, sa && sb ? pairReturnCorrelation(sa, sb, ADV_WINDOW) : null);
+        m.set(p.key, sa && sb
+          ? { corr: pairReturnCorrelation(sa, sb, ADV_WINDOW), z: pairSpreadZ(sa, sb, ADV_WINDOW) }
+          : { corr: null, z: null });
       }
     }
     return m;
@@ -445,12 +448,16 @@ export default function LiquidityCapacity() {
       case "advA": return p.a.effAdvMM;
       case "advB": return p.b.effAdvMM;
       case "advRatio": return p.advRatio;
-      case "corr": return corrMap.get(p.key) ?? null;
+      case "corr": return pairStats.get(p.key)?.corr ?? null;
+      case "spreadZ": {
+        const z = pairStats.get(p.key)?.z;
+        return z == null ? null : Math.abs(z); // sort by dislocation magnitude
+      }
       case "pairMaxPosPct": return p.pairMaxPosPct;
       case "pairExitDays": return p.pairExitDays;
       default: return null;
     }
-  }, [corrMap]);
+  }, [pairStats]);
   const pairGroups = useMemo(() => {
     if (!pairResult) return [];
     return pairResult.groups.map((g) => ({ label: g.label, pairs: pairSort.apply(g.pairs, pairAccessor) }));
@@ -459,11 +466,12 @@ export default function LiquidityCapacity() {
 
   const exportPairsCsv = useCallback(() => {
     if (!pairResult || pairResult.totalPairs === 0) return;
-    const headers = ["leg_a", "leg_b", "group", "bucket_a", "bucket_b", "adv_a_mm", "adv_b_mm", "adv_ratio", "corr_63d", "pair_max_pos_pct", "pair_max_pos_mm", "pair_exit_days"];
+    const headers = ["leg_a", "leg_b", "group", "bucket_a", "bucket_b", "adv_a_mm", "adv_b_mm", "adv_ratio", "corr_63d", "spread_z_63d", "pair_max_pos_pct", "pair_max_pos_mm", "pair_exit_days"];
     const dataRows = pairResult.groups.flatMap((g) => g.pairs.map((p) => [
       p.a.display, p.b.display, `"${p.group.replace(/"/g, '""')}"`, bucketName(p.a.bucket), bucketName(p.b.bucket),
       p.a.effAdvMM?.toFixed(2) ?? "", p.b.effAdvMM?.toFixed(2) ?? "", p.advRatio.toFixed(3),
-      corrMap.get(p.key)?.toFixed(3) ?? "", p.pairMaxPosPct?.toFixed(3) ?? "", p.pairMaxPosMM?.toFixed(1) ?? "", p.pairExitDays?.toFixed(2) ?? "",
+      pairStats.get(p.key)?.corr?.toFixed(3) ?? "", pairStats.get(p.key)?.z?.toFixed(2) ?? "",
+      p.pairMaxPosPct?.toFixed(3) ?? "", p.pairMaxPosMM?.toFixed(1) ?? "", p.pairExitDays?.toFixed(2) ?? "",
     ]));
     const csv = [headers.join(","), ...dataRows.map((r) => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -473,7 +481,7 @@ export default function LiquidityCapacity() {
     a.download = `liquidity-pairs-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [pairResult, corrMap, bucketName]);
+  }, [pairResult, pairStats, bucketName]);
 
   // ── Tier editing
   const setTierPct = useCallback((idx: number, pct: number) => {
@@ -872,6 +880,7 @@ export default function LiquidityCapacity() {
                     <th className="text-right px-2 py-1 font-mono" title="Smaller leg's basis ADV (after haircut)"><SortHeader label="ADV B" columnKey="advB" sort={pairSort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title="Smaller ÷ larger leg ADV — 100% = perfectly matched liquidity"><SortHeader label="ADV ratio" columnKey="advRatio" sort={pairSort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title={`Pearson correlation of daily returns over the last ${ADV_WINDOW} sessions (— = bars not cached server-side yet)`}><SortHeader label={`Corr ${ADV_WINDOW}d`} columnKey="corr" sort={pairSort} align="right" /></th>
+                    <th className="text-right px-2 py-1 font-mono" title={`Z-score of the current A/B price ratio vs its own last ${ADV_WINDOW} sessions. + = A rich vs B (fade: short A / long B), − = A cheap. Sorts by magnitude.`}><SortHeader label="Spread z" columnKey="spreadZ" sort={pairSort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title="Equal-sized legs: the smaller leg's max position binds the pair"><SortHeader label="Pair max %" columnKey="pairMaxPosPct" sort={pairSort} align="right" /></th>
                     <th className="text-right px-2 py-1 font-mono" title="Pair position per leg, in dollars">Pair max $</th>
                     <th className="text-right px-2 py-1 font-mono" title="Days to unwind the pair — the slower leg"><SortHeader label="Exit days" columnKey="pairExitDays" sort={pairSort} align="right" /></th>
@@ -879,7 +888,7 @@ export default function LiquidityCapacity() {
                 </thead>
                 <tbody>
                   {pairGroups.map((g) => (
-                    <PairGroupRows key={g.label} label={g.label} pairs={g.pairs} corrMap={corrMap} bucketName={bucketName}
+                    <PairGroupRows key={g.label} label={g.label} pairs={g.pairs} stats={pairStats} bucketName={bucketName}
                       isCollapsed={pairCollapse.isCollapsed(g.label)} onToggle={pairCollapse.toggle} />
                   ))}
                 </tbody>
@@ -903,10 +912,10 @@ export default function LiquidityCapacity() {
 // summary counts and CSV always cover the full filtered set.
 const MAX_RENDER_PER_GROUP = 400;
 
-function PairGroupRows({ label, pairs, corrMap, bucketName, isCollapsed, onToggle }: {
+function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle }: {
   label: string;
   pairs: LiquidityPair[];
-  corrMap: Map<string, number | null>;
+  stats: Map<string, { corr: number | null; z: number | null }>;
   bucketName: (b: number) => string;
   isCollapsed: boolean;
   onToggle: (key: string) => void;
@@ -916,14 +925,16 @@ function PairGroupRows({ label, pairs, corrMap, bucketName, isCollapsed, onToggl
     <>
       <tr className="border-t border-border bg-card/60 cursor-pointer select-none hover:bg-card/80"
         onClick={() => onToggle(label)} data-testid={`liqcap-pairgroup-${label}`}>
-        <td colSpan={9} className="px-2 py-1 font-bold text-[11px]">
+        <td colSpan={10} className="px-2 py-1 font-bold text-[11px]">
           <span className="inline-block w-3 text-muted-foreground">{isCollapsed ? "▸" : "▾"}</span>
           {label}
           <span className="ml-2 font-normal text-[10px] text-muted-foreground">· {pairs.length} pair{pairs.length === 1 ? "" : "s"}</span>
         </td>
       </tr>
       {!isCollapsed && shown.map((p) => {
-        const corr = corrMap.get(p.key);
+        const st = stats.get(p.key);
+        const corr = st?.corr;
+        const z = st?.z;
         return (
           <tr key={p.key} className="border-t border-border hover:bg-card/40 cursor-pointer" data-testid={`liqcap-pair-${p.a.ticker}-${p.b.ticker}`}
             onClick={() => navigateToPairs(p.a.display, p.b.display)} title={`${p.a.name}  vs  ${p.b.name} — open in Pairs`}>
@@ -937,6 +948,10 @@ function PairGroupRows({ label, pairs, corrMap, bucketName, isCollapsed, onToggl
             <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.b.effAdvMM)}</td>
             <td className="px-2 py-1 text-right">{(p.advRatio * 100).toFixed(0)}%</td>
             <td className={`px-2 py-1 text-right ${corr != null && corr >= 0.7 ? "text-emerald-400" : corr != null && corr < 0.3 ? "text-rose-400" : ""}`}>{fmtCorr(corr)}</td>
+            <td className={`px-2 py-1 text-right ${z != null && Math.abs(z) >= 2 ? "font-bold text-amber-400" : z != null && Math.abs(z) >= 1 ? "text-amber-300/70" : "text-muted-foreground"}`}
+              title={z == null ? undefined : z > 0 ? `${p.a.display} rich vs ${p.b.display} — fade: short ${p.a.display} / long ${p.b.display}` : `${p.a.display} cheap vs ${p.b.display} — fade: long ${p.a.display} / short ${p.b.display}`}>
+              {z == null ? "—" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}`}
+            </td>
             <td className="px-2 py-1 text-right font-bold">{p.pairMaxPosPct == null ? "—" : `${p.pairMaxPosPct.toFixed(2)}%`}</td>
             <td className="px-2 py-1 text-right text-muted-foreground">{fmtUsdMM(p.pairMaxPosMM)}</td>
             <td className="px-2 py-1 text-right">{fmtDays(p.pairExitDays)}</td>
@@ -945,7 +960,7 @@ function PairGroupRows({ label, pairs, corrMap, bucketName, isCollapsed, onToggl
       })}
       {!isCollapsed && shown.length < pairs.length && (
         <tr className="border-t border-border">
-          <td colSpan={9} className="px-2 py-1 text-[10px] text-muted-foreground italic" data-testid={`liqcap-pairs-truncated-${label}`}>
+          <td colSpan={10} className="px-2 py-1 text-[10px] text-muted-foreground italic" data-testid={`liqcap-pairs-truncated-${label}`}>
             … {(pairs.length - shown.length).toLocaleString()} more — tighten the filters or export the CSV for the full list.
           </td>
         </tr>
