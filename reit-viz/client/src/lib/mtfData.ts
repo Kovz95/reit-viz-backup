@@ -18,6 +18,7 @@
 // prior completed session" for both venues.
 
 import { fetchIntradayBars, type IntradayBar } from "@/lib/fetchIntradayBars";
+import { boundedSet } from "@/lib/boundedCache";
 import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { weeklyDownsample } from "@/lib/weeklyDownsample";
 import { dateOfTimestamp } from "@/lib/chartFrequency";
@@ -101,6 +102,7 @@ export interface DailySeriesInput {
 // scanner accepts arbitrary Yahoo symbols (SPY, XLRE, ^TNX, …) typed into the
 // pickers. Yahoo results are promise-cached so pair combos sharing a leg
 // don't refetch it.
+const YAHOO_DAILY_CACHE_CAP = 150; // full-history series; eviction = refetch later
 const yahooDailyCache = new Map<string, Promise<DailySeriesInput | null>>();
 
 export async function fetchDailyAnySymbol(ticker: string): Promise<DailySeriesInput | null> {
@@ -131,7 +133,7 @@ export async function fetchDailyAnySymbol(ticker: string): Promise<DailySeriesIn
         return null;
       }
     })();
-    yahooDailyCache.set(key, p);
+    boundedSet(yahooDailyCache, key, p, YAHOO_DAILY_CACHE_CAP);
   }
   return p;
 }

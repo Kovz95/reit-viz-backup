@@ -369,6 +369,21 @@ export default function LiquidityCapacity() {
   const grpCollapse = useCollapsedGroups("reit-viz:liquidity-capacity:collapsed-v1");
   const collapsed = grpCollapse.collapsed;
   const toggleGroup = grpCollapse.toggle;
+
+  // Row budget shared by all expanded groups, allocated in render order —
+  // collapsed groups render no rows so they don't consume it. Each group's
+  // own "… N more" note covers whatever the budget trims.
+  const renderCaps = useMemo(() => {
+    const caps = new Map<string, number>();
+    let budget = MAX_RENDER_TOTAL;
+    for (const g of groups) {
+      if (groupBy !== "flat" && collapsed.has(g.key)) { caps.set(g.key, MAX_RENDER_PER_GROUP); continue; }
+      const cap = Math.max(0, Math.min(MAX_RENDER_PER_GROUP, budget));
+      caps.set(g.key, cap);
+      budget -= Math.min(g.rows.length, cap);
+    }
+    return caps;
+  }, [groups, collapsed, groupBy]);
   const allCollapsed = groupBy !== "flat" && grpCollapse.allCollapsed(groups.map((g) => g.key));
   const collapseAll = useCallback(() => {
     grpCollapse.toggleAll(groups.map((g) => g.key));
@@ -865,7 +880,8 @@ export default function LiquidityCapacity() {
                 <tbody>
                   {groups.map((g) => (
                     <GroupRows key={g.key} group={g} groupBy={groupBy} colCount={colCount} bucketName={bucketName} isGlobal={isGlobal}
-                      isCollapsed={collapsed.has(g.key)} onToggle={toggleGroup} />
+                      isCollapsed={collapsed.has(g.key)} onToggle={toggleGroup}
+                      renderCap={renderCaps.get(g.key) ?? MAX_RENDER_PER_GROUP} />
                   ))}
                 </tbody>
               </table>
@@ -941,6 +957,9 @@ export default function LiquidityCapacity() {
 // Render cap per group so the ~9.4k-name global universe stays responsive; the
 // summary counts and CSV always cover the full filtered set.
 const MAX_RENDER_PER_GROUP = 400;
+// Total row budget across all expanded groups — Global mode can put ~9.4k
+// rows in scope, and per-group caps alone still let the DOM balloon.
+const MAX_RENDER_TOTAL = 1500;
 
 function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle }: {
   label: string;
@@ -1006,7 +1025,7 @@ function PairGroupRows({ label, pairs, stats, bucketName, isCollapsed, onToggle 
   );
 }
 
-function GroupRows({ group, groupBy, colCount, bucketName, isGlobal, isCollapsed, onToggle }: {
+function GroupRows({ group, groupBy, colCount, bucketName, isGlobal, isCollapsed, onToggle, renderCap }: {
   group: { key: string; label: string; sublabel?: string; rows: Row[] };
   groupBy: "bucket" | "sector" | "flat";
   colCount: number;
@@ -1014,8 +1033,10 @@ function GroupRows({ group, groupBy, colCount, bucketName, isGlobal, isCollapsed
   isGlobal: boolean;
   isCollapsed: boolean;
   onToggle: (key: string) => void;
+  renderCap: number;
 }) {
-  const shown = group.rows.length > MAX_RENDER_PER_GROUP ? group.rows.slice(0, MAX_RENDER_PER_GROUP) : group.rows;
+  const cap = Math.min(MAX_RENDER_PER_GROUP, renderCap);
+  const shown = group.rows.length > cap ? group.rows.slice(0, cap) : group.rows;
   return (
     <>
       {groupBy !== "flat" && (

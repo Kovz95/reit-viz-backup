@@ -17,6 +17,8 @@
 // crashing. Results are cached per ticker (these loaders run in tight per-ticker
 // loops across hundreds of names).
 
+import { boundedSet } from "@/lib/boundedCache";
+
 export interface RawTicker {
   dates: string[];
   metrics: Record<string, any[]>;
@@ -26,6 +28,9 @@ export type SparsePair = [number, number];
 
 const _cache = new Map<string, RawTicker | null>();
 const _inFlight = new Map<string, Promise<RawTicker | null>>();
+// Full {dates, metrics} payloads — bound the cache so long sessions over many
+// tickers don't accumulate hundreds of them (eviction just refetches later).
+const _CACHE_CAP = 100;
 
 /** Drop the in-memory per-ticker records so the next fetch re-reads IDB/API.
  *  Called by dataService's cache clears (data uploads/wipes) — without this,
@@ -114,7 +119,7 @@ async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
       const { idbGetFresh } = await import("@/lib/priceCacheIDB");
       const cached = (await idbGetFresh(`td:${ticker}`)) as RawTicker | null;
       if (cached && Array.isArray(cached.dates) && cached.dates.length > 0) {
-        _cache.set(ticker, cached);
+        boundedSet(_cache, ticker, cached, _CACHE_CAP);
         _inFlight.delete(ticker);
         return cached;
       }
@@ -145,7 +150,7 @@ async function fetchTickerRawBase(ticker: string): Promise<RawTicker | null> {
       }
     }
 
-    _cache.set(ticker, result);
+    boundedSet(_cache, ticker, result, _CACHE_CAP);
     _inFlight.delete(ticker);
     return result;
   })();

@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/RSIRegimeOptimizer-DgnHrF3m.js on 2026-06-11
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
+import { yieldMain } from "@/lib/yieldMain";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -445,6 +446,7 @@ export default function RSIRegimeOptimizer() {
         const configs: RsiConfig[] = [];
 
         for (const period of RSI_PERIODS) {
+          await yieldMain(); // keep the tab responsive between period sweeps
           let rsiValues: (number | null)[];
           if (freqForCalc.endsWith("_on_daily") && weeklyExpanded) {
             const wRsi = computeRSI((weeklyExpanded as any).prices as number[], period);

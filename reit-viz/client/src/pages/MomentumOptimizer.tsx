@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/MomentumOptimizer-rZsUBkFq.js on 2026-06-11
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
+import { yieldMain } from "@/lib/yieldMain";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -654,6 +655,7 @@ export default function MomentumOptimizer() {
         const configResults: MomentumConfigResult[] = [];
 
         for (const horizonCfg of MOMENTUM_HORIZONS) {
+          await yieldMain(); // keep the tab responsive between horizon sweeps
           const horizonDays = fKey === "weekly"
             ? Math.max(1, Math.round(horizonCfg.days / 5))
             : fKey === "monthly"

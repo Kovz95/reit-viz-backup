@@ -8,6 +8,7 @@
 // (the UnifiedTickerPicker lets users type arbitrary Yahoo symbols).
 
 import { getDates, getTickerRaw } from "@/lib/dataService";
+import { boundedSet } from "@/lib/boundedCache";
 
 export interface RatioBar {
   date: string;
@@ -29,6 +30,7 @@ export interface PairRatioData {
 // Yahoo fallback results are cached per ticker so a pair-combo run over many
 // pairs sharing a leg doesn't refetch it. Workbook data is already cached
 // inside dataService.
+const YAHOO_LEG_CACHE_CAP = 300; // close series per leg; eviction = refetch later
 const yahooLegCache = new Map<string, Promise<{ dates: string[]; closes: number[] } | null>>();
 
 function fetchYahooLeg(ticker: string): Promise<{ dates: string[]; closes: number[] } | null> {
@@ -50,7 +52,7 @@ function fetchYahooLeg(ticker: string): Promise<{ dates: string[]; closes: numbe
         return null;
       }
     })();
-    yahooLegCache.set(key, p);
+    boundedSet(yahooLegCache, key, p, YAHOO_LEG_CACHE_CAP);
   }
   return p;
 }

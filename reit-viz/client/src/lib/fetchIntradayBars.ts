@@ -10,7 +10,10 @@ export interface IntradayBar {
   volume: number;
 }
 
+import { boundedSet } from "@/lib/boundedCache";
+
 const CACHE_TTL_MS = 15 * 60 * 1000;
+const CACHE_CAP = 60; // TTL alone never deletes — bound stale entries too
 const cache = new Map<string, { at: number; bars: IntradayBar[] }>();
 const inflight = new Map<string, Promise<IntradayBar[]>>();
 
@@ -46,7 +49,7 @@ export async function fetchIntradayBars(
           volume: data.volumes?.[i] ?? 0,
         });
       }
-      cache.set(key, { at: Date.now(), bars });
+      boundedSet(cache, key, { at: Date.now(), bars }, CACHE_CAP);
       return bars;
     } catch {
       return [];

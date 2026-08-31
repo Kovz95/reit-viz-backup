@@ -8,6 +8,7 @@
 
 import type { ClassificationField } from "@/lib/reclassificationOverrides";
 import { parseMultipleMetric } from "@/lib/tickerData";
+import { boundedSet } from "@/lib/boundedCache";
 
 // ---- Types ----
 export interface TickerMeta {
@@ -95,6 +96,10 @@ let tickersCache: TickerMeta[] | null = null;
 let datesCache: string[] | null = null;
 let eventsCache: Record<string, any> | null = null;
 const tickerDataCache = new Map<string, RawTickerData>();
+// Fetch-path entries are evictable (a refetch restores them); injected/uploaded
+// entries are pinned — they have no server source, eviction would lose them.
+const TICKER_DATA_CACHE_CAP = 100;
+const pinnedTickerData = new Set<string>();
 
 // ---- Cache injection (for client-side parsed uploads) ----
 export function injectTickers(tickers: TickerMeta[], mode: "replace" | "merge" = "replace") {
@@ -136,10 +141,12 @@ export function injectTickerData(symbol: string, data: RawTickerData) {
       delete clean[pseudo];
     }
   }
+  pinnedTickerData.add(symbol.toUpperCase());
   tickerDataCache.set(symbol.toUpperCase(), clean);
 }
 export function clearTickerDataCache() {
   tickerDataCache.clear();
+  pinnedTickerData.clear();
   void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
   // The parallel tickerData loader keeps its own in-memory records (dynamic
   // import — tickerData imports this module, so a static import would cycle).
@@ -151,6 +158,7 @@ export function clearAllCaches() {
   datesCache = null;
   eventsCache = null;
   tickerDataCache.clear();
+  pinnedTickerData.clear();
   void import("@/lib/priceCacheIDB").then(({ idbClearPriceCache }) => idbClearPriceCache()).catch(() => {});
   void import("@/lib/tickerData").then(({ clearRawTickerCache }) => clearRawTickerCache()).catch(() => {});
 }
@@ -270,6 +278,8 @@ export async function injectFundamentalSheets(
       }
     }
 
+    // Uploaded fundamentals have no server source — pin so eviction skips them.
+    pinnedTickerData.add(symbol);
     tickerDataCache.set(symbol, existing);
 
     // Also update the ticker's metric list in tickersCache
@@ -662,7 +672,7 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
         const { idbGetFresh } = await import("@/lib/priceCacheIDB");
         const cached = await idbGetFresh(`ds:${key}`);
         if (cached && typeof cached === "object" && Object.keys(cached as object).length > 0) {
-          tickerDataCache.set(key, cached as RawTickerData);
+          boundedSet(tickerDataCache, key, cached as RawTickerData, TICKER_DATA_CACHE_CAP, pinnedTickerData);
           return cached as RawTickerData;
         }
       } catch { /* IDB unavailable — network path below */ }
@@ -701,7 +711,7 @@ async function getTickerRawBase(key: string): Promise<RawTickerData> {
         tupleData = await yahooRawForKey(key);
       }
 
-      tickerDataCache.set(key, tupleData);
+      boundedSet(tickerDataCache, key, tupleData, TICKER_DATA_CACHE_CAP, pinnedTickerData);
       if (Object.keys(tupleData).length > 0) {
         void import("@/lib/priceCacheIDB").then(({ idbPut }) => idbPut(`ds:${key}`, tupleData)).catch(() => {});
       }

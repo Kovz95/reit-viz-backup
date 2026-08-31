@@ -1,6 +1,7 @@
 // Reconstructed from recovered-bundle/ComboOptimizer-DeA6DroV.js on 2026-06-11
 
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
+import { yieldMain } from "@/lib/yieldMain";
 import React, { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { usePersistedState } from "@/lib/persistedState";
 import { useBaskets } from "@/lib/useBaskets";
@@ -809,6 +810,7 @@ export default function ComboOptimizer() {
         };
 
         for (const trigger of activeTriggers) {
+          await yieldMain(); // keep the tab responsive between trigger sweeps
           const signalIndices = detectTriggerSignals(trigger, prices, indCache);
           if (signalIndices.length === 0) continue;
           totalTriggerCount += signalIndices.length;
@@ -860,6 +862,7 @@ export default function ComboOptimizer() {
               const filt1 = allFilters[fi];
               const filtered1 = signalIndices.filter(i => evalFilterCondition(filt1, i, prices, indCache) === true);
               if (filtered1.length < minSignals) continue;
+              await yieldMain(); // filters² block — yield once per outer filter
               for (let fj = fi + 1; fj < allFilters.length; fj++) {
                 const filt2 = allFilters[fj];
                 const filtered2 = filtered1.filter(i => evalFilterCondition(filt2, i, prices, indCache) === true);

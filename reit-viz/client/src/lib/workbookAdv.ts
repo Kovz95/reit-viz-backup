@@ -7,6 +7,7 @@
 // switching tabs / remounting doesn't refire the batch. The server keeps its own
 // longer-lived cache, so a warm call returns near-instantly.
 import { useEffect, useState } from "react";
+import { boundedSet } from "@/lib/boundedCache";
 
 export interface AdvEntry {
   advUsdMM: number | null;
@@ -27,6 +28,7 @@ export interface AdvEntry {
 
 export type AdvMap = Map<string, AdvEntry>;
 
+const _MEMO_CAP = 20; // one entry per distinct symbol-set+window — bound the churn
 const _memo = new Map<string, Promise<AdvMap>>();
 
 function keyFor(symbols: string[], window: number): string {
@@ -58,7 +60,7 @@ export function loadWorkbookAdv(symbols: string[], window = 90): Promise<AdvMap>
       _memo.delete(key); // allow retry on next mount after a failure
       throw err;
     });
-    _memo.set(key, p);
+    boundedSet(_memo, key, p, _MEMO_CAP);
   }
   return p;
 }
@@ -70,7 +72,7 @@ export function refreshWorkbookAdv(symbols: string[], window = 90): Promise<AdvM
     _memo.delete(key);
     throw err;
   });
-  _memo.set(key, p);
+  boundedSet(_memo, key, p, _MEMO_CAP);
   return p;
 }
 

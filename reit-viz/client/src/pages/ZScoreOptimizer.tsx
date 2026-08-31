@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/ZScoreOptimizer-Dl9PXr46.js on 2026-06-16
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
+import { yieldMain } from "@/lib/yieldMain";
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
   computeForwardProfile,
@@ -796,6 +797,7 @@ export default function ZScoreOptimizer() {
         const windowResults: WindowResult[] = [];
         for (const w of CANDIDATE_WINDOWS) {
           if (w > metricSeries.length * 0.8) continue;
+          await yieldMain(); // keep the tab responsive between window sweeps
           let bestForW: WindowResult | null = null;
           for (const dd of dList) {
             const wr = analyzeWindow(metricSeries, priceSeries, w, buyThreshold, sellThreshold, targetReturn, band, signalType, weeklyCloses, weeklyResult, transform, dd ?? 0.4);

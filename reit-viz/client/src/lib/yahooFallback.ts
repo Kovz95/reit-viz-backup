@@ -20,6 +20,10 @@ export interface YahooDaily {
   volumes: number[];
 }
 
+import { boundedSet } from "@/lib/boundedCache";
+
+// Bounded: full-history OHLCV per symbol; eviction just refetches later.
+const YAHOO_CACHE_CAP = 150;
 const yahooCache = new Map<string, Promise<YahooDaily | null>>();
 
 /** Fetch normalized daily OHLCV for an arbitrary Yahoo symbol, or null if none. */
@@ -49,7 +53,7 @@ export function fetchYahooDaily(symbol: string): Promise<YahooDaily | null> {
         return null;
       }
     })();
-    yahooCache.set(key, p);
+    boundedSet(yahooCache, key, p, YAHOO_CACHE_CAP);
   }
   return p;
 }

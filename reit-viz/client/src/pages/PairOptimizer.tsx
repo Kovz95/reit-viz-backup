@@ -1,5 +1,6 @@
 // Reconstructed from recovered-bundle/PairOptimizer-Df5S8y_J.js on 2026-06-11
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
+import { yieldMain } from "@/lib/yieldMain";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { usePersistedState } from "@/lib/persistedState";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
@@ -527,6 +528,9 @@ export default function PairOptimizer() {
       for (let i = 0; i < pairs.length && !cancelRef.current; i++) {
         const [pA, pB] = pairs[i];
         setProgress({ current: i + 1, total: pairs.length, label: `${pA}/${pB}` });
+        // Macrotask yield: with warm caches runAnalysis resolves in microtasks
+        // only, so hundreds of pairs would sweep back-to-back without a paint.
+        await yieldMain();
         const result = await runAnalysis(
           pA, pB, selectedMetric, dates,
           targetReturn, buyThreshold, sellThreshold,
