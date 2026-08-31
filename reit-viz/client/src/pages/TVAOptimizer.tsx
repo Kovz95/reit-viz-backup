@@ -49,151 +49,31 @@ const EvalResultPanel = EvaluatorPanelResult;
 // tva compute function
 const computeTva = tvaCompute as any;
 
-// ── Constants ──────────────────────────────────────────────────────────────────
-
-const SIGNAL_TYPES = [
-  {
-    key: "regime",
-    label: "Regime Flip",
-    description: "os crosses 0 (WMA-SMA trend oscillator)",
-  },
-  {
-    key: "threshold_cross",
-    label: "Threshold Cross",
-    description: "bull/bear pressure crosses k × |envelope|",
-  },
-  {
-    key: "divergence",
-    label: "Bull / Bear Divergence",
-    description: "bullPressure crosses bearPressure",
-  },
-];
-
-const LENGTH_OPTIONS = [10, 15, 20, 30, 50];
-const SMO_OPTIONS = [3, 5, 10];
-const MULT_OPTIONS = [3, 5, 7, 10];
-const THRESHOLD_OPTIONS = [0.3, 0.5, 0.7, 0.9];
-const MIN_HISTORY_DAILY = 252;
-const MIN_HISTORY_WEEKLY = 52;
-const MIN_SIGNALS = 5;
-const TOP_N = 6;
-
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-interface TvaParams {
-  length: number;
-  smo: number;
-  mult: number;
-  threshold: number;
-  signalType: string;
-}
-
-interface TvaDirectionResult {
-  direction: "long" | "short";
-  summary: any;
-  composite: any;
-  profiles: any[];
-}
-
-interface TvaConfigResult {
-  length: number;
-  smo: number;
-  mult: number;
-  threshold: number;
-  signalType: string;
-  configLabel: string;
-  directions: TvaDirectionResult[];
-  bestDirection: "long" | "short";
-  bestScore: number;
-}
-
-interface TvaPriceContext {
-  prices: number[];
-  highs: number[];
-  lows: number[];
-  volumes: number[] | null;
-  dates: string[];
-  globalIndices: number[];
-  benchmarkPrices: null;
-  mode: "single" | "pair";
-  pairLegA?: string;
-  pairLegB?: string;
-}
-
-interface TvaTickerResult {
-  ticker: string;
-  name: string;
-  configs: TvaConfigResult[];
-  bestConfigLabel: string;
-  bestDirection: "long" | "short";
-  bestScore: number;
-  currentOs: number;
-  currentBullP: number;
-  currentBearP: number;
-  priceContext: TvaPriceContext;
-}
-
-interface SkippedEntry {
-  ticker: string;
-  reason: string;
-}
-
-// ── Signal detection ───────────────────────────────────────────────────────────
-
-function detectTvaSignals(prices: number[], volumes: number[], params: TvaParams) {
-  const tva = (computeTva as any)(prices, volumes, params.length, params.smo, params.mult);
-  const longIdx: number[] = [];
-  const shortIdx: number[] = [];
-
-  for (let x = Math.max(params.length, params.smo) + 1; x < prices.length; x++) {
-    if (params.signalType === "regime") {
-      const prev = tva.os[x - 1];
-      const cur = tva.os[x];
-      if (!Number.isFinite(prev) || !Number.isFinite(cur)) continue;
-      if (prev <= 0 && cur > 0) longIdx.push(x);
-      else if (prev >= 0 && cur < 0) shortIdx.push(x);
-    } else if (params.signalType === "threshold_cross") {
-      const bPrev = tva.bullPressure[x - 1];
-      const bCur = tva.bullPressure[x];
-      const rPrev = tva.bearPressure[x - 1];
-      const rCur = tva.bearPressure[x];
-      const aPrev = tva.a[x - 1];
-      const aCur = tva.a[x];
-      const bPrev2 = tva.b[x - 1];
-      const bCur2 = tva.b[x];
-      if (!Number.isFinite(bPrev) || !Number.isFinite(bCur) || !Number.isFinite(aPrev) || !Number.isFinite(aCur)) continue;
-      const threshBullPrev = Math.abs(aPrev) * params.threshold;
-      const threshBullCur = Math.abs(aCur) * params.threshold;
-      const threshBearPrev = Math.abs(bPrev2) * params.threshold;
-      const threshBearCur = Math.abs(bCur2) * params.threshold;
-      if (bPrev <= threshBullPrev && bCur > threshBullCur) longIdx.push(x);
-      if (rPrev <= threshBearPrev && rCur > threshBearCur) shortIdx.push(x);
-    } else if (params.signalType === "divergence") {
-      const bPrev = tva.bullPressure[x - 1];
-      const bCur = tva.bullPressure[x];
-      const rPrev = tva.bearPressure[x - 1];
-      const rCur = tva.bearPressure[x];
-      if (!Number.isFinite(bPrev) || !Number.isFinite(bCur) || !Number.isFinite(rPrev) || !Number.isFinite(rCur)) continue;
-      const diffPrev = bPrev - rPrev;
-      const diffCur = bCur - rCur;
-      if (diffPrev <= 0 && diffCur > 0) longIdx.push(x);
-      else if (diffPrev >= 0 && diffCur < 0) shortIdx.push(x);
-    }
-  }
-
-  const lastFinite = (arr: number[]) => {
-    for (let i = arr.length - 1; i >= 0; i--) if (Number.isFinite(arr[i])) return arr[i];
-    return NaN;
-  };
-
-  return {
-    longIdx,
-    shortIdx,
-    currentOs: lastFinite(tva.os),
-    currentBullP: lastFinite(tva.bullPressure),
-    currentBearP: lastFinite(tva.bearPressure),
-  };
-}
+// Sweep kernel + grid constants/types now live in lib/tvaSweep.ts, shared
+// with workers/tvaSweep.worker.ts.
+import {
+  SIGNAL_TYPES,
+  LENGTH_OPTIONS,
+  SMO_OPTIONS,
+  MULT_OPTIONS,
+  THRESHOLD_OPTIONS,
+  MIN_HISTORY_DAILY,
+  MIN_HISTORY_WEEKLY,
+  MIN_SIGNALS,
+  TOP_N,
+  detectTvaSignals,
+  formatOsSignal,
+  runTvaSweep,
+  type TvaParams,
+  type TvaDirectionResult,
+  type TvaConfigResult,
+  type TvaPriceContext,
+  type TvaTickerResult,
+  type SkippedEntry,
+  type TvaSweepPayload,
+  type TvaSweepResult,
+} from "@/lib/tvaSweep";
+import { createSweepPool } from "@/lib/sweepPool";
 
 /** Yahoo daily volumes keyed by date — the workbook has no daily Volume
  *  series, so this is the only source that lets TVA run on plain tickers. */
@@ -215,12 +95,8 @@ async function fetchYahooVolumesByDate(ticker: string): Promise<Map<string, numb
   }
 }
 
-function formatOsSignal(os: number | null | undefined): string {
-  if (os == null || !Number.isFinite(os)) return "—";
-  if (os > 0) return "BULL";
-  if (os < 0) return "BEAR";
-  return "FLAT";
-}
+
+
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -516,11 +392,18 @@ export default function TVAOptimizer() {
 
     setProgress({ current: 0, total: tickerEntries.length });
 
-    const allResults: TvaTickerResult[] = [];
     const allSkipped: SkippedEntry[] = [];
     const globalDates = (runMode === "pair" || runMode === "pairCombo") ? await (getDates as any)() : [];
 
-    for (let s = 0; s < tickerEntries.length && !cancelRef.current; s++) {
+    // Sweeps run in Web Workers (HARSI/Oscillators pattern); slots keep the
+    // results table in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/tvaSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (TvaTickerResult | null)[] = new Array(tickerEntries.length).fill(null);
+    let completed = 0;
+    const flush = () => setResults(slots.filter((r): r is TvaTickerResult => r != null));
+
+    const runItem = async (s: number) => {
       const entry = tickerEntries[s];
       try {
         const freq = (runMode === "pair" || runMode === "pairCombo") ? "daily" : resampleMode;
@@ -537,12 +420,12 @@ export default function TVAOptimizer() {
           const ratio = await getYahooPairsRatio(legA, legB, globalDates);
           if (!ratio || ratio.indices.length < MIN_HISTORY_DAILY) {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient pair history" });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           const rawA = await (fetchTickerOHLCV as any)(legA);
           if (!rawA) {
             allSkipped.push({ ticker: entry.ticker, reason: `no leg A data (${legA})` });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           const filteredA = (filterByDateRange as any)(rawA, dateRange);
           const volMap = new Map<string, number>();
@@ -554,7 +437,7 @@ export default function TVAOptimizer() {
           const volArr = workDates.map((d: string) => volMap.get(d) ?? 0);
           if (volArr.reduce((a: number, v: number) => a + v, 0) <= 0) {
             allSkipped.push({ ticker: entry.ticker, reason: `no leg A volume (${legA})` });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           workPrices = ratio.prices.slice(); workVolumes = volArr;
           dailyPrices = workPrices; workGlobalIndices = ratio.indices.slice();
@@ -562,7 +445,7 @@ export default function TVAOptimizer() {
           const data = await (getBasketOhlc as any)(combinedBasketDef, dateRange);
           if (!data || data.closes.length < MIN_HISTORY_DAILY) {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient basket history" });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           workPrices = data.closes; workVolumes = data.volumes; dailyPrices = data.closes;
           rawVolumes2 = data.volumes; workDates = data.priceDates; workGlobalIndices = [];
@@ -570,12 +453,12 @@ export default function TVAOptimizer() {
           const raw = await (fetchTickerOHLCV as any)(entry.ticker);
           if (!raw) {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient history" });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           const filtered = (filterByDateRange as any)(raw, dateRange);
           if (filtered.adjCloses.length < MIN_HISTORY_DAILY) {
             allSkipped.push({ ticker: entry.ticker, reason: "insufficient history" });
-            setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+            return;
           }
           if (filtered.volumes.reduce((a: number, v: number) => a + (Number.isFinite(v) ? v : 0), 0) <= 0) {
             // The workbook carries NO daily Volume series (only avg-volume
@@ -587,7 +470,7 @@ export default function TVAOptimizer() {
               filtered.volumes = yv;
             } else {
               allSkipped.push({ ticker: entry.ticker, reason: "no volume (workbook or Yahoo)" });
-              setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+              return;
             }
           }
           rawVolumes2 = filtered.volumes;
@@ -596,7 +479,7 @@ export default function TVAOptimizer() {
             weeklyResult = (weeklyDownsamplePrices as any)(filtered.adjCloses, filtered.dates, (frequency as string) === "monthly_on_daily" ? "monthly" : undefined);
             if (weeklyResult.prices.length < ((frequency as string) === "monthly_on_daily" ? 24 : MIN_HISTORY_WEEKLY)) {
               allSkipped.push({ ticker: entry.ticker, reason: "insufficient weekly history" });
-              setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+              return;
             }
             const weeklyVols = weeklyResult.weekIndex.map((wi: number) => filtered.volumes[wi] ?? 0);
             workPrices = weeklyResult.prices; workVolumes = weeklyVols;
@@ -605,7 +488,7 @@ export default function TVAOptimizer() {
             weeklyResampled = (weeklyDownsample as any)(filtered, freq);
             if ((freq === "weekly" || freq === "monthly") && weeklyResampled.adjCloses.length < (freq === "monthly" ? 24 : MIN_HISTORY_WEEKLY)) {
               allSkipped.push({ ticker: entry.ticker, reason: "insufficient weekly history" });
-              setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+              return;
             }
             workPrices = weeklyResampled.adjCloses; workVolumes = weeklyResampled.volumes;
             dailyPrices = filtered.adjCloses;
@@ -627,63 +510,20 @@ export default function TVAOptimizer() {
           }
         }
 
-        // Grid search
-        const configs: any[] = [];
-        for (const sigType of enabledSignalTypes) {
-          for (const len of LENGTH_OPTIONS) {
-            for (const smoV of SMO_OPTIONS) {
-              for (const multV of MULT_OPTIONS) {
-                const thresholds = sigType === "threshold_cross" ? THRESHOLD_OPTIONS : [0];
-                for (const thresh of thresholds) {
-                  const params: TvaParams = { length: len, smo: smoV, mult: multV, threshold: thresh, signalType: sigType };
-                  const signals = detectTvaSignals(workPrices, workVolumes, params);
-                  const dirResults: TvaDirectionResult[] = [];
-                  for (const dir of ["long", "short"] as const) {
-                    const sigIdx = dir === "long" ? signals.longIdx : signals.shortIdx;
-                    if (sigIdx.length < MIN_SIGNALS) continue;
-                    const side = dir === "long" ? "buy" : "sell";
-                    const profiles = sigIdx.map((ye: number) => {
-                      let dailyIdx: number;
-                      if ((frequency as string).endsWith("_on_daily") && weeklyResult) {
-                        dailyIdx = weeklyResult.weekIndex[ye] ?? -1;
-                      } else if ((freq === "weekly" || freq === "monthly") && weeklyResampled) {
-                        dailyIdx = (getDailyIndexFromWeekly as any)(ye, weeklyResampled);
-                      } else {
-                        dailyIdx = ye;
-                      }
-                      if (dailyIdx < 0) return null;
-                      return (computeForwardProfile as any)(dailyPrices, dailyIdx, targetReturn, side);
-                    }).filter((p: any) => p !== null);
-                    if (profiles.length < MIN_SIGNALS) continue;
-                    const summary = (summarizeSignals as any)(profiles, side);
-                    const composite = (computeCompositeScore as any)(summary, side);
-                    dirResults.push({ direction: dir, summary, composite, profiles });
-                  }
-                  if (dirResults.length === 0) continue;
-                  const best = dirResults.reduce((a, b) => a.composite.score >= b.composite.score ? a : b);
-                  const label = sigType === "threshold_cross"
-                    ? `${SIGNAL_TYPES.find(s => s.key === sigType)!.label} · L=${len} smo=${smoV} m=${multV} k=${thresh}`
-                    : `${SIGNAL_TYPES.find(s => s.key === sigType)!.label} · L=${len} smo=${smoV} m=${multV}`;
-                  configs.push({ ...params, configLabel: label, directions: dirResults, bestDirection: best.direction, bestScore: best.composite.score });
-                }
-              }
-            }
-          }
-          await new Promise(r => setTimeout(r, 0));
-          if (cancelRef.current) break;
-        }
-
-        configs.sort((a, b) => b.bestScore - a.bestScore);
-        const topConfigs = configs.slice(0, TOP_N);
-        if (topConfigs.length === 0) {
+        // Grid search runs in a worker; inline fallback is the same kernel.
+        const payload: TvaSweepPayload = {
+          workPrices, workVolumes, dailyPrices, weeklyResult, weeklyResampled,
+          frequency: frequency as string, freq, enabledSignalTypes, targetReturn,
+        };
+        const sweep = await sweepPool.run<TvaSweepResult>(
+          { type: "run", payload },
+          () => runTvaSweep(payload),
+        );
+        if (!sweep) {
           allSkipped.push({ ticker: entry.ticker, reason: "no signals met thresholds" });
-          setProgress({ current: s + 1, total: tickerEntries.length }); continue;
+          return;
         }
-
-        const bestConf = topConfigs[0];
-        const bestSignals = detectTvaSignals(workPrices, workVolumes, {
-          length: bestConf.length, smo: bestConf.smo, mult: bestConf.mult, threshold: bestConf.threshold, signalType: bestConf.signalType,
-        });
+        const { topConfigs, bestConfigLabel, bestDirection, bestScore, currentOs, currentBullP, currentBearP } = sweep;
 
         const finalDailyPrices = (runMode === "pair" || runMode === "pairCombo") ? workPrices : dailyPrices;
         let finalDates: string[];
@@ -720,28 +560,41 @@ export default function TVAOptimizer() {
           pairLegB: (runMode === "pair" || runMode === "pairCombo") ? legB : undefined,
         };
 
-        allResults.push({
+        slots[s] = {
           ticker: entry.ticker,
           name: entry.name || entry.ticker,
           configs: topConfigs,
-          bestConfigLabel: bestConf.configLabel,
-          bestDirection: bestConf.bestDirection,
-          bestScore: bestConf.bestScore,
-          currentOs: bestSignals.currentOs,
-          currentBullP: bestSignals.currentBullP,
-          currentBearP: bestSignals.currentBearP,
+          bestConfigLabel,
+          bestDirection,
+          bestScore,
+          currentOs,
+          currentBullP,
+          currentBearP,
           priceContext: priceCtx,
-        });
+        };
       } catch (err: any) {
         allSkipped.push({ ticker: entry.ticker, reason: err?.message || "error" });
+      } finally {
+        completed++;
+        setProgress({ current: completed, total: tickerEntries.length });
+        if (completed % 3 === 0 || completed === tickerEntries.length) flush();
       }
+    };
 
-      setProgress({ current: s + 1, total: tickerEntries.length });
-      if (s % 3 === 2) await new Promise(r => setTimeout(r, 0));
-    }
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, tickerEntries.length) }, async () => {
+        while (nextIdx < tickerEntries.length && !cancelRef.current) {
+          await runItem(nextIdx++);
+        }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
 
     setSkipped(allSkipped);
-    setResults(allResults);
+    flush();
     setRunning(false);
   }, [running, runMode, filteredAllTickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets, filteredTickers, enabledSignalTypes, targetReturn, frequency, resampleMode, dateRange, pairComboPicker.pairs]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out

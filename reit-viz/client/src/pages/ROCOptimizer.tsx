@@ -14,6 +14,24 @@ import { UnifiedTickerPicker } from "@/components/UnifiedTickerPicker";
 import { BasketTickerPill } from "@/components/BasketTickerPill";
 import { buildBacktestResult as buildBacktestResult, EvaluatorPanelResult, EvaluatorPanelLoader } from "@/components/EvaluatorPanel";
 import { computeROC, ROC_SIGNAL_HANDLERS, detectSignals, SIGNAL_META } from "@/lib/rocSignalDetect";
+// Sweep kernel + config grid/types now live in lib/rocSweep.ts, shared with
+// workers/rocSweep.worker.ts.
+import {
+  ZERO_CROSS_PERIODS,
+  FAST_SLOW_PAIRS,
+  THRESHOLD_VALUES,
+  SLOPE_LOOKBACKS,
+  buildConfigLabel,
+  mapWeeklyToDaily,
+  runRocSweep,
+  type RocConfig,
+  type SignalDate,
+  type CategoryResult,
+  type ConfigResult,
+  type RocSweepPayload,
+  type RocSweepResult,
+} from "@/lib/rocSweep";
+import { createSweepPool } from "@/lib/sweepPool";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
 import { usePairComboPicker } from "@/lib/usePairComboPicker";
 import { useFrequency } from "@/lib/useFrequency";
@@ -62,54 +80,8 @@ const BEAR_CATEGORIES = [
   "roc_curv_down",
 ];
 
-const ZERO_CROSS_PERIODS = [5, 10, 14, 20, 30, 50, 100, 200];
-const FAST_SLOW_PAIRS: [number, number][] = [
-  [5, 20],
-  [10, 30],
-  [10, 50],
-  [14, 50],
-  [20, 50],
-  [20, 100],
-  [50, 100],
-  [50, 200],
-];
-const THRESHOLD_VALUES = [0.02, 0.05, 0.1];
-const SLOPE_LOOKBACKS = [3, 5, 10];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-interface RocConfig {
-  signalType: string;
-  period: number;
-  slowPeriod?: number;
-  threshold?: number;
-  slopeLookback?: number;
-}
-
-interface SignalDate {
-  date: string;
-  ret1m: number | null;
-  ret3m: number | null;
-  ret6m: number | null;
-}
-
-interface CategoryResult {
-  category: string;
-  label: string;
-  description: string;
-  summary: any;
-  composite: any;
-  signalDates?: SignalDate[];
-  profiles?: any[];
-}
-
-interface ConfigResult {
-  config: RocConfig;
-  configLabel: string;
-  categories: CategoryResult[];
-  bestCategory: string;
-  bestScore: number;
-}
 
 interface TickerResult {
   ticker: string;
@@ -151,22 +123,6 @@ interface SortState {
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
-function buildConfigLabel(cfg: RocConfig): string {
-  switch (cfg.signalType) {
-    case "zero_cross":
-      return `ROC(${cfg.period}) cross 0`;
-    case "threshold_cross":
-      return `ROC(${cfg.period}) cross ±${pctSigned(cfg.threshold ?? 0.05)}`;
-    case "threshold_reversion":
-      return `ROC(${cfg.period}) ±${pctSigned(cfg.threshold ?? 0.05)} reversion`;
-    case "fast_slow_cross":
-      return `ROC fast=${cfg.period} vs slow=${cfg.slowPeriod ?? 0}`;
-    case "slope_curvature":
-      return `ROC(${cfg.period}) slope/curv lkb=${cfg.slopeLookback ?? 5}`;
-    default:
-      return `ROC(${cfg.period})`;
-  }
-}
 
 function buildShortLabel(cfg: RocConfig): string {
   switch (cfg.signalType) {
@@ -439,21 +395,6 @@ function downsampleWeeklyLocal(prices: number[], dates: string[], mode?: string)
   return { prices: weekPrices, weekIndex: weekIndex };
 }
 
-function mapWeeklyToDaily(
-  period: number,
-  weeklyValues: number[],
-  weekIndex: number[],
-  dailyLength: number
-): number[] {
-  const v = computeROC(weeklyValues, period);
-  const out = new Array(dailyLength).fill(NaN);
-  let c = -1;
-  for (let i = 0; i < dailyLength; i++) {
-    while (c + 1 < weekIndex.length && weekIndex[c + 1] <= i) c++;
-    if (c >= 0 && Number.isFinite(v[c])) out[i] = v[c];
-  }
-  return out;
-}
 
 // ─── Fetch price data ─────────────────────────────────────────────────────────
 
@@ -668,11 +609,16 @@ export default function ROCOptimizer() {
     setProgress({ current: 0, total: tickersToRun.length });
     const combinedBasket =
       mode === "basket" && basketMode === "combined" ? buildBasketOhlc(basketTickers, userBaskets) : null;
-    const allResults: TickerResult[] = [];
+    // Sweeps run in Web Workers (HARSI/Oscillators pattern); slots keep the
+    // results table in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/rocSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (TickerResult | null)[] = new Array(tickersToRun.length).fill(null);
+    let completed = 0;
+    const flush = () => setResults(slots.filter((r): r is TickerResult => r != null));
 
-    for (let i = 0; i < tickersToRun.length && !cancelRef.current; i++) {
+    const runItem = async (i: number) => {
       const ticker = tickersToRun[i];
-      setProgress({ current: i + 1, total: tickersToRun.length });
       const legA = mode === "pairCombo" ? ticker.pairA : pairTickerA;
       const legB = mode === "pairCombo" ? ticker.pairB : pairTickerB;
 
@@ -684,12 +630,12 @@ export default function ROCOptimizer() {
 
         if (mode === "pair" || mode === "pairCombo") {
           const ratio = await getYahooPairsRatio(legA, legB, dates);
-          if (!ratio || ratio.indices.length < 252) continue;
+          if (!ratio || ratio.indices.length < 252) return;
           const idxMap = new Map<number, number>();
           for (let j = 0; j < ratio.indices.length; j++) idxMap.set(ratio.indices[j], ratio.prices[j]);
           const validIdxs: number[] = [];
           for (let j = 0; j < dates.length; j++) if (idxMap.has(j)) validIdxs.push(j);
-          if (validIdxs.length < 252) continue;
+          if (validIdxs.length < 252) return;
           closes = validIdxs.map((j) => idxMap.get(j)!);
           priceDates = validIdxs.map((j) => dates[j]);
           globalIndexMap = validIdxs;
@@ -699,7 +645,7 @@ export default function ROCOptimizer() {
           const priceData = combinedBasket
             ? await getBasketOhlc(combinedBasket, dateRange)
             : await fetchTickerPriceData(ticker.ticker, dates, dateRange, inputSelection);
-          if (!priceData || priceData.closes.length < 252) continue;
+          if (!priceData || priceData.closes.length < 252) return;
           closes = priceData.closes;
           priceDates = priceData.priceDates;
           highs =
@@ -726,7 +672,7 @@ export default function ROCOptimizer() {
         );
         const rawCloses = closes;
         const minBars = effectiveFreq === "weekly" ? 52 : effectiveFreq === "monthly" ? 24 : 252;
-        if (downsampled.closes.length < minBars) continue;
+        if (downsampled.closes.length < minBars) return;
 
         let workingCloses: number[];
         let workingDates: string[];
@@ -739,7 +685,7 @@ export default function ROCOptimizer() {
           workingCloses = closes;
           workingDates = priceDates;
           weeklyData = downsampleWeeklyLocal(closes, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined);
-          if (weeklyData.prices.length < (frequency === "monthly_on_daily" ? 24 : 60)) continue;
+          if (weeklyData.prices.length < (frequency === "monthly_on_daily" ? 24 : 60)) return;
         } else {
           workingCloses = closes;
           workingDates = priceDates;
@@ -795,234 +741,18 @@ export default function ROCOptimizer() {
           }
         }
 
-        const configsForType: {
-          cfg: RocConfig;
-          startIdx: number;
-          opts: any;
-        }[] = [];
-
-        const startIdxCalc = (p: number) =>
-          frequency.endsWith("_on_daily")
-            ? Math.max(p * (frequency === "monthly_on_daily" ? 21 : 5), 21) + 126
-            : effectiveFreq === "weekly" || frequency === "weekly" || effectiveFreq === "monthly"
-            ? p + Math.ceil(126 / barMultiplier)
-            : p + 126;
-
-        if (signalType === "zero_cross") {
-          for (const p of ZERO_CROSS_PERIODS)
-            configsForType.push({
-              cfg: { signalType: "zero_cross", period: p },
-              startIdx: startIdxCalc(p),
-              opts: { period: p },
-            });
-        } else if (signalType === "threshold_cross") {
-          for (const p of ZERO_CROSS_PERIODS)
-            for (const t of THRESHOLD_VALUES)
-              configsForType.push({
-                cfg: { signalType: "threshold_cross", period: p, threshold: t },
-                startIdx: startIdxCalc(p),
-                opts: { period: p, threshold: t },
-              });
-        } else if (signalType === "threshold_reversion") {
-          for (const p of ZERO_CROSS_PERIODS)
-            for (const t of THRESHOLD_VALUES)
-              configsForType.push({
-                cfg: { signalType: "threshold_reversion", period: p, threshold: t },
-                startIdx: startIdxCalc(p),
-                opts: { period: p, threshold: t },
-              });
-        } else if (signalType === "fast_slow_cross") {
-          for (const [f, s] of FAST_SLOW_PAIRS)
-            configsForType.push({
-              cfg: { signalType: "fast_slow_cross", period: f, slowPeriod: s },
-              startIdx: startIdxCalc(Math.max(f, s)),
-              opts: { period: f, slowPeriod: s },
-            });
-        } else {
-          for (const p of ZERO_CROSS_PERIODS)
-            for (const slb of SLOPE_LOOKBACKS)
-              configsForType.push({
-                cfg: { signalType: "slope_curvature", period: p, slopeLookback: slb },
-                startIdx: startIdxCalc(p + slb),
-                opts: { period: p, slopeLookback: slb },
-              });
-        }
-
-        const allConfigs: ConfigResult[] = [];
-
-        for (const { cfg, startIdx, opts } of configsForType) {
-          if (workingCloses.length <= startIdx + 5) continue;
-          const optsWithPrecomputed = { ...opts } as any;
-          if (frequency.endsWith("_on_daily") && weeklyData) {
-            optsWithPrecomputed.precomputedROC = mapWeeklyToDaily(
-              opts.period,
-              weeklyData.prices,
-              weeklyData.weekIndex,
-              workingCloses.length
-            );
-            if (opts.slowPeriod !== undefined) {
-              optsWithPrecomputed.precomputedSlowROC = mapWeeklyToDaily(
-                opts.slowPeriod,
-                weeklyData.prices,
-                weeklyData.weekIndex,
-                workingCloses.length
-              );
-            }
-          }
-
-          const handler = ROC_SIGNAL_HANDLERS[signalType];
-          const detected = detectSignals(workingCloses, handler, optsWithPrecomputed, startIdx);
-          const bandOpts =
-            returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-          const categoryResults: CategoryResult[] = [];
-          let totalSignalCount = 0;
-
-          for (const cat of handler) {
-            const catMeta = SIGNAL_META[cat];
-            const direction: "buy" | "sell" = catMeta?.direction === "sell" ? "sell" : "buy";
-            const profiles: any[] = [];
-            const signalDates: SignalDate[] = [];
-            let lastSignalIdx = -1;
-
-            for (const sigIdx of detected[cat]) {
-              if (minHold > 0 && lastSignalIdx >= 0 && sigIdx < lastSignalIdx + minHold) continue;
-              const dailyIdx =
-                effectiveFreq === "weekly"
-                  ? mapWeeklyIndexToDaily(downsampled, sigIdx)
-                  : sigIdx;
-              if (dailyIdx < 0) continue;
-              const profile = computeForwardProfile(
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
-                dailyIdx,
-                targetReturn,
-                direction,
-                bandOpts,
-                minHold,
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
-              );
-              profiles.push(profile);
-              signalDates.push({
-                date: workingDates[sigIdx] ?? "",
-                ret1m: profile.returns["1M"] ?? null,
-                ret3m: profile.returns["3M"] ?? null,
-                ret6m: profile.returns["6M"] ?? null,
-              });
-              lastSignalIdx = sigIdx;
-            }
-
-            const isBand = returnMode === "band";
-            const summary = summarizeSignals(profiles, direction);
-            const composite = computeCompositeScore(summary, direction, isBand);
-            totalSignalCount += summary.count;
-            categoryResults.push({
-              category: cat,
-              label: catMeta?.label ?? cat,
-              description: catMeta?.description ?? "",
-              summary,
-              composite,
-              signalDates,
-              profiles,
-            });
-          }
-
-          if (totalSignalCount < 3) continue;
-          const bestCat = categoryResults.reduce((best, cur) =>
-            best.composite.score > cur.composite.score ? best : cur
-          );
-          allConfigs.push({
-            config: cfg,
-            configLabel: buildConfigLabel(cfg),
-            categories: categoryResults,
-            bestCategory: bestCat.category,
-            bestScore: bestCat.composite.score,
-          });
-        }
-
-        if (allConfigs.length === 0) continue;
-
-        const bestConfig = allConfigs.reduce((best, cur) =>
-          best.bestScore > cur.bestScore ? best : cur
+        const payload: RocSweepPayload = {
+          workingCloses, workingDates, rawCloses, downsampled, weeklyData, benchmarkSeries,
+          effectiveFreq, frequency: frequency as string, barMultiplier, signalType,
+          returnMode, bandMin, bandMax, targetReturn, minHold,
+        };
+        const sweep = await sweepPool.run<RocSweepResult>(
+          { type: "run", payload },
+          () => runRocSweep(payload),
         );
-
-        // Compute current signal state
-        let currentSignal = "None";
-        const currentROCByPeriod: Record<number, number> = {};
-        const currentSlowROCByPeriod: Record<number, number> = {};
-
-        {
-          const src =
-            frequency.endsWith("_on_daily") && weeklyData ? weeklyData.prices : workingCloses;
-          const lastIdx = src.length - 1;
-          const periodSet = new Set<number>();
-          const slowSet = new Set<number>();
-          for (const c of allConfigs) {
-            if (c.config.period) periodSet.add(c.config.period);
-            if (c.config.slowPeriod) slowSet.add(c.config.slowPeriod);
-          }
-          for (const p of Array.from(periodSet)) {
-            if (lastIdx >= p) {
-              const cur = src[lastIdx];
-              const prev = src[lastIdx - p];
-              if (Number.isFinite(cur) && Number.isFinite(prev) && prev !== 0)
-                currentROCByPeriod[p] = cur / prev - 1;
-            }
-          }
-          for (const p of Array.from(slowSet)) {
-            if (lastIdx >= p) {
-              const cur = src[lastIdx];
-              const prev = src[lastIdx - p];
-              if (Number.isFinite(cur) && Number.isFinite(prev) && prev !== 0)
-                currentSlowROCByPeriod[p] = cur / prev - 1;
-            }
-          }
-
-          const bestROC = computeROC(src, bestConfig.config.period);
-          const bestROCVal = bestROC[src.length - 1] ?? NaN;
-          if (Number.isFinite(bestROCVal)) {
-            if (signalType === "zero_cross") {
-              currentSignal = bestROCVal > 0 ? "ROC Above 0 (Bull)" : "ROC Below 0 (Bear)";
-            } else if (signalType === "threshold_cross") {
-              const t = bestConfig.config.threshold ?? 0.05;
-              currentSignal =
-                bestROCVal > t
-                  ? `ROC > +${pctSigned(t)} (Bull)`
-                  : bestROCVal < -t
-                  ? `ROC < -${pctSigned(t)} (Bear)`
-                  : "ROC in band (Neutral)";
-            } else if (signalType === "threshold_reversion") {
-              const t = bestConfig.config.threshold ?? 0.05;
-              currentSignal =
-                bestROCVal > t
-                  ? `ROC > +${pctSigned(t)} (Fade Short)`
-                  : bestROCVal < -t
-                  ? `ROC < -${pctSigned(t)} (Bounce Long)`
-                  : "ROC in band (Neutral)";
-            } else if (signalType === "fast_slow_cross") {
-              const slowROC = computeROC(src, bestConfig.config.slowPeriod ?? 50);
-              const slowVal = slowROC[src.length - 1] ?? NaN;
-              if (Number.isFinite(slowVal))
-                currentSignal =
-                  bestROCVal > slowVal ? "Fast ROC > Slow (Bull)" : "Fast ROC < Slow (Bear)";
-            } else {
-              const slb = bestConfig.config.slopeLookback ?? 5;
-              const rocArr = computeROC(src, bestConfig.config.period);
-              const rocCur = rocArr[src.length - 1] ?? NaN;
-              const rocPrev = rocArr[src.length - 1 - slb] ?? NaN;
-              if (src.length > slb && Number.isFinite(rocPrev))
-                currentSignal =
-                  rocCur - rocPrev > 0 ? "ROC Slope Up (Bull)" : "ROC Slope Down (Bear)";
-            }
-          }
-        }
-
-        // Keep only profiles for top 6 configs to save memory
-        const topN = 6;
-        const topLabels = new Set(
-          [...allConfigs].sort((a, b) => b.bestScore - a.bestScore).slice(0, topN).map((c) => c.configLabel)
-        );
-        for (const c of allConfigs)
-          if (!topLabels.has(c.configLabel))
-            for (const cat of c.categories) cat.profiles = undefined;
+        if (!sweep) return;
+        const { configs: allConfigs, bestCategoryKey, bestScore: sweepBestScore,
+          currentSignal, currentROCByPeriod, currentSlowROCByPeriod } = sweep;
 
         const priceContext = {
           prices: workingCloses,
@@ -1037,23 +767,37 @@ export default function ROCOptimizer() {
           pairLegB: mode === "pair" || mode === "pairCombo" ? legB : undefined,
         };
 
-        allResults.push({
+        slots[i] = {
           ticker: ticker.ticker,
           name: ticker.name,
           configs: allConfigs,
-          bestCategory: SIGNAL_META[bestConfig.bestCategory]?.label ?? bestConfig.bestCategory,
-          bestScore: bestConfig.bestScore,
+          bestCategory: SIGNAL_META[bestCategoryKey]?.label ?? bestCategoryKey,
+          bestScore: sweepBestScore,
           currentSignal,
           currentROCByPeriod,
           currentSlowROCByPeriod,
           priceContext,
-        });
+        };
+      } catch {} finally {
+        completed++;
+        setProgress({ current: completed, total: tickersToRun.length });
+        if (completed % 5 === 0 || completed === tickersToRun.length) flush();
+      }
+    };
 
-        if (i % 5 === 0 || i === tickersToRun.length - 1) setResults([...allResults]);
-      } catch {}
-    }
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, tickersToRun.length) }, async () => {
+        while (nextIdx < tickersToRun.length && !cancelRef.current) {
+          await runItem(nextIdx++);
+        }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
 
-    setResults(allResults);
+    flush();
     setRunning(false);
   }, [
     filteredByUniverse,
