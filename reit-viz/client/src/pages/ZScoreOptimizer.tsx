@@ -31,6 +31,7 @@ import { weeklyDownsamplePrices, expandWeeklyToDaily } from "@/lib/weeklyDownsam
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
@@ -254,7 +255,7 @@ export default function ZScoreOptimizer() {
   const [dateRange, setDateRange] = useState(() => createDefaultDateRange());
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = usePersistedState<TickerResult[]>("zscore:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<TickerResult>("zscore:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as TickerResult[]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"bestScore" | "ticker">("bestScore");
   const [rankBy, setRankBy] = useState("composite");
@@ -496,6 +497,7 @@ export default function ZScoreOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [tickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, selectedMetric, transform, mode, buyThreshold, sellThreshold, targetReturn, returnMode, bandMin, bandMax, signalType, frequency, freqKey, dateRange, pairComboPicker.pairs, basketMode, baskets, filteredTickers]);
   useOptimizerRunAll(runOptimizer); // unified /optimizers "Run selected" fan-out
@@ -681,7 +683,7 @@ export default function ZScoreOptimizer() {
     targetReturn,
     bandMin,
     bandMax,
-    results,
+    results: persistedSnapshot(),
     expandedTicker,
     sortBy,
     signalType,

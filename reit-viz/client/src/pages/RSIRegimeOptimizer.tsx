@@ -34,6 +34,7 @@ import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc as buildBasketOhlcFn, getBasketOhlc as getBasketOhlcFn } from "@/lib/basketOhlc";
 const buildBasketOhlc = buildBasketOhlcFn as any;
@@ -119,7 +120,7 @@ export default function RSIRegimeOptimizer() {
     "rsi-regime-input-selection",
     defaultInputSelection
   );
-  const [results, setResults] = usePersistedState<RsiTickerResult[]>("rsi:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<RsiTickerResult>("rsi:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as RsiTickerResult[]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set());
   const toggleExpandedConfig = useCallback((key: string) => {
@@ -420,6 +421,7 @@ export default function RSIRegimeOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [
     filteredByUniverse,
@@ -719,7 +721,7 @@ export default function RSIRegimeOptimizer() {
       targetReturn,
       signalMode,
       mode: runMode,
-      results,
+      results: persistedSnapshot(),
       expandedTicker,
       sortBy,
       returnMode,

@@ -3,6 +3,7 @@
 import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows, slimGridRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { useOptimizerClassFilter } from "@/lib/useOptimizerClassFilter";
@@ -387,7 +388,7 @@ export default function MACrossoverOptimizer() {
   const { frequency, setFrequency, frequencyUI } = useFrequency("ma", "daily", running);
   const timeframeMode = frequency === "weekly" ? "weekly" : frequency === "monthly" ? "monthly" : "daily";
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = usePersistedState<any[]>("ma:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<any>("ma:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as any[]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [expandedHits, setExpandedHits] = useState<Set<string>>(new Set());
   const toggleHits = useCallback((key: string) => {
@@ -405,7 +406,7 @@ export default function MACrossoverOptimizer() {
   const [runSort, setRunSort] = useState<{ col: string; dir: string }>({ col: "score", dir: "desc" });
   const [gridLongSort, setGridLongSort] = useState<{ col: string; dir: string }>({ col: "score", dir: "desc" });
   const [gridShortSort, setGridShortSort] = useState<{ col: string; dir: string }>({ col: "score", dir: "desc" });
-  const [gridResults, setGridResults] = usePersistedState<any[]>("ma:gridResults", []);
+  const { results: gridResults, setResults: setGridResults, persistResults: persistGridResults, persistedSnapshot: gridSnapshot } = useRunResultsState<any>("ma:gridResults", (r) => slimGridRows(r as any[]));
   const [expandedGridTicker, setExpandedGridTicker] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState("optimize");
   const [evalSide, setEvalSide] = useState<"long" | "short">("long");
@@ -752,6 +753,7 @@ export default function MACrossoverOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [
     tickers, selectedTicker, pairTickerA, pairTickerB, mode, signalType, maType, targetReturn,
@@ -1304,6 +1306,7 @@ export default function MACrossoverOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistGridResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [
     tickers, selectedTicker, pairTickerA, pairTickerB, mode, targetReturn, returnMode, bandMin, bandMax,
@@ -1318,7 +1321,7 @@ export default function MACrossoverOptimizer() {
       signalType,
       maType,
       mode,
-      results,
+      results: persistedSnapshot(),
       expandedTicker,
       sortBy,
       runSort,
@@ -1330,7 +1333,7 @@ export default function MACrossoverOptimizer() {
       minHold,
       legA,
       legB,
-      gridResults,
+      gridResults: gridSnapshot(),
       expandedGridTicker,
       frequency,
       signalFamily,

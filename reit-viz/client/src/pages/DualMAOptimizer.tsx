@@ -7,6 +7,7 @@ import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { computeMA, MA_TYPES } from "@/lib/movingAverages";
 import type { MAType } from "@/lib/movingAverages";
@@ -137,7 +138,7 @@ export default function DualMAOptimizer() {
   const [slopeMinPct, setSlopeMinPct] = useState<number>(savedCfg.slopeMinPct ?? 0.001);
   const [allowShort, setAllowShort] = useState<boolean>(savedCfg.allowShort ?? true);
   const [evalTicker, setEvalTicker] = useState("");
-  const [results, setResults] = usePersistedState<TickerResult[]>("dualma:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<TickerResult>("dualma:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as TickerResult[]);
   const [evalResult, setEvalResult] = usePersistedState<BacktestResult | null>("dualma:evalResult", null);
   const [activeTab, setActiveTab] = useState("optimize");
   const [running, setRunning] = useState(false);
@@ -185,7 +186,7 @@ export default function DualMAOptimizer() {
   const serializeState = useCallback(
     () => ({
       selectedTicker, pairTickerA, pairTickerB,
-      basketTickers, basketMode, mode, gridSize, results,
+      basketTickers, basketMode, mode, gridSize, results: persistedSnapshot(),
       expandedTicker, sortKey, sortAsc, evalTicker,
       evalBiasMAType: biasMAType, evalBiasLen: biasLen,
       evalTriggerMAType: triggerMAType, evalTriggerLen: triggerLen,
@@ -366,6 +367,7 @@ export default function DualMAOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [filteredTickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets, mode, gridSize, topK, frequency, dateRange, pairComboPicker.pairs, classFilter.filteredTickers, inputSelection]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out

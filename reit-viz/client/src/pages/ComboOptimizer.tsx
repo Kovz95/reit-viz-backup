@@ -4,6 +4,7 @@ import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { yieldMain } from "@/lib/yieldMain";
 import React, { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getScoreWeights, createDateRangeFromPreset, pct, hitRateColor, pctSigned,
   profitFactorColor, RANK_BY_OPTIONS, DATE_PRESETS, summarizeSignals, pickBestByRankMode } from "@/lib/forwardReturns";
@@ -183,7 +184,7 @@ export default function ComboOptimizer() {
   const [dateRange, setDateRange] = useState<DateRange>(() => (createDateRange as any)());
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = usePersistedState<ComboResult[]>("combo:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<ComboResult>("combo:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as ComboResult[]);
   const [filterText, setFilterText] = useState("");
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [expandedHCKeys, setExpandedHCKeys] = useState<Set<string>>(new Set());
@@ -228,7 +229,7 @@ export default function ComboOptimizer() {
       evalDirection,
       evalTriggerKey,
       evalFilterKeys,
-      results,
+      results: persistedSnapshot(),
       expandedTicker,
       evalResult,
       frequency,
@@ -554,6 +555,7 @@ export default function ComboOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [filteredAllTickers, selectedTicker, pairTickerA, pairTickerB, runMode, direction, horizon,
       targetReturn, pairCombo.pairs, minSignals, minLift, minHold, maxFilters, topN, allTriggers,

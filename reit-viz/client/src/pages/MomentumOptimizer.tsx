@@ -31,6 +31,7 @@ import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
@@ -131,7 +132,7 @@ export default function MomentumOptimizer() {
   const [pairTickerB, setPairTickerB] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = usePersistedState<MomentumTickerResult[]>("mom:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<MomentumTickerResult>("mom:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as MomentumTickerResult[]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [hitConditionsOpen, setHitConditionsOpen] = useState<Set<string>>(new Set());
   const toggleHitConditions = useCallback((key: string) => {
@@ -629,6 +630,7 @@ export default function MomentumOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [filteredByUniverse, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode,
       baskets, selectedRevMetric, momThreshold, revThreshold, targetReturn, runMode, returnMode,
@@ -649,7 +651,7 @@ export default function MomentumOptimizer() {
     momThreshold,
     revThreshold,
     mode: runMode,
-    results,
+    results: persistedSnapshot(),
     expandedTicker,
     sortBy,
     returnMode,

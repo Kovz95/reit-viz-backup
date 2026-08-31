@@ -27,6 +27,7 @@ import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc, getBasketOhlc } from "@/lib/basketOhlc";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
@@ -216,7 +217,7 @@ export default function SlowStochOptimizer() {
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [runningConfig, setRunningConfig] = useState<{ ticker: string; done: number; total: number } | null>(null);
   const [inputSelection, setInputSelection] = usePersistedState("slow-stoch-input-selection", defaultInputSelection);
-  const [results, setResults] = usePersistedState<TickerStochResult[]>("slowstoch:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<TickerStochResult>("slowstoch:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as TickerStochResult[]);
   const [priceContextMap, setPriceContextMap] = useState<Map<string, PriceContext>>(new Map());
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [hitConditionsOpen, setHitConditionsOpen] = useState<Set<string>>(new Set());
@@ -290,7 +291,7 @@ export default function SlowStochOptimizer() {
   const serializeState = useCallback(() => ({
     selectedTicker, pairTickerA, pairTickerB, basketTickers, mode,
     frequency, signalKind, gridSize, returnMode, targetReturn, bandMin, bandMax,
-    minHold, results, expandedTicker, runSort, pairCombo: pairComboPicker.serialize(),
+    minHold, results: persistedSnapshot(), expandedTicker, runSort, pairCombo: pairComboPicker.serialize(),
     inputSelection, basketMode,
   }), [selectedTicker, pairTickerA, pairTickerB, basketTickers, mode, frequency, signalKind, gridSize, returnMode, targetReturn, bandMin, bandMax, minHold, results, expandedTicker, runSort, inputSelection, basketMode]);
 
@@ -477,6 +478,7 @@ export default function SlowStochOptimizer() {
     // flight leaves its pool.run promise unsettled forever.
     sweepPool.terminate();
     setResults([...out]);
+    persistResults(out);
     setPriceContextMap(new Map(ctxMap));
     setRunningConfig(null);
     setRunning(false);

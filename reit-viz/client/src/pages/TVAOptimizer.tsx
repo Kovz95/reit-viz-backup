@@ -23,6 +23,7 @@ import { fetchTickerOHLCV } from "@/lib/fetchTickerOHLCV";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getTickers, getDates, getTickerRaw } from "@/lib/dataService";
 import { getDailyIndexFromWeekly } from "@/lib/getDailyIndexFromWeekly";
@@ -112,7 +113,7 @@ export default function TVAOptimizer() {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [inputSelection, setInputSelection] = usePersistedState<any>("tva-input-selection", defaultInputSelection);
-  const [results, setResults] = usePersistedState<TvaTickerResult[]>("tva:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<TvaTickerResult>("tva:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as TvaTickerResult[]);
   const [skipped, setSkipped] = useState<SkippedEntry[]>([]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState("score");
@@ -599,6 +600,7 @@ export default function TVAOptimizer() {
 
     setSkipped(allSkipped);
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [running, runMode, filteredAllTickers, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode, baskets, filteredTickers, enabledSignalTypes, targetReturn, frequency, resampleMode, dateRange, pairComboPicker.pairs]);
   useOptimizerRunAll(handleRun); // unified /optimizers "Run selected" fan-out

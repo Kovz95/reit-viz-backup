@@ -4,6 +4,7 @@ import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as React from "react";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows, slimGridRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { getYahooPairsRatio } from "@/lib/yahooPairsRatio";
 import { BasketPicker } from "@/components/BasketPicker";
@@ -433,7 +434,7 @@ export default function ROCOptimizer() {
   const { baskets: userBaskets } = useBaskets();
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [results, setResults] = usePersistedState<TickerResult[]>("roc:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<TickerResult>("roc:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as TickerResult[]);
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [expandedSignals, setExpandedSignals] = useState<Set<string>>(() => new Set());
   const toggleExpandedSignal = useCallback((key: string) => {
@@ -452,7 +453,7 @@ export default function ROCOptimizer() {
   const [runSort, setRunSort] = useState<SortState>({ col: "score", dir: "desc" });
   const [gridLongSort, setGridLongSort] = useState<SortState>({ col: "score", dir: "desc" });
   const [gridShortSort, setGridShortSort] = useState<SortState>({ col: "score", dir: "desc" });
-  const [gridResults, setGridResults] = usePersistedState<GridTickerResult[]>("roc:gridResults", []);
+  const { results: gridResults, setResults: setGridResults, persistResults: persistGridResults, persistedSnapshot: gridSnapshot } = useRunResultsState<GridTickerResult>("roc:gridResults", (r) => slimGridRows(r as any[]) as GridTickerResult[]);
   const [expandedGridTicker, setExpandedGridTicker] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState("standard");
   const cancelRef = useRef(false);
@@ -757,6 +758,7 @@ export default function ROCOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [
     filteredByUniverse,
@@ -1189,6 +1191,7 @@ export default function ROCOptimizer() {
     sweepPool.terminate();
 
     flush();
+    persistGridResults(slots.filter(Boolean) as any);
     setRunning(false);
   }, [
     filteredByUniverse,
@@ -1225,7 +1228,7 @@ export default function ROCOptimizer() {
       threshold,
       slopeLookback,
       mode,
-      results,
+      results: persistedSnapshot(),
       expandedTicker,
       sortBy,
       runSort,
@@ -1236,7 +1239,7 @@ export default function ROCOptimizer() {
       bandMax,
       minHold,
       minSignals,
-      gridResults,
+      gridResults: gridSnapshot(),
       expandedGridTicker,
       frequency,
       returnBasis,

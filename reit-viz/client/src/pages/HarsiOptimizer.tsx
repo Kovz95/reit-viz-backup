@@ -25,6 +25,7 @@ import type { TickerMeta } from "@/lib/dataService";
 import { useUniverse } from "@/lib/universeContext";
 import { useWorkspaceTab } from "@/lib/workspaceContext";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useBaskets } from "@/lib/useBaskets";
 import { buildBasketOhlc as buildBasketOhlcFn, getBasketOhlc as getBasketOhlcFn } from "@/lib/basketOhlc";
 const buildBasketOhlc = buildBasketOhlcFn as any;
@@ -615,7 +616,7 @@ export default function HarsiOptimizer() {
     "harsi-input-selection",
     defaultInputSelection
   );
-  const [results, setResults] = usePersistedState<HarsiTickerResult[]>("harsi:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<HarsiTickerResult>("harsi:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as HarsiTickerResult[]);
   const [priceContextMap, setPriceContextMap] = useState<Map<string, any>>(new Map());
   const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
   const [hitConditionsOpen, setHitConditionsOpen] = useState<Set<string>>(new Set());
@@ -1079,6 +1080,7 @@ export default function HarsiOptimizer() {
 
     await Promise.all(tickerPromises);
     setResults([...accumulated]);
+    persistResults(accumulated);
     setPriceContextMap(new Map(ctxMap));
     pool?.terminate();
     workerPoolRef.current = null;
@@ -1330,7 +1332,7 @@ export default function HarsiOptimizer() {
       bandMin,
       bandMax,
       minHold,
-      results,
+      results: persistedSnapshot(),
       expandedTicker,
       runSort: sortState,
       pairCombo: pairComboPicker.serialize(),

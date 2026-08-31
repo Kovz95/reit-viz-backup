@@ -3,6 +3,7 @@ import { useOptimizerRunAll } from "@/lib/optimizerRunSignal";
 import { yieldMain } from "@/lib/yieldMain";
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { usePersistedState } from "@/lib/persistedState";
+import { useRunResultsState, slimOptimizerRows } from "@/lib/runResultsState";
 import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import { useAppContext } from "@/lib/appContext";
 import { useWorkspaceState } from "@/lib/workspaceState";
@@ -79,7 +80,7 @@ export default function PairOptimizer() {
   const [showLoading, setShowLoading] = useState(false);
   const { frequency, setFrequency, frequencyUI } = useFrequency("pair", "daily", showLoading);
   const [progress, setProgress] = useState({ current: 0, total: 0, label: "" });
-  const [results, setResults] = usePersistedState<PairResult[]>("pair:results", []);
+  const { results, setResults, persistResults, persistedSnapshot } = useRunResultsState<PairResult>("pair:results", (r) => slimOptimizerRows(r as any[], { maxConfigs: 24 }) as PairResult[]);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState("score");
   const cancelRef = useRef(false);
@@ -142,7 +143,7 @@ export default function PairOptimizer() {
       spreadMethod,
       tickerA,
       tickerB,
-      results,
+      results: persistedSnapshot(),
       expandedPair,
       sortBy,
       returnMode,
@@ -273,7 +274,7 @@ export default function PairOptimizer() {
         returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null,
         spreadMethod, signalType, frequency
       );
-      if (result) setResults([result]);
+      if (result) { setResults([result]); persistResults([result]); }
       setProgress({ current: 1, total: 1, label: "" });
     } else {
       const groupMap = new Map<string, any[]>();
@@ -322,6 +323,7 @@ export default function PairOptimizer() {
         })
       );
       flush();
+      persistResults(slots.filter(Boolean) as any);
     }
     // Only after all dispatched work drains — terminating with a task in
     // flight leaves its pool.run promise unsettled forever.
