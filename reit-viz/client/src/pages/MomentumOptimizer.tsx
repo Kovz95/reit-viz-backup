@@ -54,15 +54,26 @@ import { Download } from "lucide-react";
 import * as React from "react";
 import "@/lib/harsi";
 import "@/lib/tva";
+// Sweep kernel + constants now live in lib/momentumSweep.ts, shared with
+// workers/momentumSweep.worker.ts.
+import {
+  MOMENTUM_HORIZONS,
+  REVISION_HORIZONS,
+  SIGNAL_CATEGORY_META,
+  MAX_EXPAND,
+  computeMomentumReturn,
+  computeRevisionMomentum,
+  computePercentileRank,
+  runMomentumSweep,
+  type MomentumCategoryResult,
+  type MomentumConfigResult,
+  type MomentumSweepPayload,
+  type MomentumSweepResult,
+} from "@/lib/momentumSweep";
+import { createSweepPool } from "@/lib/sweepPool";
 
 // ── Constants ──
 
-const MOMENTUM_HORIZONS = [
-  { days: 21,  label: "1M" },
-  { days: 63,  label: "3M" },
-  { days: 126, label: "6M" },
-  { days: 252, label: "1Y" },
-];
 
 const DEFAULT_REVISION_METRICS = [
   "EPS FY1", "EPS FY2", "FFO FY1", "FFO FY2",
@@ -70,80 +81,9 @@ const DEFAULT_REVISION_METRICS = [
   "EBITDA FY1", "EBITDA FY2",
 ];
 
-const REVISION_HORIZONS = [
-  { days: 21,  label: "1M" },
-  { days: 42,  label: "2M" },
-  { days: 63,  label: "3M" },
-];
 
-const SIGNAL_CATEGORY_META: Record<string, { label: string; description: string }> = {
-  momentum_buy: {
-    label: "Momentum Long",
-    description: "Strong price momentum + positive estimate revisions → ride the trend",
-  },
-  momentum_sell: {
-    label: "Momentum Short",
-    description: "Weak price momentum + negative estimate revisions → short the weakness",
-  },
-  reversal_buy: {
-    label: "Oversold Quality",
-    description: "Negative price momentum BUT positive/stable revisions → oversold, fundamentals intact",
-  },
-  reversal_sell: {
-    label: "Overbought Fade",
-    description: "Positive price momentum BUT negative revisions → overbought, fundamentals deteriorating",
-  },
-  oversold_quality: {
-    label: "Deep Value",
-    description: "Extreme negative momentum + strongly positive revisions → biggest reversal opportunity",
-  },
-  value_trap: {
-    label: "Value Trap",
-    description: "Extreme negative momentum + negative revisions → falling knife, avoid",
-  },
-};
 
-const MIN_MAGNITUDE = 0.1;
-const MAX_EXPAND = 6;
 
-// ── Helper functions ──
-
-function computeMomentumReturn(prices: number[], lookback: number): (number | null)[] {
-  const out = new Array(prices.length).fill(null);
-  for (let i = lookback; i < prices.length; i++) {
-    if (prices[i - lookback] > 0) {
-      out[i] = (prices[i] - prices[i - lookback]) / prices[i - lookback];
-    }
-  }
-  return out;
-}
-
-function computeRevisionMomentum(revValues: number[], lookback: number): (number | null)[] {
-  const out = new Array(revValues.length).fill(null);
-  for (let i = lookback; i < revValues.length; i++) {
-    const prev = revValues[i - lookback];
-    if (Number.isFinite(prev) && Math.abs(prev) >= MIN_MAGNITUDE) {
-      out[i] = (revValues[i] - prev) / Math.abs(prev);
-    }
-  }
-  return out;
-}
-
-function computePercentileRank(
-  series: (number | null)[],
-  atIdx: number,
-  window: number
-): number | null {
-  const start = Math.max(0, atIdx - window + 1);
-  const values: number[] = [];
-  for (let i = start; i <= atIdx; i++) {
-    if (series[i] !== null) values.push(series[i]!);
-  }
-  if (values.length < 10) return null;
-  const cur = series[atIdx];
-  if (cur === null) return null;
-  return values.filter(v => v < cur).length / values.length;
-}
 
 // ── Types ──
 
@@ -151,28 +91,6 @@ type RunMode = "single" | "universe" | "pair" | "pairCombo" | "basket";
 type SignalMode = "momentum" | "revision" | "percentile";
 type ReturnMode = "threshold" | "band";
 
-interface MomentumCategoryResult {
-  category: string;
-  label: string;
-  description: string;
-  summary: SignalSummary;
-  composite: CompositeScore;
-  profiles?: ForwardReturnProfile[];
-}
-
-interface MomentumConfig {
-  lookback: number;
-  lookbackLabel: string;
-  revisionMetric: string;
-  revisionLookback: number;
-}
-
-interface MomentumConfigResult {
-  config: MomentumConfig;
-  categories: MomentumCategoryResult[];
-  bestCategory: string;
-  bestScore: number;
-}
 
 interface MomentumTickerResult {
   ticker: string;
@@ -560,11 +478,16 @@ export default function MomentumOptimizer() {
         ? (buildBasketOhlc as any)(basketTickers, baskets)
         : null;
 
-    const accumulated: MomentumTickerResult[] = [];
+    // Sweeps run in Web Workers (HARSI/Oscillators pattern); slots keep the
+    // results table in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/momentumSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (MomentumTickerResult | null)[] = new Array(tickersToRun.length).fill(null);
+    let completed = 0;
+    const flush = () => setResults(slots.filter((r): r is MomentumTickerResult => r != null));
 
-    for (let s = 0; s < tickersToRun.length && !cancelRef.current; s++) {
+    const runItem = async (s: number) => {
       const entry = tickersToRun[s];
-      setProgress({ current: s + 1, total: tickersToRun.length });
       try {
         let globalIndices: number[], closes: number[],
           revValues: number[], hasRevisions: boolean;
@@ -573,14 +496,14 @@ export default function MomentumOptimizer() {
           const legA = runMode === "pairCombo" ? entry.pairA! : pairTickerA;
           const legB = runMode === "pairCombo" ? entry.pairB! : pairTickerB;
           const ratio = await getYahooPairsRatio(legA, legB, globalDates);
-          if (!ratio || ratio.indices.length < 252) continue;
+          if (!ratio || ratio.indices.length < 252) return;
           globalIndices = ratio.indices.slice();
           closes = ratio.prices.slice();
           revValues = new Array(globalIndices.length).fill(NaN);
           hasRevisions = false;
         } else if (combinedBasket) {
           const basketData = await (getBasketOhlc as any)(combinedBasket, dateRange);
-          if (!basketData || basketData.closes.length < 252) continue;
+          if (!basketData || basketData.closes.length < 252) return;
           const dateMap = new Map<string, number>();
           for (let i = 0; i < globalDates.length; i++) dateMap.set(globalDates[i], i);
           globalIndices = [];
@@ -589,7 +512,7 @@ export default function MomentumOptimizer() {
             const idx = dateMap.get(basketData.priceDates[i]) ?? -1;
             if (idx >= 0) { globalIndices.push(idx); closes.push(basketData.closes[i]); }
           }
-          if (closes.length < 252) continue;
+          if (closes.length < 252) return;
           revValues = new Array(closes.length).fill(NaN);
           hasRevisions = false;
         } else {
@@ -597,7 +520,7 @@ export default function MomentumOptimizer() {
           closes = [];
           if (inputSelection.kind === "workbook") {
             const wb = await fetchWorkbookSeriesForTicker(entry.ticker, inputSelection);
-            if (!wb || wb.closes.length < 252) continue;
+            if (!wb || wb.closes.length < 252) return;
             const dateMap = new Map<string, number>();
             for (let i = 0; i < globalDates.length; i++) dateMap.set(globalDates[i], i);
             for (let i = 0; i < wb.closes.length; i++) {
@@ -606,7 +529,7 @@ export default function MomentumOptimizer() {
             }
           } else {
             const raw = await fetchTickerOHLCV(entry.ticker);
-            if (!raw || (raw as any).adjCloses.length < 252) continue;
+            if (!raw || (raw as any).adjCloses.length < 252) return;
             const filtered = (filterByDateRange as any)(raw, dateRange);
             const dates = filtered.dates.slice(0, filtered.adjCloses.length);
             const dateMap = new Map<string, number>();
@@ -616,7 +539,7 @@ export default function MomentumOptimizer() {
               if (idx != null && idx >= 0) { globalIndices.push(idx); closes.push(filtered.adjCloses[i]); }
             }
           }
-          if (globalIndices.length < 252) continue;
+          if (globalIndices.length < 252) return;
           revValues = new Array(closes.length).fill(NaN);
           hasRevisions = false;
           try {
@@ -650,186 +573,19 @@ export default function MomentumOptimizer() {
 
         const minLength = fKey === "weekly" ? 52 : fKey === "monthly" ? 24 : 252;
         const effLen = actualFreq.endsWith("_on_daily") ? closes.length : effectivePrices.length;
-        if (effLen < minLength) continue;
+        if (effLen < minLength) return;
 
-        const configResults: MomentumConfigResult[] = [];
-
-        for (const horizonCfg of MOMENTUM_HORIZONS) {
-          await yieldMain(); // keep the tab responsive between horizon sweeps
-          const horizonDays = fKey === "weekly"
-            ? Math.max(1, Math.round(horizonCfg.days / 5))
-            : fKey === "monthly"
-            ? Math.max(1, Math.round(horizonCfg.days / 21))
-            : horizonCfg.days;
-
-          let momSeries: (number | null)[];
-          if (actualFreq.endsWith("_on_daily") && weeklyAgg) {
-            const weeklyHorizon = Math.max(1, Math.round(horizonCfg.days / (actualFreq === "monthly_on_daily" ? 21 : 5)));
-            const weeklyMom = computeMomentumReturn(weeklyAgg.prices, weeklyHorizon);
-            // Expand back to daily using weekIndex
-            momSeries = (expandWeeklyToDaily as any)(
-              weeklyMom.map(v => v === null ? NaN : v),
-              weeklyAgg.weekIndex,
-              closes.length
-            ).map((v: number) => Number.isNaN(v) ? null : v);
-          } else {
-            momSeries = computeMomentumReturn(effectivePrices, horizonDays);
-          }
-
-          const revHorizons = hasRevisions ? REVISION_HORIZONS : [{ days: 63, label: "3M" }];
-
-          for (const revHorizon of revHorizons) {
-            const revMom: (number | null)[] | null = hasRevisions
-              ? computeRevisionMomentum(revValues, revHorizon.days)
-              : null;
-
-            const catAccumulator: Record<string, ForwardReturnProfile[]> = {
-              momentum_buy: [], momentum_sell: [], reversal_buy: [],
-              reversal_sell: [], oversold_quality: [], value_trap: [],
-            };
-
-            let prevCategory: string | null = null;
-            const isWeeklyOnDaily = actualFreq.endsWith("_on_daily");
-            const onDailyBars = actualFreq === "monthly_on_daily" ? 12 : 52;
-            const pctileWindow = fKey === "monthly" ? 12 : isWeeklyOnDaily ? onDailyBars : fKey === "weekly" ? 52 : 252;
-            const warmup = Math.max(
-              horizonDays + (fKey === "monthly" ? 12 : isWeeklyOnDaily ? onDailyBars : fKey === "weekly" ? 52 : 252),
-              fKey === "weekly" ? Math.round(revHorizon.days / 5) : fKey === "monthly" ? Math.max(1, Math.round(revHorizon.days / 21)) : revHorizon.days
-            );
-            const effectiveLen = isWeeklyOnDaily ? closes.length : effectivePrices.length;
-
-            for (let i = warmup; i < effectiveLen; i++) {
-              const momVal = momSeries[i];
-              if (momVal === null) continue;
-              const pctile = computePercentileRank(momSeries, i, pctileWindow);
-              if (pctile === null) continue;
-
-              const dailyIdx = isWeeklyOnDaily ? i : resampledData.dailyIndexMap?.[i];
-              let revTrend: "positive" | "negative" | "neutral" = "neutral";
-              if (revMom && dailyIdx !== undefined && revMom[dailyIdx] !== null) {
-                if (revMom[dailyIdx]! > revThreshold) revTrend = "positive";
-                else if (revMom[dailyIdx]! < -revThreshold) revTrend = "negative";
-              }
-
-              const isTopQ = pctile >= 1 - momThreshold;
-              const isBottomQ = pctile <= momThreshold;
-              const isDeepBottom = pctile <= momThreshold / 2;
-
-              let category: string | null = null;
-              if (isDeepBottom && revTrend === "positive") category = "oversold_quality";
-              else if (isDeepBottom && revTrend === "negative") category = "value_trap";
-              else if (isBottomQ && revTrend !== "negative") category = "reversal_buy";
-              else if (isTopQ && revTrend === "negative") category = "reversal_sell";
-              else if (isTopQ && revTrend !== "negative") category = "momentum_buy";
-              else if (isBottomQ && revTrend === "negative") category = "momentum_sell";
-
-              if (category !== null) {
-                if (category !== prevCategory) {
-                  const isBuy = ["momentum_buy", "reversal_buy", "oversold_quality"].includes(category);
-                  const dir = isBuy ? "buy" : "sell";
-                  const bandOpts = returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-                  const entryIdx = fKey === "weekly" && !isWeeklyOnDaily
-                    ? (getDailyIndexFromWeekly as any)(i, resampledData)
-                    : i;
-                  if (entryIdx < 0) { prevCategory = category; continue; }
-                  catAccumulator[category].push(
-                    (computeForwardProfile as any)(rawPrices, entryIdx, targetReturn, dir, bandOpts, minHold)
-                  );
-                }
-                prevCategory = category;
-              }
-            }
-
-            const categoryResults: MomentumCategoryResult[] = [];
-            for (const [cat, profiles] of Object.entries(catAccumulator)) {
-              const isBuy = ["momentum_buy", "reversal_buy", "oversold_quality"].includes(cat);
-              const dir = isBuy ? "buy" : "sell";
-              const isBand = returnMode === "band";
-              const summary = summarizeSignals(profiles, dir);
-              const composite = computeCompositeScore(summary, dir, isBand);
-              categoryResults.push({
-                category: cat,
-                label: SIGNAL_CATEGORY_META[cat].label,
-                description: SIGNAL_CATEGORY_META[cat].description,
-                summary,
-                composite,
-                profiles,
-              });
-            }
-
-            const bestCat = categoryResults.reduce(
-              (a, b) => a.composite.score > b.composite.score ? a : b,
-              categoryResults[0]
-            );
-
-            configResults.push({
-              config: {
-                lookback: horizonCfg.days,
-                lookbackLabel: horizonCfg.label,
-                revisionMetric: selectedRevMetric,
-                revisionLookback: revHorizon.days,
-              },
-              categories: categoryResults,
-              bestCategory: bestCat.category,
-              bestScore: bestCat.composite.score,
-            });
-          }
-        }
-
-        if (configResults.length === 0) continue;
-        const bestConfig = configResults.reduce((a, b) => a.bestScore > b.bestScore ? a : b);
-
-        // Determine current signal
-        let currentSignal = "None";
-        {
-          const hDays = bestConfig.config.lookback;
-          const hDaysEff = fKey === "weekly" ? Math.max(1, Math.round(hDays / 5)) : fKey === "monthly" ? Math.max(1, Math.round(hDays / 21)) : hDays;
-          const isWeeklyOnDailyNow = actualFreq.endsWith("_on_daily");
-          let momNow: (number | null)[];
-          if (isWeeklyOnDailyNow && weeklyAgg) {
-            const weeklyHorizonNow = Math.max(1, Math.round(hDays / (actualFreq === "monthly_on_daily" ? 21 : 5)));
-            const weeklyMomNow = computeMomentumReturn(weeklyAgg.prices, weeklyHorizonNow);
-            momNow = (expandWeeklyToDaily as any)(
-              weeklyMomNow.map(v => v === null ? NaN : v),
-              weeklyAgg.weekIndex,
-              closes.length
-            ).map((v: number) => Number.isNaN(v) ? null : v);
-          } else {
-            momNow = computeMomentumReturn(effectivePrices, hDaysEff);
-          }
-          const pctileWindow2 = actualFreq === "monthly_on_daily" || fKey === "monthly" ? 12 : fKey === "weekly" || isWeeklyOnDailyNow ? 52 : 252;
-          const lastPctile = computePercentileRank(momNow, momNow.length - 1, pctileWindow2);
-          const revNow = hasRevisions ? computeRevisionMomentum(revValues, bestConfig.config.revisionLookback) : null;
-          const revIdx = isWeeklyOnDailyNow
-            ? closes.length - 1
-            : (resampledData.dailyIndexMap?.[resampledData.dailyIndexMap.length - 1]);
-          const lastRevVal = revNow && revIdx !== undefined ? revNow[revIdx] : null;
-
-          if (lastPctile !== null) {
-            const isTopQ = lastPctile >= 1 - momThreshold;
-            const isBottomQ = lastPctile <= momThreshold;
-            const isDeepBottom = lastPctile <= momThreshold / 2;
-            const revTrend = lastRevVal !== null
-              ? (lastRevVal > revThreshold ? "positive" : lastRevVal < -revThreshold ? "negative" : "neutral")
-              : "neutral";
-
-            if (isDeepBottom && revTrend === "positive") currentSignal = "Deep Value";
-            else if (isDeepBottom && revTrend === "negative") currentSignal = "Value Trap";
-            else if (isBottomQ && revTrend !== "negative") currentSignal = "Oversold Quality";
-            else if (isTopQ && revTrend === "negative") currentSignal = "Overbought Fade";
-            else if (isTopQ && revTrend !== "negative") currentSignal = "Momentum Long";
-            else if (isBottomQ && revTrend === "negative") currentSignal = "Momentum Short";
-          }
-        }
-
-        // Trim profile arrays for non-top configs
-        const sortedConfigs = [...configResults].sort((a, b) => b.bestScore - a.bestScore);
-        const topSet = new Set(sortedConfigs.slice(0, MAX_EXPAND));
-        for (const cfg of configResults) {
-          if (!topSet.has(cfg)) {
-            for (const cat of cfg.categories) cat.profiles = undefined;
-          }
-        }
+        const payload: MomentumSweepPayload = {
+          closes, effectivePrices, weeklyAgg, resampledData, actualFreq, fKey,
+          hasRevisions, revValues, selectedRevMetric,
+          momThreshold, revThreshold, returnMode, bandMin, bandMax, targetReturn, minHold,
+        };
+        const sweep = await sweepPool.run<MomentumSweepResult>(
+          { type: "run", payload },
+          () => runMomentumSweep(payload),
+        );
+        if (!sweep) return;
+        const { configs: configResults, bestConfig, currentSignal } = sweep;
 
         const priceContext = {
           prices: rawPrices,
@@ -844,7 +600,7 @@ export default function MomentumOptimizer() {
           pairLegB: runMode === "pairCombo" ? entry.pairB : runMode === "pair" ? pairTickerB : undefined,
         };
 
-        accumulated.push({
+        slots[s] = {
           ticker: entry.ticker,
           name: entry.name,
           configs: configResults,
@@ -852,15 +608,27 @@ export default function MomentumOptimizer() {
           bestScore: bestConfig.bestScore,
           currentSignal,
           priceContext,
-        });
+        };
+      } catch {} finally {
+        completed++;
+        setProgress({ current: completed, total: tickersToRun.length });
+        if (completed % 5 === 0 || completed === tickersToRun.length) flush();
+      }
+    };
 
-        if (s % 5 === 0 || s === tickersToRun.length - 1) {
-          setResults([...accumulated]);
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, tickersToRun.length) }, async () => {
+        while (nextIdx < tickersToRun.length && !cancelRef.current) {
+          await runItem(nextIdx++);
         }
-      } catch {}
-    }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
 
-    setResults(accumulated);
+    flush();
     setRunning(false);
   }, [filteredByUniverse, selectedTicker, pairTickerA, pairTickerB, basketTickers, basketMode,
       baskets, selectedRevMetric, momThreshold, revThreshold, targetReturn, runMode, returnMode,

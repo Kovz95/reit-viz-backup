@@ -64,123 +64,27 @@ import { useTableSort, SortHeader } from "@/lib/useTableSort";
 import * as React from "react";
 import "@/lib/harsi";
 import "@/lib/tva";
+// Sweep kernel now lives in lib/rsiRegimeSweep.ts, shared with
+// workers/rsiRegimeSweep.worker.ts.
+import {
+  RSI_CATEGORIES,
+  RSI_PERIODS,
+  OS_LEVELS,
+  OB_LEVELS,
+  computeRSI,
+  classifyRSIZone,
+  runRsiRegimeSweep,
+  type RsiConfig,
+  type RsiCategoryResult,
+  type RsiSweepPayload,
+  type RsiSweepResult,
+} from "@/lib/rsiRegimeSweep";
+import { createSweepPool } from "@/lib/sweepPool";
 
-// ── RSI Categories ──────────────────────────────────────────────────────────
 
-const RSI_CATEGORIES = {
-  oversold: {
-    label: "Oversold Zone",
-    description: "RSI in oversold territory — historically cheap momentum, potential bounce",
-    direction: "buy",
-  },
-  neutral_low: {
-    label: "Neutral Low",
-    description: "RSI between oversold and midpoint — recovering from weakness",
-    direction: "buy",
-  },
-  neutral: {
-    label: "Neutral",
-    description: "RSI in the middle zone — no strong directional signal",
-    direction: "buy",
-  },
-  neutral_high: {
-    label: "Neutral High",
-    description: "RSI between midpoint and overbought — strong but not extreme",
-    direction: "buy",
-  },
-  overbought: {
-    label: "Overbought Zone",
-    description: "RSI in overbought territory — potentially overextended, risk of pullback",
-    direction: "sell",
-  },
-  enter_oversold: {
-    label: "Enter Oversold",
-    description: "RSI crosses below oversold threshold — transition into weakness",
-    direction: "buy",
-  },
-  exit_oversold: {
-    label: "Exit Oversold",
-    description: "RSI crosses above oversold threshold — recovery signal",
-    direction: "buy",
-  },
-  enter_overbought: {
-    label: "Enter Overbought",
-    description: "RSI crosses above overbought threshold — momentum peak",
-    direction: "sell",
-  },
-  exit_overbought: {
-    label: "Exit Overbought",
-    description: "RSI crosses below overbought threshold — momentum fading",
-    direction: "sell",
-  },
-} as const;
-
-const RSI_PERIODS = [7, 14, 21];
-const OS_LEVELS = [20, 25, 30, 35];
-const OB_LEVELS = [65, 70, 75, 80];
-
-// ── RSI Math ─────────────────────────────────────────────────────────────────
-
-function computeRSI(prices: number[], period: number): (number | null)[] {
-  const result = new Array<number | null>(prices.length).fill(null);
-  if (prices.length < period + 1) return result;
-  const changes: number[] = [];
-  for (let i = 1; i < prices.length; i++) changes.push(prices[i] - prices[i - 1]);
-  let avgGain = 0,
-    avgLoss = 0;
-  for (let i = 0; i < period; i++) {
-    if (changes[i] > 0) avgGain += changes[i];
-    else avgLoss += Math.abs(changes[i]);
-  }
-  avgGain /= period;
-  avgLoss /= period;
-  if (avgLoss === 0) result[period] = 100;
-  else {
-    const rs = avgGain / avgLoss;
-    result[period] = 100 - 100 / (1 + rs);
-  }
-  for (let i = period; i < changes.length; i++) {
-    const change = changes[i];
-    const gain = change > 0 ? change : 0;
-    const loss = change < 0 ? Math.abs(change) : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-    if (avgLoss === 0) result[i + 1] = 100;
-    else {
-      const rs = avgGain / avgLoss;
-      result[i + 1] = 100 - 100 / (1 + rs);
-    }
-  }
-  return result;
-}
-
-function classifyRSIZone(rsi: number, osLevel: number, obLevel: number): string {
-  const mid = (osLevel + obLevel) / 2;
-  if (rsi <= osLevel) return "oversold";
-  if (rsi >= obLevel) return "overbought";
-  if (rsi < mid - 5) return "neutral_low";
-  if (rsi > mid + 5) return "neutral_high";
-  return "neutral";
-}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface RsiCategoryResult {
-  category: string;
-  label: string;
-  description: string;
-  summary: SignalSummary;
-  composite: CompositeScore;
-  profiles?: ForwardReturnProfile[];
-}
-
-interface RsiConfig {
-  config: { rsiPeriod: number; oversoldLevel: number; overboughtLevel: number };
-  configLabel: string;
-  categories: RsiCategoryResult[];
-  bestCategory: string;
-  bestScore: number;
-}
 
 interface RsiTickerResult {
   ticker: string;
@@ -341,11 +245,17 @@ export default function RSIRegimeOptimizer() {
       runMode === "basket" && basketMode === "combined"
         ? buildBasketOhlc(basketTickers, baskets)
         : null;
-    const accumulated: RsiTickerResult[] = [];
 
-    for (let i = 0; i < tickers.length && !cancelRef.current; i++) {
+    // Sweeps run in Web Workers (HARSI/Oscillators pattern); slots keep the
+    // results table in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/rsiRegimeSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (RsiTickerResult | null)[] = new Array(tickers.length).fill(null);
+    let completed = 0;
+    const flush = () => setResults(slots.filter((r): r is RsiTickerResult => r != null));
+
+    const runItem = async (i: number) => {
       const ticker = tickers[i];
-      setProgress({ current: i + 1, total: tickers.length });
       try {
         let globalIndices: number[], prices: number[];
 
@@ -353,7 +263,7 @@ export default function RSIRegimeOptimizer() {
           const legA = runMode === "pairCombo" ? ticker.pairA : pairTickerA;
           const legB = runMode === "pairCombo" ? ticker.pairB : pairTickerB;
           const ratio = await getYahooPairsRatio(legA, legB, dates);
-          if (!ratio || ratio.indices.length < 252) continue;
+          if (!ratio || ratio.indices.length < 252) return;
           const filteredIdx: number[] = [];
           const filteredPrices: number[] = [];
           for (let k = 0; k < ratio.indices.length; k++) {
@@ -363,12 +273,12 @@ export default function RSIRegimeOptimizer() {
               filteredPrices.push(ratio.prices[k]);
             }
           }
-          if (filteredIdx.length < 252) continue;
+          if (filteredIdx.length < 252) return;
           globalIndices = filteredIdx;
           prices = filteredPrices;
         } else if (combinedBasket) {
           const bar = await getBasketOhlc(combinedBasket, dateRange);
-          if (!bar || (bar as any).closes.length < 252) continue;
+          if (!bar || (bar as any).closes.length < 252) return;
           const dateMap = new Map<string, number>();
           for (let x = 0; x < dates.length; x++) dateMap.set(dates[x], x);
           globalIndices = [];
@@ -380,7 +290,7 @@ export default function RSIRegimeOptimizer() {
               prices.push((bar as any).closes[x]);
             }
           }
-          if (globalIndices.length < 252) continue;
+          if (globalIndices.length < 252) return;
         } else {
           globalIndices = [];
           prices = [];
@@ -391,7 +301,7 @@ export default function RSIRegimeOptimizer() {
             const series = await fetchWorkbookSeriesForTicker(ticker.ticker, inputSelection, {
               dateRange,
             });
-            if (!series || (series as any).closes.length < 252) continue;
+            if (!series || (series as any).closes.length < 252) return;
             for (let x = 0; x < (series as any).closes.length; x++) {
               const idx = dateMap.get((series as any).priceDates[x] ?? "");
               if (idx != null && idx >= 0) {
@@ -401,9 +311,9 @@ export default function RSIRegimeOptimizer() {
             }
           } else {
             const raw = await fetchTickerOHLCV(ticker.ticker);
-            if (!raw || (raw as any).adjCloses.length < 252) continue;
+            if (!raw || (raw as any).adjCloses.length < 252) return;
             const filtered = (filterByDateRange as any)(raw, dateRange);
-            if (!filtered || filtered.adjCloses.length < 252) continue;
+            if (!filtered || filtered.adjCloses.length < 252) return;
             const filteredDates = filtered.dates.slice(0, filtered.adjCloses.length);
             for (let j = 0; j < filtered.adjCloses.length; j++) {
               const idx = dateMap.get(filteredDates[j]);
@@ -413,7 +323,7 @@ export default function RSIRegimeOptimizer() {
               }
             }
           }
-          if (globalIndices.length < 252) continue;
+          if (globalIndices.length < 252) return;
         }
 
         const tickerDates = globalIndices.map((idx) => dates[idx] || "");
@@ -441,216 +351,19 @@ export default function RSIRegimeOptimizer() {
         if (
           (freqForCalc.endsWith("_on_daily") ? prices.length : computePrices.length) < minLen
         )
-          continue;
+          return;
 
-        const configs: RsiConfig[] = [];
-
-        for (const period of RSI_PERIODS) {
-          await yieldMain(); // keep the tab responsive between period sweeps
-          let rsiValues: (number | null)[];
-          if (freqForCalc.endsWith("_on_daily") && weeklyExpanded) {
-            const wRsi = computeRSI((weeklyExpanded as any).prices as number[], period);
-            rsiValues = (resampleWeekly as any).expandWeeklyToDaily(
-              wRsi.map((v: number | null) => (v === null ? NaN : v)),
-              (weeklyExpanded as any).weekIndex,
-              prices.length
-            ).map((v: number) => (Number.isNaN(v) ? null : v));
-          } else {
-            rsiValues = computeRSI(computePrices, period);
-          }
-
-          const isWeeklyOnDaily = freqForCalc.endsWith("_on_daily");
-          const workLen = isWeeklyOnDaily ? prices.length : computePrices.length;
-
-          if (signalMode === "zone") {
-            for (const osLevel of OS_LEVELS) {
-              for (const obLevel of OB_LEVELS) {
-                if (osLevel >= obLevel) continue;
-                const zoneBuckets: Record<string, ForwardReturnProfile[]> = {
-                  oversold: [],
-                  neutral_low: [],
-                  neutral: [],
-                  neutral_high: [],
-                  overbought: [],
-                };
-                let prevZone: string | null = null;
-                const startIdx = period + 126;
-                for (let n = startIdx; n < workLen; n++) {
-                  if (rsiValues[n] === null) continue;
-                  const zone = classifyRSIZone(rsiValues[n]!, osLevel, obLevel);
-                  if (prevZone === null) {
-                    prevZone = zone;
-                    continue;
-                  }
-                  if (zone !== prevZone) {
-                    const dir = RSI_CATEGORIES[zone as keyof typeof RSI_CATEGORIES].direction;
-                    const band =
-                      returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-                    const dailyIdx =
-                      (freqForResample === "weekly" || freqForResample === "monthly") && !isWeeklyOnDaily
-                        ? getDailyIndexFromWeekly(n, weekly)
-                        : n;
-                    if (dailyIdx < 0) {
-                      prevZone = zone;
-                      continue;
-                    }
-                    const profile = (computeForwardProfile as any)(
-                      rawPrices,
-                      dailyIdx,
-                      targetReturn,
-                      dir,
-                      band
-                    );
-                    zoneBuckets[zone].push(profile);
-                  }
-                  prevZone = zone;
-                }
-
-                const categoryResults: RsiCategoryResult[] = [];
-                for (const [catKey, profiles] of Object.entries(zoneBuckets)) {
-                  const catDef =
-                    RSI_CATEGORIES[catKey as keyof typeof RSI_CATEGORIES];
-                  const dir = catDef.direction;
-                  const useBand = returnMode === "band";
-                  const summary = summarizeSignals(profiles, dir);
-                  const composite = computeCompositeScore(summary, dir, useBand);
-                  categoryResults.push({
-                    category: catKey,
-                    label: catDef.label,
-                    description: catDef.description,
-                    summary,
-                    composite,
-                    profiles,
-                  });
-                }
-                const bestCat = categoryResults.reduce(
-                  (a, b) => (a.composite.score > b.composite.score ? a : b),
-                  categoryResults[0]
-                );
-                configs.push({
-                  config: { rsiPeriod: period, oversoldLevel: osLevel, overboughtLevel: obLevel },
-                  configLabel: `RSI(${period}) ${osLevel}/${obLevel}`,
-                  categories: categoryResults,
-                  bestCategory: bestCat.category,
-                  bestScore: bestCat.composite.score,
-                });
-              }
-            }
-          } else {
-            // transition mode
-            for (const osLevel of OS_LEVELS) {
-              for (const obLevel of OB_LEVELS) {
-                if (osLevel >= obLevel) continue;
-                const transitionBuckets: Record<string, ForwardReturnProfile[]> = {
-                  enter_oversold: [],
-                  exit_oversold: [],
-                  enter_overbought: [],
-                  exit_overbought: [],
-                };
-                const startIdx = period + 126;
-                for (let n = startIdx + 1; n < workLen; n++) {
-                  if (rsiValues[n] === null || rsiValues[n - 1] === null) continue;
-                  const cur = rsiValues[n]!;
-                  const prev = rsiValues[n - 1]!;
-                  const fired: string[] = [];
-                  if (cur <= osLevel && prev > osLevel) fired.push("enter_oversold");
-                  if (cur > osLevel && prev <= osLevel) fired.push("exit_oversold");
-                  if (cur >= obLevel && prev < obLevel) fired.push("enter_overbought");
-                  if (cur < obLevel && prev >= obLevel) fired.push("exit_overbought");
-                  const band =
-                    returnMode === "band" ? { minReturn: bandMin, maxReturn: bandMax } : null;
-                  for (const key of fired) {
-                    const dir =
-                      RSI_CATEGORIES[key as keyof typeof RSI_CATEGORIES].direction;
-                    const dailyIdx =
-                      (freqForResample === "weekly" || freqForResample === "monthly") && !isWeeklyOnDaily
-                        ? getDailyIndexFromWeekly(n, weekly)
-                        : n;
-                    if (dailyIdx < 0) continue;
-                    transitionBuckets[key].push(
-                      (computeForwardProfile as any)(rawPrices, dailyIdx, targetReturn, dir, band)
-                    );
-                  }
-                }
-
-                const categoryResults: RsiCategoryResult[] = [];
-                for (const [catKey, profiles] of Object.entries(transitionBuckets)) {
-                  const catDef =
-                    RSI_CATEGORIES[catKey as keyof typeof RSI_CATEGORIES];
-                  const dir = catDef.direction;
-                  const useBand = returnMode === "band";
-                  const summary = summarizeSignals(profiles, dir);
-                  const composite = computeCompositeScore(summary, dir, useBand);
-                  categoryResults.push({
-                    category: catKey,
-                    label: catDef.label,
-                    description: catDef.description,
-                    summary,
-                    composite,
-                    profiles,
-                  });
-                }
-                const bestCat = categoryResults.reduce(
-                  (a, b) => (a.composite.score > b.composite.score ? a : b),
-                  categoryResults[0]
-                );
-                configs.push({
-                  config: { rsiPeriod: period, oversoldLevel: osLevel, overboughtLevel: obLevel },
-                  configLabel: `RSI(${period}) ${osLevel}/${obLevel}`,
-                  categories: categoryResults,
-                  bestCategory: bestCat.category,
-                  bestScore: bestCat.composite.score,
-                });
-              }
-            }
-          }
-        }
-
-        if (configs.length === 0) continue;
-
-        const bestConfig = configs.reduce((a, b) => (a.bestScore > b.bestScore ? a : b));
-        const currentRsiArr =
-          freqForCalc.endsWith("_on_daily") && weeklyExpanded
-            ? (() => {
-                const wRsi = computeRSI(weeklyExpanded as number[], bestConfig.config.rsiPeriod);
-                return (resampleWeekly as any).expandWeeklyToDaily(
-                  wRsi.map((v: number | null) => (v === null ? NaN : v)),
-                  (weeklyExpanded as any).weekIndex,
-                  prices.length
-                ).map((v: number) => (Number.isNaN(v) ? null : v));
-              })()
-            : computeRSI(computePrices, bestConfig.config.rsiPeriod);
-
-        const lastRsi = currentRsiArr[currentRsiArr.length - 1];
-        let currentSignal = "None";
-        if (lastRsi !== null) {
-          const zone = classifyRSIZone(
-            lastRsi,
-            bestConfig.config.oversoldLevel,
-            bestConfig.config.overboughtLevel
-          );
-          currentSignal = RSI_CATEGORIES[zone as keyof typeof RSI_CATEGORIES].label;
-          const prevRsi = currentRsiArr[currentRsiArr.length - 2];
-          if (prevRsi !== null) {
-            const os = bestConfig.config.oversoldLevel;
-            const ob = bestConfig.config.overboughtLevel;
-            if (lastRsi <= os && prevRsi > os) currentSignal = "→ Oversold";
-            else if (lastRsi > os && prevRsi <= os) currentSignal = "← Oversold";
-            else if (lastRsi >= ob && prevRsi < ob) currentSignal = "→ Overbought";
-            else if (lastRsi < ob && prevRsi >= ob) currentSignal = "← Overbought";
-          }
-        }
-
-        // Keep profiles only for top 6 configs
-        const TOP_CONFIGS = 6;
-        const topSet = new Set(
-          [...configs].sort((a, b) => b.bestScore - a.bestScore).slice(0, TOP_CONFIGS)
+        const payload: RsiSweepPayload = {
+          prices, computePrices, weeklyExpanded, weekly,
+          freqForCalc, freqForResample: freqForResample as string,
+          signalMode, returnMode, bandMin, bandMax, targetReturn,
+        };
+        const sweep = await sweepPool.run<RsiSweepResult>(
+          { type: "run", payload },
+          () => runRsiRegimeSweep(payload),
         );
-        for (const cfg of configs) {
-          if (!topSet.has(cfg)) {
-            for (const cat of cfg.categories) cat.profiles = undefined;
-          }
-        }
+        if (!sweep) return;
+        const { configs, bestConfig, currentSignal } = sweep;
 
         const priceContext = {
           prices: rawPrices,
@@ -675,7 +388,7 @@ export default function RSIRegimeOptimizer() {
               : undefined,
         };
 
-        accumulated.push({
+        slots[i] = {
           ticker: ticker.ticker,
           name: ticker.name,
           configs,
@@ -684,15 +397,29 @@ export default function RSIRegimeOptimizer() {
             bestConfig.bestCategory,
           bestScore: bestConfig.bestScore,
           currentSignal,
-          currentRSI: lastRsi !== null ? Math.round(lastRsi * 10) / 10 : null,
+          currentRSI: sweep.currentRSI,
           priceContext,
-        });
+        };
+      } catch {} finally {
+        completed++;
+        setProgress({ current: completed, total: tickers.length });
+        if (completed % 5 === 0 || completed === tickers.length) flush();
+      }
+    };
 
-        if (i % 5 === 0 || i === tickers.length - 1) setResults([...accumulated]);
-      } catch {}
-    }
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, tickers.length) }, async () => {
+        while (nextIdx < tickers.length && !cancelRef.current) {
+          await runItem(nextIdx++);
+        }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
 
-    setResults(accumulated);
+    flush();
     setRunning(false);
   }, [
     filteredByUniverse,
