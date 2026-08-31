@@ -196,7 +196,11 @@ export default function TVAOptimizer() {
 
   const restoreWorkspaceState = useCallback((state: any) => {
     if (!state || typeof state !== "object") return;
-    if (typeof state.selectedTicker === "string") { setSelectedTicker(state.selectedTicker); tickerInitRef.current = true; }
+    // Only restore a NON-EMPTY ticker: a saved "" would clobber the
+    // auto-selected ticker and set tickerInitRef, leaving single-mode Run a
+    // silent no-op until the user picks one manually (every other optimizer
+    // guards this with truthiness too).
+    if (typeof state.selectedTicker === "string" && state.selectedTicker) { setSelectedTicker(state.selectedTicker); tickerInitRef.current = true; }
     if (typeof state.pairTickerA === "string") setPairTickerA(state.pairTickerA);
     if (typeof state.pairTickerB === "string") setPairTickerB(state.pairTickerB);
     if (state.mode === "single" || state.mode === "universe" || state.mode === "pair" || state.mode === "pairCombo" || state.mode === "basket") setRunMode(state.mode);
