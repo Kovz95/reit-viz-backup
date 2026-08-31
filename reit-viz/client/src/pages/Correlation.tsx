@@ -177,6 +177,10 @@ const STOCK_METRICS_BASE = [
 ];
 const STOCK_METRICS_SET = new Set(STOCK_METRICS_BASE);
 
+// Max series in the universe matrix — mirrors Heatmap's MATRIX_CAP. The N×N
+// table plus the O(n²) stat panels must stay bounded or the tab hard-locks.
+const UNI_MATRIX_CAP = 80;
+
 const BASKET_SPEC_PREFIX = "BASKET:";
 const isBasketSpec = (spec: string) => spec.startsWith(BASKET_SPEC_PREFIX);
 const basketSpecId = (spec: string) => spec.slice(BASKET_SPEC_PREFIX.length);
@@ -3528,13 +3532,19 @@ export default function Correlation() {
     () => (uniScope === "basket" ? baskets.find((b) => b.id === corrBasketId) ?? null : null),
     [uniScope, baskets, corrBasketId]
   );
-  const universeSpecs = useMemo(() => {
+  const universeSpecsAll = useMemo(() => {
     if (uniScope === "custom") return matrixSpecs;
     if (uniScope === "basket") {
       return (uniScopeBasket?.tickers ?? []).map((t) => `${t}:${uniMetric}`);
     }
     return uniFilteredList.map((t) => `${t.ticker}:${uniMetric}`);
   }, [uniScope, uniScopeBasket, uniFilteredList, uniMetric, matrixSpecs]);
+  // An uncapped universe (~500 names) means a 500×500 DOM table plus O(n²)
+  // stats in one synchronous commit — enough to lock the tab for minutes.
+  const universeSpecs = useMemo(
+    () => (universeSpecsAll.length > UNI_MATRIX_CAP ? universeSpecsAll.slice(0, UNI_MATRIX_CAP) : universeSpecsAll),
+    [universeSpecsAll]
+  );
 
   // BASKET:<id> legs: cache-key signature (so editing a basket's members
   // refetches) + resolver producing the weighted aggregate close as the
@@ -4130,6 +4140,11 @@ export default function Correlation() {
               <div className="text-sm font-mono font-bold text-primary" data-testid="uni-corr-count">
                 {universeSpecs.length} {uniScope === "custom" ? "series" : "tickers"}
               </div>
+              {universeSpecsAll.length > UNI_MATRIX_CAP && (
+                <div className="text-[10px] text-yellow-400" data-testid="uni-corr-cap-note">
+                  Showing first {UNI_MATRIX_CAP} of {universeSpecsAll.length} — narrow scope via filters or a basket.
+                </div>
+              )}
               <div className="text-[10px] text-muted-foreground">
                 {uniScope === "custom"
                   ? "Hand-picked series — any metric, macro welcome"

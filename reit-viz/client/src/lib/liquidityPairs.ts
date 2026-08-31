@@ -47,6 +47,13 @@ export interface PairGenOptions {
   maxTier: number;
   /** Per-group cap on names considered (largest effAdv first) to bound combinatorics. */
   topPerGroup: number;
+  /**
+   * Cap on the number of groups generated (0/undefined = no cap). Global mode
+   * grouped at subindustry yields 150+ groups — unbounded, that's tens of
+   * thousands of pair objects and rows. Groups are ranked by aggregate pool
+   * ADV so the most tradeable ones survive; output stays label-sorted.
+   */
+  maxGroups?: number;
 }
 
 export interface PairGenResult {
@@ -55,6 +62,8 @@ export interface PairGenResult {
   totalPairs: number;
   /** Names skipped by the per-group cap (still counted so the UI can say so). */
   cappedNames: number;
+  /** Groups dropped by maxGroups (so the UI can say "narrow your filters"). */
+  cappedGroups: number;
 }
 
 export function buildLiquidityPairs(legs: PairLeg[], opts: PairGenOptions): PairGenResult {
@@ -69,9 +78,23 @@ export function buildLiquidityPairs(legs: PairLeg[], opts: PairGenOptions): Pair
   const groups: Array<{ label: string; pairs: LiquidityPair[] }> = [];
   let totalPairs = 0;
   let cappedNames = 0;
+  let cappedGroups = 0;
 
-  for (const [label, members] of [...byGroup.entries()].sort((x, y) => x[0].localeCompare(y[0]))) {
-    if (members.length < 2) continue;
+  let entries = [...byGroup.entries()].filter(([, m]) => m.length >= 2);
+  const maxGroups = opts.maxGroups ?? 0;
+  if (maxGroups > 0 && entries.length > maxGroups) {
+    const poolAdv = (members: PairLeg[]) =>
+      members
+        .map((l) => l.effAdvMM ?? 0)
+        .sort((x, y) => y - x)
+        .slice(0, Math.max(2, opts.topPerGroup))
+        .reduce((s, v) => s + v, 0);
+    entries.sort((x, y) => poolAdv(y[1]) - poolAdv(x[1]));
+    cappedGroups = entries.length - maxGroups;
+    entries = entries.slice(0, maxGroups);
+  }
+
+  for (const [label, members] of entries.sort((x, y) => x[0].localeCompare(y[0]))) {
     const ranked = members.slice().sort((x, y) => (y.effAdvMM ?? 0) - (x.effAdvMM ?? 0));
     const pool = ranked.slice(0, Math.max(2, opts.topPerGroup));
     cappedNames += ranked.length - pool.length;
@@ -103,7 +126,7 @@ export function buildLiquidityPairs(legs: PairLeg[], opts: PairGenOptions): Pair
     groups.push({ label, pairs });
   }
 
-  return { groups, totalPairs, cappedNames };
+  return { groups, totalPairs, cappedNames, cappedGroups };
 }
 
 export interface CloseSeries {

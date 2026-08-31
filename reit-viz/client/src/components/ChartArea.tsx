@@ -233,6 +233,11 @@ interface ChartAreaProps {
   onColorByMapChange?: (map: Record<number, string>) => void;
 }
 
+// Stable identity for "no indicators" — an inline `|| {}` mints a new object
+// every render, and that identity sits in the dep array of the ChartPane
+// effect that tears down and recreates every sub-chart.
+const EMPTY_INDICATORS: ActiveIndicators = {};
+
 // Carousel classification filter chips (broad → narrow). Chips with only one
 // unique value across the universe are auto-hidden to keep the popover tidy.
 const CAROUSEL_CLASS_FIELDS = [
@@ -2866,7 +2871,7 @@ export default function ChartArea({
                   chartConfig={chartConfig}
                   intraday={isIntraday}
                   spacerTimes={freqView ? freqView.spacerTimes : null}
-                  activeIndicators={indicatorsMap[pane.id] || {}}
+                  activeIndicators={indicatorsMap[pane.id] || EMPTY_INDICATORS}
                   timeRange={timeRange}
                   activeTool={isIntraday ? "none" : activeTool}
                   drawColor={drawColor}

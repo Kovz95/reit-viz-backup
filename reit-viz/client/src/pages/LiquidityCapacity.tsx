@@ -148,6 +148,9 @@ function sanitizePairCfg(raw: any): PairCfg {
 // rendered pairs — bounds the quadratic blow-up on the ~9.4k global universe.
 const PAIR_POOL_PER_GROUP = 25;
 const MAX_PAIRS_RENDERED_PER_GROUP = 100;
+// Group-count cap for the Pairs view — Global mode grouped at subindustry has
+// 150+ groups; unbounded that's ~45k pair objects and ~15k rendered rows.
+const PAIR_MAX_GROUPS = 60;
 // Unique symbols fetched for the correlation column (cache-only server read).
 const CORR_SYMBOL_CAP = 200;
 
@@ -398,6 +401,7 @@ export default function LiquidityCapacity() {
       minAdvRatio: pairCfg.minAdvRatioPct / 100,
       maxTier: Math.min(pairCfg.maxTier, Math.max(0, thresholds.length - 1)),
       topPerGroup: PAIR_POOL_PER_GROUP,
+      maxGroups: PAIR_MAX_GROUPS,
     });
   }, [pageView, rows, pairCfg, thresholds.length]);
 
@@ -771,6 +775,7 @@ export default function LiquidityCapacity() {
             <div className="text-[10px] text-muted-foreground pb-1">
               Legs pair within a {PAIR_LEVELS.find((l) => l.value === pairCfg.level)?.label.toLowerCase()}; pair size = the smaller leg's capacity, exit = the slower leg.
               {(pairResult?.cappedNames ?? 0) > 0 && <span className="text-amber-400"> Pool capped at {PAIR_POOL_PER_GROUP} names/group by ADV ({pairResult!.cappedNames} skipped).</span>}
+              {(pairResult?.cappedGroups ?? 0) > 0 && <span className="text-amber-400" data-testid="liqcap-pairs-group-cap"> Showing top {PAIR_MAX_GROUPS} groups by pool ADV ({pairResult!.cappedGroups} more hidden — narrow filters or group coarser).</span>}
             </div>
           </div>
         )}

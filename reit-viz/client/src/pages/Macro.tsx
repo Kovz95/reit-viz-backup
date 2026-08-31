@@ -105,6 +105,10 @@ const SERIES_COLORS = [
 
 const LINE_STYLE_LABELS = ["Solid", "Dotted", "Dashed", "LgDash"];
 
+// Stable identity for "no indicators" — an inline `|| {}` mints a fresh object
+// per render and re-triggers any downstream effect keyed on it.
+const EMPTY_INDICATORS: ActiveIndicators = {};
+
 // ── Presets: common multi-series views ──
 const PRESETS: { label: string; ids: string[]; group: string }[] = [
   { label: "Yield Curve", ids: ["DGS2", "DGS5", "DGS10", "DGS30"], group: "National" },
@@ -1112,7 +1116,7 @@ export default function Macro() {
                       onUnregisterChart={unregisterChart}
                       onRegisterSeries={registerSeries}
                       onCrosshairMove={handleCrosshairMove}
-                      activeIndicators={indicatorsMap[p.id] || {}}
+                      activeIndicators={indicatorsMap[p.id] || EMPTY_INDICATORS}
                       chartType={macroChartType}
                       onUpdatePane={updatePane}
                       onRemoveSeriesFromPane={removeSeriesFromPane}

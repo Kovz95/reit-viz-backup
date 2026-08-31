@@ -257,7 +257,7 @@ interface OptimizerOptions {
   minHold: number;
 }
 
-function runStochOptimizer(
+async function runStochOptimizer(
   ticker: string,
   name: string,
   closes: number[],
@@ -265,7 +265,7 @@ function runStochOptimizer(
   lows: number[],
   opts: OptimizerOptions,
   onProgress?: (done: number, total: number) => void
-): TickerStochResult | null {
+): Promise<TickerStochResult | null> {
   const grid = opts.grid;
   const totalCombos = countCombos(grid, opts.kind);
   if (totalCombos === 0) return null;
@@ -283,6 +283,15 @@ function runStochOptimizer(
   const results: StochConfigResult[] = [];
   let done = 0;
   const progressInterval = Math.max(10, Math.floor(totalCombos / 20));
+  // Yield to the event loop at each progress interval — without it the whole
+  // grid runs as one uninterruptible task and the progress UI never repaints.
+  const tick = async () => {
+    done++;
+    if (done % progressInterval === 0) {
+      onProgress?.(done, totalCombos);
+      await new Promise<void>((r) => setTimeout(r, 0));
+    }
+  };
 
   const maxKLen = Math.max(...grid.kLength);
   const maxSK = Math.max(...grid.smoothK);
@@ -325,7 +334,7 @@ function runStochOptimizer(
           const { slowK, slowD } = getStoch(kLen, sk, sd);
           const signals = kdCrossSignals(slowK, slowD, warmup);
           processSignals(signals, `K-D Cross(${kLen},${sk},${sd})`, `kd_${kLen}_${sk}_${sd}`, "kd_cross", { kLength: kLen, smoothK: sk, smoothD: sd, obThreshold: 80, osThreshold: 20 });
-          done++; if (done % progressInterval === 0 && onProgress) onProgress(done, totalCombos);
+          await tick();
         }
   } else if (opts.kind === "k_threshold") {
     for (const kLen of grid.kLength)
@@ -336,7 +345,7 @@ function runStochOptimizer(
           for (const os of grid.osThresholds) {
             const signals = kThresholdSignals(slowK, ob, os, warmup);
             processSignals(signals, `K Thr(${kLen},${sk}) OB${ob}/OS${os}`, `kthr_${kLen}_${sk}_${ob}_${os}`, "k_threshold", { kLength: kLen, smoothK: sk, smoothD: sd, obThreshold: ob, osThreshold: os });
-            done++; if (done % progressInterval === 0 && onProgress) onProgress(done, totalCombos);
+            await tick();
           }
       }
   } else if (opts.kind === "kd_cross_in_zone") {
@@ -348,7 +357,7 @@ function runStochOptimizer(
             for (const os of grid.osThresholds) {
               const signals = kdCrossInZoneSignals(slowK, slowD, ob, os, warmup);
               processSignals(signals, `KD Zone(${kLen},${sk},${sd}) OB${ob}/OS${os}`, `kdzone_${kLen}_${sk}_${sd}_${ob}_${os}`, "kd_cross_in_zone", { kLength: kLen, smoothK: sk, smoothD: sd, obThreshold: ob, osThreshold: os });
-              done++; if (done % progressInterval === 0 && onProgress) onProgress(done, totalCombos);
+              await tick();
             }
         }
   }
@@ -684,7 +693,7 @@ export default function SlowStochOptimizer() {
     let done = 0;
     const globalDates = await getDates();
 
-    const tasks = tickerList.map(async item => {
+    const runItem = async (item: typeof tickerList[number]) => {
       if (cancelRef.current) return;
       try {
         let series: SeriesData | null = null;
@@ -748,7 +757,7 @@ export default function SlowStochOptimizer() {
         };
 
         setRunningConfig({ ticker: item.ticker, done: 0, total: combosCount });
-        const res = runStochOptimizer(item.ticker, item.name ?? item.ticker, series.closes, series.highs, series.lows, opts, (d, t) => {
+        const res = await runStochOptimizer(item.ticker, item.name ?? item.ticker, series.closes, series.highs, series.lows, opts, (d, t) => {
           setRunningConfig({ ticker: item.ticker, done: d, total: t });
         });
         if (res) { out.push(res); ctxMap.set(res.ticker, ctx); }
@@ -760,9 +769,20 @@ export default function SlowStochOptimizer() {
           setPriceContextMap(new Map(ctxMap));
         }
       }
-    });
+    };
 
-    await Promise.all(tasks);
+    // Bounded concurrency — the old unbounded map() fired one fetch per ticker
+    // (~500 in "all" mode) at once, then queued that many grid sweeps
+    // back-to-back with no room for the UI thread to breathe.
+    const CONCURRENCY = 4;
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, tickerList.length) }, async () => {
+        while (nextIdx < tickerList.length && !cancelRef.current) {
+          await runItem(tickerList[nextIdx++]);
+        }
+      })
+    );
     setResults([...out]);
     setPriceContextMap(new Map(ctxMap));
     setRunningConfig(null);

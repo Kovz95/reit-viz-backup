@@ -1520,18 +1520,20 @@ function SubIndicatorChart({
     };
   }, [closeData, ohlcBars, fullDates, spacerTimes, activeIndicators, type, indKey, instances, freqSources, baseLabel, lookbackEntries, axisLabelsVisible, priceLinesVisible, parentChart, IC, gridColor, frequency, overlayDef, sourceData, onPrimaryData]);
 
-  // Resize
+  // Resize — mount-once; reads the live chart via ref so recreations are
+  // covered without re-running (the creation effect sizes new charts itself).
   useEffect(() => {
     const el = containerRef.current;
-    const chart = chartRef.current;
-    if (!el || !chart) return;
+    if (!el) return;
     const ro = new ResizeObserver(() => {
+      const chart = chartRef.current;
+      if (!chart) return;
       const { width, height } = el.getBoundingClientRect();
       if (width > 0 && height > 0) chart.applyOptions({ width, height });
     });
     ro.observe(el);
     return () => ro.disconnect();
-  });
+  }, []);
 
   // Header chip: instance panes label by their instance(s) ("RSI 14W") so two
   // panes of the same indicator read apart at a glance; multi-instance merged
