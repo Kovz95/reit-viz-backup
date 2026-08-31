@@ -360,3 +360,203 @@ export async function runRocSweep(pl: RocSweepPayload): Promise<RocSweepResult |
     currentSlowROCByPeriod,
   };
 }
+
+// ── Grid-search tab kernel (moved from the page with the grid sweep) ──
+
+export const BULL_CATEGORIES = [
+  "roc_zero_up",
+  "roc_thresh_up",
+  "roc_thresh_down_rev",
+  "roc_fast_above",
+  "roc_slope_up",
+  "roc_curv_up",
+];
+
+export const BEAR_CATEGORIES = [
+  "roc_zero_down",
+  "roc_thresh_down",
+  "roc_thresh_up_rev",
+  "roc_fast_below",
+  "roc_slope_down",
+  "roc_curv_down",
+];
+
+export interface GridCombo {
+  configLabel: string;
+  config: RocConfig;
+  bullSummary: any;
+  bullScore: number;
+  bullSignals: number;
+  bearSummary: any;
+  bearScore: number;
+  bearSignals: number;
+  bestSide: string;
+  bestScore: number;
+  bullDates?: SignalDate[];
+  bearDates?: SignalDate[];
+}
+
+export function buildShortLabel(cfg: RocConfig): string {
+  switch (cfg.signalType) {
+    case "zero_cross":
+      return `ROC(${cfg.period}) ↕0`;
+    case "fast_slow_cross":
+      return `ROC F=${cfg.period}/S=${cfg.slowPeriod ?? 0}`;
+    case "threshold_cross":
+      return `ROC(${cfg.period}) ±${pctSigned(cfg.threshold ?? 0.05)} cont`;
+    case "threshold_reversion":
+      return `ROC(${cfg.period}) ±${pctSigned(cfg.threshold ?? 0.05)} rev`;
+    case "slope_curvature":
+      return `ROC(${cfg.period}) slp/crv lkb=${cfg.slopeLookback ?? 5}`;
+    default:
+      return buildConfigLabel(cfg);
+  }
+}
+
+export interface RocGridSweepPayload {
+  workingCloses: number[];
+  workingDates: string[];
+  rawCloses: number[];
+  downsampled: any;
+  weeklyData: { prices: number[]; weekIndex: number[] } | null;
+  benchmarkSeries: number[] | null;
+  effectiveFreq: string;
+  frequency: string;
+  gridConfigs: RocConfig[];
+  returnMode: string;
+  bandMin: number;
+  bandMax: number;
+  targetReturn: number;
+  minHold: number;
+}
+
+export async function runRocGridSweep(
+  pl: RocGridSweepPayload,
+  onProgress?: (done: number, total: number) => void,
+): Promise<GridCombo[]> {
+  const { workingCloses, workingDates, rawCloses, downsampled, weeklyData, benchmarkSeries,
+    effectiveFreq, frequency, gridConfigs, returnMode, bandMin, bandMax, targetReturn, minHold } = pl;
+  const combos: GridCombo[] = [];
+  const isBand = returnMode === "band";
+  const bandOpts = isBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
+
+  for (let b = 0; b < gridConfigs.length; b++) {
+    const gcfg = gridConfigs[b];
+    const gHandler = ROC_SIGNAL_HANDLERS[gcfg.signalType];
+    const bullCats = gHandler.filter((c: string) => BULL_CATEGORIES.includes(c));
+    const bearCats = gHandler.filter((c: string) => BEAR_CATEGORIES.includes(c));
+    const allCats = [...bullCats, ...bearCats];
+    const startIdx =
+      gcfg.signalType === "fast_slow_cross"
+        ? Math.max(gcfg.period, gcfg.slowPeriod ?? gcfg.period) + 126
+        : gcfg.signalType === "slope_curvature"
+        ? gcfg.period + (gcfg.slopeLookback ?? 5) + 126
+        : gcfg.period + 126;
+
+    const tick = async () => {
+      if (b % 30 === 0) {
+        onProgress?.(b + 1, gridConfigs.length);
+        await yieldMain(); // fallback responsiveness; cheap in a worker
+      }
+    };
+    if (workingCloses.length <= startIdx + 5) { await tick(); continue; }
+
+    const gopts: any = {
+      period: gcfg.period,
+      slowPeriod: gcfg.slowPeriod,
+      threshold: gcfg.threshold,
+      slopeLookback: gcfg.slopeLookback,
+    };
+    if (frequency.endsWith("_on_daily") && weeklyData) {
+      gopts.precomputedROC = mapWeeklyToDaily(gcfg.period, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
+      if (gcfg.slowPeriod !== undefined)
+        gopts.precomputedSlowROC = mapWeeklyToDaily(gcfg.slowPeriod, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
+    }
+
+    const detected = detectSignals(workingCloses, allCats, gopts, startIdx);
+    const bullProfiles: any[] = [];
+    const bearProfiles: any[] = [];
+    const bullDates: SignalDate[] = [];
+    const bearDates: SignalDate[] = [];
+    let lastBull = -1;
+    let lastBear = -1;
+
+    for (const cat of bullCats) {
+      for (const idx of detected[cat]) {
+        if (minHold > 0 && lastBull >= 0 && idx < lastBull + minHold) continue;
+        const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
+        if (di < 0) continue;
+        const profile = computeForwardProfile(
+          (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
+          di,
+          targetReturn,
+          "buy",
+          bandOpts,
+          minHold,
+          (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
+        );
+        bullProfiles.push(profile);
+        bullDates.push({
+          date: workingDates[idx] ?? "",
+          ret1m: profile.returns["1M"] ?? null,
+          ret3m: profile.returns["3M"] ?? null,
+          ret6m: profile.returns["6M"] ?? null,
+        });
+        lastBull = idx;
+      }
+    }
+
+    for (const cat of bearCats) {
+      for (const idx of detected[cat]) {
+        if (minHold > 0 && lastBear >= 0 && idx < lastBear + minHold) continue;
+        const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
+        if (di < 0) continue;
+        const profile = computeForwardProfile(
+          (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
+          di,
+          targetReturn,
+          "sell",
+          bandOpts,
+          minHold,
+          (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
+        );
+        bearProfiles.push(profile);
+        bearDates.push({
+          date: workingDates[idx] ?? "",
+          ret1m: profile.returns["1M"] ?? null,
+          ret3m: profile.returns["3M"] ?? null,
+          ret6m: profile.returns["6M"] ?? null,
+        });
+        lastBear = idx;
+      }
+    }
+
+    const bullSummary = bullProfiles.length > 0 ? summarizeSignals(bullProfiles, "buy") : null;
+    const bearSummary = bearProfiles.length > 0 ? summarizeSignals(bearProfiles, "sell") : null;
+    const bullScore = bullSummary ? computeCompositeScore(bullSummary, "buy", isBand).score : 0;
+    const bearScore = bearSummary ? computeCompositeScore(bearSummary, "sell", isBand).score : 0;
+    const bestSide = bullScore >= bearScore ? "bull" : "bear";
+    const bestScore = Math.max(bullScore, bearScore);
+
+    combos.push({
+      configLabel: buildShortLabel(gcfg),
+      config: gcfg,
+      bullSummary,
+      bullScore,
+      bullSignals: bullProfiles.length,
+      bearSummary,
+      bearScore,
+      bearSignals: bearProfiles.length,
+      bestSide,
+      bestScore,
+      bullDates,
+      bearDates,
+    });
+
+    await tick();
+  }
+
+  const validCombos = combos.filter((c) => c.bullSignals + c.bearSignals > 0);
+  validCombos.sort((a, b) => b.bestScore - a.bestScore);
+  return validCombos.slice(0, 50);
+}

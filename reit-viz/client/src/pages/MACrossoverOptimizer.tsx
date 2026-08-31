@@ -110,6 +110,8 @@ import {
   maBurnFactor,
   legBurnIn,
   runMaSweep,
+  runMaGridSweep,
+  type MaGridSweepPayload,
   type IndicatorSpec,
   type ComboLeg,
   type MaOpts,
@@ -1185,9 +1187,16 @@ export default function MACrossoverOptimizer() {
               });
     const total = list.length * comboDefs.length;
     setProgress({ current: 0, total });
-    const out: any[] = [];
 
-    for (let di = 0; di < list.length && !abortRef.current; di++) {
+    // Grid sweeps run in Web Workers (same maSweep worker, "grid" message);
+    // slots keep results in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/maSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (any | null)[] = new Array(list.length).fill(null);
+    let completed = 0;
+    const flush = () => setGridResults(slots.filter((r): r is any => r != null));
+
+    const runItem = async (di: number) => {
       const meta = list[di];
       try {
         let closes: number[], highs: number[], lows: number[], priceDates: string[], globalIndices: number[];
@@ -1196,8 +1205,7 @@ export default function MACrossoverOptimizer() {
         if (mode === "pair" || mode === "pairCombo") {
           const ratio = await getYahooPairsRatio(legAticker, legBticker, dates);
           if (!ratio || ratio.indices.length < 252) {
-            setProgress({ current: (di + 1) * comboDefs.length, total });
-            continue;
+            return;
           }
           const ratioMap = new Map<number, number>();
           for (let z = 0; z < ratio.indices.length; z++) ratioMap.set(ratio.indices[z], ratio.prices[z]);
@@ -1207,8 +1215,7 @@ export default function MACrossoverOptimizer() {
           const slice = sliceDateRange(presentDates, dateRange);
           const kept = slice ? present.slice((slice as any).start, (slice as any).end + 1) : [];
           if (kept.length < 252) {
-            setProgress({ current: (di + 1) * comboDefs.length, total });
-            continue;
+            return;
           }
           closes = kept.map((z) => ratioMap.get(z) as number);
           highs = closes.slice();
@@ -1218,8 +1225,7 @@ export default function MACrossoverOptimizer() {
         } else {
           const data = combinedBasket ? await getBasketOhlc(combinedBasket, dateRange) : await fetchTickerPriceData(meta.ticker, dates, dateRange, inputSelection);
           if (!data || data.closes.length < 252) {
-            setProgress({ current: (di + 1) * comboDefs.length, total });
-            continue;
+            return;
           }
           closes = data.closes;
           highs = data.highs;
@@ -1234,8 +1240,7 @@ export default function MACrossoverOptimizer() {
         if (timeframeMode === "weekly" && mode !== "pair") {
           weekly = weeklyDownsample({ dates: priceDates, highs, lows, closes, adjCloses: closes }, "weekly");
           if (weekly.closes.length < 52) {
-            setProgress({ current: (di + 1) * comboDefs.length, total });
-            continue;
+            return;
           }
           closes = weekly.closes;
           highs = weekly.highs;
@@ -1265,91 +1270,40 @@ export default function MACrossoverOptimizer() {
             }
         }
 
-        const cache = new Map<string, (number | null)[]>();
-        const ma = (type: string, period: number) => {
-          const key = `${type}-${period}`;
-          let v = cache.get(key);
-          if (!v) {
-            v = computeMA(closes, period, type, { highs, lows, framaFC, framaSC, t3VolumeFactor: t3Vf, almaOffset, almaSigma });
-            cache.set(key, v);
-          }
-          return v;
+        const payload: MaGridSweepPayload = {
+          closes, highs, lows, baseSeries, weekly, benchmark, comboDefs,
+          framaFC, framaSC, t3Vf, almaOffset, almaSigma,
+          returnMode, bandMin, bandMax, targetReturn, minHold,
         };
-        const combos: any[] = [];
-        const useBand = returnMode === "band";
-        const activeBand: ReturnBand | null = useBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
-        for (let g = 0; g < comboDefs.length && !abortRef.current; g++) {
-          const def = comboDefs[g];
-          const aState = (() => {
-            const fastMA = ma(def.legA.maType, def.legA.fastPeriod);
-            const arr = new Array(closes.length).fill(null);
-            for (let i = 0; i < closes.length; i++) if (fastMA[i] !== null) arr[i] = closes[i] > (fastMA[i] as number);
-            return arr;
-          })();
-          const bState = (() => {
-            const fastMA = ma(def.legB.maType, def.legB.fastPeriod);
-            const slowMA = ma(legSlowMaType(def.legB), def.legB.slowPeriod);
-            const arr = new Array(closes.length).fill(null);
-            for (let i = 0; i < closes.length; i++)
-              if (fastMA[i] !== null && slowMA[i] !== null) arr[i] = (fastMA[i] as number) > (slowMA[i] as number);
-            return arr;
-          })();
-          const start = Math.max(legBurnIn(def.legA), legBurnIn(def.legB)) + 126;
-          const bullProfiles: ForwardReturnProfile[] = [];
-          const bearProfiles: ForwardReturnProfile[] = [];
-          let prevOn: boolean | null = null;
-          let holdUntil = -1;
-          for (let i = start; i < closes.length; i++) {
-            const a = aState[i];
-            const b = bState[i];
-            if (a === null || b === null) continue;
-            const on = a && b;
-            if (prevOn !== null && on !== prevOn && i >= holdUntil) {
-              const hi = mapHit(i);
-              if (hi >= 0)
-                on
-                  ? bullProfiles.push(computeForwardProfile(baseSeries, hi, targetReturn, "buy", activeBand, minHold, benchmark))
-                  : bearProfiles.push(computeForwardProfile(baseSeries, hi, targetReturn, "sell", activeBand, minHold, benchmark));
-              if (minHold > 0) holdUntil = i + minHold;
-            }
-            prevOn = on;
-          }
-          const bullSummary = bullProfiles.length > 0 ? summarizeSignals(bullProfiles, "buy") : null;
-          const bearSummary = bearProfiles.length > 0 ? summarizeSignals(bearProfiles, "sell") : null;
-          const bullScore = bullSummary ? computeCompositeScore(bullSummary, "buy", useBand).score : 0;
-          const bearScore = bearSummary ? computeCompositeScore(bearSummary, "sell", useBand).score : 0;
-          const bestSide = bullScore >= bearScore ? "bull" : "bear";
-          const bestScore = Math.max(bullScore, bearScore);
-          combos.push({
-            legA: def.legA,
-            legB: def.legB,
-            legAlabel: legLabel(def.legA),
-            legBlabel: legLabel(def.legB),
-            bullSummary,
-            bullScore,
-            bullSignals: bullProfiles.length,
-            bearSummary,
-            bearScore,
-            bearSignals: bearProfiles.length,
-            bestSide,
-            bestScore,
-          });
-          if ((g & 31) === 0) {
-            setProgress({ current: di * comboDefs.length + g + 1, total });
-            await new Promise((r) => setTimeout(r, 0));
-          }
-        }
-        const filtered = combos.filter((c) => c.bullSignals + c.bearSignals > 0);
-        filtered.sort((a, b) => b.bestScore - a.bestScore);
-        const topCombos = filtered.slice(0, 25);
-        out.push({ ticker: meta.ticker, name: meta.name, topCombos });
-        setProgress({ current: (di + 1) * comboDefs.length, total });
-        setGridResults([...out]);
+        const topCombos = (await sweepPool.run<any[]>(
+          { type: "grid", payload },
+          () => runMaGridSweep(payload, (done) => {
+            setProgress({ current: di * comboDefs.length + done, total });
+          }),
+          (m) => setProgress({ current: di * comboDefs.length + m.done, total }),
+        )) ?? [];
+        slots[di] = { ticker: meta.ticker, name: meta.name, topCombos };
       } catch {
-        setProgress({ current: (di + 1) * comboDefs.length, total });
+      } finally {
+        completed++;
+        setProgress({ current: completed * comboDefs.length, total });
+        flush();
       }
-    }
-    setGridResults(out);
+    };
+
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, list.length) }, async () => {
+        while (nextIdx < list.length && !abortRef.current) {
+          await runItem(nextIdx++);
+        }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
+
+    flush();
     setRunning(false);
   }, [
     tickers, selectedTicker, pairTickerA, pairTickerB, mode, targetReturn, returnMode, bandMin, bandMax,

@@ -22,8 +22,14 @@ import {
   THRESHOLD_VALUES,
   SLOPE_LOOKBACKS,
   buildConfigLabel,
+  buildShortLabel,
   mapWeeklyToDaily,
   runRocSweep,
+  runRocGridSweep,
+  BULL_CATEGORIES,
+  BEAR_CATEGORIES,
+  type GridCombo,
+  type RocGridSweepPayload,
   type RocConfig,
   type SignalDate,
   type CategoryResult,
@@ -62,23 +68,6 @@ import "@/components/ClassificationFiltersWithSource";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const BULL_CATEGORIES = [
-  "roc_zero_up",
-  "roc_thresh_up",
-  "roc_thresh_down_rev",
-  "roc_fast_above",
-  "roc_slope_up",
-  "roc_curv_up",
-];
-
-const BEAR_CATEGORIES = [
-  "roc_zero_down",
-  "roc_thresh_down",
-  "roc_thresh_up_rev",
-  "roc_fast_below",
-  "roc_slope_down",
-  "roc_curv_down",
-];
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -101,20 +90,6 @@ interface GridTickerResult {
   topCombos: GridCombo[];
 }
 
-interface GridCombo {
-  configLabel: string;
-  config: RocConfig;
-  bullSummary: any;
-  bullScore: number;
-  bullSignals: number;
-  bearSummary: any;
-  bearScore: number;
-  bearSignals: number;
-  bestSide: string;
-  bestScore: number;
-  bullDates?: SignalDate[];
-  bearDates?: SignalDate[];
-}
 
 interface SortState {
   col: string;
@@ -124,22 +99,6 @@ interface SortState {
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
 
-function buildShortLabel(cfg: RocConfig): string {
-  switch (cfg.signalType) {
-    case "zero_cross":
-      return `ROC(${cfg.period}) ↕0`;
-    case "fast_slow_cross":
-      return `ROC F=${cfg.period}/S=${cfg.slowPeriod ?? 0}`;
-    case "threshold_cross":
-      return `ROC(${cfg.period}) ±${pctSigned(cfg.threshold ?? 0.05)} cont`;
-    case "threshold_reversion":
-      return `ROC(${cfg.period}) ±${pctSigned(cfg.threshold ?? 0.05)} rev`;
-    case "slope_curvature":
-      return `ROC(${cfg.period}) slp/crv lkb=${cfg.slopeLookback ?? 5}`;
-    default:
-      return buildConfigLabel(cfg);
-  }
-}
 
 function getBestCategoryForSide(cfg: ConfigResult, side: "long" | "short"): CategoryResult | null {
   const validCats = side === "long" ? BULL_CATEGORIES : BEAR_CATEGORIES;
@@ -1071,9 +1030,15 @@ export default function ROCOptimizer() {
     const totalWork = tickersToRun.length * gridConfigs.length;
     setProgress({ current: 0, total: totalWork });
 
-    const allGridResults: GridTickerResult[] = [];
+    // Grid sweeps run in Web Workers (same rocSweep worker, "grid" message);
+    // slots keep results in input order regardless of completion order.
+    const sweepPool = createSweepPool(() =>
+      new Worker(new URL("../workers/rocSweep.worker.ts", import.meta.url), { type: "module" }));
+    const slots: (GridTickerResult | null)[] = new Array(tickersToRun.length).fill(null);
+    let completed = 0;
+    const flush = () => setGridResults(slots.filter((r): r is GridTickerResult => r != null));
 
-    for (let i = 0; i < tickersToRun.length && !cancelRef.current; i++) {
+    const runItem = async (i: number) => {
       const ticker = tickersToRun[i];
       const legA = mode === "pairCombo" ? ticker.pairA : pairTickerA;
       const legB = mode === "pairCombo" ? ticker.pairB : pairTickerB;
@@ -1084,16 +1049,14 @@ export default function ROCOptimizer() {
         if (mode === "pair" || mode === "pairCombo") {
           const ratio = await getYahooPairsRatio(legA, legB, dates);
           if (!ratio || ratio.indices.length < 252) {
-            setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-            continue;
+            return;
           }
           const idxMap = new Map<number, number>();
           for (let j = 0; j < ratio.indices.length; j++) idxMap.set(ratio.indices[j], ratio.prices[j]);
           const validIdxs: number[] = [];
           for (let j = 0; j < dates.length; j++) if (idxMap.has(j)) validIdxs.push(j);
           if (validIdxs.length < 252) {
-            setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-            continue;
+            return;
           }
           closes = validIdxs.map((j) => idxMap.get(j)!);
           priceDates = validIdxs.map((j) => dates[j]);
@@ -1103,8 +1066,7 @@ export default function ROCOptimizer() {
             ? await getBasketOhlc(combinedBasket, dateRange)
             : await fetchTickerPriceData(ticker.ticker, dates, dateRange, inputSelection);
           if (!priceData || priceData.closes.length < 252) {
-            setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-            continue;
+            return;
           }
           closes = priceData.closes;
           priceDates = priceData.priceDates;
@@ -1122,8 +1084,7 @@ export default function ROCOptimizer() {
         const rawCloses = closes;
         const minBars = effectiveFreq === "weekly" ? 52 : effectiveFreq === "monthly" ? 24 : 252;
         if (downsampled.closes.length < minBars) {
-          setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-          continue;
+          return;
         }
 
         let workingCloses: number[];
@@ -1138,8 +1099,7 @@ export default function ROCOptimizer() {
           workingDates = priceDates;
           weeklyData = downsampleWeeklyLocal(closes, priceDates, frequency === "monthly_on_daily" ? "monthly" : undefined);
           if (weeklyData.prices.length < (frequency === "monthly_on_daily" ? 24 : 60)) {
-            setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-            continue;
+            return;
           }
         } else {
           workingCloses = closes;
@@ -1194,142 +1154,41 @@ export default function ROCOptimizer() {
           }
         }
 
-        const combos: GridCombo[] = [];
-        const isBand = returnMode === "band";
-        const bandOpts = isBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
+        const payload: RocGridSweepPayload = {
+          workingCloses, workingDates, rawCloses, downsampled, weeklyData, benchmarkSeries,
+          effectiveFreq, frequency: frequency as string, gridConfigs,
+          returnMode, bandMin, bandMax, targetReturn, minHold,
+        };
+        const top50 = (await sweepPool.run<GridCombo[]>(
+          { type: "grid", payload },
+          () => runRocGridSweep(payload, (done) => {
+            setProgress({ current: i * gridConfigs.length + done, total: totalWork });
+          }),
+          (m) => setProgress({ current: i * gridConfigs.length + m.done, total: totalWork }),
+        )) ?? [];
 
-        for (let b = 0; b < gridConfigs.length && !cancelRef.current; b++) {
-          const gcfg = gridConfigs[b];
-          const gHandler = ROC_SIGNAL_HANDLERS[gcfg.signalType];
-          const bullCats = gHandler.filter((c: string) => BULL_CATEGORIES.includes(c));
-          const bearCats = gHandler.filter((c: string) => BEAR_CATEGORIES.includes(c));
-          const allCats = [...bullCats, ...bearCats];
-          const startIdx =
-            gcfg.signalType === "fast_slow_cross"
-              ? Math.max(gcfg.period, gcfg.slowPeriod ?? gcfg.period) + 126
-              : gcfg.signalType === "slope_curvature"
-              ? gcfg.period + (gcfg.slopeLookback ?? 5) + 126
-              : gcfg.period + 126;
-
-          if (workingCloses.length <= startIdx + 5) {
-            if (b % 30 === 0) {
-              setProgress({ current: i * gridConfigs.length + b + 1, total: totalWork });
-              await new Promise((r) => setTimeout(r, 0));
-            }
-            continue;
-          }
-
-          const gopts: any = {
-            period: gcfg.period,
-            slowPeriod: gcfg.slowPeriod,
-            threshold: gcfg.threshold,
-            slopeLookback: gcfg.slopeLookback,
-          };
-          if (frequency.endsWith("_on_daily") && weeklyData) {
-            gopts.precomputedROC = mapWeeklyToDaily(gcfg.period, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
-            if (gcfg.slowPeriod !== undefined)
-              gopts.precomputedSlowROC = mapWeeklyToDaily(gcfg.slowPeriod, weeklyData.prices, weeklyData.weekIndex, workingCloses.length);
-          }
-
-          const detected = detectSignals(workingCloses, allCats, gopts, startIdx);
-          const bullProfiles: any[] = [];
-          const bearProfiles: any[] = [];
-          const bullDates: SignalDate[] = [];
-          const bearDates: SignalDate[] = [];
-          let lastBull = -1;
-          let lastBear = -1;
-
-          for (const cat of bullCats) {
-            for (const idx of detected[cat]) {
-              if (minHold > 0 && lastBull >= 0 && idx < lastBull + minHold) continue;
-              const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
-              if (di < 0) continue;
-              const profile = computeForwardProfile(
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
-                di,
-                targetReturn,
-                "buy",
-                bandOpts,
-                minHold,
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
-              );
-              bullProfiles.push(profile);
-              bullDates.push({
-                date: workingDates[idx] ?? "",
-                ret1m: profile.returns["1M"] ?? null,
-                ret3m: profile.returns["3M"] ?? null,
-                ret6m: profile.returns["6M"] ?? null,
-              });
-              lastBull = idx;
-            }
-          }
-
-          for (const cat of bearCats) {
-            for (const idx of detected[cat]) {
-              if (minHold > 0 && lastBear >= 0 && idx < lastBear + minHold) continue;
-              const di = (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? mapWeeklyIndexToDaily(downsampled, idx) : idx;
-              if (di < 0) continue;
-              const profile = computeForwardProfile(
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? rawCloses : workingCloses,
-                di,
-                targetReturn,
-                "sell",
-                bandOpts,
-                minHold,
-                (effectiveFreq === "weekly" || effectiveFreq === "monthly") ? null : benchmarkSeries
-              );
-              bearProfiles.push(profile);
-              bearDates.push({
-                date: workingDates[idx] ?? "",
-                ret1m: profile.returns["1M"] ?? null,
-                ret3m: profile.returns["3M"] ?? null,
-                ret6m: profile.returns["6M"] ?? null,
-              });
-              lastBear = idx;
-            }
-          }
-
-          const bullSummary = bullProfiles.length > 0 ? summarizeSignals(bullProfiles, "buy") : null;
-          const bearSummary = bearProfiles.length > 0 ? summarizeSignals(bearProfiles, "sell") : null;
-          const bullScore = bullSummary ? computeCompositeScore(bullSummary, "buy", isBand).score : 0;
-          const bearScore = bearSummary ? computeCompositeScore(bearSummary, "sell", isBand).score : 0;
-          const bestSide = bullScore >= bearScore ? "bull" : "bear";
-          const bestScore = Math.max(bullScore, bearScore);
-
-          combos.push({
-            configLabel: buildShortLabel(gcfg),
-            config: gcfg,
-            bullSummary,
-            bullScore,
-            bullSignals: bullProfiles.length,
-            bearSummary,
-            bearScore,
-            bearSignals: bearProfiles.length,
-            bestSide,
-            bestScore,
-            bullDates,
-            bearDates,
-          });
-
-          if (b % 30 === 0) {
-            setProgress({ current: i * gridConfigs.length + b + 1, total: totalWork });
-            await new Promise((r) => setTimeout(r, 0));
-          }
-        }
-
-        const validCombos = combos.filter((c) => c.bullSignals + c.bearSignals > 0);
-        validCombos.sort((a, b) => b.bestScore - a.bestScore);
-        const top50 = validCombos.slice(0, 50);
-
-        allGridResults.push({ ticker: ticker.ticker, name: ticker.name, topCombos: top50 });
-        setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
-        setGridResults([...allGridResults]);
+        slots[i] = { ticker: ticker.ticker, name: ticker.name, topCombos: top50 };
       } catch {
-        setProgress({ current: (i + 1) * gridConfigs.length, total: totalWork });
+      } finally {
+        completed++;
+        setProgress({ current: completed * gridConfigs.length, total: totalWork });
+        flush();
       }
-    }
+    };
 
-    setGridResults(allGridResults);
+    let nextIdx = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(sweepPool.size, tickersToRun.length) }, async () => {
+        while (nextIdx < tickersToRun.length && !cancelRef.current) {
+          await runItem(nextIdx++);
+        }
+      })
+    );
+    // Only after the lanes drain — terminating with a task in flight leaves
+    // its pool.run promise unsettled forever.
+    sweepPool.terminate();
+
+    flush();
     setRunning(false);
   }, [
     filteredByUniverse,

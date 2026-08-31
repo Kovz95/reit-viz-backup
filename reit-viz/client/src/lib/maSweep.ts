@@ -1268,3 +1268,113 @@ export async function runMaSweep(pl: MaSweepPayload): Promise<MaSweepResult | nu
     currentDetailByConfig,
   };
 }
+
+// ── Grid-search tab kernel ("Find Best Combo", moved from the page) ──
+
+export interface MaGridSweepPayload {
+  closes: number[];
+  highs: number[];
+  lows: number[];
+  baseSeries: number[];
+  weekly: any;
+  benchmark: number[] | null;
+  comboDefs: { legA: ComboLeg; legB: ComboLeg }[];
+  framaFC: number;
+  framaSC: number;
+  t3Vf: number;
+  almaOffset: number;
+  almaSigma: number;
+  returnMode: string;
+  bandMin: number;
+  bandMax: number;
+  targetReturn: number;
+  minHold: number;
+}
+
+export async function runMaGridSweep(
+  pl: MaGridSweepPayload,
+  onProgress?: (done: number, total: number) => void,
+): Promise<any[]> {
+  const { closes, highs, lows, baseSeries, weekly, benchmark, comboDefs,
+    framaFC, framaSC, t3Vf, almaOffset, almaSigma,
+    returnMode, bandMin, bandMax, targetReturn, minHold } = pl;
+  const mapHit = (i: number) => (weekly ? mapWeeklyIndexToDaily(weekly, i) : i);
+
+  const cache = new Map<string, (number | null)[]>();
+  const ma = (type: string, period: number) => {
+    const key = `${type}-${period}`;
+    let v = cache.get(key);
+    if (!v) {
+      v = computeMA(closes, period, type, { highs, lows, framaFC, framaSC, t3VolumeFactor: t3Vf, almaOffset, almaSigma });
+      cache.set(key, v);
+    }
+    return v;
+  };
+  const combos: any[] = [];
+  const useBand = returnMode === "band";
+  const activeBand: ReturnBand | null = useBand ? { minReturn: bandMin, maxReturn: bandMax } : null;
+  for (let g = 0; g < comboDefs.length; g++) {
+    const def = comboDefs[g];
+    const aState = (() => {
+      const fastMA = ma(def.legA.maType, def.legA.fastPeriod);
+      const arr = new Array(closes.length).fill(null);
+      for (let i = 0; i < closes.length; i++) if (fastMA[i] !== null) arr[i] = closes[i] > (fastMA[i] as number);
+      return arr;
+    })();
+    const bState = (() => {
+      const fastMA = ma(def.legB.maType, def.legB.fastPeriod);
+      const slowMA = ma(legSlowMaType(def.legB), def.legB.slowPeriod);
+      const arr = new Array(closes.length).fill(null);
+      for (let i = 0; i < closes.length; i++)
+        if (fastMA[i] !== null && slowMA[i] !== null) arr[i] = (fastMA[i] as number) > (slowMA[i] as number);
+      return arr;
+    })();
+    const start = Math.max(legBurnIn(def.legA), legBurnIn(def.legB)) + 126;
+    const bullProfiles: ForwardReturnProfile[] = [];
+    const bearProfiles: ForwardReturnProfile[] = [];
+    let prevOn: boolean | null = null;
+    let holdUntil = -1;
+    for (let i = start; i < closes.length; i++) {
+      const a = aState[i];
+      const b = bState[i];
+      if (a === null || b === null) continue;
+      const on = a && b;
+      if (prevOn !== null && on !== prevOn && i >= holdUntil) {
+        const hi = mapHit(i);
+        if (hi >= 0)
+          on
+            ? bullProfiles.push(computeForwardProfile(baseSeries, hi, targetReturn, "buy", activeBand, minHold, benchmark))
+            : bearProfiles.push(computeForwardProfile(baseSeries, hi, targetReturn, "sell", activeBand, minHold, benchmark));
+        if (minHold > 0) holdUntil = i + minHold;
+      }
+      prevOn = on;
+    }
+    const bullSummary = bullProfiles.length > 0 ? summarizeSignals(bullProfiles, "buy") : null;
+    const bearSummary = bearProfiles.length > 0 ? summarizeSignals(bearProfiles, "sell") : null;
+    const bullScore = bullSummary ? computeCompositeScore(bullSummary, "buy", useBand).score : 0;
+    const bearScore = bearSummary ? computeCompositeScore(bearSummary, "sell", useBand).score : 0;
+    const bestSide = bullScore >= bearScore ? "bull" : "bear";
+    const bestScore = Math.max(bullScore, bearScore);
+    combos.push({
+      legA: def.legA,
+      legB: def.legB,
+      legAlabel: legLabel(def.legA),
+      legBlabel: legLabel(def.legB),
+      bullSummary,
+      bullScore,
+      bullSignals: bullProfiles.length,
+      bearSummary,
+      bearScore,
+      bearSignals: bearProfiles.length,
+      bestSide,
+      bestScore,
+    });
+    if ((g & 31) === 0) {
+      onProgress?.(g + 1, comboDefs.length);
+      await yieldMain(); // fallback responsiveness; cheap in a worker
+    }
+  }
+  const filtered = combos.filter((c) => c.bullSignals + c.bearSignals > 0);
+  filtered.sort((a, b) => b.bestScore - a.bestScore);
+  return filtered.slice(0, 25);
+}
