@@ -9,6 +9,7 @@ import { useEarningsNow, EarningsChip } from "@/lib/earningsNow";
 import { getMetricSeries } from "@/lib/dataService";
 import PairBacktestModal from "@/components/PairBacktestModal";
 import { hrpCluster } from "@/lib/hrp";
+import { createSweepPool } from "@/lib/sweepPool";
 import { PENDING_DISLOC_PRESET_KEY, PENDING_PAIR_TEMPLATE_KEY } from "@/components/CommandPalette";
 import { getCustomFundamentalMetrics } from "@/lib/dataService";
 import { groupMetricsByCategory, DERIVED_METRICS } from "@/lib/metricCategories";
@@ -5330,7 +5331,19 @@ function HrpPanel({ labels, displayLabels, matrix }: { labels: string[]; display
           } catch { /* default vol */ }
         }
       }));
-      setRes({ ...hrpCluster(matrix, vols, k), vols });
+      // Clustering runs in the shared correlation-math worker; the inline
+      // fallback is the same lib kernel.
+      const pool = createSweepPool(() =>
+        new Worker(new URL("../workers/corrMath.worker.ts", import.meta.url), { type: "module" }), 1);
+      try {
+        const clustered = (await pool.run<ReturnType<typeof hrpCluster>>(
+          { type: "hrp", corr: matrix, vols, k },
+          async () => hrpCluster(matrix, vols, k),
+        ))!;
+        setRes({ ...clustered, vols });
+      } finally {
+        pool.terminate();
+      }
     } finally {
       setBusy(false);
     }
